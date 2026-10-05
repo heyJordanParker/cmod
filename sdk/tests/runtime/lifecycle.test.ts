@@ -354,6 +354,26 @@ test('a mod whose setup function throws says its setup function threw, and leave
   )
 })
 
+test('a mod whose state fails to load says its state did not load', async () => {
+  const fake = fakeClaude({ name: 'broken', root })
+  fake.claude.store.get = async () => Promise.reject(new Error('the store file is locked'))
+  const lifecycle = createLifecycle(defineMod({ name: 'broken', state: { project: { expanded: [] as string[] } }, setup() {} }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'broken', isInstalled: true }))
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing broken  its state did not load: the store file is locked\n  Fix it, then run /reload-plugins.')
+})
+
+test('a mod whose open panes cannot be read says its open panes did not load', async () => {
+  const fake = fakeClaude({ name: 'broken', root })
+  fake.claude.ui.panes = async () => Promise.reject(new Error('the pane list is unavailable'))
+  const lifecycle = createLifecycle(defineMod({ name: 'broken', setup: (mod) => void mod.ui.pane({ id: 'trash', title: 'Trash', render: () => Text({ children: 'empty' }) }) }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'broken', isInstalled: true }))
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing broken  its open panes did not load: the pane list is unavailable\n  Fix it, then run /reload-plugins.')
+})
+
 test("the CMod plugin runs its bootstrap from its root, and its mod.dataFolder names its data folder", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const spawned: ProcessSpawnRequest[] = []
@@ -756,7 +776,7 @@ test("after the project root changes, the mod reads that project's saved value a
       },
     }),
   )
-  const filesPane ={ surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
+  const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
   await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
   ;(lifecycle.mod as Mod<{ project: { expanded: string[] } }>).state.project.expanded = ['src']
   projectRoot = '/work/b'
@@ -795,7 +815,7 @@ function folderPane() {
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
   const start = () => lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
   const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
-  return { lifecycle, session, redraws, redrawnFolders, moves, start, drawn }
+  return { fake, lifecycle, session, redraws, redrawnFolders, moves, start, drawn }
 }
 
 const movedTo = (oldCwd: string, newCwd: string) => ({ session_id: 'test-session', cwd: newCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: newCwd })
@@ -889,6 +909,28 @@ test('two overlapping Bash calls fire CwdChanged once', async () => {
   expect(moves).toEqual([movedTo('/work/a', '/work/a/lib')])
 })
 
+test('a folder move whose project fails to load fires CwdChanged on the retry', async () => {
+  const { fake, lifecycle, session, moves, start } = folderPane()
+  const storeGet = fake.claude.store.get
+  let isStoreLocked = false
+  fake.claude.store.get = async (key) => (isStoreLocked ? Promise.reject(new Error('the store file is locked')) : storeGet(key))
+  await start()
+  session.root = '/work/b'
+  session.cwd = '/work/b'
+  isStoreLocked = true
+
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/a', '/work/a'])
+  expect(moves).toEqual([])
+
+  isStoreLocked = false
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/work/b'])
+  expect(moves).toEqual([movedTo('/work/a', '/work/b')])
+})
+
 test('a /cd the user cancels moves nothing', async () => {
   const { lifecycle, redraws, moves, start, drawn } = folderPane()
   await start()
@@ -968,7 +1010,7 @@ function sessionStartMod() {
 
 const sessionStart = (source: 'startup' | 'resume') => ({ session_id: 'test-session', transcript_path: '/t', cwd: '/work', hook_event_name: 'SessionStart', source })
 
-const unreadSessionStart = "safe-delete finished installing after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks."
+const unreadSessionStart = "safe-delete started after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks."
 
 test("an installed mod's SessionStart context reaches Claude Code on a fresh start", async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
@@ -1029,4 +1071,112 @@ test('a mod whose install finished before SessionStart runs its SessionStart hoo
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
+})
+
+test('a SessionStart held past the limit passes on and replays once the mod starts', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
+  fake.fakes.clock.after = (ms, fire) => {
+    const made = { ms, fire, isCancelled: false }
+    timers.push(made)
+    return { cancel: () => (made.isCancelled = true) }
+  }
+  let finishRead: () => void = () => undefined
+  const slowRead = new Promise<void>((resolve) => (finishRead = resolve))
+  const { sources, definition } = sessionStartMod()
+  const lifecycle = createLifecycle(definition)
+  let isAnswered = false
+
+  const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {}).finally(() => (isAnswered = true))
+  const starting = lifecycle.start(fake.claude, async () => {
+    await slowRead
+    return { ...pending, isInstalled: true }
+  })
+  await settle()
+  timers.find((made) => made.ms === 9_000)?.fire()
+  await settle()
+
+  expect(isAnswered).toBe(true)
+  expect(await answer).toEqual({})
+  expect(sources).toEqual([])
+
+  finishRead()
+  await starting
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect(sources).toEqual(['startup'])
+  expect(fake.shown.debug).toEqual([unreadSessionStart])
+})
+
+test('a SessionStart answered before the limit cancels its timer', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const timers: { ms: number; isCancelled: boolean }[] = []
+  fake.fakes.clock.after = (ms) => {
+    const made = { ms, isCancelled: false }
+    timers.push(made)
+    return { cancel: () => (made.isCancelled = true) }
+  }
+  const { sources, definition } = sessionStartMod()
+  const lifecycle = createLifecycle(definition)
+
+  const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+
+  expect(await answer).toEqual({ additionalContext: ['safe-delete saw startup'] })
+  expect(sources).toEqual(['startup'])
+  expect(timers).toEqual([{ ms: 9_000, isCancelled: true }])
+})
+
+test('a late SessionStart replay that throws leaves the mod active', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const step = controlledStream()
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => step.stream
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      setup: (mod) =>
+        mod.use(({ on }) =>
+          on('classic.SessionStart', async () => {
+            throw new Error('no session file')
+          }),
+        ),
+    }),
+  )
+  await lifecycle.start(fake.claude, given(pending))
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  step.print('done safe-delete 0.2.0')
+  step.exit(0)
+  await settle()
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect(lifecycle.phase).toBe('active')
+  expect(lifecycle.failure).toBeUndefined()
+  expect(fake.shown.logs).toContain('safe-delete: the SessionStart hook failed: no session file')
+})
+
+test("a mod that finishes installing before /clear replays only the cleared session's SessionStart", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const step = controlledStream()
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => step.stream
+  const seen: string[] = []
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      setup(mod) {
+        mod.on('SessionStart', (input) => void seen.push(`${input.source} ${input.session_id}`))
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, given(pending))
+
+  await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'first' }, {})
+  step.print('done safe-delete 0.2.0')
+  step.exit(0)
+  await settle()
+  await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'second', source: 'clear' }, {})
+
+  expect(seen).toEqual(['clear second'])
 })

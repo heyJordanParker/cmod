@@ -11,7 +11,7 @@ export const cmodPlugin = defineMod({
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
-      if (outcome.kind === 'done') mod.ui.toast(`${name} is uninstalled. Run /reload-plugins to stop it in this session.`)
+      if (outcome.kind === 'done') mod.ui.toast(`${name} is uninstalled. A session that still runs it stops after /reload-plugins.`)
       else if (exitCode !== 0) {
         const error = outcome.kind === 'failed' ? outcome.message : stderr.trim().split('\n').at(-1)
         mod.ui.toast(`cmod teardown ${name} exited ${exitCode}: ${error}`)

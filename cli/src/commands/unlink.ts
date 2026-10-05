@@ -5,6 +5,7 @@ import { readPlugin } from '../plugin.js'
 import { readProgram, removeProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { removePluginFolder, settingsPath } from '../settings.js'
+import { holdSignals } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
 
 export const summary = 'Stop loading a linked checkout.'
@@ -27,10 +28,15 @@ export async function run(argv: string[]): Promise<number> {
   if (!(await removePluginFolder(plugin.root))) throw new Error(`${tilde(plugin.root)} is not linked in ${tilde(settingsPath())}.`)
   progress.succeed(`Unlinked ${tilde(plugin.root)} from ${tilde(settingsPath())}`)
 
-  const record = await readRecord(readText, storeFolder(process.env), plugin.name)
-  const exitCode = record === undefined || record.root !== plugin.root ? 0 : await teardownInTerminal(plugin.name, progress)
+  const hold = holdSignals()
+  try {
+    const record = await readRecord(readText, storeFolder(process.env), plugin.name)
+    const exitCode = record === undefined || record.root !== plugin.root ? 0 : await teardownInTerminal(plugin.name, progress)
 
-  const program = await readProgram(plugin)
-  if (program !== undefined && (await removeProgram(program.name))) progress.succeed(`Removed ${program.name} from ~/.local/bin`)
-  return exitCode
+    const program = await readProgram(plugin)
+    if (program !== undefined && (await removeProgram(program.name))) progress.succeed(`Removed ${program.name} from ~/.local/bin`)
+    return exitCode
+  } finally {
+    hold[Symbol.dispose]()
+  }
 }

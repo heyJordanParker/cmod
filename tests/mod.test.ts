@@ -26,8 +26,16 @@ test("a removed enabledPlugins key runs cmod teardown --events with that plugin'
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
-  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. Run /reload-plugins to stop it in this session.'])
+  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. A session that still runs it stops after /reload-plugins.'])
   expect(tested.state.global.installedPlugins).toEqual(['cmod'])
+})
+
+test('a removal noticed at session start toasts that a session still running it stops after /reload-plugins', async () => {
+  const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'done four-step\n', stderr: '' } })
+  await tested.fire('SessionStart', { source: 'startup' })
+  await settled()
+  expect(teardowns).toEqual(['cmod teardown four-step --events'])
+  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. A session that still runs it stops after /reload-plugins.'])
 })
 
 test('the CMod plugin tears down only keys removed from user settings', async () => {

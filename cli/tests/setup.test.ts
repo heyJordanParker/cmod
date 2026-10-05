@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, utimes } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readdir, readFile, readlink, rename, rm, stat, symlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
-import { deleteUnclaimedLeftovers } from '../src/commands/teardown.js'
+import { deleteUnclaimedLeftovers } from '../src/commands/setup.js'
 import { readText } from '../src/files.js'
-import { cmod, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -586,6 +586,83 @@ test('a failed upgrade keeps the program the record names', async () => {
   expect(result.exitCode).toBe(1)
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/records/hello-mod.json'), 'utf8'))).toMatchObject({ version: '0.2.0', program: 'hello' })
+})
+
+test('Ctrl+C during the install step of cmod setup leaves no program link', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n',
+  })
+
+  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(130)
+  expect(result.output).toContain('Cancelled the install step of hello-mod on SIGINT.')
+  expect(result.output).not.toContain('Fix the step')
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
+test("Ctrl+C during cmod remove's uninstall step still removes the mod", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
+    'setup/uninstall.sh': '#!/bin/sh\nkill -INT 0\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n',
+  })
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+
+  const result = await cmodInTerminal(home, 'remove', 'hello-mod')
+
+  expect(result.exitCode).toBe(130)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(store, 'records/hello-mod.json.claim'), join(store, 'uninstall/hello-mod')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
+test('a record write that fails after the uninstall step is saved deletes the saved step', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const store = join(home, '.local/share/cmod')
+  await mkdir(join(store, 'records'), { recursive: true })
+  await chmod(join(store, 'records'), 0o555)
+
+  const result = await cmod(home, 'setup', root, '--yes')
+  await chmod(join(store, 'records'), 0o755)
+
+  expect(result.exitCode).toBe(1)
+  expect(await readdir(join(store, 'uninstall')).catch(() => [])).toEqual([])
+})
+
+test('a record write that fails in an upgrade keeps the saved uninstall step of the set-up version', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const store = join(home, '.local/share/cmod')
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  const saved = await readFile(join(store, 'uninstall/demo/root/setup/uninstall.sh'), 'utf8')
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/uninstall.sh': '#!/bin/sh\necho "the new uninstall" >> "$HOME/uninstalls"\n' })
+  await chmod(join(store, 'records'), 0o555)
+
+  const result = await cmod(home, 'setup', root, '--yes')
+  await chmod(join(store, 'records'), 0o755)
+
+  expect(result.exitCode).toBe(1)
+  expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
+  expect(await readFile(join(store, 'uninstall/demo/root/setup/uninstall.sh'), 'utf8')).toBe(saved)
+  expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0' })
 })
 
 test('setup --events prints failed with the fix when the release holds no build for this platform, and writes no record', async () => {

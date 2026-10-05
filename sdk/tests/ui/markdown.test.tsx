@@ -336,6 +336,14 @@ const drawDiagram = ({ lang, value, Default }: SlotProps<typeof markdownSlots.Co
 
 const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
 
+const claude = fakeClaude({ name: 'claude', root: '/test' }).claude
+
+async function drawsLikeClaude(e: Frozen<Args<'ui.render'>>): Promise<RenderElement> {
+  const table = claude.ui.resolve(e)
+  const { text, isFirstOfReply } = e.props as { readonly text: string; readonly isFirstOfReply: boolean }
+  return isFirstOfReply ? table.Box({ children: [table.Box({ minWidth: 2, children: table.Text({ children: '⏺' }) }), table.Text({ children: text })] }) : table.Text({ children: text })
+}
+
 test('two mods drawing one reply give the same gaps as one mod', async () => {
   const headings = await started(
     defineMod({
@@ -362,24 +370,14 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
       },
     }),
   )
-  const claude = fakeClaude({ name: 'claude', root: '/test' }).claude
-  const claudeDraws = async (e: Frozen<Args<'ui.render'>>) => claude.ui.resolve(e).Text({ children: `claude: ${(e.props as { text: string }).text}` })
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '# Plan\n\n```mermaid\ngraph TD\n```\n\nDone.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
-  const byOne = rows(await both.route('ui.render', reply, claudeDraws))
-  const byTwo = rows(await headings.route('ui.render', reply, (e) => diagrams.route('ui.render', e, claudeDraws)))
+  const byOne = rows(await both.route('ui.render', reply, drawsLikeClaude))
+  const byTwo = rows(await headings.route('ui.render', reply, (e) => diagrams.route('ui.render', e, drawsLikeClaude)))
 
-  expect(byOne).toEqual(['⏺ PLAN', '', '  diagram: graph TD', '  claude: Done.'])
+  expect(byOne).toEqual(['⏺ PLAN', '', '  diagram: graph TD', '  Done.'])
   expect(byTwo).toEqual(byOne)
 })
-
-const claudeWithBullet = fakeClaude({ name: 'claude', root: '/test' }).claude
-
-async function drawsLikeClaude(e: Frozen<Args<'ui.render'>>): Promise<RenderElement> {
-  const table = claudeWithBullet.ui.resolve(e)
-  const { text, isFirstOfReply } = e.props as { readonly text: string; readonly isFirstOfReply: boolean }
-  return isFirstOfReply ? table.Box({ children: [table.Box({ minWidth: 2, children: table.Text({ children: '⏺' }) }), table.Text({ children: text })] }) : table.Text({ children: text })
-}
 
 test("a reply drawn by two mods keeps every block under the bullet's text", async () => {
   const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => mod.ui.render(markdownSlots.Heading, drawHeading) }))

@@ -39,22 +39,34 @@ export async function temporaryHome(): Promise<string> {
 }
 
 export async function cmod(home: string, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, main, ...args], {
-    cwd: home,
-    env: {
-      ...process.env,
-      HOME: home,
-      XDG_DATA_HOME: '',
-      XDG_CONFIG_HOME: '',
-      CLAUDE_CONFIG_DIR: '',
-      PATH: `${join(home, 'bin')}:${process.env['PATH']}`,
-      CMOD_SDK: `file:${join(import.meta.dir, '..', '..', 'sdk')}`,
-    },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+  const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: environment(home), stdout: 'pipe', stderr: 'pipe' })
   const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   return { exitCode, stdout, stderr }
+}
+
+export async function cmodInTerminal(home: string, ...args: string[]): Promise<{ exitCode: number; output: string }> {
+  const child = Bun.spawn(['script', '-q', '/dev/null', 'sh', '-c', 'trap : INT; "$0" "$@"; exit $?', process.execPath, main, ...args], {
+    cwd: home,
+    env: environment(home),
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'ignore',
+  })
+  await Bun.write(join(home, 'terminal-pid'), `${child.pid}\n`)
+  const [output, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
+  return { exitCode, output }
+}
+
+function environment(home: string): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    HOME: home,
+    XDG_DATA_HOME: '',
+    XDG_CONFIG_HOME: '',
+    CLAUDE_CONFIG_DIR: '',
+    PATH: `${join(home, 'bin')}:${process.env['PATH']}`,
+    CMOD_SDK: `file:${join(import.meta.dir, '..', '..', 'sdk')}`,
+  }
 }
 
 export async function hashOf(root: string): Promise<string> {

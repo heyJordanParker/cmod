@@ -1,4 +1,4 @@
-import type { Args, EventResult, Frozen, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
 import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
@@ -49,6 +49,8 @@ const announcedKey = 'cmod-sdk:announced'
 const cmodCheckMs = 1000
 
 const cmodWaitMs = 60_000
+
+const sessionStartHoldMs = (10_000 satisfies HookBudget['ms']) - 1_000
 
 const dependencyCallMs = 30_000
 
@@ -126,6 +128,8 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   let shouldRecord = false
   let recording: Promise<void> | undefined
   let missedSessionStart: Frozen<Args<'classic.SessionStart'>> | undefined
+  let beginStart: (claude: Claude) => void = () => undefined
+  const startBegun = new Promise<Claude>((resolve) => (beginStart = resolve))
   let settleStart: () => void = () => undefined
   const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
 
@@ -184,8 +188,14 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     phase = 'active'
     runtime.claude.ui.invalidate('ui.render')
     endLine()
-    if (missedSessionStart !== undefined && Object.keys(await activeRouter.dispatch('classic.SessionStart', missedSessionStart, async () => ({}))).length > 0) {
-      runtime.claude.ui.log(`${definition.name} finished installing after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks.`, { to: 'debug' })
+    const missed = missedSessionStart
+    missedSessionStart = undefined
+    const lateAnswer = missed === undefined ? {} : await activeRouter.dispatch('classic.SessionStart', missed, async () => ({})).catch((error: unknown) => {
+      claude().ui.log(`${definition.name}: the SessionStart hook failed: ${messageOf(error)}`)
+      return {}
+    })
+    if (Object.keys(lateAnswer).length > 0) {
+      runtime.claude.ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks.`, { to: 'debug' })
     }
     const version = plugin.version ?? ''
     if ((await runtime.claude.store.get(announcedKey)) === version) return
@@ -270,6 +280,21 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     if (phase !== 'failed') fail(messageOf(error), `Run cmod install ${definition.name} in a terminal to see the whole log.`)
   }
 
+  const whenActive = async () => {
+    if (phase === 'ready') activation ??= activate().catch(report)
+    if (activation !== undefined && phase !== 'active') await activation
+  }
+
+  const holdSessionStart = () =>
+    new Promise<void>((resolve) => {
+      const held = startSettled.then(whenActive)
+      void held.then(resolve)
+      void startBegun.then((claudeCalls) => {
+        const limit = claudeCalls.clock.after(sessionStartHoldMs, resolve)
+        void held.then(() => limit.cancel())
+      })
+    })
+
   return {
     get phase() {
       return phase
@@ -283,6 +308,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
       runtime = { claude: claudeCalls, progress: createProgress(claudeCalls) }
+      beginStart(claudeCalls)
       try {
         const started = await read(claudeCalls).catch((error: unknown) => {
           report(error)
@@ -302,10 +328,9 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
       }
     },
     async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>> {
-      if (event === 'classic.SessionStart') await startSettled
+      if (event === 'classic.SessionStart') missedSessionStart = undefined
       if (shouldRecord && event === 'classic.UserPromptSubmit') record()
-      if (phase === 'ready') activation ??= activate().catch(report)
-      if (activation !== undefined && phase !== 'active') await activation
+      await (event === 'classic.SessionStart' ? holdSessionStart() : whenActive())
       if (event === 'classic.SessionStart' && phase !== 'active') missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
       if (event === 'cmod.call' && phase !== 'active' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) {
         const isStopped = phase === 'declined' || phase === 'failed'
@@ -365,9 +390,12 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       const [nextRoot, nextCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
       const oldCwd = cwd
       const hasMovedRoot = nextRoot !== modState.root
-      cwd = nextCwd
       if (!hasMovedRoot && nextCwd === oldCwd) return
-      await modState.moveTo(nextRoot)
+      cwd = nextCwd
+      await modState.moveTo(nextRoot).catch((error: unknown) => {
+        if (cwd === nextCwd) cwd = oldCwd
+        throw error
+      })
       if (!hasMovedRoot) area.changed()
       if (nextCwd === oldCwd) return
       const moved: Parameters<ModHook<'CwdChanged'>>[0] = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
@@ -407,15 +435,19 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     if (names.has(key)) throw new Error(taken)
     names.add(key)
   }
-  await modState.load()
-  try {
-    await definition.setup(mod)
-  } catch (error) {
-    throw new Error(`its setup function threw: ${messageOf(error)}`, { cause: error })
-  }
-  await area.restorePanes()
+  await failsAs('its state did not load', () => modState.load())
+  await failsAs('its setup function threw', () => definition.setup(mod))
+  await failsAs('its open panes did not load', () => area.restorePanes())
   if (hookEvents.length > 0) added.push(`${hookEvents.length === 1 ? 'a hook' : 'hooks'} on ${listed(hookEvents)}`)
   return { mod, added }
+}
+
+async function failsAs(subject: string, step: () => unknown): Promise<void> {
+  try {
+    await step()
+  } catch (error) {
+    throw new Error(`${subject}: ${messageOf(error)}`, { cause: error })
+  }
 }
 
 async function readLines(stream: HookStream<ProcessSpawnChunk, ProcessSpawnResult>, onLine: (text: string) => void): Promise<{ code: number | null; lastError: string }> {

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { rename, rm, stat, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -8,7 +7,7 @@ import { runStep } from '../process.js'
 import { removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
 import { revokeApprovals, storePath } from '../store.js'
-import { printEvent, printFailure, stepEnvironment } from './setup.js'
+import { deleteUnclaimedLeftovers, heldSignals, holdSignals, printEvent, printFailure, stepEnvironment } from './setup.js'
 
 export const summary = "Run a removed mod's saved uninstall step."
 
@@ -49,32 +48,37 @@ async function teardownWithEvents(name: string): Promise<number> {
     printEvent({ kind: 'missing', name })
     return 0
   }
-  const code = await runTeardown(record, printEvent).catch(printFailure)
+  const code = await runTeardown(record, [], printEvent).catch(printFailure)
   if (code === 0) printEvent({ kind: 'done', name })
   return code
 }
 
 export async function teardownInTerminal(name: string, progress: Progress): Promise<number> {
-  const record = await claimRecord(name)
-  if (record === undefined) {
-    await deleteUnclaimedLeftovers(name)
-    progress.skip(`${name} has no install record, so there is nothing to tear down. cmod list shows the mods CMod set up.`)
+  const hold = holdSignals()
+  try {
+    const record = await claimRecord(name)
+    if (record === undefined) {
+      await deleteUnclaimedLeftovers(name)
+      progress.skip(`${name} has no install record, so there is nothing to tear down. cmod list shows the mods CMod set up.`)
+      return 0
+    }
+    const heading = `Uninstalling ${name}`
+    progress.step(heading)
+    const failure = { code: 0, message: '' }
+    const code = await runTeardown(record, heldSignals, (event) => {
+      if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
+      if (event.kind === 'log') progress.log(event.text)
+      if (event.kind === 'failed') Object.assign(failure, event)
+    })
+    if (code !== 0) {
+      progress.fail(`The uninstall step of ${name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix ${record.uninstall}, then run cmod teardown ${name}.`)
+      return code
+    }
+    progress.succeed(record.uninstall === null ? `Removed what CMod set up for ${name}` : `Ran the uninstall step of ${name} and removed what CMod set up for it`)
     return 0
+  } finally {
+    hold[Symbol.dispose]()
   }
-  const heading = `Uninstalling ${name}`
-  progress.step(heading)
-  const failure = { code: 0, message: '' }
-  const code = await runTeardown(record, (event) => {
-    if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
-    if (event.kind === 'log') progress.log(event.text)
-    if (event.kind === 'failed') Object.assign(failure, event)
-  })
-  if (code !== 0) {
-    progress.fail(`The uninstall step of ${name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix ${record.uninstall}, then run cmod teardown ${name}.`)
-    return code
-  }
-  progress.succeed(record.uninstall === null ? `Removed what CMod set up for ${name}` : `Ran the uninstall step of ${name} and removed what CMod set up for it`)
-  return 0
 }
 
 async function claimRecord(name: string): Promise<InstallRecord | undefined> {
@@ -102,17 +106,9 @@ async function ranOnFile(action: () => Promise<void>): Promise<boolean> {
   )
 }
 
-export async function deleteUnclaimedLeftovers(name: string): Promise<void> {
-  const store = storeFolder(process.env)
-  const path = recordPath(store, name)
-  if (existsSync(`${path}.claim`) || existsSync(path)) return
-  await rm(dataFolder(store, name), { recursive: true, force: true })
-  await revokeApprovals(name)
-}
-
-async function runTeardown(record: InstallRecord, emit: (event: RunnerEvent) => void): Promise<number> {
+async function runTeardown(record: InstallRecord, ignoredSignals: readonly NodeJS.Signals[], emit: (event: RunnerEvent) => void): Promise<number> {
   const path = recordPath(storeFolder(process.env), record.name)
-  const code = await removeSetup(record, emit).catch(async (error: unknown) => {
+  const code = await removeSetup(record, ignoredSignals, emit).catch(async (error: unknown) => {
     await rename(`${path}.claim`, path)
     throw error
   })
@@ -121,10 +117,11 @@ async function runTeardown(record: InstallRecord, emit: (event: RunnerEvent) => 
   return code
 }
 
-async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => void): Promise<number> {
+async function removeSetup(record: InstallRecord, ignoredSignals: readonly NodeJS.Signals[], emit: (event: RunnerEvent) => void): Promise<number> {
   const folder = storePath('uninstall', record.name)
   if (record.uninstall !== null) {
-    const { exitCode, lastError } = await runStep(['sh', record.uninstall], folder, await stepEnvironment(join(folder, 'root'), record.name, record.version), emit)
+    const ignore = ignoredSignals.length === 0 ? '' : `trap '' ${ignoredSignals.map((signal) => signal.replace(/^SIG/, '')).join(' ')}; `
+    const { exitCode, lastError } = await runStep(['sh', '-c', `${ignore}exec sh "$0"`, record.uninstall], folder, await stepEnvironment(join(folder, 'root'), record.name, record.version), emit)
     if (exitCode !== 0) {
       emit({ kind: 'failed', code: exitCode, message: lastError })
       return 1

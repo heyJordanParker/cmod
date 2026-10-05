@@ -2,9 +2,30 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodInTerminal, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
+
+async function waitForTeardown(home: string): Promise<void> {
+  for (let waited = 0; waited < 10_000 && !(existsSync(join(home, 'uninstalls')) && leftovers(home).length === 0); waited += 100) await Bun.sleep(100)
+}
+
+function leftovers(home: string): string[] {
+  const store = join(home, '.local/share/cmod')
+  const paths = [
+    join(home, '.local/bin/hello'),
+    join(store, 'bin/hello'),
+    join(store, 'data/hello-mod'),
+    join(store, 'records/hello-mod.json'),
+    join(store, 'records/hello-mod.json.claim'),
+    join(store, 'uninstall/hello-mod'),
+  ]
+  return paths.filter((path) => existsSync(path)).map((path) => path.slice(home.length + 1))
+}
+
+async function approvals(home: string): Promise<unknown> {
+  return JSON.parse((await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8').catch(() => undefined)) ?? '{}')
+}
 
 const helloMod = {
   '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
@@ -130,6 +151,86 @@ esac
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
   expect(existsSync(join(store, 'records/hello-mod.json'))).toBe(false)
 })
+
+test('a signal to the process group during the install step of cmod try leaves no program, approval or data', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, { ...helloMod, 'setup/install.sh': '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n' })
+
+  const result = await cmodInTerminal(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(130)
+  expect(result.output).toContain('Cancelled the install step of hello-mod on SIGINT.')
+  expect(result.output).not.toContain('Fix the step')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(leftovers(home)).toEqual([])
+  expect(await approvals(home)).toEqual({})
+})
+
+test('a signal to cmod try during the install step skips the session and tears the mod down', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, { ...helloMod, 'setup/install.sh': '#!/bin/sh\nkill -HUP $PPID\nsleep 1\necho ran >> "$CMOD_DATA/runs"\n' })
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(129)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  expect(leftovers(home)).toEqual([])
+  expect(await approvals(home)).toEqual({})
+})
+
+test('a throw after the program is linked in cmod try removes the program', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n', '.local/share/cmod/uninstall': 'a file where the saved uninstall steps go\n' })
+  await writeFiles(root, helloMod)
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toStartWith('cmod try: ')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(leftovers(home)).toEqual([])
+  expect(await approvals(home)).toEqual({})
+})
+
+test('a closed terminal while the cmod try session runs leaves no record or claim', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'kill -KILL $(cat "$HOME/terminal-pid")\nsleep 2\necho "outlived the terminal" > "$HOME/session"') })
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, { ...helloMod, 'setup/uninstall.sh': '#!/bin/sh\necho "progress 1 2 Removing"\nsleep 0.5\necho "progress 2 2 Removed"\necho uninstalled >> "$HOME/uninstalls"\n' })
+
+  await cmodInTerminal(home, 'try', root, '--yes')
+  await waitForTeardown(home)
+
+  expect(existsSync(join(home, 'session'))).toBe(false)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  expect(leftovers(home)).toEqual([])
+  expect(await approvals(home)).toEqual({})
+}, 15_000)
+
+test("a closed terminal during cmod try's teardown leaves no record or claim", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'true') })
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, { ...helloMod, 'setup/uninstall.sh': '#!/bin/sh\nkill -KILL $(cat "$HOME/terminal-pid")\necho "progress 1 2 Removing"\nsleep 0.5\necho "progress 2 2 Removed"\necho uninstalled >> "$HOME/uninstalls"\n' })
+
+  await cmodInTerminal(home, 'try', root, '--yes')
+  await waitForTeardown(home)
+
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  expect(leftovers(home)).toEqual([])
+  expect(await approvals(home)).toEqual({})
+}, 15_000)
 
 test('a failed install in cmod try leaves no approval or data', async () => {
   const home = await temporaryHome()

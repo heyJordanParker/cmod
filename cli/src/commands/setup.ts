@@ -1,14 +1,15 @@
-import { copyFile, mkdir, rm, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, readRecord, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
+import { dataFolder, formatEvent, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { fetchProgram, programSteps, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
-import { approve, isApproved, storePath } from '../store.js'
+import { approve, isApproved, revokeApprovals, storePath } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
 
@@ -69,30 +70,69 @@ export function printFailure(error: unknown): number {
   return 1
 }
 
-export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined }, progress: Progress): Promise<number> {
+export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined; onConsent?: () => void }, progress: Progress): Promise<number> {
   const state = await checkSetup(plugin)
+  if (!state.isCurrent && state.needsConsent && !options.yes && options.consent !== state.sha256 && !askConsent(plugin)) {
+    progress.fail(`${plugin.name} is not set up: its install step needs your consent. Run the command again with --yes after reading the commands.`)
+    return 10
+  }
+  options.onConsent?.()
   if (state.isCurrent) {
     progress.succeed(`${plugin.name} ${plugin.version} is set up`)
     return 0
   }
-  if (state.needsConsent) {
-    if (!options.yes && options.consent !== state.sha256 && !askConsent(plugin)) {
-      progress.fail(`${plugin.name} is not set up: its install step needs your consent. Run the command again with --yes after reading the commands.`)
-      return 10
-    }
-    await approve(plugin.name, state.sha256)
-  }
+  using hold = holdSignals()
   const heading = `Installing ${plugin.name}`
-  progress.step(heading)
   const failure = { code: 0, message: '' }
-  const code = await runSetup(plugin, state.sha256, (event) => {
-    if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
-    if (event.kind === 'log') progress.log(event.text)
-    if (event.kind === 'failed') Object.assign(failure, event)
-  })
+  let code = 1
+  try {
+    if (state.needsConsent) await approve(plugin.name, state.sha256)
+    progress.step(heading)
+    code = await runSetup(plugin, state.sha256, (event) => {
+      if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
+      if (event.kind === 'log') progress.log(event.text)
+      if (event.kind === 'failed') Object.assign(failure, event)
+    })
+  } finally {
+    if (code !== 0) await deleteUnclaimedLeftovers(plugin.name)
+  }
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
+  else if (hold.signal !== undefined) progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}.`)
   else progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
   return code
+}
+
+export const heldSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP', 'SIGTERM']
+
+export type SignalHold = { signal: NodeJS.Signals | undefined; [Symbol.dispose](): void }
+
+const holds = new Set<SignalHold>()
+
+export function holdSignals(): SignalHold {
+  if (holds.size === 0) for (const signal of heldSignals) process.on(signal, holdSignal)
+  const hold: SignalHold = {
+    signal: undefined,
+    [Symbol.dispose]() {
+      holds.delete(hold)
+      if (holds.size > 0) return
+      for (const signal of heldSignals) process.off(signal, holdSignal)
+      if (hold.signal !== undefined) process.kill(process.pid, hold.signal)
+    },
+  }
+  holds.add(hold)
+  return hold
+}
+
+function holdSignal(signal: NodeJS.Signals): void {
+  for (const hold of holds) hold.signal ??= signal
+}
+
+export async function deleteUnclaimedLeftovers(name: string): Promise<void> {
+  const store = storeFolder(process.env)
+  const path = recordPath(store, name)
+  if (existsSync(`${path}.claim`) || existsSync(path)) return
+  await rm(dataFolder(store, name), { recursive: true, force: true })
+  await revokeApprovals(name)
 }
 
 async function checkSetup(plugin: Plugin): Promise<{ sha256: string; isCurrent: boolean; needsConsent: boolean }> {
@@ -108,25 +148,39 @@ async function runSetup(plugin: Plugin, sha256: string, emit: (event: RunnerEven
   const { install, program } = plugin.steps
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
-  if (install !== undefined) {
-    const result = await runStep(['sh', '-c', install], plugin.root, await stepEnvironment(plugin.root, plugin.name, plugin.version), (event) =>
-      emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
-    )
-    if (result.exitCode !== 0) {
+  const folder = storePath('uninstall', plugin.name)
+  const staged = `${folder}.${process.pid}.tmp`
+  let hasUninstall = false
+  let isRecorded = false
+  try {
+    if (install !== undefined) {
+      const result = await runStep(['sh', '-c', install], plugin.root, await stepEnvironment(plugin.root, plugin.name, plugin.version), (event) =>
+        emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
+      )
+      if (result.exitCode !== 0) {
+        emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
+        return 1
+      }
+    }
+    hasUninstall = await saveUninstall(plugin, staged)
+    await writeRecord(writeAtomically, storeFolder(process.env), {
+      name: plugin.name,
+      version: plugin.version,
+      root: plugin.root,
+      installedAt: new Date().toISOString(),
+      scriptsSha256: sha256,
+      uninstall: hasUninstall ? join(folder, 'uninstall.sh') : null,
+      program: program ?? null,
+    })
+    isRecorded = true
+  } finally {
+    if (!isRecorded) {
       if (program !== undefined) await restoreProgram(program, await readRecord(readText, storeFolder(process.env), plugin.name))
-      emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
-      return 1
+      await rm(staged, { recursive: true, force: true })
     }
   }
-  await writeRecord(writeAtomically, storeFolder(process.env), {
-    name: plugin.name,
-    version: plugin.version,
-    root: plugin.root,
-    installedAt: new Date().toISOString(),
-    scriptsSha256: sha256,
-    uninstall: await saveUninstall(plugin),
-    program: program ?? null,
-  })
+  await rm(folder, { recursive: true, force: true })
+  if (hasUninstall) await rename(staged, folder)
   return 0
 }
 
@@ -137,11 +191,10 @@ export async function stepEnvironment(root: string, name: string, version: strin
   return { ...process.env, PATH: path, CMOD_PLUGIN_ROOT: root, CMOD_DATA: data, CMOD_VERSION: version }
 }
 
-async function saveUninstall(plugin: Plugin): Promise<string | null> {
-  const folder = storePath('uninstall', plugin.name)
+async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
   await rm(folder, { recursive: true, force: true })
   const { uninstall } = plugin.steps
-  if (uninstall === undefined) return null
+  if (uninstall === undefined) return false
   const scriptFolders = new Set<string>()
   for (const path of scriptPaths(uninstall)) {
     if ((await stat(join(plugin.root, path)).catch(() => undefined))?.isFile()) scriptFolders.add(dirname(path))
@@ -154,9 +207,8 @@ async function saveUninstall(plugin: Plugin): Promise<string | null> {
       await copyFile(join(plugin.root, scriptFolder, path), target)
     }
   }
-  const script = join(folder, 'uninstall.sh')
-  await Bun.write(script, `cd "$(dirname "$0")/root" || exit 1\n${uninstall}\n`)
-  return script
+  await Bun.write(join(folder, 'uninstall.sh'), `cd "$(dirname "$0")/root" || exit 1\n${uninstall}\n`)
+  return true
 }
 
 function askConsent(plugin: Plugin): boolean {
