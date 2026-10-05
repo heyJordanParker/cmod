@@ -88,7 +88,7 @@ test('a SHA-256 that differs in an update installs nothing and keeps the program
   const result = await setUp(home, `cmod download hello ${machine} ${server.origin}/hello.tar.gz ${listed}`)
 
   expect(result.stdout.split('\n').at(-2)).toBe(
-    `failed 1\tcmod download: ${server.origin}/hello.tar.gz has SHA-256 ${sha256(tarGz)}, but the install script lists ${listed}, so CMod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`,
+    `failed 1\tThe install step of demo exited 1: cmod download: ${server.origin}/hello.tar.gz has SHA-256 ${sha256(tarGz)}, but the install script lists ${listed}, so CMod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`,
   )
   expect(result.exitCode).toBe(1)
   expect(await readdir(data(home))).toEqual(['bin'])
@@ -103,7 +103,7 @@ test('a machine with no listed download fails naming the machines listed', async
 
   const result = await setUp(home, `cmod download hello freebsd-x64 ${server.origin}/hello-freebsd.tar.gz ${sha256('freebsd')} win32-arm64 ${server.origin}/hello-windows.zip ${sha256('windows')}`)
 
-  expect(result.stdout).toBe(`log cmod download: hello has no download for this machine, ${machine}. The install script lists freebsd-x64, win32-arm64.\nfailed 1\tcmod download: hello has no download for this machine, ${machine}. The install script lists freebsd-x64, win32-arm64.\n`)
+  expect(result.stdout).toBe(`log cmod download: hello has no download for this machine, ${machine}. The install script lists freebsd-x64, win32-arm64.\nfailed 1\tThe install step of demo exited 1: cmod download: hello has no download for this machine, ${machine}. The install script lists freebsd-x64, win32-arm64.\n`)
   expect(result.exitCode).toBe(1)
   expect(server.requested).toEqual([])
   expect(existsSync(data(home))).toBe(false)

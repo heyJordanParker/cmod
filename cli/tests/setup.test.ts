@@ -297,13 +297,13 @@ test('setup --events on a set-up mod prints done and runs nothing', async () => 
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 
-test('setup --events on a failing install step prints failed with the exit code and the last stderr line, and writes no record', async () => {
+test('setup --events on a failing install step prints failed with the exit code and a sentence naming the last stderr line, and writes no record', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho "progress 1 2 Fetching"\necho "curl: could not resolve host" >&2\nexit 7\n')
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('progress 1 2 Fetching\nlog curl: could not resolve host\nlog The uninstall step of demo exited 0.\nfailed 7\tcurl: could not resolve host\n')
+  expect(result.stdout).toBe('progress 1 2 Fetching\nlog curl: could not resolve host\nlog The uninstall step of demo undid the install.\nfailed 7\tThe install step of demo exited 7: curl: could not resolve host.\n')
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod/records/demo.json'))).toBe(false)
 })
@@ -552,7 +552,7 @@ test('a failed upgrade keeps only the approval of the version its record names',
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('failed 3\t\n')
+  expect(result.stdout).toBe('failed 3\tThe install step of demo exited 3.\n')
   expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0' })
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({ demo: [sha256] })
@@ -679,7 +679,7 @@ test('Ctrl+C during the install step runs the uninstall step and leaves nothing'
 
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled the install step of demo on SIGINT.')
-  expect(result.output).toContain('The uninstall step of demo exited 0.')
+  expect(result.output).toContain('The uninstall step of demo undid the install.')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
@@ -710,7 +710,7 @@ test('a fresh install step that fails runs the uninstall step and leaves nothing
   const result = await cmod(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(1)
-  expect(result.stdout).toContain('The uninstall step of demo exited 0.')
+  expect(result.stdout).toContain('The uninstall step of demo undid the install.')
   expect(result.stdout).toContain('✘ The install step of demo exited 3: brew: no such formula. Fix the step, then run the command again.\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
@@ -726,7 +726,20 @@ test('a fresh install whose uninstall step fails says parts may remain', async (
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('log curl: could not resolve host\nlog zsh: no such file\nlog The uninstall step of demo exited 2.\nfailed 7\tcurl: could not resolve host. The uninstall step then exited 2: zsh: no such file, so parts of the install may remain\n')
+  expect(result.stdout).toBe(
+    'log curl: could not resolve host\nlog zsh: no such file\nfailed 7\tThe install step of demo exited 7: curl: could not resolve host. The uninstall step then exited 2: zsh: no such file, so parts of the install may remain.\n',
+  )
+  expect(result.exitCode).toBe(1)
+})
+
+test('a fresh install that exits with no stderr and whose uninstall step fails names both exits in order', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\nexit 7\n')
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toBe('log zsh: no such file\nfailed 7\tThe install step of demo exited 7. The uninstall step then exited 2: zsh: no such file, so parts of the install may remain.\n')
   expect(result.exitCode).toBe(1)
 })
 
@@ -738,7 +751,7 @@ test("Ctrl+C during the undo keeps the install step's exit code and reason", asy
   const result = await cmodInTerminal(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of demo on SIGINT. It exited 3: brew: no such formula.')
+  expect(result.output).toContain('Cancelled the install step of demo on SIGINT. The install step of demo exited 3: brew: no such formula.')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
 })
 

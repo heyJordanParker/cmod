@@ -214,10 +214,10 @@ test('Not now declines the install with one notice naming cmod install, and setu
   expect(await fire(lifecycle, 'ui.render', abovePrompt, prompt)).toBe(prompt)
 })
 
-test('a failed install draws the error and its fix, and setup never runs', async () => {
+test('a failed install draws the sentence cmod setup wrote and its fix, and setup never runs', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodOnPath
-  fake.fakes.process.spawn = () => finished(['progress 1 4 Checking Homebrew', 'failed 1\tbrew: command not found'], 1)
+  fake.fakes.process.spawn = () => finished(['progress 1 4 Checking Homebrew', 'failed 1\tThe install step of safe-delete exited 1: brew: command not found.'], 1)
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
 
@@ -227,7 +227,7 @@ test('a failed install draws the error and its fix, and setup never runs', async
 
   expect(runs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
-    '>\n✗ Installing safe-delete  exit 1: brew: command not found\n  Fix the cause, then run: cmod install safe-delete',
+    '>\n✗ Installing safe-delete  The install step of safe-delete exited 1: brew: command not found.\n  Fix the cause, then run: cmod install safe-delete',
   )
 })
 
@@ -244,7 +244,7 @@ test('an install error longer than the band shows its fix in full', async () => 
 
   expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
     '>',
-    '✗ Installing safe-delete  exit 1: cmod',
+    '✗ Installing safe-delete  cmod',
     '  bootstrap: cmod is installed at',
     '  /home/me/.local/bin/cmod, but PATH',
     '  finds no cmod. Put /home/me/.local/bin',
@@ -896,6 +896,23 @@ test('after /cd while Claude Code still reports the old cwd, the pane redraws on
   await fire(lifecycle, 'command.run', cd('../b'), {})
 
   expect(redrawnFolders).toEqual(['/work/b /work/b'])
+  expect(moves).toEqual([movedTo('/work/a', '/work/b')])
+})
+
+test('a Bash call between /cd and the next prompt keeps mod.cwd on the new root', async () => {
+  const { lifecycle, session, moves, start } = folderPane()
+  await start()
+  session.root = '/work/b'
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'ls' } }, {})
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/work/b'])
+  expect(moves).toEqual([movedTo('/work/a', '/work/b')])
+
+  session.cwd = '/work/b'
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
   expect(moves).toEqual([movedTo('/work/a', '/work/b')])
 })
 

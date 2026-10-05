@@ -5,7 +5,7 @@ import { isObject, pluginName, type InstallRecord, type RunnerEvent } from 'cmod
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { home, readJson, readText, tilde } from './files.js'
 import type { Plugin } from './plugin.js'
-import { capture, runStep } from './process.js'
+import { capture, formatExit, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { storePath } from './store.js'
 
@@ -44,7 +44,7 @@ export async function buildProgram(program: Program, progress: Progress): Promis
     else progress.log(event.text)
   })
   if (result.exitCode !== 0) {
-    progress.fail(`Building ${program.name} with "${program.build}" exited ${result.exitCode}${result.lastError ? `: ${result.lastError}` : ''}`)
+    progress.fail(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, result.lastError)}`)
     throw new Error(`Fix the build in ${tilde(program.folder)}, then run the command again.`)
   }
   const folder = join(program.folder, program.output)
@@ -95,7 +95,7 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
       const check = await capture([partial, '--version']).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
       if (check.exitCode !== 0) {
         const detail = (check.stderr.trim() || check.stdout.trim()).split('\n').at(-1)
-        throw new Error(`${url} downloaded, but ${name} --version exited ${check.exitCode}${detail ? `: ${detail}` : ''}. Attach the ${machine} build of ${name} to the v${plugin.version} release.`)
+        throw new Error(`${url} downloaded, but ${name} --version ${formatExit(check.exitCode, detail ?? '')}. Attach the ${machine} build of ${name} to the v${plugin.version} release.`)
       }
       await rename(partial, target)
     } finally {

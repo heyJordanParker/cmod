@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { dataFolder, readRecord, recordPath, storeFolder, type InstallRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
 import { readText, tilde } from '../files.js'
-import { runStep } from '../process.js'
+import { formatExit, runStep } from '../process.js'
 import { removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
 import { modLock, revokeApprovals, storePath, takeLock } from '../store.js'
@@ -83,7 +83,7 @@ async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => 
   if (record.uninstall !== null) {
     const { exitCode, lastError } = await runStep(uninterruptible(['sh', record.uninstall]), folder, await stepEnvironment(join(folder, 'root'), record.name, record.version), emit)
     if (exitCode !== 0) {
-      emit({ kind: 'failed', code: exitCode, message: `The uninstall step of ${record.name} exited ${exitCode}${lastError ? `: ${lastError}` : ''}. Fix ${tilde(record.uninstall)}, then run cmod teardown ${record.name}.` })
+      emit({ kind: 'failed', code: exitCode, message: `The uninstall step of ${record.name} ${formatExit(exitCode, lastError)}. Fix ${tilde(record.uninstall)}, then run cmod teardown ${record.name}.` })
       return 1
     }
   }

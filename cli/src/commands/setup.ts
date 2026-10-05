@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util'
 import { dataFolder, formatEvent, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
-import { runStep } from '../process.js'
+import { formatExit, runStep } from '../process.js'
 import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
@@ -37,7 +37,7 @@ Options:
                         progress <done> <total> <label>
                         log <text>
                         done <name> <version>                          exit 0
-                        failed <exit code>\\t<last line of stderr>       exit 1
+                        failed <exit code>\\t<what failed>               exit 1
   --consent <sha256>  Approve the scripts whose hash a needs-consent event named
   --yes               Approve the scripts without asking`
 
@@ -93,14 +93,10 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
     })
   }
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
-  else if (hold.signal === undefined) progress.fail(`The install step of ${plugin.name} ${formatExit(failure.code, failure.message)}. Fix the step, then run the command again.`)
+  else if (hold.signal === undefined) progress.fail(`${failure.message} Fix the step, then run the command again.`)
   else if (failure.code === 0) progress.fail(`Cancelled setting up ${plugin.name} on ${hold.signal}, before its install step started.`)
-  else progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}. It ${formatExit(failure.code, failure.message)}.`)
+  else progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}. ${failure.message}`)
   return code
-}
-
-function formatExit(code: number, reason: string): string {
-  return `exited ${code}${reason ? `: ${reason}` : ''}`
 }
 
 const heldSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP', 'SIGTERM']
@@ -190,15 +186,15 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
         emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
       )
       if (result.exitCode !== 0) {
-        const reasons = [result.lastError]
+        const sentences = [`The install step of ${plugin.name} ${formatExit(result.exitCode, result.lastError)}.`]
         if (uninstall !== undefined && previous === undefined) {
           const undone = await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
             if (event.kind === 'log') emit(event)
           })
-          emit({ kind: 'log', text: `The uninstall step of ${plugin.name} exited ${undone.exitCode}.` })
-          if (undone.exitCode !== 0) reasons.push(`The uninstall step then ${formatExit(undone.exitCode, undone.lastError)}, so parts of the install may remain`)
+          if (undone.exitCode === 0) emit({ kind: 'log', text: `The uninstall step of ${plugin.name} undid the install.` })
+          else sentences.push(`The uninstall step then ${formatExit(undone.exitCode, undone.lastError)}, so parts of the install may remain.`)
         }
-        emit({ kind: 'failed', code: result.exitCode, message: reasons.filter(Boolean).join('. ') })
+        emit({ kind: 'failed', code: result.exitCode, message: sentences.join(' ') })
         return 1
       }
     }

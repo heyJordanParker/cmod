@@ -152,7 +152,7 @@ A mod that changes the machine, such as by adding a shell alias, names its insta
 "cmod": { "install": "./setup/install.sh", "uninstall": "./setup/uninstall.sh" }
 ```
 
-When the first install of a mod fails or is stopped, CMod runs its uninstall step, so the uninstall step must work on a partial install.
+CMod runs each step with `sh -c` in the mod's folder, so make the scripts executable: `chmod +x setup/*.sh`. `CMOD_DATA` names the mod's data folder. The install step runs again on every new version of the mod, so it must work over an existing install. When the first install of a mod fails or is stopped, CMod runs its uninstall step, so the uninstall step must work on a partial install. CMod saves the folder of each script the uninstall step names, and runs the uninstall step from that copy after you remove the mod.
 
 Start `claude`, and the mod runs on every prompt. `cmod check` runs every check. `cmod publish` releases the mod on GitHub.
 

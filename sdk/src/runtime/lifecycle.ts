@@ -235,7 +235,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     })
     if (outcome?.kind === 'done') return finish()
     if (outcome?.kind === 'needs-consent') return askConsent(outcome)
-    const reason = outcome?.kind === 'failed' ? `exit ${outcome.code}: ${outcome.message}` : `cmod setup exit ${code ?? 'by signal'}: ${lastError}`
+    const reason = outcome?.kind === 'failed' ? outcome.message : `cmod setup exit ${code ?? 'by signal'}: ${lastError}`
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`)
   }
 
@@ -352,6 +352,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()])
   let cwd = startCwd
   let loadedCwd = startCwd
+  let staleCwd: string | undefined
   const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
   const mod: Mod<State> = {
@@ -388,7 +389,9 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       const [nextRoot, reportedCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
       const oldCwd = cwd
       const hasMovedRoot = nextRoot !== modState.root
-      const nextCwd = isAfterCd && hasMovedRoot && relativePath(nextRoot, reportedCwd) === undefined ? nextRoot : reportedCwd
+      if (isAfterCd && hasMovedRoot && relativePath(nextRoot, reportedCwd) === undefined) staleCwd = reportedCwd
+      if (reportedCwd !== staleCwd) staleCwd = undefined
+      const nextCwd = staleCwd === undefined ? reportedCwd : nextRoot
       if (!hasMovedRoot && nextCwd === oldCwd) return
       cwd = nextCwd
       await modState.moveTo(nextRoot).catch((error: unknown) => {
