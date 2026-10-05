@@ -1,25 +1,12 @@
-import type { ElementTable, MarkdownProps, RenderElement, Timer } from 'claude-code'
-import type { Mod } from '../mod.js'
-import type { Claude } from '../runtime/claude.js'
-import type { Router } from '../runtime/router.js'
-import { type Pane, type PaneSize, paneSize } from '../ui/define-pane.js'
+import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement, Timer } from 'claude-code'
+import type { Mod, PaneHandle, ProgressStep } from '../mod.js'
+import type { Pane } from '../ui/define-pane.js'
 import { Box, drawWith, Text } from '../ui/elements.js'
 import type { MarkdownKind, MarkdownReader } from '../ui/markdown.js'
 import type { Slot, SlotProps } from '../ui/slots.js'
 import { messageOf } from '../utils/text.js'
-
-export type ProgressStep = {
-  readonly done: number
-  readonly total: number
-  readonly label?: string
-}
-
-export type PaneHandle = {
-  open(): Promise<void>
-  close(): Promise<void>
-  toggle(): Promise<void>
-  readonly isOpen: boolean
-}
+import type { Claude } from './claude.js'
+import type { Router } from './router.js'
 
 export type ProgressLine = {
   report(step: ProgressStep): void
@@ -41,10 +28,13 @@ type Line = {
   failure: { readonly reason: string; readonly fix: string } | undefined
 }
 
+type PaneSize = Pick<PaneOpenArgs, 'columns' | 'rows'>
+
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 const spinnerMs = 100
 const widestBar = 30
 const narrowestBar = 10
+const sizeKeys = ['columns', 'rows'] as const
 
 export function createProgress(claude: Claude): Progress {
   const lines: Line[] = []
@@ -143,6 +133,18 @@ function barWidth(columns: number | undefined, textLength: number): number {
   return Math.max(narrowestBar, Math.min(widestBar, columns - textLength - spacing))
 }
 
+function paneSize<State extends object>(pane: Pane<State>, state: State): PaneSize {
+  const size: { columns?: number; rows?: number } = {}
+  for (const key of sizeKeys) {
+    const wanted = pane[key]
+    const value = typeof wanted === 'function' ? wanted(state) : wanted
+    if (value === undefined) continue
+    if (!Number.isInteger(value) || value <= 0) throw new Error(`the pane "${pane.id}" gets ${key} ${value} from its state. Return a whole number above 0, or undefined for Claude Code's default.`)
+    size[key] = value
+  }
+  return size
+}
+
 function times(count: number): string {
   return count === 1 ? '1 time' : `${count} times`
 }
@@ -196,7 +198,7 @@ export type UiOptions<State extends object> = {
   readonly claude: Claude
   readonly router: Router
   readonly progress: Progress
-  readonly adds: (feature: string) => void
+  readonly announce: (feature: string) => void
   readonly mod: () => Mod<State>
 }
 
@@ -206,13 +208,13 @@ export type UiArea<State extends object> = {
   restorePanes(): Promise<void>
 }
 
-export function createUi<State extends object>({ name, claude, router, progress, adds, mod }: UiOptions<State>): UiArea<State> {
+export function createUi<State extends object>({ name, claude, router, progress, announce, mod }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, Pane<State>>()
   const openPanes = new Set<string>()
   const requestedSizes = new Map<string, PaneSize>()
+  const renders = new Set<string>()
   const markdownRenders = new Map<string, MarkdownRender>()
   let read: MarkdownReader | undefined
-  let hasRenders = false
   let isRouted = false
   let isResizeQueued = false
 
@@ -314,7 +316,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
       pane(pane) {
         if (panes.has(pane.id)) throw new Error(`${name}: the pane "${pane.id}" is already added. Give each pane its own id.`)
         panes.set(pane.id, pane)
-        adds(`the ${pane.title} pane`)
+        announce(`the ${pane.title} pane`)
         route()
         const handle: PaneHandle = {
           get isOpen() {
@@ -333,18 +335,18 @@ export function createUi<State extends object>({ name, claude, router, progress,
         return handle
       },
       render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement) {
-        hasRenders = true
         const place: Slot = slot
+        const feature = 'markdown' in place ? `a render of markdown ${place.markdown.name}` : `a render of ${place.component}`
+        if (renders.has(feature)) throw new Error(`${name}: ${feature} is already added. Render each slot once.`)
+        renders.add(feature)
+        announce(feature)
         if ('markdown' in place) {
           const kind = place.markdown
-          if (markdownRenders.has(kind.type)) throw new Error(`${name}: a render of markdown ${kind.name} is already added. Render each markdown slot once.`)
           markdownRenders.set(kind.type, { Component: Component as unknown as MarkdownRender['Component'], log: logOnce(`markdown ${kind.name}`) })
-          adds(`a render of markdown ${kind.name}`)
           routeMarkdown(kind)
           return
         }
         const { component } = place
-        adds(`a render of ${component}`)
         const log = logOnce(component)
         router.add('ui.render', async (e, next) => {
           if (e.component !== component) return next(e)
@@ -370,7 +372,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
       ask: (question, options) => claude.ui.ask(question, options),
     },
     changed() {
-      if (panes.size === 0 && !hasRenders) return
+      if (panes.size === 0 && renders.size === 0) return
       claude.ui.invalidate('ui.render')
       if (isResizeQueued) return
       isResizeQueued = true

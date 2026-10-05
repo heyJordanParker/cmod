@@ -3,10 +3,11 @@ import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import { defineMod } from '../src/mod.js'
-import { testMod } from '../src/testing.js'
+import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
-import { Box, Button, Text } from '../src/ui/elements.js'
+import { Box, Button, Image, Text } from '../src/ui/elements.js'
 import { slots } from '../src/ui/slots.js'
+import { fakeFileSystem } from './jobs/fake-file-system.js'
 
 const tickets = defineMod({
   name: 'tickets',
@@ -92,6 +93,49 @@ test("testMod dependencies fakes another mod's api", async () => {
   expect(tested.calls).toContainEqual({ call: 'cmod.call', args: [{ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } }] })
 })
 
+test('testMod answers a call to a mod it does not fake with the install command', async () => {
+  const outline = defineMod({
+    name: 'outline',
+    setup(mod) {
+      mod.use(slashCommand({ name: 'outline', description: 'List the functions a file exports', reply: async ({ args }, mod) => (await mod.dependencies.tracer.signatures({ path: args })).length.toString() }))
+    },
+  })
+
+  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
+})
+
+const project = '/work/dent'
+const projectFiles = fakeFileSystem({
+  [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
+  [`${project}/.git/worktrees/design/commondir`]: '../..\n',
+  [`${project}/worktrees/design/.git`]: `gitdir: ${project}/.git/worktrees/design\n`,
+  [`${project}/worktrees/design/Domain.md`]: '# Domain\n',
+})
+
+function domainGuard(options: TestOptions<Record<never, never>>) {
+  const tested = testMod(
+    defineMod({
+      name: 'dent',
+      setup(mod) {
+        mod.use(permissions({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] }))
+      },
+    }),
+    options,
+  )
+  tested.fakes.fs.stat = async (path) => ({ ...(await projectFiles.stat(path)), size: 0, mtimeMs: 0, isLink: false })
+  tested.fakes.fs.read = (path) => projectFiles.read(path)
+  tested.fakes.fs.exists = (path) => projectFiles.exists(path)
+  return tested
+}
+
+test('testMod scope project makes the mod a project plugin, and projectRoot alone does not', async () => {
+  const editInWorktree = { tool: 'Edit', input: { file_path: `${project}/worktrees/design/Domain.md`, old_string: '#', new_string: '##' }, tool_use_id: 'toolu_1' }
+  const allowed = { decision: 'allow' } as const
+
+  expect(await domainGuard({ projectRoot: project, scope: 'project' }).fire('tool.check', editInWorktree, allowed)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
+  expect(await domainGuard({ projectRoot: project }).fire('tool.check', editInWorktree, allowed)).toEqual(allowed)
+})
+
 type NotesState = { global: { notes: readonly string[] } }
 
 const notesPane = definePane<NotesState>({
@@ -129,6 +173,19 @@ test('lines reads a pane as rows of text', async () => {
   await tested.type('/notes')
 
   expect(await tested.lines('notes')).toEqual(['Notes  2 saved', '', '  Buy milk', '  Call the plumber about', '  the sink', '', 'Clear'])
+})
+
+test("tested.lines shows an Image's alt text", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      setup(mod) {
+        void mod.ui.pane({ id: 'diagram', title: 'Diagram', render: () => Box({ flexDirection: 'column', children: [Text({ children: 'Login flow' }), Image({ source: { png: '' }, columns: 40, rows: 10, alt: 'A login flow diagram' })] }) }).open()
+      },
+    }),
+  )
+
+  expect(await tested.lines('diagram')).toEqual(['Login flow', 'A login flow diagram'])
 })
 
 test('lines refuses a pane that is not open', async () => {

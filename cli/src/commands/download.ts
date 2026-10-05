@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { programName } from '../plugin.js'
+import { pluginName } from 'cmod-sdk/src/records.js'
 import { run as runCommand } from '../process.js'
 import { download, machine } from '../program.js'
 import { printEvent } from './setup.js'
@@ -30,7 +30,7 @@ const steps = 7
 export async function run(argv: string[]): Promise<number> {
   const [program, ...listed] = parseArgs({ args: argv, allowPositionals: true }).positionals
   if (program === undefined || listed.length === 0 || listed.length % 3 !== 0) throw new Error(`cmod download takes a program, then one or more <machine> <url> <sha256> triples.\n\n${help}`)
-  if (!programName.test(program)) throw new Error(`"${program}" is not a program name: use letters, digits, ".", "_", and "-", starting with a letter or digit.`)
+  if (!pluginName.test(program)) throw new Error(`"${program}" is not a program name: use letters, digits, ".", "_", and "-", starting with a letter or digit.`)
   const downloads = Array.from({ length: listed.length / 3 }, (_, index) => {
     const [listedMachine, url, sha256] = listed.slice(index * 3, index * 3 + 3) as [string, string, string]
     if (!URL.canParse(url)) throw new Error(`"${url}" for ${listedMachine} is not a URL.`)

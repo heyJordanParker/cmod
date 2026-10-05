@@ -62,23 +62,27 @@ test('a Bash mv lists both files', async () => {
   expect(seen).toEqual([{ event: 'PostToolUse', files: { read: [], changed: ['/work/notes.md', '/work/archive/notes.md', '/work/archive'] } }])
 })
 
-test("a Grep's folder is in files.read", async () => {
+test("a Grep call's files lists no folder", async () => {
   const { tested, seen } = fileWatcher()
 
+  await tested.fire('PreToolUse', call('Grep', { pattern: 'TODO', path: 'src' }))
   await tested.fire('PostToolUse', { ...call('Grep', { pattern: 'TODO', path: 'src' }), tool_response: {} })
 
-  expect(seen).toEqual([{ event: 'PostToolUse', files: { read: ['/work/src'], changed: [] } }])
+  expect(seen).toEqual([
+    { event: 'PreToolUse', files: { read: [], changed: [] } },
+    { event: 'PostToolUse', files: { read: [], changed: [] } },
+  ])
 })
 
-test('a Glob lists the folder it searches', async () => {
+test("a Glob call's files lists no folder", async () => {
   const { tested, seen } = fileWatcher()
 
   await tested.fire('PostToolUse', { ...call('Glob', { pattern: '**/*.ts', path: 'src' }), tool_response: {} })
   await tested.fire('PostToolUse', { ...call('Glob', { pattern: '**/*.md' }), tool_response: {} })
 
   expect(seen).toEqual([
-    { event: 'PostToolUse', files: { read: ['/work/src'], changed: [] } },
-    { event: 'PostToolUse', files: { read: ['/work'], changed: [] } },
+    { event: 'PostToolUse', files: { read: [], changed: [] } },
+    { event: 'PostToolUse', files: { read: [], changed: [] } },
   ])
 })
 

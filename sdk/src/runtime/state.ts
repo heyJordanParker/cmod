@@ -9,8 +9,6 @@ type SavedLifetime = Exclude<Lifetime, 'memory'>
 
 type Groups = Record<Lifetime, Record<string, unknown>>
 
-type Kept = Readonly<Record<string, unknown>>
-
 export type StateOptions = {
   readonly name: string
   readonly initial: object
@@ -48,19 +46,18 @@ export function createState<State extends object>({ name, initial, session, root
     return run
   }
 
-  const storeKey = (lifetime: SavedLifetime, key: string) => (lifetime === 'global' ? `${name}.${key}` : `${name}.${key}.${lifetime === 'project' ? 'projects' : 'sessions'}`)
-  const ownerField = (lifetime: SavedLifetime) => (lifetime === 'project' ? 'root' : 'session')
-  const keptValues = async (lifetime: SavedLifetime, key: string) => ((await claude.store.get(storeKey(lifetime, key))) ?? []) as Kept[]
+  const ownersKey = (lifetime: Exclude<SavedLifetime, 'global'>, key: string) => `${name}.${key}.${lifetime === 'project' ? 'projects' : 'sessions'}.`
 
-  const read = async (lifetime: SavedLifetime, key: string, owner: string) => {
-    if (lifetime === 'global') return claude.store.get(storeKey(lifetime, key))
-    return (await keptValues(lifetime, key)).find((saved) => saved[ownerField(lifetime)] === owner)?.['value']
-  }
+  const storeKey = (lifetime: SavedLifetime, key: string, owner: string) => (lifetime === 'global' ? `${name}.${key}` : `${ownersKey(lifetime, key)}${owner}`)
+
+  const read = (lifetime: SavedLifetime, key: string, owner: string) => claude.store.get(storeKey(lifetime, key, owner))
 
   const write = async (lifetime: SavedLifetime, key: string, value: unknown, owner: string) => {
-    if (lifetime === 'global') return claude.store.set(storeKey(lifetime, key), value)
-    const others = (await keptValues(lifetime, key)).filter((saved) => saved[ownerField(lifetime)] !== owner)
-    await claude.store.set(storeKey(lifetime, key), [...others, { [ownerField(lifetime)]: owner, value }].slice(-keptPerValue))
+    if (lifetime === 'global') return claude.store.set(storeKey(lifetime, key, owner), value)
+    await claude.store.delete(storeKey(lifetime, key, owner))
+    await claude.store.set(storeKey(lifetime, key, owner), value)
+    const owners = (await claude.store.keys()).filter((stored) => stored.startsWith(ownersKey(lifetime, key)))
+    for (const oldest of owners.slice(0, -keptPerValue)) await claude.store.delete(oldest)
   }
 
   const fileValues = (path: string, tier: 'system' | 'project', text: string, systemPath: string) => {

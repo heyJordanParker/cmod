@@ -2,14 +2,14 @@ import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { permissions, type PermissionRules } from '../../src/jobs/permissions.js'
 import { defineMod, type Part } from '../../src/mod.js'
-import { testModWithEngine } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 import { fakeFileSystem } from './fake-file-system.js'
 
 const bashCheck = (command: string, toolUseId: string) => ({ tool: 'Bash', input: { command }, tool_use_id: toolUseId })
 const allowedInBypassMode: EventResult<'tool.check'> = { decision: 'allow' }
 
 test('a deny rule refuses a Bash call in bypassPermissions mode, and its reason reaches the answer', async () => {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'no-force-push',
       setup(mod) {
@@ -37,7 +37,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
       return next(e)
     })
   }
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'read-only-explorers',
       setup(mod) {
@@ -62,7 +62,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
 })
 
 test("a when check gets the mod's own typed state, so a rule follows state without capturing the mod from setup", async () => {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'freeze',
       state: { project: { frozen: true } },
@@ -79,7 +79,7 @@ test("a when check gets the mod's own typed state, so a rule follows state witho
 
 test("the main loop's agentType is the session's Agent, read from the classic hook input", async () => {
   const seen: (string | undefined)[] = []
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'agent-reader',
       setup(mod) {
@@ -95,7 +95,7 @@ test("the main loop's agentType is the session's Agent, read from the classic ho
 })
 
 test('a when check whose mod.process.run passes the 2 s deadline gives the rule its own decision', async () => {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'clean-tree',
       setup(mod) {
@@ -131,14 +131,14 @@ const projectFiles = fakeFileSystem({
 })
 
 function inProject(rules: PermissionRules) {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'dent',
       setup(mod) {
         mod.use(permissions(rules))
       },
     }),
-    { projectRoot: project },
+    { scope: 'project', projectRoot: project },
   )
   tested.fakes.fs.stat = async (path) => ({ ...(await projectFiles.stat(path)), size: 0, mtimeMs: 0, isLink: false })
   tested.fakes.fs.read = (path) => projectFiles.read(path)

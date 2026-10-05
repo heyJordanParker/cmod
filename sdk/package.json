@@ -13,7 +13,6 @@
     "*.js",
     "*.d.ts",
     "*.d.ts.map",
-    "api/",
     "jobs/",
     "runtime/",
     "ui/",

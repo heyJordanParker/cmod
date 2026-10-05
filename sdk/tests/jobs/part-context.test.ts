@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
+import type { EventResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import { modOf, targetWords } from '../../src/jobs/part-context.js'
 import { findProjectScope, type Workspace } from '../../src/jobs/permissions/find-project-scope.js'
-import { modOf, targetWords } from '../../src/jobs/tool-calls.js'
+import { prompt } from '../../src/jobs/prompt.js'
+import { tool } from '../../src/jobs/tool.js'
 import { defineMod, type PartContext } from '../../src/mod.js'
-import { toolCalls, type ToolCalls } from '../../src/runtime/tool-calls.js'
 import { testMod } from '../../src/testing.js'
 import { fakeFileSystem } from './fake-file-system.js'
 
@@ -24,14 +26,6 @@ async function partFor() {
   if (used === undefined) throw new Error('setup did not run')
   return { fake: tested, context: used }
 }
-
-test('every job of one mod shares one tool-call context', async () => {
-  const contexts: ToolCalls[] = []
-  const tested = testMod(defineMod({ name: 'dent', setup: (mod) => void contexts.push(mod.use(toolCalls), mod.use(toolCalls)) }))
-  await tested.start()
-  expect(contexts).toHaveLength(2)
-  expect(contexts[0]).toBe(contexts[1])
-})
 
 test("in a project-scope plugin, a callback's mod.process.run runs in the work tree that holds the call's path", async () => {
   const { fake, context } = await partFor()
@@ -67,4 +61,77 @@ test('targetWords names each target in words a user reads', () => {
   expect(targetWords({ fetch: 'https://*.example/**' })).toBe('fetches of https://*.example/**')
   expect(targetWords({ subagent: 'explorer' })).toBe('the explorer subagent')
   expect(targetWords({ tool: 'mcp__github__*' })).toBe('the mcp__github__* tool')
+})
+
+type Stream = HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+
+async function readAll(stream: Stream): Promise<string> {
+  let text = ''
+  for await (const piece of stream) text += piece.text
+  return text
+}
+
+function written(text: string): Stream {
+  async function* pieces(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+    yield { stream: 'stdout', text }
+    return { code: 0, signal: null }
+  }
+  return Object.assign(pieces(), { result: Promise.resolve({ code: 0, signal: null }) })
+}
+
+function endless(killed: () => void): Stream {
+  const stream = {
+    next: () => new Promise(() => undefined),
+    return: async (value: ProcessSpawnResult) => {
+      killed()
+      return { done: true, value }
+    },
+    [Symbol.asyncIterator]: () => stream,
+    result: new Promise(() => undefined),
+  }
+  return stream as unknown as Stream
+}
+
+test('spawn inside a prompt callback runs in the work tree', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'dent',
+      setup(mod) {
+        mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: (_input, mod) => readAll(mod.process.spawn(['git', 'status'])) }))
+      },
+    }),
+    { scope: 'project', projectRoot: root },
+  )
+  tested.fakes.fs.stat = async (path) => ({ ...(await fs.stat(path)), size: 0, mtimeMs: 0, isLink: false })
+  tested.fakes.fs.read = (path) => fs.read(path)
+  tested.fakes.fs.exists = (path) => fs.exists(path)
+  tested.fakes.clock.after = () => ({ cancel: () => undefined })
+  tested.fakes.process.spawn = () => written('On branch design\n')
+  const edit = { tool: 'Edit', file_path: `${root}/worktrees/design/Domain.md`, old_string: '#', new_string: '##', tool_use_id: 'toolu_1' } as never
+  const answered = { result: { filePath: `${root}/worktrees/design/Domain.md` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
+
+  const answer = await tested.fire('tool.call', edit, answered)
+
+  expect(tested.calls.filter((call) => call.call === 'process.spawn').map((call) => call.args)).toEqual([[{ argv: ['git', 'status'], cwd: `${root}/worktrees/design` }]])
+  expect(answer.context).toEqual(['On branch design\n'])
+})
+
+test("a spawn inside a job stops at the job's deadline", async () => {
+  let isKilled = false
+  const tested = testMod(
+    defineMod({
+      name: 'tickets',
+      setup(mod) {
+        mod.use(tool({ name: 'sync', description: 'Sync the tickets', execute: (_input, mod) => readAll(mod.process.spawn(['tracker', 'sync'])) }))
+      },
+    }),
+  )
+  tested.fakes.process.spawn = () => endless(() => (isKilled = true))
+  tested.fakes.clock.after = (ms, fire) => {
+    if (ms === 30000) void Promise.resolve().then(fire)
+    return { cancel: () => undefined }
+  }
+
+  expect(await tested.callTool('sync', {})).toEqual({ deny: 'The sync tool failed: mod.process.spawn passed the 30 s deadline of tool' })
+  expect(isKilled).toBe(true)
 })

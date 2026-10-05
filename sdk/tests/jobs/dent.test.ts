@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
-import { testModWithEngine } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 import { dent } from './dent-mod.js'
 import { fakeFileSystem } from './fake-file-system.js'
 
@@ -25,7 +25,7 @@ const allowed: EventResult<'tool.check'> = { decision: 'allow' }
 const answered = { result: { filePath: `${root}/app/cart.ts` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 
 function dentSession(gitStatus = '') {
-  const tested = testModWithEngine(dent, { projectRoot: root })
+  const tested = testMod(dent, { scope: 'project', projectRoot: root })
   tested.fakes.fs.stat = async (path) => ({ ...(await files.stat(path)), size: 0, mtimeMs: 0, isLink: false })
   tested.fakes.fs.read = (path) => files.read(path)
   tested.fakes.fs.exists = (path) => files.exists(path)

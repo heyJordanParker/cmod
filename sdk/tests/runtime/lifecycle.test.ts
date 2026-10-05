@@ -3,9 +3,10 @@ import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, FsStat, Hoo
 import { defineMod, type Mod } from '../../src/mod.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Plugin } from '../../src/runtime/lifecycle.js'
-import { fakeClaude, textOf } from '../../src/testing.js'
+import { fakeClaude } from '../../src/testing.js'
 import { scriptsSha256 } from '../../src/records.js'
 import { Text } from '../../src/ui/elements.js'
+import { textOf } from '../../src/utils/fake-elements.js'
 
 const root = '/plugins/safe-delete'
 const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false }
@@ -18,9 +19,8 @@ const fileStat = async (): Promise<FsStat> => ({ kind: 'file', size: 1, mtimeMs:
 
 const entriesIn = (files: Record<string, string>) => async (folder = ''): Promise<FsEntry[]> => {
   const prefix = `${folder.replaceAll('/./', '/')}/`
-  return Object.keys(files)
-    .filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
-    .map((path) => ({ name: path.slice(prefix.length), kind: 'file', size: 1, mtimeMs: 0, isLink: false }))
+  const names = new Set(Object.keys(files).flatMap((path) => (path.startsWith(prefix) ? [path.slice(prefix.length).split('/')[0] as string] : [])))
+  return [...names].map((name) => ({ name, kind: files[`${prefix}${name}`] === undefined ? 'dir' : 'file', size: 1, mtimeMs: 0, isLink: false }))
 }
 
 function controlledStream() {
@@ -117,7 +117,6 @@ test('a mod with a pending install registers nothing until done, then runs setup
   await settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
-  expect(lifecycle.phase).toBe('installing')
   expect(await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})).toEqual({})
   expect(runs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(`>\n⠋ Installing safe-delete  ${'█'.repeat(15)}${'░'.repeat(15)}  2/4  Installing trash`)
@@ -127,14 +126,12 @@ test('a mod with a pending install registers nothing until done, then runs setup
   step.exit(0)
   await settle()
 
-  expect(lifecycle.phase).toBe('ready')
   expect(runs).toEqual([])
 
   const answer = await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(runs).toEqual(['setup', 'PostToolUse'])
   expect(answer).toEqual({ additionalContext: ['safe-delete saw it'] })
-  expect(lifecycle.phase).toBe('active')
   expect(fake.shown.toasts).toEqual(['safe-delete is ready'])
   expect(fake.shown.logs).toEqual(['safe-delete added the Trash pane and a hook on PostToolUse.'])
   expect(await fire(lifecycle, 'ui.render', abovePrompt, prompt)).toBe(prompt)
@@ -150,8 +147,7 @@ test('a call to a mod still installing fails with when to retry', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await settle()
 
-  expect(lifecycle.phase).toBe('installing')
-  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: { missing: 'safe-delete' } })).toEqual({
+  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })).toEqual({
     deny: "safe-delete is installing. Try again when it's ready.",
   })
   expect(await fire(lifecycle, 'cmod.call', { to: 'tracer', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
@@ -167,8 +163,7 @@ test('a call to a mod whose install was declined fails with the install command'
   await lifecycle.start(fake.claude, given(pending))
   await settle()
 
-  expect(lifecycle.phase).toBe('declined')
-  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: { missing: 'safe-delete' } })).toEqual({
+  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: [] })).toEqual({
     deny: 'safe-delete is not installed. Run cmod install safe-delete.',
   })
 })
@@ -199,7 +194,6 @@ test('needs-consent asks in the question dialog, and Install runs the setup agai
     ['cmod', 'setup', root, '--events'],
     ['cmod', 'setup', root, '--events', '--consent', 'abc123'],
   ])
-  expect(lifecycle.phase).toBe('ready')
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
   expect(runs).toEqual(['setup', 'PostToolUse'])
 })
@@ -216,7 +210,6 @@ test('Not now declines the install with one notice naming cmod install, and setu
   await settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
-  expect(lifecycle.phase).toBe('declined')
   expect(fake.shown.logs).toEqual(['safe-delete is not installed. Run cmod install safe-delete to install it.'])
   expect(runs).toEqual([])
   expect(await fire(lifecycle, 'ui.render', abovePrompt, prompt)).toBe(prompt)
@@ -233,7 +226,6 @@ test('a failed install draws the error and its fix, and setup never runs', async
   await settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
-  expect(lifecycle.phase).toBe('failed')
   expect(runs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
     '>\n✗ Installing safe-delete  exit 1: brew: command not found\n  Fix the cause, then run: cmod install safe-delete',
@@ -267,7 +259,6 @@ test('a waiting mod continues its install once the cmod program appears, with no
   cmodCheck?.fire()
   await settle()
 
-  expect(lifecycle.phase).toBe('waiting')
   expect(spawned).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for CMod')
 
@@ -276,9 +267,38 @@ test('a waiting mod continues its install once the cmod program appears, with no
   await settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
-  expect(lifecycle.phase).toBe('ready')
   expect(cmodCheck?.isCancelled).toBe(true)
   expect(runs).toEqual([])
+})
+
+test('a mod gives up waiting for CMod after 60 seconds and names it', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodMissing
+  const spawned: ProcessSpawnRequest[] = []
+  fake.fakes.process.spawn = (request) => {
+    spawned.push(request)
+    return finished(['done safe-delete 0.2.0'], 0)
+  }
+  const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
+  const timer = (ms: number, fire: () => void) => {
+    const made = { ms, fire, isCancelled: false }
+    timers.push(made)
+    return { cancel: () => (made.isCancelled = true) }
+  }
+  fake.claude.clock.every = timer
+  fake.fakes.clock.after = timer
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await settle()
+  timers.find((made) => made.ms === 60_000)?.fire()
+  fake.fakes.process.run = cmodOnPath
+  timers.find((made) => made.ms === 1000)?.fire()
+  await settle()
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing safe-delete  CMod did not start in 60 seconds\n  Install it with cmod install cmod, then run /reload-plugins.')
+  expect(timers.find((made) => made.ms === 1000)?.isCancelled).toBe(true)
+  expect(spawned).toEqual([])
 })
 
 test('a setup that throws draws the error and leaves no hook registered', async () => {
@@ -299,7 +319,6 @@ test('a setup that throws draws the error and leaves no hook registered', async 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'broken', isInstalled: true }))
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
-  expect(lifecycle.phase).toBe('failed')
   expect(hookRuns).toBe(0)
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
     '>\n✗ Installing broken  setup failed: no config file\n  Fix the mod’s setup, then run /reload-plugins.',
@@ -360,6 +379,33 @@ test('readPlugin reads the install step, the version, and whether the record mat
   expect((await readPlugin(fake.claude)).isInstalled).toBe(false)
 })
 
+test("the SDK lists files in a script's subfolders", async () => {
+  const files: Record<string, string> = {
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+    [`${root}/package.json`]: '{ "cmod": { "install": "./setup/install.sh" } }',
+    [`${root}/setup/install.sh`]: '. ./setup/lib/brew.sh\n',
+    [`${root}/setup/lib/brew.sh`]: 'brew install trash\n',
+  }
+  const fileAt = (path: string) => files[path.replaceAll('/./', '/')]
+  const below = (folder: string) => {
+    const prefix = `${root}/${folder}/`.replaceAll('/./', '/')
+    return Object.keys(files).flatMap((path) => (path.startsWith(prefix) ? [path.slice(prefix.length)] : [])).sort()
+  }
+  const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => fileAt(`${root}/${path}`), list: async (folder) => below(folder) })
+  files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.fs.exists = async (path) => fileAt(path) !== undefined
+  fake.fakes.fs.stat = fileStat
+  fake.fakes.fs.read = async (path) => fileAt(path) as string
+  fake.fakes.fs.list = entriesIn(files)
+
+  expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
+
+  files[`${root}/setup/lib/brew.sh`] = 'brew install trash-cli\n'
+
+  expect((await readPlugin(fake.claude)).isInstalled).toBe(false)
+})
+
 test('a mod with a program and no install step runs setup and then turns on', async () => {
   const files: Record<string, string> = {
     [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
@@ -382,12 +428,11 @@ test('a mod with a program and no install step runs setup and then turns on', as
   await settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
-  expect(lifecycle.phase).toBe('ready')
+  expect(runs).toEqual([])
 
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(runs).toEqual(['setup', 'PostToolUse'])
-  expect(lifecycle.phase).toBe('active')
 })
 
 test('a mod with no steps activates at once and writes its record in the background', async () => {
@@ -408,7 +453,6 @@ test('a mod with no steps activates at once and writes its record in the backgro
   await lifecycle.start(fake.claude, readPlugin)
   await settle()
 
-  expect(lifecycle.phase).toBe('active')
   expect(runs).toEqual(['setup'])
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
   expect(await fire(lifecycle, 'ui.render', abovePrompt, prompt)).toBe(prompt)
@@ -419,8 +463,8 @@ test('a mod with no steps activates at once and writes its record in the backgro
   await fire(lifecycle, 'classic.UserPromptSubmit', { ...postToolUse, hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, {})
   await settle()
 
-  expect(lifecycle.phase).toBe('active')
   expect(spawned).toHaveLength(1)
+  expect(await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})).toEqual({ additionalContext: ['safe-delete saw it'] })
 })
 
 test('a mod with no steps writes its record silently, and retries on the next prompt while CMod is missing', async () => {
@@ -442,7 +486,6 @@ test('a mod with no steps writes its record silently, and retries on the next pr
   await lifecycle.start(fake.claude, readPlugin)
   await settle()
 
-  expect(lifecycle.phase).toBe('active')
   expect(runs).toEqual(['setup'])
   expect(spawned).toEqual([])
   expect(await fire(lifecycle, 'ui.render', abovePrompt, prompt)).toBe(prompt)
@@ -479,7 +522,6 @@ test('a folder named in an install command does not stop the mod from starting',
 
   await lifecycle.start(fake.claude, readPlugin)
 
-  expect(lifecycle.phase).toBe('active')
   expect(runs).toEqual(['setup'])
 })
 
@@ -493,7 +535,6 @@ test('a plugin.json that is not JSON shows its path as a failure', async () => {
 
   await lifecycle.start(fake.claude, readPlugin)
 
-  expect(lifecycle.phase).toBe('failed')
   expect(runs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith(`>\n✗ Installing safe-delete  ${root}/.claude-plugin/plugin.json is not JSON`)
 })
@@ -507,7 +548,6 @@ test('an error from cmod --version other than not found shows as a failure', asy
   await lifecycle.start(fake.claude, given(pending))
   await settle()
 
-  expect(lifecycle.phase).toBe('failed')
   expect(runs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
     '>\n✗ Installing safe-delete  cmod --version is still running after 30 s\n  Run cmod install safe-delete in a terminal to see the whole log.',
@@ -523,7 +563,7 @@ test('cmod missing from PATH is waiting, not a failure', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await settle()
 
-  expect(lifecycle.phase).toBe('waiting')
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for CMod')
 })
 
 test('a question dialog that fails shows as a failure, not as Not now', async () => {
@@ -537,7 +577,6 @@ test('a question dialog that fails shows as a failure, not as Not now', async ()
   await lifecycle.start(fake.claude, given(pending))
   await settle()
 
-  expect(lifecycle.phase).toBe('failed')
   expect(fake.shown.logs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
     '>\n✗ Installing safe-delete  the question dialog closed\n  Run cmod install safe-delete in a terminal to see the whole log.',
@@ -584,7 +623,7 @@ function notesIn(projectRoot: string) {
   const startConversation = (id: string) => {
     fake.claude.session.id = async () => id
   }
-  return { session, moveTo, startConversation, store: fake.store }
+  return { session, moveTo, startConversation }
 }
 
 test('a global value is the same in every project', async () => {
@@ -615,14 +654,12 @@ test('a session value comes back after a code reload, and a new conversation sta
   expect(fresh.state.session.draft).toBe('')
 })
 
-test('a memory value is never written to the store', async () => {
+test('a memory value starts from its default after a code reload, and a session value comes back', async () => {
   const notes = notesIn('/work/a')
   const first = await notes.session()
   first.state.memory.isTyping = true
   first.state.session.draft = 'call mum'
   await settle()
-
-  expect([...notes.store.keys()]).toEqual(['cmod-sdk:announced', 'notes.draft.sessions'])
 
   const reloaded = await notes.session()
 
@@ -686,6 +723,27 @@ test("after the project root changes, the mod reads that project's saved value a
   expect(textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))).toBe('src')
 })
 
+test('two projects setting one project value keep both', async () => {
+  const definition = defineMod({ name: 'file-tree', state: { project: { expanded: [] as string[] } }, setup() {} })
+  const first = fakeClaude({ name: 'file-tree', root })
+  const sessionIn = async (projectRoot: string) => {
+    const fake = fakeClaude({ name: 'file-tree', root })
+    Object.assign(fake.claude.store, first.claude.store)
+    fake.claude.session.root = async () => projectRoot
+    const lifecycle = createLifecycle(definition)
+    await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+    return lifecycle.mod as Mod<{ project: { expanded: string[] } }>
+  }
+  const [inA, inB] = await Promise.all([sessionIn('/work/a'), sessionIn('/work/b')])
+
+  inA.state.project.expanded = ['src']
+  inB.state.project.expanded = ['docs']
+  await settle()
+
+  expect((await sessionIn('/work/a')).state.project.expanded).toEqual(['src'])
+  expect((await sessionIn('/work/b')).state.project.expanded).toEqual(['docs'])
+})
+
 test("a project whose saved state fails to load leaves the mod in the project it was in, and the next prompt loads it", async () => {
   const fake = fakeClaude({ name: 'file-tree', root })
   let projectRoot = '/work/a'
@@ -704,11 +762,11 @@ test("a project whose saved state fails to load leaves the mod in the project it
 
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([mod.session.root, mod.state.project.expanded]).toEqual(['/work/a', ['src']])
+  expect([mod.projectRoot, mod.state.project.expanded]).toEqual(['/work/a', ['src']])
   expect(fake.shown.logs).toContain('file-tree keeps the state of /work/a and tries the project folder again on the next prompt: the store file is locked')
 
   isStoreLocked = false
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([mod.session.root, mod.state.project.expanded]).toEqual(['/work/b', []])
+  expect([mod.projectRoot, mod.state.project.expanded]).toEqual(['/work/b', []])
 })

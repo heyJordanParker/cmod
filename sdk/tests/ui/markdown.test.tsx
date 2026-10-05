@@ -2,12 +2,13 @@ import { expect, spyOn, test } from 'bun:test'
 import type { Args, Frozen, Next, RenderElement } from 'claude-code'
 import { defineMod, type ModDefinition } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
-import { fakeClaude, testMod, textOf } from '../../src/testing.js'
+import { fakeClaude, testMod } from '../../src/testing.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
 import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Markdown, Text } from '../../src/ui/elements.js'
-import { markdownSlots } from '../../src/ui/markdown.js'
+import { markdownBlocks, markdownSlots } from '../../src/ui/markdown.js'
 import { slots, type SlotProps } from '../../src/ui/slots.js'
+import { textOf } from '../../src/utils/fake-elements.js'
 
 declare const Bun: { spawnSync(argv: readonly string[]): { readonly stdout: { toString(): string }; readonly stderr: { toString(): string } } }
 declare const process: { readonly execPath: string }
@@ -23,6 +24,29 @@ function Shouted({ text }: SlotProps<typeof markdownSlots.Heading>): RenderEleme
 
 function MermaidBlock({ lang, value, Default }: SlotProps<typeof markdownSlots.CodeBlock>): RenderElement {
   return lang === 'mermaid' ? <Text>diagram: {value}</Text> : <Default />
+}
+
+const everyBlock = defineMod({
+  name: 'blocks',
+  setup(mod) {
+    for (const [name, slot] of Object.entries(markdownSlots)) mod.ui.render(slot, ({ Default, ...block }) => <Text>{`${name} ${JSON.stringify(block)}`}</Text>)
+  },
+})
+
+function prefixesOf(reply: string): string[] {
+  return Array.from({ length: reply.length }, (_, index) => reply.slice(0, index + 1))
+}
+
+async function streamedAgainstWhole(reply: string) {
+  const streamed = testMod(everyBlock)
+  const differences: { readonly text: string; readonly streamed: string[]; readonly whole: string[] }[] = []
+  for (const text of prefixesOf(reply)) {
+    await streamed.lines(slots.AssistantMessage, { text, isFirstOfReply: true })
+    const drawn = await streamed.lines(slots.AssistantMessage, { text, isFirstOfReply: true })
+    const whole = await testMod(everyBlock).lines(slots.AssistantMessage, { text, isFirstOfReply: true })
+    if (JSON.stringify(drawn) !== JSON.stringify(whole)) differences.push({ text, streamed: drawn, whole })
+  }
+  return differences
 }
 
 test('a markdown slot draws its blocks and leaves the rest to Default', async () => {
@@ -82,6 +106,20 @@ test('a block still streaming is drawn by Default', async () => {
   expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true })).toEqual(['PLAN', 'AssistantMessage', '  text: "We read."', '  isFirstOfReply: false', 'STEPS'])
 })
 
+test('a heading stays drawn by its render while the paragraph directly below it streams', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'headings',
+      setup(mod) {
+        mod.ui.render(markdownSlots.Heading, Shouted)
+      },
+    }),
+  )
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\nWe', isFirstOfReply: true })
+
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\nWe read', isFirstOfReply: true })).toEqual(['PLAN', 'AssistantMessage', '  text: "We read"', '  isFirstOfReply: false'])
+})
+
 test('a streaming reply parses its finished blocks once', async () => {
   const parse = spyOn(vendorMarkdown, 'fromMarkdown')
   const tested = testMod(
@@ -102,6 +140,56 @@ test('a streaming reply parses its finished blocks once', async () => {
   parse.mockRestore()
 })
 
+test('a list that continues across a blank line while streaming draws as one list', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'lists',
+      setup(mod) {
+        mod.ui.render(markdownSlots.List, ({ start, text }) => <Text>{`List from ${start}: ${JSON.stringify(text)}`}</Text>)
+      },
+    }),
+  )
+  for (const text of prefixesOf('1. a\n\n2. b')) await tested.lines(slots.AssistantMessage, { text, isFirstOfReply: true })
+
+  expect(await tested.lines(slots.AssistantMessage, { text: '1. a\n\n2. b', isFirstOfReply: true })).toEqual(['List from 1: "a\\nb"'])
+})
+
+test('a streamed list draws as a whole one when its next item starts after a blank line', async () => {
+  expect(await streamedAgainstWhole('1. read\n\n2. write\n\n10. done')).toEqual([])
+})
+
+test('a streamed list draws as a whole one when a line directly below joins its last item', async () => {
+  expect(await streamedAgainstWhole('- read\n#2 next')).toEqual([])
+})
+
+test('a streamed paragraph draws as a whole one when a line directly below joins it', async () => {
+  expect(await streamedAgainstWhole('Tag it\n#urgent')).toEqual([])
+})
+
+test('a streamed block quote draws as a whole one when a line directly below joins it', async () => {
+  expect(await streamedAgainstWhole('> Note\n#urgent')).toEqual([])
+})
+
+test('a streamed table draws as a whole one when a line directly below becomes its row', async () => {
+  expect(await streamedAgainstWhole('| tag |\n| --- |\n#urgent')).toEqual([])
+})
+
+test('a streamed footnote draws as a whole one when a line directly below joins it', async () => {
+  expect(await streamedAgainstWhole('[^1]: Source\n#urgent')).toEqual([])
+})
+
+test('a streamed link definition draws as a whole one when its title follows on the next line', async () => {
+  expect(await streamedAgainstWhole("[docs]: https://example.com\n'Docs'\n\nSee [docs].")).toEqual([])
+})
+
+test('a streamed indented code block draws the block after a blank line as a whole parse does', async () => {
+  expect(await streamedAgainstWhole('    npm test\n\n- run it')).toEqual([])
+})
+
+test('a link definition streamed after a block changes that block as a whole parse does', async () => {
+  expect(await streamedAgainstWhole('See [docs].\n\n[docs]: https://example.com "Docs"\n\nFact[^1].\n\n[^1]: Source')).toEqual([])
+})
+
 test("a markdown component that throws keeps Claude's drawing of its block", async () => {
   const tested = testMod(
     defineMod({
@@ -116,20 +204,6 @@ test("a markdown component that throws keeps Claude's drawing of its block", asy
 
   expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nBody', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "# Plan"', '  isFirstOfReply: true', 'AssistantMessage', '  text: "Body"', '  isFirstOfReply: false'])
   expect(tested.shown.logs).toEqual(['broken added a render of markdown Heading.', 'broken: the markdown Heading render threw, so Claude Code draws its own: no font'])
-})
-
-test('a mod renders each markdown slot once', async () => {
-  const tested = testMod(
-    defineMod({
-      name: 'twice',
-      setup(mod) {
-        mod.ui.render(markdownSlots.Heading, Shouted)
-        mod.ui.render(markdownSlots.Heading, Shouted)
-      },
-    }),
-  )
-
-  await expect(tested.start()).rejects.toThrow('twice: a render of markdown Heading is already added. Render each markdown slot once.')
 })
 
 test('Markdown in a pane applies the mod\'s markdown slots', async () => {
@@ -190,6 +264,23 @@ test('a mod that renders no markdown slot never loads vendor-markdown', () => {
 
   expect(plain).toBe('false')
   expect(markdown).toBe('true')
+})
+
+test('markdownBlocks returns the code blocks of a reply with their props', () => {
+  const reply = '# Plan\n\n```mermaid\ngraph TD\n```\n\nThen:\n\n```ts\nconst a = 1\n```'
+
+  expect(markdownBlocks(reply, markdownSlots.CodeBlock)).toEqual([
+    { text: 'graph TD', source: '```mermaid\ngraph TD\n```', lang: 'mermaid', meta: undefined, value: 'graph TD' },
+    { text: 'const a = 1', source: '```ts\nconst a = 1\n```', lang: 'ts', meta: undefined, value: 'const a = 1' },
+  ])
+})
+
+test('a markdownBlocks block takes the props its slot carries', () => {
+  const [diagram] = markdownBlocks('```mermaid\ngraph TD\n```', markdownSlots.CodeBlock)
+
+  expect(diagram?.lang).toBe('mermaid')
+  // @ts-expect-error
+  expect(diagram?.depth).toBeUndefined()
 })
 
 test('a markdown slot component takes the props its block carries', () => {

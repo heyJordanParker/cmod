@@ -3,7 +3,7 @@ import type { Mod, Part } from '../mod.js'
 import { parse } from '../vendor.js'
 import { longestMs } from '../runtime/deadline.js'
 import { messageOf } from '../utils/text.js'
-import { modWithin, reserveName } from './tool-calls.js'
+import { modWithin } from './part-context.js'
 
 export type Reply = string | { text?: string; context?: string } | undefined
 
@@ -20,9 +20,9 @@ export function slashCommand<State extends object = Record<never, never>>(option
 }): Part<void, State> {
   const { name, description, argumentHint, immediate, reply } = options
   return (part) => {
-    const { mod, claude, on, adds } = part
+    const { mod, claude, on, announce, reserveName } = part
     if (!commandName.test(name)) throw new Error(`${mod.name}: "${name}" is not a slash command name. Use 1 to 64 letters, digits, "_", or "-", without the slash.`)
-    reserveName(mod, 'slashCommand', name, `${mod.name}: the slash command /${name} is already added. Give each slashCommand its own name.`)
+    reserveName('slashCommand', name, `${mod.name}: the slash command /${name} is already added. Give each slashCommand its own name.`)
 
     let registered: string | undefined
     claude.command.register({ name, description, ...(argumentHint === undefined ? {} : { argumentHint }), ...(immediate === undefined ? {} : { immediate }) }).then(
@@ -33,7 +33,7 @@ export function slashCommand<State extends object = Record<never, never>>(option
         claude.ui.log(`${mod.name}: /${name} is not added: ${oneLine(error)}`)
       },
     )
-    adds(`/${name}`)
+    announce(`/${name}`)
 
     const replyMod = modWithin(part, deadline)
     on('command.run', async (e, next) => {

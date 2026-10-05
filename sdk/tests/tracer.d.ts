@@ -4,8 +4,8 @@ export type Tracer = {
   signatures(input: { path: string }): Promise<TracerSignature[]>
 }
 
-declare module 'cmod-sdk/mod.js' {
-  interface Dependencies {
+declare module 'claude-code' {
+  interface CmodDependencies {
     tracer: Tracer
   }
 }

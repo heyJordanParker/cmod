@@ -1,5 +1,5 @@
 import type { ProcessRunResult } from 'claude-code'
-import { checks } from '../../src/jobs/checks.js'
+import { check } from '../../src/jobs/check.js'
 import { permissions, type FileCall } from '../../src/jobs/permissions.js'
 import { defineMod, type Mod } from '../../src/mod.js'
 
@@ -30,6 +30,6 @@ export const dent = defineMod({
       ],
     }))
 
-    mod.use(checks({ after: [{ write: ['**/*.ts', '**/*.tsx', '**/*.php'], run: ['bun', 'cli/dnt.ts', 'check'] }] }))
+    mod.use(check({ after: { write: ['**/*.ts', '**/*.tsx', '**/*.php'] }, run: ['bun', 'cli/dnt.ts', 'check'] }))
   },
 })

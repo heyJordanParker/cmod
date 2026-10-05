@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Args } from 'claude-code'
 import { tool } from '../../src/jobs/tool.js'
 import { defineMod } from '../../src/mod.js'
-import { testMod, testModWithEngine } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 
 test('a call without the required title is denied with title named, and execute never runs', async () => {
   const executed: unknown[] = []
@@ -59,7 +59,7 @@ test("execute gets the mod's own typed state, so a tool counts its calls without
 test('execute gets the input without the keys Claude Code adds, and an object result reaches Claude as JSON text', async () => {
   const executed: unknown[] = []
   let handle: { readonly name: string } | undefined
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'tickets',
       setup(mod) {
@@ -86,7 +86,7 @@ test('execute gets the input without the keys Claude Code adds, and an object re
 })
 
 test('a call of another tool passes on, and an execute that throws is denied with its message', async () => {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'tickets',
       setup(mod) {

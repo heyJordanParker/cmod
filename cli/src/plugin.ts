@@ -2,8 +2,8 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { readSteps, type Steps } from 'cmod-sdk/src/records.js'
-import { isObject, readJson } from './files.js'
+import { isObject, readSteps, type Steps } from 'cmod-sdk/src/records.js'
+import { readJson } from './files.js'
 import { bunArgv, run } from './process.js'
 
 export type Plugin = {
@@ -15,8 +15,6 @@ export type Plugin = {
   steps: Steps
   packageJson: Record<string, unknown> | undefined
 }
-
-export const programName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 export async function readPlugin(path: string): Promise<Plugin> {
   if (!existsSync(path)) throw new Error(`${resolve(path)} does not exist.`)

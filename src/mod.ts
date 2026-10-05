@@ -1,9 +1,8 @@
-import { defineMod } from '../node_modules/cmod-sdk/mod.js'
+import { defineMod, messageOf } from '../node_modules/cmod-sdk/mod.js'
 import { parseEvent } from '../node_modules/cmod-sdk/records.js'
+import { longestMs } from '../node_modules/cmod-sdk/runtime/deadline.js'
 
 export type CmodPluginState = { installedPlugins: readonly string[] | null }
-
-const longestProcessRunMs = 600_000
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
@@ -11,7 +10,7 @@ export const cmodPlugin = defineMod({
 
   setup(mod) {
     const tearDown = async (name: string) => {
-      const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestProcessRunMs })
+      const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
       if (outcome.kind === 'done') mod.ui.toast(`${name} is uninstalled`)
       else if (exitCode !== 0) {
@@ -29,13 +28,12 @@ export const cmodPlugin = defineMod({
       for (const name of previous ?? []) {
         if (current.includes(name)) continue
         void tearDown(name).catch((error: unknown) => {
-          mod.ui.toast(`cmod teardown ${name} did not run: ${error instanceof Error ? error.message : String(error)}`)
+          mod.ui.toast(`cmod teardown ${name} did not run: ${messageOf(error)}`)
         })
       }
     }
 
     mod.on('SessionStart', watchRemovals)
     mod.on('UserPromptSubmit', watchRemovals)
-    mod.on('PreToolUse', watchRemovals)
   },
 })

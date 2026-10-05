@@ -1,6 +1,7 @@
 import type {
   AskOptions,
   ClassicHookInputs,
+  CmodDependencies,
   FsEntry,
   HookStream,
   HttpInit,
@@ -15,14 +16,27 @@ import type {
   Settings,
   SettingsReadArgs,
 } from 'claude-code'
-import type { PaneHandle, ProgressStep } from './api/ui.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import type { RoutedHook } from './runtime/router.js'
+import type { ToolCalls } from './runtime/tool-calls.js'
 import type { Pane } from './ui/define-pane.js'
 import type { Slot, SlotProps } from './ui/slots.js'
 
-export type { PaneHandle, ProgressStep }
+export type ProgressStep = {
+  readonly done: number
+  readonly total: number
+  readonly label?: string
+}
+
+export type PaneHandle = {
+  open(): Promise<void>
+  close(): Promise<void>
+  toggle(): Promise<void>
+  readonly isOpen: boolean
+}
+
+export { messageOf } from './utils/text.js'
 
 export type ModEvent =
   | 'SessionStart'
@@ -88,8 +102,6 @@ type HookInputs = Omit<ClassicHookInputs, 'PreToolUse' | 'PostToolUse' | 'PostTo
 
 export type ModHook<E extends ModEvent> = (input: HookInputs[E]) => HookAnswer | void | Promise<HookAnswer | void>
 
-export interface Dependencies {}
-
 export type Mod<State extends object = Record<never, never>> = {
   readonly name: string
   readonly state: Readonly<State>
@@ -118,11 +130,9 @@ export type Mod<State extends object = Record<never, never>> = {
   readonly settings: {
     read(args?: SettingsReadArgs): Promise<Settings>
   }
-  readonly session: {
-    readonly root: string
-    readonly cwd: string
-  }
-  readonly dependencies: Dependencies
+  readonly projectRoot: string
+  readonly cwd: string
+  readonly dependencies: CmodDependencies
 }
 
 type StateGroups = {
@@ -132,10 +142,14 @@ type StateGroups = {
   readonly global?: object
 }
 
-export type ModDefinition<State extends StateGroups = Record<never, never>> = {
-  readonly name: string
+type Api<Contract, State extends object> = {
+  readonly [Method in keyof Contract]: Contract[Method] extends (input: infer Input) => infer Result ? (input: Input, mod: Mod<State>) => Result | Awaited<Result> : never
+}
+
+export type ModDefinition<State extends StateGroups = Record<never, never>, Name extends string = string> = {
+  readonly name: Name
   readonly state?: State
-  readonly api?: { readonly [method: string]: (input: never, mod: Mod<State>) => unknown }
+  readonly api?: Name extends keyof CmodDependencies ? Api<CmodDependencies[Name], State> : { readonly [method: string]: (input: never, mod: Mod<State>) => unknown }
   setup(mod: Mod<State>): void | Promise<void>
 }
 
@@ -143,12 +157,14 @@ export type PartContext<State extends object = Record<never, never>> = {
   readonly mod: Mod<State>
   readonly claude: Claude
   on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
-  adds(feature: string): void
+  announce(feature: string): void
+  reserveName(kind: string, name: string, taken: string): void
+  readonly toolCalls: ToolCalls
 }
 
 export type Part<Handle, State extends object = Record<never, never>> = (context: PartContext<State>) => Handle
 
-export function defineMod<State extends StateGroups = Record<never, never>>(definition: ModDefinition<State>): ModDefinition<State> {
+export function defineMod<State extends StateGroups = Record<never, never>, Name extends string = string>(definition: ModDefinition<State, Name>): ModDefinition<State, Name> {
   if (definition.name.trim() === '') throw new Error('defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.')
   return definition
 }

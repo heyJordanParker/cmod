@@ -1,6 +1,6 @@
 import type { Mod, Part } from '../mod.js'
 import { messageOf } from '../utils/text.js'
-import { modWithin, reserveName } from './tool-calls.js'
+import { modWithin } from './part-context.js'
 
 export type Usage = {
   model: string
@@ -16,9 +16,9 @@ export function statusLine<State extends object = Record<never, never>>(options:
 }): Part<void, State> {
   const { text, interval = 10000 } = options
   return (part) => {
-    const { mod, claude, on, adds } = part
+    const { mod, claude, on, announce, reserveName } = part
     if (!(interval >= 1)) throw new Error(`${mod.name}: the status line interval is ${interval}. Give it in milliseconds, 1 or more.`)
-    reserveName(mod, 'statusLine', '', `${mod.name}: a status line is already added. A mod has one status line: join the texts in one statusLine.`)
+    reserveName('statusLine', '', `${mod.name}: a status line is already added. A mod has one status line: join the texts in one statusLine.`)
 
     const textMod = modWithin(part, deadline)
     let shown: string | undefined
@@ -46,7 +46,7 @@ export function statusLine<State extends object = Record<never, never>>(options:
       queue = queue.then(update)
     }
 
-    adds('a status line')
+    announce('a status line')
     on('session.measure', (e, next) => {
       refresh()
       return next(e)

@@ -12,7 +12,7 @@ const backoffSeconds = [1, 2, 4, 8, 16] as const
 
 export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Part<Program> {
   const { command, environment } = options
-  return ({ mod, claude, adds }) => {
+  return ({ mod, claude, announce }) => {
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
     let state: Program['state'] = 'stopped'
@@ -66,7 +66,7 @@ export function program(options: { readonly command: readonly string[]; readonly
       claude.clock.after(wait * 1000, () => void start())
     }
 
-    adds(`the ${executable} program`)
+    announce(`the ${executable} program`)
     void claude.session.surfaces().then((surfaces) => {
       if (surfaces.length > 0 && state === 'stopped') void start()
     })

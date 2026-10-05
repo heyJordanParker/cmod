@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { RenderElement, RenderPropsOf } from 'claude-code'
 import { defineMod } from '../../src/mod.js'
-import { testMod, testModWithEngine, textOf } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 import { Box, Text } from '../../src/ui/elements.js'
-import { slots } from '../../src/ui/slots.js'
+import { markdownSlots } from '../../src/ui/markdown.js'
+import { type Slot, slots } from '../../src/ui/slots.js'
+import { textOf } from '../../src/utils/fake-elements.js'
 
 const bashRow: RenderPropsOf['ToolUse'] = { tool_use_id: 'toolu_1', tool: 'Bash', input: { command: 'deploy --token s3cret' }, isRunning: false, isErrored: false, isInterrupted: false }
 
@@ -101,7 +103,7 @@ test('onScreen is passed on unchanged and isFirstOfReply is only on the first pi
 })
 
 test("two Default pieces in one drawing each draw Claude's slot", async () => {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'twice',
       setup(mod) {
@@ -198,6 +200,22 @@ test("the install progress bar still draws above a mod's AbovePrompt render", as
   await Promise.resolve()
   await Promise.resolve()
   expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts'])
+})
+
+test('a mod that renders one slot twice is refused with the same message for every slot', async () => {
+  const renderedTwice = (slot: Slot) =>
+    testMod(
+      defineMod({
+        name: 'twice',
+        setup(mod) {
+          mod.ui.render(slot, () => <Text>once</Text>)
+          mod.ui.render(slot, () => <Text>twice</Text>)
+        },
+      }),
+    ).start()
+
+  await expect(renderedTwice(slots.ToolUse)).rejects.toThrow('twice: a render of ToolUse is already added. Render each slot once.')
+  await expect(renderedTwice(markdownSlots.Heading)).rejects.toThrow('twice: a render of markdown Heading is already added. Render each slot once.')
 })
 
 test('a slot component takes the props its slot carries', () => {

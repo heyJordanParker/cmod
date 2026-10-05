@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { chmod, lstat, readFile, readlink, rename, rm, utimes } from 'node:fs/promises'
+import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
-import { readRecord, recordPath } from 'cmod-sdk/src/records.js'
+import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
 import { deleteUnclaimedLeftovers } from '../src/commands/teardown.js'
 import { readText } from '../src/files.js'
 import { cmod, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
@@ -59,6 +59,19 @@ async function createProgramMod(home: string, repository: string): Promise<strin
   })
   return root
 }
+
+const sdkLifecycle = join(import.meta.dir, '..', '..', 'sdk', 'src', 'runtime', 'lifecycle.ts')
+
+const claudeOnDisk = (home: string, plugin: { name: string; root: string }) => ({
+  plugin,
+  env: { home: async () => home, dataHome: async () => undefined },
+  fs: {
+    exists: async (path: string) => existsSync(path),
+    stat: async (path: string) => ({ kind: (await stat(path)).isFile() ? 'file' : 'dir' }),
+    read: (path: string) => readFile(path, 'utf8'),
+    list: async (folder: string) => (await readdir(folder, { withFileTypes: true })).map((entry) => ({ name: entry.name, kind: entry.isFile() ? 'file' : entry.isDirectory() ? 'dir' : 'symlink' })),
+  },
+})
 
 const isGone = (path: string) => lstat(path).then(
   () => false,
@@ -124,6 +137,52 @@ test('changing only a sourced sibling script asks for consent again', async () =
 
   expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\n`)
   expect(asked.exitCode).toBe(10)
+})
+
+test('an update that changes only setup/lib asks consent again', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\n. ./setup/lib/common.sh\ngreet\n')
+  await writeFiles(root, { 'setup/lib/common.sh': 'greet() {\n  echo "progress 1 1 Greeting"\n}\n' })
+  const approved = await hashOf(root)
+  expect((await cmod(home, 'setup', root, '--events', '--consent', approved)).exitCode).toBe(0)
+  await writeFiles(root, { 'setup/lib/common.sh': 'greet() {\n  rm -rf "$HOME/Documents"\n}\n' })
+  const changed = await hashOf(root)
+
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.exitCode).toBe(10)
+  expect(changed).not.toBe(approved)
+})
+
+test('the CLI and the SDK hash a mod with a nested setup/lib the same', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\n. ./setup/lib/common.sh\n')
+  await writeFiles(root, { 'setup/lib/common.sh': 'echo safe\n', 'setup/lib/shell/zsh.sh': 'echo zsh\n' })
+  const asked = parseEvent((await cmod(home, 'setup', root, '--events')).stdout.trim())
+  if (asked.kind !== 'needs-consent') throw new Error(`cmod setup printed ${asked.kind}, not needs-consent`)
+  expect((await cmod(home, 'setup', root, '--events', '--consent', asked.sha256)).exitCode).toBe(0)
+  const { readPlugin } = await import(sdkLifecycle)
+
+  const plugin = await readPlugin(claudeOnDisk(home, { name: 'demo', root }))
+
+  expect(plugin).toMatchObject({ name: 'demo', version: '0.1.0', isInstalled: true })
+})
+
+test('a step script at the plugin root is refused', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { install: './install.sh' } }),
+    'install.sh': fourStepInstall,
+  })
+
+  const result = await cmod(home, 'setup', root, '--events')
+
+  expect(result.stderr).toBe(`cmod setup: ${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: CMod asks consent for the whole folder of each script.\n`)
+  expect(result.exitCode).toBe(1)
+  expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
 })
 
 test('setup --events asks consent for a mod that names only a program', async () => {
@@ -225,6 +284,23 @@ test('the saved uninstall runs a script that sources a sibling file after the pl
   await writeFiles(root, {
     'setup/uninstall.sh': '#!/bin/sh\n. "$(dirname "$0")/lib.sh"\nremove_alias\n',
     'setup/lib.sh': 'remove_alias() {\n  echo "alias removed" >> "$HOME/uninstalls"\n}\n',
+  })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await rm(root, { recursive: true })
+
+  const result = await cmod(home, 'teardown', 'demo', '--events')
+
+  expect(result.stdout).toBe('done demo\n')
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('alias removed\n')
+})
+
+test('teardown runs an uninstall that sources setup/lib after the mod\'s folder is gone', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeFiles(root, {
+    'setup/uninstall.sh': '#!/bin/sh\n. ./setup/lib/alias.sh\nremove_alias\n',
+    'setup/lib/alias.sh': 'remove_alias() {\n  echo "alias removed" >> "$HOME/uninstalls"\n}\n',
   })
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
   await rm(root, { recursive: true })

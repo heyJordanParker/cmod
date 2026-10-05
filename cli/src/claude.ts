@@ -1,4 +1,4 @@
-import { isObject } from './files.js'
+import { isObject } from 'cmod-sdk/src/records.js'
 import { capture, run } from './process.js'
 
 export type InstalledPlugin = { id: string; name: string; version: string; scope: string; enabled: boolean; installPath: string; errors: string[] }

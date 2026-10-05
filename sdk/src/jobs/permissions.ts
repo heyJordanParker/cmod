@@ -3,9 +3,8 @@ import type { Mod, Part } from '../mod.js'
 import type { ToolUse } from '../utils/call-effects.js'
 import { decidePermission, stricterVerdict, type PermissionRules as RulesFor, type Rule as RuleFor, type Verdict } from './permissions/decide-permission.js'
 import { targetOf } from './permissions/match-target.js'
-import { toolCalls } from '../runtime/tool-calls.js'
 import { messageOf } from '../utils/text.js'
-import { modOf, workspaceOf } from './tool-calls.js'
+import { modOf, workspaceReader } from './part-context.js'
 
 export type { CommandCall, FetchCall, FileCall, ToolCall } from '../utils/call-effects.js'
 export type { Target } from './permissions/match-target.js'
@@ -20,11 +19,11 @@ export function permissions<State extends object = Record<never, never>>(rules: 
   for (const rule of [...(rules.deny ?? []), ...(rules.ask ?? [])]) targetOf(rule)
 
   return (context) => {
-    const calls = toolCalls(context)
+    const readWorkspace = workspaceReader(context)
 
     const verdictOf = async (e: Frozen<Args<'tool.check'>>): Promise<Verdict | undefined> => {
       try {
-        const [agent, workspace] = await Promise.all([calls.agentOf(e.tool_use_id), workspaceOf(context)])
+        const [agent, workspace] = await Promise.all([context.toolCalls.agentOf(e.tool_use_id), readWorkspace()])
         const use: ToolUse = { tool: e.tool, input: e.input, ...agent }
         return await decidePermission(rules, use, workspace, (call, folder) => modOf(context, call, folder, workspace, deadline))
       } catch (error) {
@@ -36,6 +35,6 @@ export function permissions<State extends object = Record<never, never>>(rules: 
       const [below, ours] = await Promise.all([next(e), verdictOf(e)])
       return ours === undefined ? below : stricterVerdict<Verdict>(below, ours)
     })
-    context.adds(`${count} permission rule${count === 1 ? '' : 's'}`)
+    context.announce(`${count} permission rule${count === 1 ? '' : 's'}`)
   }
 }

@@ -146,9 +146,11 @@ async function saveUninstall(plugin: Plugin): Promise<string | null> {
   }
   await mkdir(join(folder, 'root'), { recursive: true })
   for (const scriptFolder of scriptFolders) {
-    const target = join(folder, 'root', scriptFolder)
-    await mkdir(target, { recursive: true })
-    for (const name of await listFiles(join(plugin.root, scriptFolder))) await copyFile(join(plugin.root, scriptFolder, name), join(target, name))
+    for (const path of await listFiles(join(plugin.root, scriptFolder))) {
+      const target = join(folder, 'root', scriptFolder, path)
+      await mkdir(dirname(target), { recursive: true })
+      await copyFile(join(plugin.root, scriptFolder, path), target)
+    }
   }
   const script = join(folder, 'uninstall.sh')
   await Bun.write(script, `cd "$(dirname "$0")/root" || exit 1\n${uninstall}\n`)

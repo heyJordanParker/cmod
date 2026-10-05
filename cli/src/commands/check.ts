@@ -3,8 +3,9 @@ import { readdir } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
+import { isObject, scriptPaths } from 'cmod-sdk/src/records.js'
 import { listPlugins } from '../claude.js'
-import { isObject, readJson, readText, writeAtomically } from '../files.js'
+import { readJson, readText, writeAtomically } from '../files.js'
 import { preparePackages, readPlugin, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { startProgress } from '../progress.js'
@@ -18,9 +19,10 @@ export const help = `Usage: cmod check [path]
 ${summary}
 
 Runs every check this machine can run on the mod at path (default: the current
-folder): installs its packages, checks its layout, validates it with Claude
-Code, type-checks it, lints it, runs its tests with bun test and with claude
-plugin test, and checks its name. Each failure names its fix.`
+folder): installs its packages, checks its layout and that each step runs a
+script, validates it with Claude Code, type-checks it, lints it, runs its tests
+with bun test and with claude plugin test, and checks its name. Each failure
+names its fix.`
 
 type Result = { status: 'pass' | 'fail' | 'skip'; text: string; fix?: string }
 
@@ -34,6 +36,7 @@ const componentNames = ['skills', 'commands', 'agents', 'hooks', 'monitors', 'ou
 const checks: Check[] = [
   { heading: 'Installing packages', run: checkPackages },
   { heading: 'Checking the layout', run: checkLayout },
+  { heading: 'Checking the steps', run: checkSteps },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
   { heading: 'Validating with Claude Code', run: checkValidate },
@@ -80,6 +83,19 @@ async function checkLayout(plugin: Plugin): Promise<Result> {
   if (problems.length > 0) return { status: 'fail', text: `The layout has ${problems.length === 1 ? 'a problem' : `${problems.length} problems`}`, fix: problems.join('\n    fix: ') }
   const parts = (await readdir(plugin.root)).filter((entry) => componentNames.includes(entry))
   return { status: 'pass', text: `The layout fits a mod. Claude Code loads these root entries as parts of ${plugin.name}: ${parts.join(', ') || 'none'}` }
+}
+
+async function checkSteps(plugin: Plugin): Promise<Result> {
+  const problems: string[] = []
+  for (const key of ['install', 'uninstall'] as const) {
+    const command = plugin.steps[key]
+    if (command === undefined) continue
+    const scripts = await Promise.all(scriptPaths(command).map((path) => readText(join(plugin.root, path))))
+    if (scripts.every((script) => script === undefined)) problems.push(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod: put the commands in a script, such as ./setup/${key}.sh`)
+  }
+  if (problems.length > 0) return { status: 'fail', text: `The steps have ${problems.length === 1 ? 'a problem' : `${problems.length} problems`}`, fix: problems.join('\n    fix: ') }
+  if (plugin.steps.install === undefined && plugin.steps.uninstall === undefined) return { status: 'skip', text: 'No install or uninstall step, so no step to check' }
+  return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
 }
 
 async function checkImports(plugin: Plugin): Promise<Result> {

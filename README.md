@@ -118,7 +118,7 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 ```
 
-`state` groups the mod's values by how long they last: `memory` until `/clear` or until Claude Code closes, `session` for this conversation, `project` for this project, and `global` for every project. CMod saves every value except `memory`. A `session` value comes back on `--resume`, starts over on `/clear`, and is copied by `/branch`. Put values the mod works out again on every prompt, such as a git status, in `memory`.
+`state` groups the mod's values by how long they last: `memory` until `/clear`, `--resume`, `/branch`, or a reload of Claude Code or its plugins, `session` for this conversation, `project` for this project, and `global` for every project. CMod saves every value except `memory`. A `session` value comes back on `--resume`, starts over on `/clear`, and is copied by `/branch`. Put values the mod works out again on every prompt, such as a git status, in `memory`.
 
 Start `claude`, and the mod runs on every prompt. `cmod check` runs every check. `cmod publish` releases the mod on GitHub.
 
@@ -140,7 +140,7 @@ export const tracer = defineMod({
 })
 ```
 
-The mod types its `api` in `types/index.d.ts`, and its `.claude-plugin/plugin.json` names that file as `"types": "./types/index.d.ts"`:
+The mod types its `api` in `types/index.d.ts`, and its `.claude-plugin/plugin.json` names that file as `"types": "./types/index.d.ts"`. The file adds the mod to `CmodDependencies`, which the CMod plugin declares on `claude-code`:
 
 ```ts
 export type TracerSignature = { name: string; line: number }
@@ -149,12 +149,14 @@ export type Tracer = {
   signatures(input: { path: string }): Promise<TracerSignature[]>
 }
 
-declare module 'cmod-sdk/mod.js' {
-  interface Dependencies {
+declare module 'claude-code' {
+  interface CmodDependencies {
     tracer: Tracer
   }
 }
 ```
+
+`tsc` then checks the mod's own `api` against `Tracer`, so a method that returns another shape fails `cmod check`.
 
 A mod that calls it lists it in its own `.claude-plugin/plugin.json`, and Claude Code installs it with the mod:
 

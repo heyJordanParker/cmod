@@ -1,4 +1,4 @@
-import type { Mod, PartContext } from '../mod.js'
+import type { PartContext } from '../mod.js'
 
 export type Agent = { agentId?: string; agentType?: string }
 
@@ -9,16 +9,15 @@ export type ToolCalls = {
 
 export const reservedKeys: readonly string[] = ['tool', 'tool_use_id', 'consent', 'agentId']
 
-type AgentFields = { readonly agent_id?: string; readonly agent_type?: string }
+export function toolInputOf(envelope: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(envelope).filter(([key]) => !reservedKeys.includes(key)))
+}
 
-const toolCallsByMod = new WeakMap<Mod, ToolCalls>()
+type AgentFields = { readonly agent_id?: string; readonly agent_type?: string }
 
 const keptCalls = 100
 
-export function toolCalls(context: PartContext): ToolCalls {
-  const known = toolCallsByMod.get(context.mod)
-  if (known !== undefined) return known
-  const { claude, on } = context
+export function toolCalls({ claude, on }: Pick<PartContext, 'claude' | 'on'>): ToolCalls {
   let mainAgentType: string | undefined
   const agentIds = new Map<string, string>()
   const cwds = new Map<string, string>()
@@ -59,7 +58,7 @@ export function toolCalls(context: PartContext): ToolCalls {
       }
     })
   }
-  const calls: ToolCalls = {
+  return {
     async agentOf(toolUseId) {
       const agentId = toolUseId === undefined ? undefined : agentIds.get(toolUseId)
       const agentType = agentId === undefined ? mainAgentType : (await claude.agent.list()).find((agent) => agent.id === agentId)?.type
@@ -67,6 +66,4 @@ export function toolCalls(context: PartContext): ToolCalls {
     },
     cwdOf: (toolUseId) => cwds.get(toolUseId),
   }
-  toolCallsByMod.set(context.mod, calls)
-  return calls
 }

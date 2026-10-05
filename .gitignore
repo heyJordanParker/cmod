@@ -5,7 +5,6 @@ sdk/*.js
 sdk/*.d.ts
 sdk/*.d.ts.map
 sdk/runtime/
-sdk/api/
 sdk/jobs/
 sdk/ui/
 sdk/utils/

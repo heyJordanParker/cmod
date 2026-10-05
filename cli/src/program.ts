@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, symlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
-import type { RunnerEvent } from 'cmod-sdk/src/records.js'
-import { home, isObject, readJson, readText, tilde } from './files.js'
-import { programName, type Plugin } from './plugin.js'
+import { isObject, pluginName, type RunnerEvent } from 'cmod-sdk/src/records.js'
+import { home, readJson, readText, tilde } from './files.js'
+import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { storePath } from './store.js'
@@ -31,7 +31,7 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
     throw new Error(`${tilde(folder)} declares a "cmod" build without "build" and "output". Write "cmod": { "build": "<command>", "output": "<folder>" }.`)
   }
   const name = manifest['name']
-  if (typeof name !== 'string' || !programName.test(name)) throw new Error(`${tilde(folder)} names its program "${String(name)}". The manifest's "name" is the command, such as "hello".`)
+  if (typeof name !== 'string' || !pluginName.test(name)) throw new Error(`${tilde(folder)} names its program "${String(name)}". The manifest's "name" is the command, such as "hello".`)
   return { name, folder, build: declared['build'], output: declared['output'] }
 }
 

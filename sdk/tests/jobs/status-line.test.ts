@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Args } from 'claude-code'
 import { statusLine } from '../../src/jobs/status-line.js'
 import { defineMod } from '../../src/mod.js'
-import { testMod, testModWithEngine } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 
 const measured: Args<'session.measure'> = { context: { window: 200000 }, rateLimits: [], changed: ['cost'] }
 
@@ -13,7 +13,7 @@ async function settle(): Promise<void> {
 test('the line shows when the mod turns on and is sent again only when its text changes', async () => {
   let branch = 'main'
   const seen: unknown[] = []
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'branch-line',
       setup(mod) {
@@ -60,7 +60,7 @@ test("text gets the mod's own typed state, so the line shows state without captu
 
 test('a text that throws keeps the last line and writes one debug line', async () => {
   let fails = false
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'branch-line',
       setup(mod) {

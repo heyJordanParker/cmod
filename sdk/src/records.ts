@@ -1,3 +1,5 @@
+import { messageOf } from './utils/text.js'
+
 export type InstallRecord = {
   name: string
   version: string
@@ -20,7 +22,7 @@ export type RunnerEvent =
   | { kind: 'missing'; name: string }
   | { kind: 'failed'; code: number; message: string }
 
-const pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+export const pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 export function storeFolder(env: Record<string, string | undefined>): string {
   const dataHome = env['XDG_DATA_HOME']
@@ -77,7 +79,7 @@ function parseRecord(text: string, path: string): InstallRecord {
   try {
     value = JSON.parse(text)
   } catch (error) {
-    throw new Error(`${path} is not JSON (${(error as Error).message}). ${fix}`)
+    throw new Error(`${path} is not JSON (${messageOf(error)}). ${fix}`)
   }
   if (!isObject(value)) throw new Error(`${path} is not a CMod install record. ${fix}`)
   for (const key of ['name', 'version', 'root', 'installedAt', 'scriptsSha256'] as const) {
@@ -114,6 +116,8 @@ function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall
   if (command === undefined) return {}
   if (typeof command !== 'string' || command.trim() === '') throw new Error(`package.json "cmod.${key}" must be a command, such as "./setup/${key}.sh".`)
   if (/[\n\t]/.test(command)) throw new Error(`package.json "cmod.${key}" holds a line break or a tab. Write one command, such as "./setup/${key}.sh".`)
+  const atRoot = scriptPaths(command).find((path) => folderOf(path) === '.')
+  if (atRoot !== undefined) throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: CMod asks consent for the whole folder of each script.`)
   return { [key]: command }
 }
 
@@ -121,8 +125,12 @@ export function scriptPaths(command: string): string[] {
   const words = command
     .split(/[\s;&|()<>]+/)
     .map((word) => word.replace(/^['"]|['"]$/g, ''))
-    .filter((word) => word !== '' && !word.startsWith('-') && !word.startsWith('/') && !word.startsWith('~') && !word.startsWith('$') && !word.includes('=') && !word.split('/').includes('..'))
+    .filter((word) => word.includes('/') && !word.startsWith('-') && !word.startsWith('/') && !word.startsWith('~') && !word.startsWith('$') && !word.includes('=') && !word.split('/').includes('..'))
   return [...new Set(words)]
+}
+
+function folderOf(path: string): string {
+  return path.slice(0, path.lastIndexOf('/'))
 }
 
 export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list: (folder: string) => Promise<string[]> }): Promise<string> {
@@ -130,7 +138,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
   let text = [...commands, steps.program ?? ''].join('\0')
   const folders = new Set<string>()
   for (const path of new Set(commands.flatMap(scriptPaths))) {
-    if ((await files.read(path)) !== undefined) folders.add(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '.')
+    if ((await files.read(path)) !== undefined) folders.add(folderOf(path))
   }
   for (const folder of [...folders].sort()) {
     for (const name of (await files.list(folder)).sort()) text += `\0${folder}/${name}\0${(await files.read(`${folder}/${name}`)) ?? ''}`
@@ -170,6 +178,6 @@ export function parseEvent(line: string): RunnerEvent {
   return { kind: 'log', text: line.replace(/^log /, '') }
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

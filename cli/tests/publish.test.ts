@@ -40,6 +40,22 @@ test('publish refuses a mod whose cli/ declares a program the root package.json 
   )
 })
 
+test('cmod publish refuses a file: dependency', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', dependencies: { 'cmod-sdk': 'file:../cmod/sdk/cmod-sdk-0.1.0.tgz', shared: 'link:shared' } }),
+  })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe(
+    'cmod publish: ~/hello-mod/package.json depends on cmod-sdk at file:../cmod/sdk/cmod-sdk-0.1.0.tgz, shared at link:shared, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "cmod-sdk": "^0.1.0", then run cmod publish again.\n',
+  )
+  expect(result.exitCode).toBe(1)
+})
+
 test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lists every release file', async () => {
   const home = await temporaryHome()
   const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)

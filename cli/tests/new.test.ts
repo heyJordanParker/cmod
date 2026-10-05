@@ -17,7 +17,8 @@ test('new writes the repository layout with a defineMod that has one hook and on
     expect(existsSync(join(root, path))).toBe(true)
   }
   expect(existsSync(join(root, '.gitattributes'))).toBe(false)
-  expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules/\ntarget/\n.claude-plugin/types/\n')
+  expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules/\n.claude-plugin/types/\n')
+  expect(JSON.parse(await readFile(join(root, 'tsconfig.json'), 'utf8'))).toEqual({ extends: './.claude-plugin/types/tsconfig.json', include: ['hooks', 'src', 'types'] })
   const manifest = JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8'))
   expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: ['cmod'] })
   const mod = await readFile(join(root, 'src/mod.tsx'), 'utf8')

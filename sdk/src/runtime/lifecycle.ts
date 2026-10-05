@@ -1,14 +1,15 @@
 import type { Args, EventResult, Frozen, HookStream, Next, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { createProgress, createUi, type Progress, type ProgressLine } from '../api/ui.js'
 import type { Mod, ModDefinition, ModEvent, PartContext } from '../mod.js'
 import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { beforeDeadline, toolDeadline } from './deadline.js'
-import { answerCall, classicHook, dependencyCalls, notInstalled, userSkillHook, type RoutedEvent } from './hooks.js'
+import { beforeDeadline } from './deadline.js'
+import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
+import { classicHook, userSkillHook, type RoutedEvent } from './hooks.js'
 import { createRouter, type Router } from './router.js'
 import { createState } from './state.js'
 import { toolCalls } from './tool-calls.js'
+import { createProgress, createUi, type Progress, type ProgressLine } from './ui.js'
 
 export type Plugin = {
   readonly name: string
@@ -47,6 +48,10 @@ const announcedKey = 'cmod-sdk:announced'
 
 const cmodCheckMs = 1000
 
+const cmodWaitMs = 60_000
+
+const dependencyCallMs = 30_000
+
 const cannotStart = /failed to start: /
 
 export async function readPlugin(claude: Claude): Promise<Plugin> {
@@ -62,9 +67,21 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   if (Object.keys(steps).length === 0) return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version }
   const scripts = await scriptsSha256(steps, {
     read: (path) => read(`${root}/${path}`),
-    list: async (folder) => (await claude.fs.list(`${root}/${folder}`)).filter((entry) => entry.kind === 'file').map((entry) => entry.name),
+    list: async (folder) => (await filesBelow(claude, `${root}/${folder}`)).sort(),
   })
   return { ...plugin, isInstalled: version !== undefined && record?.version === version && record.scriptsSha256 === scripts, shouldRecord: false }
+}
+
+async function filesBelow(claude: Claude, folder: string): Promise<string[]> {
+  const entries = await claude.fs.list(folder)
+  const paths = await Promise.all(
+    entries.map(async ({ name, kind }) => {
+      if (kind === 'file') return [name]
+      if (kind === 'dir') return (await filesBelow(claude, `${folder}/${name}`)).map((path) => `${name}/${path}`)
+      return []
+    }),
+  )
+  return paths.flat()
 }
 
 async function readJson(read: ReadFile, path: string): Promise<unknown> {
@@ -205,11 +222,16 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
       check ??= cmodVersion(claude())
         .then((version) => {
           check = undefined
-          if (version === undefined) return
+          if (version === undefined || phase !== 'waiting') return
           timer.cancel()
+          limit.cancel()
           return install()
         })
         .catch(report)
+    })
+    const limit = claude().clock.after(cmodWaitMs, () => {
+      timer.cancel()
+      fail(`CMod did not start in ${cmodWaitMs / 1000} seconds`, 'Install it with cmod install cmod, then run /reload-plugins.')
     })
   }
 
@@ -278,13 +300,13 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   const { claude, router, progress } = runtime
   const added: string[] = []
   const hookEvents: ModEvent[] = []
-  const adds = (feature: string) => {
+  const announce = (feature: string) => {
     added.push(feature)
   }
   const on: PartContext<State>['on'] = (event, hook) => router.add(event, hook)
   const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()])
   let cwd = startCwd
-  const area = createUi<State>({ name: definition.name, claude, router, progress, adds, mod: () => mod })
+  const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
   const mod: Mod<State> = {
     name: definition.name,
@@ -294,7 +316,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       if (!hookEvents.includes(event)) hookEvents.push(event)
       router.add(`classic.${event}`, classicHook(definition.name, event, hook, claude, agents))
     },
-    use: (part) => part({ mod, claude, on, adds }),
+    use: (part) => part({ mod, claude, on, announce, reserveName, toolCalls: agents }),
     ui: area.ui,
     process: {
       run: (argv, init) => claude.process.run(argv, init),
@@ -307,15 +329,13 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     },
     http: { fetch: (url, init) => claude.http.fetch(url, init) },
     settings: { read: (args) => claude.settings.read(args) },
-    session: {
-      get root() {
-        return modState.root
-      },
-      get cwd() {
-        return cwd
-      },
+    get projectRoot() {
+      return modState.root
     },
-    dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, toolDeadline, call, task)),
+    get cwd() {
+      return cwd
+    },
+    dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),
   }
   const followSession = async () => {
     try {
@@ -343,7 +363,13 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   on('skill.prompt', userSkillHook(claude))
   const api = Object.fromEntries(Object.entries(definition.api ?? {}).map(([method, run]) => [method, (input: never) => run(input, mod)]))
   on('cmod.call', (e, next) => (e.to === definition.name ? answerCall(definition.name, api, e) : next(e)))
-  const agents = toolCalls({ mod, claude, on, adds })
+  const agents = toolCalls({ claude, on })
+  const names = new Set<string>()
+  const reserveName = (kind: string, name: string, taken: string) => {
+    const key = `${kind}:${name}`
+    if (names.has(key)) throw new Error(taken)
+    names.add(key)
+  }
   await modState.load()
   await definition.setup(mod)
   await area.restorePanes()

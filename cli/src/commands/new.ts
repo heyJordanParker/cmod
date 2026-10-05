@@ -62,7 +62,7 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
   const state = `${definition.charAt(0).toUpperCase()}${definition.slice(1)}State`
   const files: Record<string, string> = {
     '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: ['cmod'] }),
-    '.gitignore': 'node_modules/\ntarget/\n.claude-plugin/types/\n',
+    '.gitignore': 'node_modules/\n.claude-plugin/types/\n',
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
     'hooks/register.ts': `import type { Register } from 'claude-code'
@@ -135,7 +135,7 @@ description: Explains what the ${name} mod does. Use when the user asks about th
 The ${name} mod counts the prompts of this session and shows the count in its panel and above the prompt.
 `,
     'package.json': json({ name, private: true, type: 'module', dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
-    'tsconfig.json': json({ extends: './.claude-plugin/types/tsconfig.json', compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' }, include: ['hooks', 'src'] }),
+    'tsconfig.json': json({ extends: './.claude-plugin/types/tsconfig.json', include: ['hooks', 'src', 'types'] }),
   }
   if (!isProject) {
     files['.claude/CLAUDE.md'] = `# ${name}

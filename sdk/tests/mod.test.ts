@@ -1,12 +1,14 @@
 import { expect, expectTypeOf, test } from 'bun:test'
 import type { AgentInfo, Args, ClassicHookInputs, Frozen, Next, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
+import { tool } from '../src/jobs/tool.js'
 import { defineMod, type Mod, type PaneHandle, type Part } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
-import { fakeClaude, testMod, testModWithEngine, textOf, type TestCall } from '../src/testing.js'
+import { fakeClaude, testMod, type TestCall, type TestedMod } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Text } from '../src/ui/elements.js'
+import { textOf } from '../src/utils/fake-elements.js'
 import type { TracerSignature } from './tracer.js'
 
 const base = { session_id: 'session-1', transcript_path: '/tmp/transcript.jsonl', cwd: '/work', permission_mode: 'default' }
@@ -101,6 +103,20 @@ test('a deny beneath the mod outranks the allow the mod answers', async () => {
   const answer = await tested.fire('PreToolUse', preToolUse('rm build'), { deny: 'org policy' })
 
   expect(answer).toEqual({ deny: 'org policy', updatedInput: { command: 'trash build' } })
+})
+
+test('a deny from one mod beats an ask from another', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'guard',
+      setup(mod) {
+        mod.on('PreToolUse', () => ({ decision: 'block', reason: 'Never deploy from a laptop.', hookSpecificOutput: { permissionDecision: 'allow' } }))
+      },
+    }),
+  )
+
+  expect(await tested.fire('PreToolUse', preToolUse('deploy'))).toEqual({ deny: 'Never deploy from a laptop.' })
+  expect(await tested.fire('PreToolUse', preToolUse('deploy'), { ask: 'another mod asks' })).toEqual({ deny: 'Never deploy from a laptop.' })
 })
 
 test('the PreToolUse hook reads the settings.json input built from the tool call and the session as it is now', async () => {
@@ -318,7 +334,7 @@ test('mod.ui.progress draws a bar line above the prompt while its task runs', as
       })
     },
   })
-  const tested = testModWithEngine(indexer)
+  const tested = testMod(indexer)
   const prompt ={ type: 'Text', children: ['>'] } as unknown as RenderElement
   const abovePrompt = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: {}, viewport: { columns: 80, rows: 24 } }
 
@@ -331,10 +347,10 @@ test('mod.ui.progress draws a bar line above the prompt while its task runs', as
   expect(await tested.fire('ui.render', abovePrompt as never, prompt)).toBe(prompt)
 })
 
-const noForcePush: Part<{ readonly denied: string[] }> = ({ on, claude, adds }) => {
+const noForcePush: Part<{ readonly denied: string[] }> = ({ on, claude, announce }) => {
   const denied: string[] = []
   void claude.command.register({ name: 'pushes', description: 'List refused pushes' })
-  adds('the /pushes command')
+  announce('the /pushes command')
   on('tool.check', async (e, next) => {
     const command = (e.input as { command?: string }).command ?? ''
     if (e.tool !== 'Bash' || !command.includes('push --force')) return next(e)
@@ -346,7 +362,7 @@ const noForcePush: Part<{ readonly denied: string[] }> = ({ on, claude, adds }) 
 
 test('a part added with mod.use answers tool.check, reaches Claude Code calls, and returns its handle', async () => {
   let handle: { readonly denied: string[] } | undefined
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'guard',
       setup(mod) {
@@ -366,13 +382,13 @@ test('a part added with mod.use answers tool.check, reaches Claude Code calls, a
   expect(tested.shown.logs).toEqual(['guard added the /pushes command.'])
 })
 
-test('mod.session.root is set before setup runs', async () => {
+test('mod.projectRoot and mod.cwd are set before setup runs', async () => {
   const seen: string[] = []
   const tested = testMod(
     defineMod({
       name: 'file-tree',
       setup(mod) {
-        seen.push(mod.session.root, mod.session.cwd)
+        seen.push(mod.projectRoot, mod.cwd)
       },
     }),
     { projectRoot: '/work/app', cwd: '/work/app/src' },
@@ -384,31 +400,48 @@ test('mod.session.root is set before setup runs', async () => {
 })
 
 function projectFolders() {
-  const sessions: Mod<{ project: { expanded: string[] } }>['session'][] = []
+  const mods: Mod<{ project: { expanded: string[] } }>[] = []
   const definition = defineMod({
     name: 'file-tree',
     state: { project: { expanded: [] as string[] } },
     setup(mod) {
-      sessions.push(mod.session)
+      mods.push(mod)
     },
   })
-  return { sessions, definition }
+  return { mods, definition }
 }
 
 test('a project value saved in one project is not seen in another', async () => {
-  const { sessions, definition } = projectFolders()
+  const { mods, definition } = projectFolders()
   const tested = testMod(definition, { projectRoot: '/work/a' })
   await tested.start()
   tested.state.project.expanded = ['src']
 
   await tested.moveTo('/work/b', '/work/b/lib')
 
-  expect(sessions.map((session) => [session.root, session.cwd])).toEqual([['/work/b', '/work/b/lib']])
+  expect(mods.map((mod) => [mod.projectRoot, mod.cwd])).toEqual([['/work/b', '/work/b/lib']])
   expect(tested.state.project.expanded).toEqual([])
 
   await tested.moveTo('/work/a')
 
   expect(tested.state.project.expanded).toEqual(['src'])
+})
+
+test("a tool's mod reads the project the session moved to", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'file-tree',
+      setup(mod) {
+        mod.use(tool({ name: 'where', description: 'Name the project folder', inputSchema: { type: 'object', properties: {} }, execute: (_input, mod) => `${mod.projectRoot} ${mod.cwd}` }))
+      },
+    }),
+    { projectRoot: '/work/a' },
+  )
+  await tested.start()
+
+  await tested.moveTo('/work/b', '/work/b/lib')
+
+  expect(await tested.callTool('where', {})).toEqual({ result: '/work/b /work/b/lib' })
 })
 
 test('a project value keeps only the 20 projects used most recently', async () => {
@@ -764,7 +797,7 @@ test('a pane Claude Code holds back is not open, so the first toggle opens it in
 
 test('a pane Claude Code shows later counts as open, so toggle closes it', async () => {
   let handle: PaneHandle | undefined
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'diagrams',
       setup(mod) {
@@ -942,16 +975,16 @@ const outline = defineMod({
   },
 })
 
-function relayTo(provider: ReturnType<typeof testModWithEngine>): Claude['cmod']['call'] {
+function relayTo(provider: Pick<TestedMod<object>, 'fire'>): Claude['cmod']['call'] {
   return async (call) => {
-    const answer = await provider.fire('cmod.call', call, { value: { missing: call.to } })
+    const answer = await provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Run cmod install ${call.to}.` })
     if (answer.deny !== undefined) throw new Error(answer.deny)
     return answer.value
   }
 }
 
 test("a mod calls another mod's api and gets its result", async () => {
-  const provider = testModWithEngine(tracer)
+  const provider = testMod(tracer)
   provider.fakes.fs.read = async () => 'export function parse(text: string) {}\nconst cache = new Map()\nexport function render() {}\n'
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(provider)
@@ -962,21 +995,21 @@ test("a mod calls another mod's api and gets its result", async () => {
 
 test('a call to a mod that is not installed fails with the install command', async () => {
   const consumer = testMod(outline)
-  consumer.fakes.cmod.call = relayTo(testModWithEngine(defineMod({ name: 'file-tree', setup() {} })))
+  consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'file-tree', setup() {} })))
 
   expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
 })
 
 test('an unknown method fails naming it', async () => {
-  const provider = testModWithEngine(tracer)
-  const below = { value: { missing: 'tracer' } }
+  const provider = testMod(tracer)
+  const below = { deny: 'tracer is not installed. Run cmod install tracer.' }
 
   expect(await provider.fire('cmod.call', { to: 'tracer', method: 'callers', input: { name: 'parse' } }, below)).toEqual({ deny: 'tracer has no method callers.' })
   expect(await provider.fire('cmod.call', { to: 'tracer', method: 'constructor', input: {} }, below)).toEqual({ deny: 'tracer has no method constructor.' })
 })
 
 test("a provider method that throws reaches the caller with the provider's name", async () => {
-  const provider = testModWithEngine(tracer)
+  const provider = testMod(tracer)
   provider.fakes.fs.read = async (path) => {
     throw new Error(`ENOENT: no such file ${path}`)
   }
@@ -987,7 +1020,7 @@ test("a provider method that throws reaches the caller with the provider's name"
 })
 
 test('a mod passes on a call addressed to another mod', async () => {
-  const provider = testModWithEngine(tracer)
+  const provider = testMod(tracer)
   const below = { value: [{ name: 'main', line: 1 }] }
 
   expect(await provider.fire('cmod.call', { to: 'symbols', method: 'signatures', input: { path: 'src/a.ts' } }, below)).toBe(below)
@@ -1013,7 +1046,7 @@ test("a dependency call that never answers fails at the deadline with the provid
 
   expect(await tested.type('/outline src/a.ts')).toEqual({ text: '/outline failed: mod.dependencies.tracer.signatures passed the 30 s deadline of slashCommand' })
   await tested.fire('UserPromptSubmit', { prompt: 'outline src/a.ts' })
-  expect(tested.shown.logs).toContain('outline: the UserPromptSubmit hook failed: mod.dependencies.tracer.signatures passed the 30 s deadline of tool')
+  expect(tested.shown.logs).toContain('outline: the UserPromptSubmit hook failed: mod.dependencies.tracer.signatures passed its 30 s deadline')
   expect(deadlines).toEqual([30000, 30000])
 })
 
@@ -1022,4 +1055,17 @@ test("a dependency's method takes the input and returns the result its contract 
 
   expectTypeOf<Parameters<Signatures>>().toEqualTypeOf<[input: { path: string }]>()
   expectTypeOf<Awaited<ReturnType<Signatures>>>().toEqualTypeOf<TracerSignature[]>()
+})
+
+test('a provider whose api method returns the wrong type fails tsc', () => {
+  const wrong = defineMod({
+    name: 'tracer',
+    api: {
+      // @ts-expect-error
+      signatures: async ({ path }: { path: string }) => `${path}:1`,
+    },
+    setup() {},
+  })
+
+  expect(wrong.name).toBe('tracer')
 })

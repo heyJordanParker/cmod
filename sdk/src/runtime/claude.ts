@@ -4,18 +4,13 @@ import type {
   AskOptions,
   CommandSpec,
   ElementTable,
-  EngineInterface,
-  EventResult,
   FsEntry,
   FsStat,
   FsStatOptions,
-  Frozen,
   HookStream,
   HttpInit,
   HttpResponse,
   InvalidatableEventName,
-  Next,
-  On,
   PaneCloseArgs,
   PaneOpenArgs,
   ProcessRunInit,
@@ -35,7 +30,6 @@ import type {
   UiOpenResult,
   UiPane,
 } from 'claude-code'
-import { startSession } from './hooks.js'
 
 export type Claude = {
   readonly plugin: { readonly name: string; readonly root: string }
@@ -67,6 +61,8 @@ export type Claude = {
   readonly store: {
     get(key: string): Promise<unknown>
     set(key: string, value: unknown): Promise<void>
+    delete(key: string): Promise<void>
+    keys(): Promise<string[]>
   }
   readonly clock: {
     now(): Promise<number>
@@ -90,66 +86,4 @@ export type Claude = {
     configHome(): Promise<string | undefined>
   }
   readonly cmod: { call(input: Args<'cmod.call'>): Promise<unknown> }
-}
-
-async function keep($: EngineInterface, e: Frozen<Args<'session.start'>>, next: Next<'session.start'>): Promise<EventResult<'session.start'>> {
-  await startSession({
-    plugin: { name: $.plugin.name, root: $.plugin.root },
-    ui: {
-      toast: (text, options) => $.ui.toast(text, options),
-      status: (text) => $.ui.status(text),
-      log: (text, options) => $.ui.log(text, options),
-      notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
-      invalidate: (event) => $.ui.invalidate(event),
-      ask: (question, options) => $.ui.ask(question, options),
-      open: (pane) => $.ui.open(pane),
-      close: (pane) => $.ui.close(pane),
-      panes: () => $.ui.panes(),
-      resolve: (render) => $.ui.resolve(render),
-    },
-    process: {
-      run: (argv, init) => $.process.run(argv, init),
-      spawn: (request) => $.process.spawn(request),
-    },
-    fs: {
-      read: (path) => $.fs.read(path),
-      write: (path, text) => $.fs.write(path, text),
-      list: (path) => $.fs.list(path),
-      exists: (path) => $.fs.exists(path),
-      stat: (path, options) => $.fs.stat(path, options),
-    },
-    http: { fetch: (url, init) => $.http.fetch(url, init) },
-    settings: { read: (args) => $.settings.read(args) },
-    store: {
-      get: (key) => $.store.get(key),
-      set: (key, value) => $.store.set(key, value),
-    },
-    clock: {
-      now: () => $.clock.now(),
-      after: (ms, fn) => $.clock.after(ms, fn),
-      every: (ms, fn) => $.clock.every(ms, fn),
-    },
-    session: {
-      id: () => $.session.id(),
-      root: () => $.session.root(),
-      cwd: () => $.session.cwd(),
-      model: () => $.session.model(),
-      usage: () => $.session.usage(),
-      surfaces: () => $.session.surfaces(),
-    },
-    command: { register: (command) => $.command.register(command) },
-    tool: { register: (tool) => $.tool.register(tool) },
-    agent: { list: () => $.agent.list() },
-    env: {
-      home: () => $.env.get('HOME'),
-      dataHome: () => $.env.get('XDG_DATA_HOME'),
-      configHome: () => $.env.get('CLAUDE_CONFIG_DIR'),
-    },
-    cmod: { call: (input) => $.cmod.call(input) },
-  })
-  return next(e)
-}
-
-export function keepClaudeCalls(on: On): void {
-  on('session.start', keep)
 }

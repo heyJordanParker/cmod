@@ -1,20 +1,20 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
-import { checks } from '../../src/jobs/checks.js'
+import { check } from '../../src/jobs/check.js'
 import { defineMod, type Part } from '../../src/mod.js'
-import { testModWithEngine } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 
 const root = '/test/plugins/typed'
 const answered = { result: { filePath: `${root}/a.ts` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 const editOf = (path: string, toolUseId: string) => ({ tool: 'Edit', file_path: path, old_string: 'let a = 1', new_string: "let a = 'one'", tool_use_id: toolUseId }) as never
 const typeError = "a.ts(1,5): error TS2322: Type 'string' is not assignable to type 'number'."
 
-function typed() {
-  const tested = testModWithEngine(
+function typed(...parts: Part<void>[]) {
+  const tested = testMod(
     defineMod({
       name: 'typed',
       setup(mod) {
-        mod.use(checks({ after: [{ write: '**/*.ts', run: ['tsc', '--noEmit'] }] }))
+        for (const part of parts) mod.use(part)
       },
     }),
   )
@@ -24,8 +24,10 @@ function typed() {
   return tested
 }
 
-test('a check after write **/*.ts runs once after an Edit of a.ts with a.ts appended, and its failing output reaches Claude as context', async () => {
-  const tested = typed()
+const typeCheck = check({ after: { write: '**/*.ts' }, run: ['tsc', '--noEmit'] })
+
+test('check runs its command after a matching call and reports a failure', async () => {
+  const tested = typed(typeCheck)
 
   const answer = await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
@@ -35,7 +37,7 @@ test('a check after write **/*.ts runs once after an Edit of a.ts with a.ts appe
 })
 
 test('a check adds nothing when its command exits 0, and does not run for an unmatched file or a refused call', async () => {
-  const tested = typed()
+  const tested = typed(typeCheck)
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: 'ok', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
   expect(await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)).toEqual(answered)
@@ -44,8 +46,22 @@ test('a check adds nothing when its command exits 0, and does not run for an unm
   expect(tested.calls.filter((call) => call.call === 'process.run')).toHaveLength(1)
 })
 
+test('a check after several targets runs its command once, with the matched files appended', async () => {
+  const tested = typed(check({ after: [{ write: '**/*.ts' }, { command: 'git commit' }], run: ['bun', 'test'] }))
+  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
+  await tested.fire('tool.call', { tool: 'Bash', command: 'echo x > a.ts && git commit -am x', tool_use_id: 'toolu_1' } as never, answered)
+  await tested.fire('tool.call', { tool: 'Bash', command: 'git commit -m x', tool_use_id: 'toolu_2' } as never, answered)
+
+  expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([
+    [['bun', 'test', `${root}/a.ts`], { timeoutMs: 60000 }],
+    [['bun', 'test'], { timeoutMs: 60000 }],
+  ])
+  expect(tested.shown.logs).toEqual(['typed added a check after edits to **/*.ts and git commit.'])
+})
+
 test('a check that passes its deadline tells Claude the check and the deadline', async () => {
-  const tested = typed()
+  const tested = typed(typeCheck)
   tested.fakes.process.run = () => new Promise(() => undefined)
   tested.fakes.clock.after = (_ms, fire) => {
     void Promise.resolve().then(fire)
@@ -54,39 +70,7 @@ test('a check that passes its deadline tells Claude the check and the deadline',
 
   const answer = await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
-  expect(answer.context).toEqual([`The check after edits to **/*.ts failed: tsc --noEmit ${root}/a.ts passed the 60 s deadline of checks`])
-})
-
-test('a check whose run is a function gives Claude the string it returns', async () => {
-  const tested = testModWithEngine(
-    defineMod({
-      name: 'reread',
-      setup(mod) {
-        mod.use(checks({ after: [{ command: 'git commit', run: (call) => `Committed with ${call.commands.length} command.` }] }))
-      },
-    }),
-  )
-
-  const answer = await tested.fire('tool.call', { tool: 'Bash', command: 'git commit -m x', tool_use_id: 'toolu_1' } as never, answered)
-
-  expect(answer.context).toEqual(['Committed with 1 command.'])
-})
-
-test("a check's run gets the mod's own typed state, so it counts commits without capturing the mod from setup", async () => {
-  const tested = testModWithEngine(
-    defineMod({
-      name: 'reread',
-      state: { project: { commits: 0 } },
-      setup(mod) {
-        mod.use(checks({ after: [{ command: 'git commit', run: (_call, mod) => `Commit ${(mod.state.project.commits += 1)} landed.` }] }))
-      },
-    }),
-  )
-
-  const answer = await tested.fire('tool.call', { tool: 'Bash', command: 'git commit -m x', tool_use_id: 'toolu_1' } as never, answered)
-
-  expect(answer.context).toEqual(['Commit 1 landed.'])
-  expect(tested.state.project.commits).toBe(1)
+  expect(answer.context).toEqual(['The check after edits to **/*.ts failed: mod.process.run passed the 60 s deadline of check'])
 })
 
 test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () => {
@@ -96,15 +80,7 @@ test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () =>
       return next(e)
     })
   }
-  const tested = testModWithEngine(
-    defineMod({
-      name: 'typed',
-      setup(mod) {
-        mod.use(checks({ after: [{ write: '**/*.ts', run: ['tsc', '--noEmit'] }] }))
-        mod.use(bashMovesFolder)
-      },
-    }),
-  )
+  const tested = typed(typeCheck, bashMovesFolder)
   tested.fakes.fs.exists = async (path) => path === `${root}/app/cart.ts`
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
@@ -113,8 +89,10 @@ test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () =>
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/app/cart.ts`], { timeoutMs: 60000 }]])
 })
 
-test('a timeoutMs past 10 minutes throws in setup', () => {
-  expect(() => checks({ after: [{ write: '**/*.ts', run: ['tsc'], timeoutMs: 600_001 }] })).toThrow(
-    'checks: the check after edits to **/*.ts has timeoutMs 600001. Set it above 0 and at most 600000 (10 minutes).',
+test('a check with no target, no command, or a timeoutMs past 10 minutes throws in setup', () => {
+  expect(() => check({ after: [], run: ['tsc'] })).toThrow("check: give after a target, such as { write: '**/*.ts' }.")
+  expect(() => check({ after: { write: '**/*.ts' }, run: [] })).toThrow("check: the check after edits to **/*.ts has no command. Give run a command, such as ['bun', 'test'].")
+  expect(() => check({ after: { write: '**/*.ts' }, run: ['tsc'], timeoutMs: 600_001 })).toThrow(
+    'check: the check after edits to **/*.ts has timeoutMs 600001. Set it above 0 and at most 600000 (10 minutes).',
   )
 })

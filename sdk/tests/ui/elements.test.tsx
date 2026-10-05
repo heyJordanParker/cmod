@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
-import type { RenderElement } from 'claude-code'
+import type { Args, ElementTable, Frozen, Next, RenderElement } from 'claude-code'
 import { defineMod } from '../../src/mod.js'
-import { testMod } from '../../src/testing.js'
+import { createLifecycle } from '../../src/runtime/lifecycle.js'
+import { fakeClaude, testMod } from '../../src/testing.js'
 import { definePane } from '../../src/ui/define-pane.js'
-import { Box, Text } from '../../src/ui/elements.js'
+import { Box, Image, Text } from '../../src/ui/elements.js'
 
 type CounterState = { session: { count: number } }
 
@@ -43,4 +44,22 @@ test("an element called outside a render throws with the element's name", async 
   await tested.lines('counter')
 
   expect(() => Box({})).toThrow("Box was called outside a render. Use it inside a pane's render or a slot's component.")
+})
+
+test('Image draws', async () => {
+  const fake = fakeClaude({ name: 'charts', root: '/test/plugins/charts' })
+  fake.claude.ui.resolve = () => ({ Image: (props: object) => ({ type: 'Image', props }) }) as unknown as ElementTable
+  const chart = { source: { png: 'iVBORw0KGgo=' }, columns: 40, rows: 12, alt: 'p95 latency' }
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'charts',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'chart', title: 'Chart', render: () => Image(chart) })).open()
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, async () => ({ name: 'charts', root: '/test/plugins/charts', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'chart', props: { title: 'Chart', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
+
+  expect(await lifecycle.route('ui.render', pane, Object.assign(async () => Box({}), { event: 'ui.render' }) as unknown as Next<'ui.render'>)).toEqual({ type: 'Image', props: chart } as unknown as RenderElement)
 })

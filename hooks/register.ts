@@ -1,5 +1,6 @@
 import type { Register } from 'claude-code'
 import { connect } from '../node_modules/cmod-sdk/connect.js'
+import { notInstalled } from '../node_modules/cmod-sdk/runtime/dependencies.js'
 import { cmodPlugin } from '../src/mod.js'
 import type { Cmod } from '../types/index.js'
 
@@ -8,7 +9,7 @@ export const register: Register = (on) => {
     const built = await next(e)
     const cmod: Cmod = {
       async call(input) {
-        return { missing: input.to }
+        return { deny: notInstalled(input.to) }
       },
     }
     return { ...built, cmod }

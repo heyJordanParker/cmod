@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { defineMod } from '../../src/mod.js'
-import { testMod, testModWithEngine } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 
 test('/tree a b reaches reply with the args and their words, and the string reply is shown', async () => {
   const seen: unknown[] = []
@@ -62,7 +62,7 @@ test('a second slashCommand with the same name throws in setup and names the com
 })
 
 test('a command of another plugin passes on, and a reply that throws shows /<name> failed with the message', async () => {
-  const tested = testModWithEngine(
+  const tested = testMod(
     defineMod({
       name: 'file-tree',
       setup(mod) {

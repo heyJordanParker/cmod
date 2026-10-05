@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readSteps, scriptsSha256 } from 'cmod-sdk/src/records.js'
+import { listFiles, readText } from '../src/files.js'
 
 const main = join(import.meta.dir, '..', 'src', 'main.ts')
 const homes: string[] = []
@@ -56,10 +56,7 @@ export async function cmod(home: string, ...args: string[]): Promise<{ exitCode:
 
 export async function hashOf(root: string): Promise<string> {
   const steps = readSteps(JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))) ?? {}
-  return scriptsSha256(steps, {
-    read: async (path) => (existsSync(join(root, path)) ? readFile(join(root, path), 'utf8') : undefined),
-    list: async (folder) => (await readdir(join(root, folder), { withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => entry.name),
-  })
+  return scriptsSha256(steps, { read: (path) => readText(join(root, path)), list: (folder) => listFiles(join(root, folder)) })
 }
 
 export async function writeFiles(root: string, files: Record<string, string>): Promise<void> {

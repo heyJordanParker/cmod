@@ -6,4 +6,5 @@ declare module 'claude-code' {
   interface EngineInterface {
     cmod: Cmod
   }
+  interface CmodDependencies {}
 }

@@ -2,6 +2,8 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
+import { version as sdkVersion } from 'cmod-sdk/package.json'
+import { isObject } from 'cmod-sdk/src/records.js'
 import { version as cmodVersion } from '../../package.json'
 import { tilde, writeAtomically } from '../files.js'
 import { readPlugin } from '../plugin.js'
@@ -20,12 +22,15 @@ plugin.json. Builds the release archive from the committed files with git
 archive, leaving out cli/, builds the program cli/ declares, writes SHA256SUMS
 for every file of the release, and writes .claude-plugin/marketplace.json
 listing the archive and the CMod plugin. Then commits that file, tags
-v<version>, pushes, and creates the GitHub release.
+v<version>, pushes, and creates the GitHub release. It refuses a package.json
+that depends on a file: or link: path, which no user has.
 
 Options:
   --dry-run  Build and write everything, and push nothing`
 
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
+
+const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { 'dry-run': { type: 'boolean', default: false } } })
@@ -36,6 +41,13 @@ export async function run(argv: string[]): Promise<number> {
   if (program !== undefined && program.name !== plugin.steps.program) {
     const packagePath = `${tilde(plugin.root)}/package.json`
     throw new Error(`${tilde(program.folder)} declares the program ${program.name}, but ${packagePath} ${plugin.steps.program === undefined ? 'does not name it' : `names "${plugin.steps.program}"`}, so installing the mod would not fetch ${program.name}. Write "program": "${program.name}" in the "cmod" key of ${packagePath}.`)
+  }
+  const local = dependencyGroups
+    .map((group) => plugin.packageJson?.[group])
+    .flatMap((dependencies) => Object.entries(isObject(dependencies) ? dependencies : {}))
+    .filter(([, spec]) => typeof spec === 'string' && /^(file|link):/.test(spec))
+  if (local.length > 0) {
+    throw new Error(`${tilde(plugin.root)}/package.json depends on ${local.map(([name, spec]) => `${name} at ${spec}`).join(', ')}, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "cmod-sdk": "^${sdkVersion}", then run cmod publish again.`)
   }
   const git = (...args: string[]) => runCommand(['git', '-C', plugin.root, ...args])
   if ((await git('rev-parse', '--show-toplevel').catch(() => '')).trim() !== plugin.root) throw new Error(`${plugin.root} is not the root of a git repository. Run git init there and commit the mod.`)

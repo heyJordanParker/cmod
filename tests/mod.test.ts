@@ -43,10 +43,18 @@ test('the CMod plugin tears down only keys removed from user settings', async ()
 
 test('a key set to false runs nothing', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true, 'four-step@fixtures': false })
-  await tested.fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual([])
   expect(tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
+})
+
+test('a tool call reads no settings and tears nothing down', async () => {
+  const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
+  await tested.fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
+  await settled()
+  expect(tested.calls.filter((call) => call.call === 'settings.read')).toEqual([])
+  expect(teardowns).toEqual([])
 })
 
 test('the first snapshot after install removes nothing', async () => {
@@ -79,12 +87,12 @@ test('a teardown that fails before any event shows its last line of standard err
   expect(tested.shown.toasts).toEqual(['cmod is ready', 'cmod teardown four-step exited 1: cmod teardown: records/four-step.json is not JSON'])
 })
 
-test('cmod.call answers missing when no mod takes the call', async () => {
+test('cmod.call denies a call no mod takes with the install command', async () => {
   const hooks = new Map<string, (...args: unknown[]) => Promise<EngineCreateResult>>()
   const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => void hooks.set(event, hook)
   register(on as unknown as On, {})
 
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
 
-  expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ missing: 'tracer' })
+  expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Run cmod install tracer.' })
 })
