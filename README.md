@@ -58,22 +58,64 @@ cd my-mod
 cmod link
 ```
 
-`cmod new` writes the mod and installs its packages. `cmod link` loads it in every new Claude Code session. The mod lives in `src/mod.ts`:
+`cmod new` writes the mod and installs its packages. `cmod link` loads it in every new Claude Code session. The mod lives in `src/`:
 
-```ts
+```text
+src/
+├── mod.tsx                     defineMod, and the mappings: the pane, the slot renders, the hooks
+├── state.ts                    the starting state, grouped by how long it lasts
+├── panes/
+│   └── prompts.tsx             one definePane per file
+└── components/
+    └── prompt-count.tsx        what the pane and the slot render draw with
+```
+
+`src/mod.tsx` attaches each part to Claude Code with one line:
+
+```tsx
 import { defineMod } from '../node_modules/cmod-sdk/mod.js'
+import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
+import { PromptCount } from './components/prompt-count.js'
+import { promptsPane } from './panes/prompts.js'
+import { initialState } from './state.js'
 
 export const myMod = defineMod({
   name: 'my-mod',
-  state: { session: { prompts: 0 } },
+  state: initialState,
 
   setup(mod) {
+    mod.ui.pane(promptsPane)
+    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) => (hasSurvey ? <Default /> : <PromptCount count={mod.state.session.prompts} />))
+
     mod.on('UserPromptSubmit', () => {
       mod.state.session.prompts += 1
-      return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: `This session has ${mod.state.session.prompts} prompts.` } }
+      const prompts = mod.state.session.prompts === 1 ? '1 prompt' : `${mod.state.session.prompts} prompts`
+      return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: `The my-mod mod is loaded. It has seen ${prompts} this session.` } }
     })
   },
 })
+```
+
+`src/state.ts` holds the starting state:
+
+```ts
+export type MyModState = { session: { prompts: number } }
+
+export const initialState: MyModState = { session: { prompts: 0 } }
+```
+
+`src/panes/prompts.tsx` is the mod's panel, and `src/components/prompt-count.tsx` is what it draws. The `AbovePrompt` render draws the same component in the band above the prompt, and gives the band back to Claude Code's `Default` while Claude Code shows a survey:
+
+```tsx
+export const promptsPane = definePane<MyModState>({
+  id: 'my-mod',
+  title: 'my-mod',
+  render: (mod) => <PromptCount count={mod.state.session.prompts} />,
+})
+
+export function PromptCount({ count }: { readonly count: number }): RenderElement {
+  return <Text>{`Prompts this session: ${count}`}</Text>
+}
 ```
 
 `state` groups the mod's values by how long they last: `memory` until `/clear` or until Claude Code closes, `session` for this conversation, `project` for this project, and `global` for every project. CMod saves every value except `memory`. A `session` value comes back on `--resume`, starts over on `/clear`, and is copied by `/branch`. Put values the mod works out again on every prompt, such as a git status, in `memory`.

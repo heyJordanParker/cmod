@@ -1,10 +1,11 @@
 import type { Mod, Part } from '../mod.js'
+import { beforeDeadline, longestMs, type Deadline } from '../runtime/deadline.js'
 import { triggeredChecks, type Check, type CheckRun } from './checks/triggered-checks.js'
 import type { Workspace } from './permissions/find-project-scope.js'
 import { targetOf } from './permissions/match-target.js'
 import type { ToolUse } from '../utils/call-effects.js'
 import { messageOf } from '../utils/text.js'
-import { beforeDeadline, longestMs, modOf, targetWords, useOf, workspaceOf, type Deadline } from './tool-calls.js'
+import { modOf, targetWords, useOf, workspaceOf } from './tool-calls.js'
 
 const defaultMs = 60_000
 

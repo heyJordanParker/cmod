@@ -1,6 +1,7 @@
 import type { Args, Frozen } from 'claude-code'
 import type { Mod, PartContext } from '../mod.js'
 import type { Claude } from '../runtime/claude.js'
+import { beforeDeadline, type Deadline } from '../runtime/deadline.js'
 import { dependencyCalls } from '../runtime/hooks.js'
 import { reservedKeys, toolCalls } from '../runtime/tool-calls.js'
 import { listed } from '../utils/text.js'
@@ -8,12 +9,6 @@ import type { ToolCall, ToolUse } from '../utils/call-effects.js'
 import { findProjectScope, type ProjectScope, type Workspace } from './permissions/find-project-scope.js'
 import { targetOf, type Target } from './permissions/match-target.js'
 import type { FileSystem } from '../utils/paths.js'
-
-export type Deadline = { readonly ms: number; readonly job: string; readonly longestMs?: number }
-
-export const longestMs = 600_000
-
-export const toolDeadline: Deadline = { ms: 30000, longestMs, job: 'tool' }
 
 type Session = { readonly home: string; readonly scope: ProjectScope | undefined; readonly fs: FileSystem }
 
@@ -78,22 +73,6 @@ export function modWithin<State extends object>({ mod, claude }: PartContext<Sta
     http: { fetch: (url, init) => within('mod.http.fetch', mod.http.fetch(url, init)) },
     dependencies: dependencyCalls(claude, within),
   }
-}
-
-export function beforeDeadline<Value>(claude: Claude, { ms, job }: Deadline, call: string, task: Promise<Value>): Promise<Value> {
-  return new Promise<Value>((resolve, reject) => {
-    const timer = claude.clock.after(ms, () => reject(new Error(`${call} passed the ${ms / 1000} s deadline of ${job}`)))
-    task.then(
-      (value) => {
-        timer.cancel()
-        resolve(value)
-      },
-      (error: unknown) => {
-        timer.cancel()
-        reject(error)
-      },
-    )
-  })
 }
 
 export function targetWords(target: Target): string {

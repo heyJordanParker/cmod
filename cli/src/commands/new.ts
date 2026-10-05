@@ -13,8 +13,8 @@ export const help = `Usage: cmod new <name> [--project]
 
 ${summary}
 
-Creates a mod in ./<name>: a defineMod with one hook and one panel, a Skill,
-and a test. Then installs its packages.
+Creates a mod in ./<name>: a defineMod with one hook, one panel, and one render
+of the band above the prompt, a Skill, and a test. Then installs its packages.
 
 Options:
   --project  Create a project-scope plugin in ./.claude/skills/<name>/ of the
@@ -73,17 +73,19 @@ export const register: Register = (on) => {
   connect(on, ${definition})
 }
 `,
-    'src/mod.ts': `import { defineMod } from '../node_modules/cmod-sdk/mod.js'
-import { promptsPane } from './prompts-pane.js'
-
-export type ${state} = { session: { prompts: number } }
+    'src/mod.tsx': `import { defineMod } from '../node_modules/cmod-sdk/mod.js'
+import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
+import { PromptCount } from './components/prompt-count.js'
+import { promptsPane } from './panes/prompts.js'
+import { initialState } from './state.js'
 
 export const ${definition} = defineMod({
   name: '${name}',
-  state: { session: { prompts: 0 } } as ${state},
+  state: initialState,
 
   setup(mod) {
     mod.ui.pane(promptsPane)
+    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) => (hasSurvey ? <Default /> : <PromptCount count={mod.state.session.prompts} />))
 
     mod.on('UserPromptSubmit', () => {
       mod.state.session.prompts += 1
@@ -93,15 +95,26 @@ export const ${definition} = defineMod({
   },
 })
 `,
-    'src/prompts-pane.tsx': `import { definePane } from '../node_modules/cmod-sdk/ui/define-pane.js'
-import { Text } from '../node_modules/cmod-sdk/ui/elements.js'
-import type { ${state} } from './mod.js'
+    'src/state.ts': `export type ${state} = { session: { prompts: number } }
+
+export const initialState: ${state} = { session: { prompts: 0 } }
+`,
+    'src/panes/prompts.tsx': `import { definePane } from '../../node_modules/cmod-sdk/ui/define-pane.js'
+import { PromptCount } from '../components/prompt-count.js'
+import type { ${state} } from '../state.js'
 
 export const promptsPane = definePane<${state}>({
   id: '${name}',
   title: '${name}',
-  render: (mod) => <Text>{\`Prompts this session: \${mod.state.session.prompts}\`}</Text>,
+  render: (mod) => <PromptCount count={mod.state.session.prompts} />,
 })
+`,
+    'src/components/prompt-count.tsx': `import type { RenderElement } from 'claude-code'
+import { Text } from '../../node_modules/cmod-sdk/ui/elements.js'
+
+export function PromptCount({ count }: { readonly count: number }): RenderElement {
+  return <Text>{\`Prompts this session: \${count}\`}</Text>
+}
 `,
     'tests/mod.test.ts': `import { expect, test } from 'bun:test'
 import { testMod } from '../node_modules/cmod-sdk/testing.js'
@@ -119,7 +132,7 @@ name: ${name}
 description: Explains what the ${name} mod does. Use when the user asks about the ${name} mod.
 ---
 
-The ${name} mod counts the prompts of this session and shows the count in its panel.
+The ${name} mod counts the prompts of this session and shows the count in its panel and above the prompt.
 `,
     'package.json': json({ name, private: true, type: 'module', dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
     'tsconfig.json': json({ extends: './.claude-plugin/types/tsconfig.json', compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' }, include: ['hooks', 'src'] }),
@@ -127,7 +140,9 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
   if (!isProject) {
     files['.claude/CLAUDE.md'] = `# ${name}
 
-- \`src/mod.ts\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only connects it to Claude Code.
+- \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only connects it to Claude Code.
+- \`src/panes/\` holds one \`definePane\` per file.
+- \`src/components/\` holds the components panes and slot renders draw with.
 - \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.
 - \`cmod check\` runs every check. \`cmod publish --dry-run\` builds the release without pushing.
 `

@@ -1,9 +1,10 @@
 import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import type { Mod, Part } from '../mod.js'
 import { Validator } from '../vendor.js'
+import { toolDeadline } from '../runtime/deadline.js'
 import { reservedKeys } from '../runtime/tool-calls.js'
 import { messageOf } from '../utils/text.js'
-import { modWithin, reserveName, toolDeadline } from './tool-calls.js'
+import { modWithin, reserveName } from './tool-calls.js'
 
 const toolName = /^[A-Za-z0-9_-]{1,64}$/
 
