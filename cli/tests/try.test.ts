@@ -128,7 +128,7 @@ test('cmod try starts no session and tears nothing down when the mod is not set 
   expect(result.stdout).not.toContain('tear down')
 })
 
-test('Ctrl+C before the session starts ends cmod try at once', async () => {
+test('Ctrl+C before the session starts skips the session and sets nothing up', async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
   const store = join(home, '.local/share/cmod')
@@ -148,8 +148,10 @@ esac
   const result = await cmod(home, 'try', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
   expect(existsSync(join(store, 'records/hello-mod.json'))).toBe(false)
+  expect(existsSync(join(store, 'data/hello-mod'))).toBe(false)
+  expect(await approvals(home)).toEqual({})
 })
 
 test('a signal to the process group during the install step of cmod try leaves no program, approval or data', async () => {

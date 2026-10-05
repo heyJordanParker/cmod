@@ -931,6 +931,35 @@ test('a folder move whose project fails to load fires CwdChanged on the retry', 
   expect(moves).toEqual([movedTo('/work/a', '/work/b')])
 })
 
+test('two overlapping folder moves that both fail leave mod.cwd at the last loaded folder', async () => {
+  const { fake, lifecycle, session, moves, start } = folderPane()
+  const storeGet = fake.claude.store.get
+  let isStoreLocked = false
+  let failLockedReads: () => void = () => undefined
+  const lockedReadsFail = new Promise<void>((resolve) => (failLockedReads = resolve))
+  fake.claude.store.get = async (key) => {
+    if (!isStoreLocked) return storeGet(key)
+    await lockedReadsFail
+    throw new Error('the store file is locked')
+  }
+  await start()
+  isStoreLocked = true
+  session.root = '/work/b'
+  session.cwd = '/work/b'
+  const first = fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await settle()
+  session.root = '/work/c'
+  session.cwd = '/work/c'
+  const second = fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await settle()
+
+  failLockedReads()
+  await Promise.all([first, second])
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/a', '/work/a'])
+  expect(moves).toEqual([])
+})
+
 test('a /cd the user cancels moves nothing', async () => {
   const { lifecycle, redraws, moves, start, drawn } = folderPane()
   await start()
@@ -1017,8 +1046,9 @@ test("an installed mod's SessionStart context reaches Claude Code on a fresh sta
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
 
+  const starting = lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('resume'), {})
-  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await starting
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(await answer).toEqual({ additionalContext: ['safe-delete saw resume'] })
@@ -1087,11 +1117,11 @@ test('a SessionStart held past the limit passes on and replays once the mod star
   const lifecycle = createLifecycle(definition)
   let isAnswered = false
 
-  const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {}).finally(() => (isAnswered = true))
   const starting = lifecycle.start(fake.claude, async () => {
     await slowRead
     return { ...pending, isInstalled: true }
   })
+  const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {}).finally(() => (isAnswered = true))
   await settle()
   timers.find((made) => made.ms === 9_000)?.fire()
   await settle()
@@ -1119,8 +1149,9 @@ test('a SessionStart answered before the limit cancels its timer', async () => {
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
 
+  const starting = lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
-  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await starting
 
   expect(await answer).toEqual({ additionalContext: ['safe-delete saw startup'] })
   expect(sources).toEqual(['startup'])

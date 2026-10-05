@@ -8,9 +8,12 @@ export const cmodPlugin = defineMod({
   state: { global: { installedPlugins: null } as CmodPluginState },
 
   setup(mod) {
+    const triedRemovals = new Set<string>()
+
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
+      if (outcome.kind === 'done' || outcome.kind === 'missing') mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
       if (outcome.kind === 'done') mod.ui.toast(`${name} is uninstalled. A session that still runs it stops after /reload-plugins.`)
       else if (exitCode !== 0) {
         const error = outcome.kind === 'failed' ? outcome.message : stderr.trim().split('\n').at(-1)
@@ -22,10 +25,12 @@ export const cmodPlugin = defineMod({
       const enabledPlugins = (await mod.settings.read({ source: 'user' }))['enabledPlugins'] as Record<string, unknown> | undefined
       const current = [...new Set(Object.keys(enabledPlugins ?? {}).map((key) => key.replace(/@[^@]*$/, '')))]
       const previous = mod.state.global.installedPlugins
-      if (previous !== null && previous.length === current.length && previous.every((name) => current.includes(name))) return
-      mod.state.global.installedPlugins = current
-      for (const name of previous ?? []) {
-        if (current.includes(name)) continue
+      const removed = (previous ?? []).filter((name) => !current.includes(name))
+      const installed = [...current, ...removed]
+      if (previous === null || previous.length !== installed.length || !installed.every((name) => previous.includes(name))) mod.state.global.installedPlugins = installed
+      for (const name of removed) {
+        if (triedRemovals.has(name)) continue
+        triedRemovals.add(name)
         void tearDown(name).catch((error: unknown) => {
           mod.ui.toast(`cmod teardown ${name} did not run: ${messageOf(error)}`)
         })

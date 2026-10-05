@@ -13,7 +13,7 @@ In Claude Code, add the mod's marketplace and install the mod:
 
 Claude Code installs the CMod plugin with the mod. CMod then fetches the cmod program, and the mod runs its install step. A progress bar shows each step. A notice tells you when the mod is ready.
 
-When you remove a mod with `/plugin uninstall`, CMod runs the mod's uninstall step at the next session start or prompt. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
+When you remove a mod with `/plugin uninstall`, CMod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
 
 In a terminal, one command does the same:
 

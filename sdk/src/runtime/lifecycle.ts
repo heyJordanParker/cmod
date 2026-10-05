@@ -128,8 +128,6 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   let shouldRecord = false
   let recording: Promise<void> | undefined
   let missedSessionStart: Frozen<Args<'classic.SessionStart'>> | undefined
-  let beginStart: (claude: Claude) => void = () => undefined
-  const startBegun = new Promise<Claude>((resolve) => (beginStart = resolve))
   let settleStart: () => void = () => undefined
   const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
 
@@ -287,11 +285,10 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
 
   const holdSessionStart = () =>
     new Promise<void>((resolve) => {
-      const held = startSettled.then(whenActive)
-      void held.then(resolve)
-      void startBegun.then((claudeCalls) => {
-        const limit = claudeCalls.clock.after(sessionStartHoldMs, resolve)
-        void held.then(() => limit.cancel())
+      const limit = claude().clock.after(sessionStartHoldMs, resolve)
+      void startSettled.then(whenActive).then(() => {
+        limit.cancel()
+        resolve()
       })
     })
 
@@ -308,7 +305,6 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
       runtime = { claude: claudeCalls, progress: createProgress(claudeCalls) }
-      beginStart(claudeCalls)
       try {
         const started = await read(claudeCalls).catch((error: unknown) => {
           report(error)
@@ -354,6 +350,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   const on: PartContext<State>['on'] = (event, hook) => router.add(event, hook)
   const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()])
   let cwd = startCwd
+  let loadedCwd = startCwd
   const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
   const mod: Mod<State> = {
@@ -393,9 +390,10 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       if (!hasMovedRoot && nextCwd === oldCwd) return
       cwd = nextCwd
       await modState.moveTo(nextRoot).catch((error: unknown) => {
-        if (cwd === nextCwd) cwd = oldCwd
+        if (cwd === nextCwd) cwd = loadedCwd
         throw error
       })
+      loadedCwd = nextCwd
       if (!hasMovedRoot) area.changed()
       if (nextCwd === oldCwd) return
       const moved: Parameters<ModHook<'CwdChanged'>>[0] = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }

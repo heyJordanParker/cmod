@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -75,9 +76,11 @@ test('download installs the program for this machine into CMOD_DATA/bin', async 
   expect(await readdir(data(home, 'bin'))).toEqual(['hello'])
 })
 
-test('a SHA-256 that differs installs nothing', async () => {
+test('a SHA-256 that differs in an update installs nothing and keeps the program the mod had', async () => {
   const home = await temporaryHome()
   const { tarGz } = await archives(home)
+  const record = { name: 'demo', version: '0.0.9', root: join(home, 'demo'), installedAt: '2026-10-01T00:00:00.000Z', scriptsSha256: '', uninstall: null, program: null }
+  await writeFiles(home, { '.local/share/cmod/records/demo.json': JSON.stringify(record) })
   await writeFiles(data(home), { 'bin/hello': '#!/bin/sh\necho "hello 0.9.0"\n' })
   using server = await serve({ 'hello.tar.gz': tarGz })
   const listed = sha256('the archive the mod author checked')
@@ -91,7 +94,7 @@ test('a SHA-256 that differs installs nothing', async () => {
   expect(await readdir(data(home))).toEqual(['bin'])
   expect(await readdir(data(home, 'bin'))).toEqual(['hello'])
   expect(await readFile(data(home, 'bin/hello'), 'utf8')).toBe('#!/bin/sh\necho "hello 0.9.0"\n')
-  expect(await Bun.file(join(home, '.local/share/cmod/records/demo.json')).exists()).toBe(false)
+  expect(JSON.parse(await readFile(join(home, '.local/share/cmod/records/demo.json'), 'utf8'))).toEqual(record)
 })
 
 test('a machine with no listed download fails naming the machines listed', async () => {
@@ -103,7 +106,7 @@ test('a machine with no listed download fails naming the machines listed', async
   expect(result.stdout).toBe(`log cmod download: hello has no download for this machine, ${machine}. The install script lists freebsd-x64, win32-arm64.\nfailed 1\tcmod download: hello has no download for this machine, ${machine}. The install script lists freebsd-x64, win32-arm64.\n`)
   expect(result.exitCode).toBe(1)
   expect(server.requested).toEqual([])
-  expect(await readdir(data(home))).toEqual([])
+  expect(existsSync(data(home))).toBe(false)
 })
 
 test('download prints progress lines setup can read', async () => {

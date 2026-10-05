@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { chmod, lstat, mkdir, readdir, readFile, readlink, rename, rm, stat, symlink, utimes } from 'node:fs/promises'
-import { join } from 'node:path'
+import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, utimes } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { deleteUnclaimedLeftovers } from '../src/commands/setup.js'
-import { readText } from '../src/files.js'
-import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
+import { listFiles, readText } from '../src/files.js'
+import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -39,16 +39,21 @@ function sha256Sums(files: Record<string, string>): string {
     .join('')
 }
 
-function serveRelease(files: Record<string, string>) {
+function serveRelease(files: Record<string, string>, delayMs = 0) {
   return Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    fetch: (request) => {
+    fetch: async (request) => {
       const { pathname } = new URL(request.url)
       const file = pathname.startsWith(`${release}/`) ? files[pathname.slice(release.length + 1)] : undefined
+      await Bun.sleep(delayMs)
       return file === undefined ? new Response('Not Found', { status: 404 }) : new Response(file)
     },
   })
+}
+
+async function waitFor(path: string): Promise<void> {
+  while (!existsSync(path)) await Bun.sleep(10)
 }
 
 async function createProgramMod(home: string, repository: string): Promise<string> {
@@ -407,7 +412,7 @@ test('two teardowns of one mod run its uninstall once', async () => {
 
   const results = await Promise.all([cmod(home, 'teardown', 'demo', '--events'), cmod(home, 'teardown', 'demo', '--events')])
 
-  expect(results.map((result) => result.stdout).sort()).toEqual(['done demo\n', 'missing demo\n'])
+  expect(results.map((result) => result.stdout).sort()).toEqual(['claimed demo\n', 'done demo\n'])
   expect(results.map((result) => result.exitCode)).toEqual([0, 0])
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
 })
@@ -447,7 +452,8 @@ test('a teardown claim older than 600 seconds is taken over, and a newer one is 
 
   const fresh = await cmod(home, 'teardown', 'demo', '--events')
 
-  expect(fresh.stdout).toBe('missing demo\n')
+  expect(fresh.stdout).toBe('claimed demo\n')
+  expect(parseEvent(fresh.stdout.trim())).toEqual({ kind: 'claimed', name: 'demo' })
   expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(true)
 
   const tenMinutesAgo = new Date(Date.now() - 601_000)
@@ -633,36 +639,217 @@ test("Ctrl+C during cmod remove's uninstall step still removes the mod", async (
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
+const blockRecordWrite = '#!/bin/sh\nmkdir "$HOME/.local/share/cmod/records/demo.json.$PPID.tmp"\n'
+
 test('a record write that fails after the uninstall step is saved deletes the saved step', async () => {
   const home = await temporaryHome()
-  const root = await createMod(home)
+  const root = await createMod(home, blockRecordWrite)
   const store = join(home, '.local/share/cmod')
-  await mkdir(join(store, 'records'), { recursive: true })
-  await chmod(join(store, 'records'), 0o555)
 
   const result = await cmod(home, 'setup', root, '--yes')
-  await chmod(join(store, 'records'), 0o755)
 
   expect(result.exitCode).toBe(1)
+  expect(existsSync(join(store, 'records/demo.json'))).toBe(false)
   expect(await readdir(join(store, 'uninstall')).catch(() => [])).toEqual([])
 })
 
-test('a record write that fails in an upgrade keeps the saved uninstall step of the set-up version', async () => {
+test('a record write that fails in an upgrade keeps the new saved uninstall step, because the new install step ran', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
   expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
-  const saved = await readFile(join(store, 'uninstall/demo/root/setup/uninstall.sh'), 'utf8')
-  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/uninstall.sh': '#!/bin/sh\necho "the new uninstall" >> "$HOME/uninstalls"\n' })
-  await chmod(join(store, 'records'), 0o555)
+  const newUninstall = '#!/bin/sh\necho "the new uninstall" >> "$HOME/uninstalls"\n'
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': blockRecordWrite, 'setup/uninstall.sh': newUninstall })
 
   const result = await cmod(home, 'setup', root, '--yes')
-  await chmod(join(store, 'records'), 0o755)
 
   expect(result.exitCode).toBe(1)
   expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
-  expect(await readFile(join(store, 'uninstall/demo/root/setup/uninstall.sh'), 'utf8')).toBe(saved)
+  expect(await readFile(join(store, 'uninstall/demo/root/setup/uninstall.sh'), 'utf8')).toBe(newUninstall)
   expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0' })
+})
+
+test('a crash between the saved step and the record leaves a record whose uninstall step exists', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(root, Object.fromEntries(Array.from({ length: 3000 }, (_, index) => [`setup/lib/${index}.sh`, `echo ${index}\n`])))
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  const recordFile = join(store, 'records/demo.json')
+
+  const setup = startCmod(home, 'setup', root, '--yes')
+  while (setup.child.exitCode === null && !(await readFile(recordFile, 'utf8')).includes('"version": "0.2.0"')) await Bun.sleep(0)
+  setup.child.kill('SIGKILL')
+  await setup.done
+
+  const record = JSON.parse(await readFile(recordFile, 'utf8'))
+  expect(record.version).toBe('0.2.0')
+  expect(existsSync(record.uninstall)).toBe(true)
+  expect(await listFiles(join(dirname(record.uninstall), 'root/setup'))).toEqual(await listFiles(join(root, 'setup')))
+}, 30_000)
+
+test('an upgrade that drops cmod.program removes the old program', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
+  })
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(store, 'bin/hello/0.2.0/hello'))
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { install: './setup/install.sh' } }),
+  })
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(0)
+  expect(JSON.parse(await readFile(join(store, 'records/hello-mod.json'), 'utf8'))).toMatchObject({ version: '0.3.0', program: null })
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+})
+
+test('an upgrade that renames cmod.program removes the old program and links the new one', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n', 'bin/hi/0.3.0/hi': '#!/bin/sh\necho hi\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
+  })
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hi', install: './setup/install.sh' } }),
+  })
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readlink(join(home, '.local/bin/hi'))).toBe(join(store, 'bin/hi/0.3.0/hi'))
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+})
+
+test('Ctrl+C while cmod setup downloads the program installs nothing', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) }, 1000)
+  const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
+  const store = join(home, '.local/share/cmod')
+
+  const setup = startCmod(home, 'setup', root, '--yes')
+  await Bun.sleep(500)
+  setup.child.kill('SIGINT')
+  const result = await setup.done
+
+  expect(result.exitCode).toBe(130)
+  expect(result.stdout).toContain('Cancelled the install step of hello-mod on SIGINT.')
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
+test('SIGTERM to cmod setup --events during the install step leaves a recorded mod', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+    'setup/install.sh': '#!/bin/sh\ntouch "$HOME/installing"\nsleep 1\necho ran >> "$CMOD_DATA/runs"\n',
+    'setup/uninstall.sh': '#!/bin/sh\necho uninstalled >> "$HOME/uninstalls"\n',
+  })
+
+  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await waitFor(join(home, 'installing'))
+  setup.child.kill('SIGTERM')
+  const result = await setup.done
+
+  expect(result.exitCode).toBe(143)
+  expect(JSON.parse(await readFile(join(store, 'records/hello-mod.json'), 'utf8'))).toMatchObject({ version: '0.2.0', program: 'hello', uninstall: join(store, 'uninstall/hello-mod/uninstall.sh') })
+  expect(existsSync(join(store, 'uninstall/hello-mod/uninstall.sh'))).toBe(true)
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(store, 'bin/hello/0.2.0/hello'))
+  expect(await readFile(join(store, 'data/hello-mod/runs'), 'utf8')).toBe('ran\n')
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({ 'hello-mod': [await hashOf(root)] })
+})
+
+test('concurrent setups of two mods keep both approvals', async () => {
+  const home = await temporaryHome()
+  const names = Array.from({ length: 8 }, (_, index) => `mod-${index}`)
+  const roots = names.map((name) => join(home, name))
+  for (const [index, name] of names.entries()) {
+    await writeFiles(roots[index] as string, {
+      '.claude-plugin/plugin.json': JSON.stringify({ name, version: '0.1.0' }),
+      'package.json': JSON.stringify({ name, cmod: { install: './setup/install.sh' } }),
+      'setup/install.sh': '#!/bin/sh\ntrue\n',
+    })
+  }
+  const hashes = await Promise.all(roots.map((root) => hashOf(root)))
+
+  const results = await Promise.all(roots.map((root, index) => cmod(home, 'setup', root, '--events', '--consent', hashes[index] as string)))
+
+  expect(results.map((result) => result.exitCode)).toEqual(names.map(() => 0))
+  expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual(Object.fromEntries(names.map((name, index) => [name, [hashes[index]]])))
+}, 15_000)
+
+test('SIGTERM to cmod teardown --events during the uninstall step still removes the mod', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\ntouch "$HOME/uninstalling"\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+
+  const teardown = startCmod(home, 'teardown', 'demo', '--events')
+  await waitFor(join(home, 'uninstalling'))
+  teardown.child.kill('SIGTERM')
+  const result = await teardown.done
+
+  expect(result.exitCode).toBe(143)
+  expect(result.stdout).toBe('done demo\n')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  for (const path of [join(store, 'records/demo.json'), join(store, 'records/demo.json.claim'), join(store, 'data/demo'), join(store, 'uninstall/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+})
+
+test('six concurrent setups of one mod run the install step once and all exit 0', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\nsleep 0.3\necho ran >> "$CMOD_DATA/runs"\n')
+  const store = join(home, '.local/share/cmod')
+  const consent = await hashOf(root)
+
+  const results = await Promise.all(Array.from({ length: 6 }, () => cmod(home, 'setup', root, '--events', '--consent', consent)))
+
+  expect(results.map((result) => ({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }))).toEqual(Array.from({ length: 6 }, () => ({ exitCode: 0, stdout: 'done demo 0.1.0\n', stderr: '' })))
+  expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe('ran\n')
+  expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
+  expect(await readdir(join(store, 'records'))).toEqual(['demo.json'])
+}, 15_000)
+
+test('a setup lock older than 600 seconds is taken over', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const lock = join(home, '.local/share/cmod/records/demo.json.setup')
+  await writeFiles(home, { '.local/share/cmod/records/demo.json.setup': '' })
+  const tenMinutesAgo = new Date(Date.now() - 601_000)
+  await utimes(lock, tenMinutesAgo, tenMinutesAgo)
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toEndWith('done demo 0.1.0\n')
+  expect(result.exitCode).toBe(0)
+  expect(existsSync(lock)).toBe(false)
 })
 
 test('setup --events prints failed with the fix when the release holds no build for this platform, and writes no record', async () => {

@@ -39,9 +39,13 @@ export async function temporaryHome(): Promise<string> {
 }
 
 export async function cmod(home: string, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return startCmod(home, ...args).done
+}
+
+export function startCmod(home: string, ...args: string[]) {
   const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: environment(home), stdout: 'pipe', stderr: 'pipe' })
-  const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-  return { exitCode, stdout, stderr }
+  const done = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }))
+  return { child, done }
 }
 
 export async function cmodInTerminal(home: string, ...args: string[]): Promise<{ exitCode: number; output: string }> {

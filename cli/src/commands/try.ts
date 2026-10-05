@@ -8,7 +8,7 @@ import { preparePackages, readPlugin, sourceOf } from '../plugin.js'
 import { run as runCommand, runAttached } from '../process.js'
 import { startProgress } from '../progress.js'
 import { installCmodPlugin } from './install.js'
-import { holdSignals, setupInTerminal, type SignalHold } from './setup.js'
+import { holdSignals, setupInTerminal } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
 
 export const summary = 'Start one throwaway Claude Code session with a mod set up.'
@@ -22,9 +22,9 @@ install step after asking consent for its install and uninstall commands, as
 cmod link does, then starts one Claude Code session with the mod loaded through
 --plugin-dir. When the session ends, even when its terminal closes, runs the
 mod's uninstall step and deletes its record, data folder, approval, and
-program, so the mod stays uninstalled. Ctrl+C at the consent question changes
-nothing. After consent, Ctrl+C, a closed terminal, or SIGTERM skips a session
-that has not started, and the uninstall step runs to its end.
+program, so the mod stays uninstalled. Ctrl+C at the consent question deletes
+the clone and changes nothing else. Ctrl+C, a closed terminal, or SIGTERM
+skips a session that has not started, and the uninstall step runs to its end.
 The CMod plugin stays installed, as the cmod program does. A GitHub mod is
 cloned into a temporary folder that is deleted too. A mod another folder has
 set up is refused, so cmod try never replaces an installed copy. A checkout
@@ -42,7 +42,7 @@ export async function run(argv: string[]): Promise<number> {
   if (positionals.length !== 1) throw new Error(`cmod try takes one source.\n\n${help}`)
   const source = sourceOf(positionals[0] as string)
   const progress = startProgress()
-  let hold: SignalHold | undefined
+  using hold = holdSignals()
 
   const clone = source.kind === 'github' ? await mkdtemp(join(tmpdir(), 'cmod-try-')) : undefined
   try {
@@ -60,18 +60,17 @@ export async function run(argv: string[]): Promise<number> {
     if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
     else progress.succeed(`${plugin.name} has no packages to install`)
     await installCmodPlugin(progress)
-    const code = await setupInTerminal(plugin, { yes: values.yes, onConsent: () => (hold = holdSignals()) }, progress)
+    const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
     if (code !== 0) return code
     try {
-      if (hold?.signal !== undefined) return code
+      if (hold.signal !== undefined) return code
       const exitCode = await runAttached(['claude', '--plugin-dir', plugin.root, ...forwarded])
-      if (hold !== undefined) hold.signal = undefined
+      hold.signal = undefined
       return exitCode
     } finally {
       if (record === undefined) await teardownInTerminal(plugin.name, progress)
     }
   } finally {
     if (clone !== undefined) await rm(clone, { recursive: true, force: true })
-    hold?.[Symbol.dispose]()
   }
 }

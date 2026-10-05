@@ -77,13 +77,49 @@ test('a removed plugin that is not a cmod mod answers missing and shows nothing'
   await settled()
   expect(teardowns).toEqual(['cmod teardown other-plugin --events'])
   expect(tested.shown.toasts).toEqual(['cmod is ready'])
+  expect(tested.state.global.installedPlugins).toEqual(['cmod'])
 })
 
-test('a failed teardown shows the error its failed event names', async () => {
+test('a failed teardown shows the error its failed event names, and the removal stays pending', async () => {
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 1, stdout: 'log removing the alias\nfailed 2\tzsh: no such file: ~/.zshrc.d/four-step\n', stderr: '' } })
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
   expect(tested.shown.toasts).toEqual(['cmod is ready', 'cmod teardown four-step exited 1: zsh: no such file: ~/.zshrc.d/four-step'])
+  expect(tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
+})
+
+test('a removal interrupted before its teardown answers is torn down by the next session', async () => {
+  const interrupted = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
+  interrupted.tested.fakes.process.run = () => new Promise(() => {})
+  await interrupted.tested.fire('SessionStart', { source: 'startup' })
+  await settled()
+  expect(interrupted.tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
+
+  const next = testRemovals(interrupted.tested.state.global.installedPlugins, { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'done four-step\n', stderr: '' } })
+  await next.tested.fire('SessionStart', { source: 'startup' })
+  await settled()
+  expect(next.teardowns).toEqual(['cmod teardown four-step --events'])
+  expect(next.tested.state.global.installedPlugins).toEqual(['cmod'])
+})
+
+test('a teardown that answers claimed keeps the removal pending and shows nothing', async () => {
+  const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'claimed four-step\n', stderr: '' } })
+  await tested.fire('SessionStart', { source: 'startup' })
+  await settled()
+  expect(tested.shown.toasts).toEqual(['cmod is ready'])
+  expect(tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
+})
+
+test('a prompt while a removal is pending starts no second teardown in the same session', async () => {
+  const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
+  tested.fakes.process.run = (argv) => {
+    teardowns.push(argv.join(' '))
+    return new Promise(() => {})
+  }
+  await tested.fire('SessionStart', { source: 'startup' })
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await settled()
+  expect(teardowns).toEqual(['cmod teardown four-step --events'])
 })
 
 test('a teardown that fails before any event shows its last line of standard error', async () => {
