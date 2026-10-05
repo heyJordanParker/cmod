@@ -17,6 +17,7 @@ cli/dist/
 /docs/plans/
 /.claude/*
 !/.claude/rules/
+!/.claude/skills/
 
 # tracer's per-repo disk cache
 .tracer-cache/
