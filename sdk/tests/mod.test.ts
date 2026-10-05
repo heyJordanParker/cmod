@@ -565,15 +565,8 @@ const commits = defineMod({
 
 const systemFile = '/test/home/.claude/cmods/commits/state.json'
 
-function withFiles(files: Record<string, string>, options: { projectRoot?: string } = {}) {
-  const tested = testMod(commits, options)
-  tested.fakes.fs.exists = async (path) => files[path] !== undefined
-  tested.fakes.fs.read = async (path) => files[path] as string
-  return tested
-}
-
 test("a value in the system state.json replaces the mod's default", async () => {
-  const tested = withFiles({ [systemFile]: '{ "global": { "retries": 5 } }' })
+  const tested = testMod(commits, { files: { [systemFile]: '{ "global": { "retries": 5 } }' } })
   await tested.start()
 
   expect(tested.state).toEqual({ session: { greeting: 'hello' }, project: { policy: 'ask' }, global: { retries: 5 } })
@@ -581,7 +574,7 @@ test("a value in the system state.json replaces the mod's default", async () => 
 })
 
 test('a value the mod saved wins over the system state.json', async () => {
-  const tested = withFiles({ [systemFile]: '{ "project": { "policy": "never" } }' }, { projectRoot: '/work/a' })
+  const tested = testMod(commits, { files: { [systemFile]: '{ "project": { "policy": "never" } }' }, projectRoot: '/work/a' })
   await tested.start()
   tested.state.project.policy = 'always'
 
@@ -595,7 +588,7 @@ test('a value the mod saved wins over the system state.json', async () => {
 })
 
 test('a key the mod does not declare in state.json is ignored with a log line naming it', async () => {
-  const tested = withFiles({ [systemFile]: '{ "global": { "retry": 5 }, "globl": { "retries": 5 } }' })
+  const tested = testMod(commits, { files: { [systemFile]: '{ "global": { "retry": 5 }, "globl": { "retries": 5 } }' } })
   await tested.start()
 
   expect(tested.state.global.retries).toBe(3)
@@ -606,7 +599,7 @@ test('a key the mod does not declare in state.json is ignored with a log line na
 })
 
 test('a value of the wrong type in state.json is ignored with a log line', async () => {
-  const tested = withFiles({ [systemFile]: '{ "global": { "retries": "five" } }' })
+  const tested = testMod(commits, { files: { [systemFile]: '{ "global": { "retries": "five" } }' } })
   await tested.start()
 
   expect(tested.state.global.retries).toBe(3)
@@ -614,7 +607,7 @@ test('a value of the wrong type in state.json is ignored with a log line', async
 })
 
 test('a session default in state.json is what a new conversation starts with', async () => {
-  const tested = withFiles({ [systemFile]: '{ "session": { "greeting": "hi" } }' })
+  const tested = testMod(commits, { files: { [systemFile]: '{ "session": { "greeting": "hi" } }' } })
   await tested.start()
   expect(tested.state.session.greeting).toBe('hi')
   tested.state.session.greeting = 'good morning'
@@ -625,13 +618,13 @@ test('a session default in state.json is what a new conversation starts with', a
 })
 
 test('the project state.json overrides the system state.json', async () => {
-  const tested = withFiles(
-    {
+  const tested = testMod(commits, {
+    files: {
       [systemFile]: '{ "project": { "policy": "never" }, "global": { "retries": 5 } }',
       '/work/app/.claude/cmods/commits/state.json': '{ "project": { "policy": "always" } }',
     },
-    { projectRoot: '/work/app' },
-  )
+    projectRoot: '/work/app',
+  })
   await tested.start()
 
   expect(tested.state).toEqual({ session: { greeting: 'hello' }, project: { policy: 'always' }, global: { retries: 5 } })
@@ -639,7 +632,7 @@ test('the project state.json overrides the system state.json', async () => {
 
 test('a global value in a project state.json is ignored with a log line', async () => {
   const projectFile = '/work/app/.claude/cmods/commits/state.json'
-  const tested = withFiles({ [projectFile]: '{ "global": { "retries": 9 } }' }, { projectRoot: '/work/app' })
+  const tested = testMod(commits, { files: { [projectFile]: '{ "global": { "retries": 9 } }' }, projectRoot: '/work/app' })
   await tested.start()
 
   expect(tested.state.global.retries).toBe(3)
@@ -649,10 +642,8 @@ test('a global value in a project state.json is ignored with a log line', async 
 test('a memory key in state.json is ignored with a log line', async () => {
   const userFile = '/test/home/.claude/cmods/file-tree/state.json'
   const projectFile = '/work/app/.claude/cmods/file-tree/state.json'
-  const files: Record<string, string> = { [userFile]: '{ "memory": { "changed": ["a.ts"] } }', [projectFile]: '{ "memory": { "changed": ["b.ts"] } }' }
-  const tested = testMod(gitChanges, { projectRoot: '/work/app' })
-  tested.fakes.fs.exists = async (path) => files[path] !== undefined
-  tested.fakes.fs.read = async (path) => files[path] as string
+  const files = { [userFile]: '{ "memory": { "changed": ["a.ts"] } }', [projectFile]: '{ "memory": { "changed": ["b.ts"] } }' }
+  const tested = testMod(gitChanges, { projectRoot: '/work/app', files })
   await tested.start()
 
   expect(tested.state.memory.changed).toEqual([])
@@ -663,7 +654,7 @@ test('a memory key in state.json is ignored with a log line', async () => {
 })
 
 test("after a /cd the new project's state.json applies", async () => {
-  const tested = withFiles({ '/work/b/.claude/cmods/commits/state.json': '{ "project": { "policy": "always" } }' }, { projectRoot: '/work/a' })
+  const tested = testMod(commits, { files: { '/work/b/.claude/cmods/commits/state.json': '{ "project": { "policy": "always" } }' }, projectRoot: '/work/a' })
   await tested.start()
 
   await tested.moveTo('/work/b')
@@ -789,6 +780,27 @@ test('a pane Claude Code holds back is not open, so the first toggle opens it in
   expect(tested.shown.openPanes).toEqual(new Set())
 
   tested.fakes.ui.open = async () => ({ isPlaced: true })
+  await handle?.toggle()
+
+  expect(handle?.isOpen).toBe(true)
+  expect(tested.calls.filter((call) => call.call === 'ui.open' || call.call === 'ui.close').map((call) => call.call)).toEqual(['ui.open', 'ui.open'])
+})
+
+test('the first toggle of a pane setup opened and Claude Code holds back opens it', async () => {
+  let handle: PaneHandle | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      async setup(mod) {
+        handle = mod.ui.pane(drawingPane)
+        await handle.open()
+      },
+    }),
+  )
+  tested.fakes.ui.open = async () => ({ isPlaced: false, reason: 'unasked below 144 columns (120 now)' })
+  await tested.start()
+  tested.fakes.ui.open = async () => ({ isPlaced: true })
+
   await handle?.toggle()
 
   expect(handle?.isOpen).toBe(true)

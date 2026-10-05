@@ -3,7 +3,6 @@ import type { EventResult } from 'claude-code'
 import { permissions, type PermissionRules } from '../../src/jobs/permissions.js'
 import { defineMod, type Part } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
-import { fakeFileSystem } from './fake-file-system.js'
 
 const bashCheck = (command: string, toolUseId: string) => ({ tool: 'Bash', input: { command }, tool_use_id: toolUseId })
 const allowedInBypassMode: EventResult<'tool.check'> = { decision: 'allow' }
@@ -119,7 +118,7 @@ test('a when check whose mod.process.run passes the 2 s deadline gives the rule 
 })
 
 const project = '/work/dent'
-const projectFiles = fakeFileSystem({
+const files = {
   [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${project}/.git/worktrees/design/commondir`]: '../..\n',
   [`${project}/worktrees/design/.git`]: `gitdir: ${project}/.git/worktrees/design\n`,
@@ -128,7 +127,7 @@ const projectFiles = fakeFileSystem({
   [`${project}/docs/Domain.md`]: '# Domain\n',
   ['/test/home/dotfiles/.git/HEAD']: 'ref: refs/heads/master\n',
   ['/test/home/dotfiles/Domain.md']: '# Domain\n',
-})
+}
 
 function inProject(rules: PermissionRules) {
   const tested = testMod(
@@ -138,11 +137,8 @@ function inProject(rules: PermissionRules) {
         mod.use(permissions(rules))
       },
     }),
-    { scope: 'project', projectRoot: project },
+    { scope: 'project', projectRoot: project, files },
   )
-  tested.fakes.fs.stat = async (path) => ({ ...(await projectFiles.stat(path)), size: 0, mtimeMs: 0, isLink: false })
-  tested.fakes.fs.read = (path) => projectFiles.read(path)
-  tested.fakes.fs.exists = (path) => projectFiles.exists(path)
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   return tested
 }

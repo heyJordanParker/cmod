@@ -340,8 +340,10 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   const followSession = async () => {
     try {
       const [nextRoot, nextCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
+      const hasMovedOnlyFolder = nextRoot === modState.root && nextCwd !== cwd
       cwd = nextCwd
       await modState.moveTo(nextRoot)
+      if (hasMovedOnlyFolder) area.changed()
     } catch (error) {
       claude.ui.log(`${definition.name} keeps the state of ${modState.root} and tries the project folder again on the next prompt: ${messageOf(error)}`)
     }
@@ -352,13 +354,20 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     })
     return next(e)
   })
-  on('classic.CwdChanged', async (e, next) => {
-    await followSession()
-    return next(e)
-  })
   on('classic.UserPromptSubmit', async (e, next) => {
     await followSession()
     return next(e)
+  })
+  for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
+    on(event, async (e, next) => {
+      if (e.tool_name === 'Bash') await followSession()
+      return next(e)
+    })
+  }
+  on('command.run', async (e, next) => {
+    const answer = await next(e)
+    if (e.command === 'cd') await followSession()
+    return answer
   })
   on('skill.prompt', userSkillHook(claude))
   const api = Object.fromEntries(Object.entries(definition.api ?? {}).map(([method, run]) => [method, (input: never) => run(input, mod)]))

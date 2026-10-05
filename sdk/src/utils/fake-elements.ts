@@ -90,7 +90,7 @@ function boxRows({ props, children = [] }: Drawn, width: number): string[] {
   const ordered = direction.endsWith('-reverse') ? [...children].reverse() : children
   const inner = width - left - space('Right', 'X')
   const rows = direction.startsWith('column') ? stacked(ordered, inner, size('rowGap') ?? size('gap') ?? 0) : sideBySide(ordered, inner, size('columnGap') ?? size('gap') ?? 0)
-  return [...blankRows(space('Top', 'Y')), ...rows.map((row) => `${' '.repeat(left)}${row}`), ...blankRows(space('Bottom', 'Y'))]
+  return [...blankRows(space('Top', 'Y')), ...rows.map((row) => paddedTo(`${' '.repeat(left)}${row}`, size('minWidth') ?? 0)), ...blankRows(space('Bottom', 'Y'))]
 }
 
 function stacked(children: readonly RenderNode[], width: number, gap: number): string[] {
@@ -99,13 +99,22 @@ function stacked(children: readonly RenderNode[], width: number, gap: number): s
 }
 
 function sideBySide(children: readonly RenderNode[], width: number, gap: number): string[] {
-  const laid = children.map((child) => ({ child, natural: rowsOf(child, Number.POSITIVE_INFINITY) })).filter(({ natural }) => natural.length > 0)
-  const total = laid.reduce((sum, { natural }) => sum + widthOf(natural), 0)
-  const overflow = total + gap * Math.max(laid.length - 1, 0) - width
-  const blocks = laid.map(({ child, natural }) => (overflow <= 0 || total === 0 ? natural : rowsOf(child, widthOf(natural) - Math.ceil((overflow * widthOf(natural)) / total))))
+  const laid = children
+    .map((child) => ({ child, natural: rowsOf(child, Number.POSITIVE_INFINITY) }))
+    .filter(({ natural }) => natural.length > 0)
+    .map(({ child, natural }) => ({ child, natural, canShrink: widthOf(natural) > minWidthOf(child) }))
+  const overflow = laid.reduce((sum, { natural }) => sum + widthOf(natural), 0) + gap * Math.max(laid.length - 1, 0) - width
+  const total = laid.reduce((sum, { natural, canShrink }) => (canShrink ? sum + widthOf(natural) : sum), 0)
+  const blocks = laid.map(({ child, natural, canShrink }) => (overflow <= 0 || !canShrink || total === 0 ? natural : rowsOf(child, widthOf(natural) - Math.ceil((overflow * widthOf(natural)) / total))))
   const height = Math.max(0, ...blocks.map((block) => block.length))
   const columns = blocks.map(widthOf)
   return Array.from({ length: height }, (_, row) => blocks.map((block, index) => paddedTo(block[row] ?? '', index === blocks.length - 1 ? 0 : (columns[index] ?? 0))).join(' '.repeat(gap)))
+}
+
+function minWidthOf(node: RenderNode): number {
+  if (typeof node === 'string') return 0
+  const minWidth = insideOf(node).props['minWidth']
+  return typeof minWidth === 'number' ? minWidth : 0
 }
 
 function blankRows(count: number): string[] {

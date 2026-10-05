@@ -6,7 +6,7 @@ import { createLifecycle, readPlugin, type Plugin } from '../../src/runtime/life
 import { fakeClaude } from '../../src/testing.js'
 import { scriptsSha256 } from '../../src/records.js'
 import { Text } from '../../src/ui/elements.js'
-import { textOf } from '../../src/utils/fake-elements.js'
+import { rowsOf, textOf } from '../../src/utils/fake-elements.js'
 
 const root = '/plugins/safe-delete'
 const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false }
@@ -230,6 +230,30 @@ test('a failed install draws the error and its fix, and setup never runs', async
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
     '>\n✗ Installing safe-delete  exit 1: brew: command not found\n  Fix the cause, then run: cmod install safe-delete',
   )
+})
+
+test('an install error longer than the band shows its fix in full', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  const error = 'cmod bootstrap: cmod is installed at /home/me/.local/bin/cmod, but PATH finds no cmod. Put /home/me/.local/bin first on PATH, then restart Claude Code.'
+  fake.fakes.process.spawn = () => finished([`failed 1\t${error}`], 1)
+  const lifecycle = createLifecycle(trackedMod().definition)
+  const narrowBand = { ...abovePrompt, viewport: { columns: 40, rows: 30 } }
+
+  await lifecycle.start(fake.claude, given(pending))
+  await settle()
+
+  expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
+    '>',
+    '✗ Installing safe-delete  exit 1: cmod',
+    '  bootstrap: cmod is installed at',
+    '  /home/me/.local/bin/cmod, but PATH',
+    '  finds no cmod. Put /home/me/.local/bin',
+    '  first on PATH, then restart Claude',
+    '  Code.',
+    '  Fix the cause, then run: cmod install',
+    '  safe-delete',
+  ])
 })
 
 test('a waiting mod continues its install once the cmod program appears, with no further event', async () => {
@@ -721,6 +745,73 @@ test("after the project root changes, the mod reads that project's saved value a
 
   expect(redraws).toEqual(['ui.render'])
   expect(textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))).toBe('src')
+})
+
+function folderPane() {
+  const fake = fakeClaude({ name: 'file-tree', root })
+  const session = { root: '/work/a', cwd: '/work/a' }
+  fake.claude.session.root = async () => session.root
+  fake.claude.session.cwd = async () => session.cwd
+  const redraws: string[] = []
+  fake.claude.ui.invalidate = (event) => {
+    redraws.push(event)
+  }
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'file-tree',
+      state: { project: { expanded: [] as string[] } },
+      setup(mod) {
+        mod.ui.pane({ id: 'files', title: 'Files', render: (drawn) => Text({ children: `${drawn.projectRoot} ${drawn.cwd}` }) })
+      },
+    }),
+  )
+  const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
+  const start = () => lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+  const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
+  return { lifecycle, session, redraws, start, drawn }
+}
+
+const cd = (args: string) => ({ command: 'cd', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+
+test('a Bash cd moves mod.cwd and redraws the pane', async () => {
+  const { lifecycle, session, redraws, start, drawn } = folderPane()
+  await start()
+  redraws.length = 0
+  session.cwd = '/work/a/lib'
+
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd lib' } }, {})
+
+  expect(lifecycle.mod?.cwd).toBe('/work/a/lib')
+  expect(redraws).toEqual(['ui.render'])
+  expect(await drawn()).toBe('/work/a /work/a/lib')
+})
+
+test('a Bash cd in a command that fails still moves mod.cwd', async () => {
+  const { lifecycle, session, redraws, start, drawn } = folderPane()
+  await start()
+  redraws.length = 0
+  session.cwd = '/work/a/lib'
+
+  await fire(lifecycle, 'classic.PostToolUseFailure', { ...postToolUse, hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'cd lib && make' }, error: 'make: *** No targets.' }, {})
+
+  expect(lifecycle.mod?.cwd).toBe('/work/a/lib')
+  expect(redraws).toEqual(['ui.render'])
+  expect(await drawn()).toBe('/work/a /work/a/lib')
+})
+
+test('a /cd the user cancels moves nothing', async () => {
+  const { lifecycle, redraws, start, drawn } = folderPane()
+  await start()
+  const mod = lifecycle.mod as Mod<{ project: { expanded: string[] } }>
+  mod.state.project.expanded = ['src']
+  await settle()
+  redraws.length = 0
+
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+
+  expect([mod.projectRoot, mod.cwd, mod.state.project.expanded]).toEqual(['/work/a', '/work/a', ['src']])
+  expect(redraws).toEqual([])
+  expect(await drawn()).toBe('/work/a /work/a')
 })
 
 test('two projects setting one project value keep both', async () => {

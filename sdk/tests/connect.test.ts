@@ -110,7 +110,6 @@ test('connect registers each Claude Code event once', () => {
     'classic.PreCompact',
     'classic.Stop',
     'classic.StopFailure',
-    'classic.CwdChanged',
     'tool.check',
     'tool.call',
     'prompt.submit',

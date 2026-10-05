@@ -32,6 +32,7 @@ type PaneSize = Pick<PaneOpenArgs, 'columns' | 'rows'>
 
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 const spinnerMs = 100
+const bullet = '⏺'
 const widestBar = 30
 const narrowestBar = 10
 const sizeKeys = ['columns', 'rows'] as const
@@ -97,8 +98,8 @@ function drawLine(line: Line, frame: number, columns: number | undefined): Rende
     return Box({
       flexDirection: 'column',
       children: [
-        Text({ wrap: 'truncate-end', children: [Text({ color: 'error', children: '✗' }), ' ', title, '  ', Text({ color: 'error', children: line.failure.reason })] }),
-        Text({ dimColor: true, wrap: 'truncate-end', children: `  ${line.failure.fix}` }),
+        Box({ children: [Box({ minWidth: 2, children: Text({ color: 'error', children: '✗' }) }), Text({ children: [title, '  ', Text({ color: 'error', children: line.failure.reason })] })] }),
+        Box({ paddingLeft: 2, children: Text({ dimColor: true, children: line.failure.fix }) }),
       ],
     })
   }
@@ -162,7 +163,7 @@ async function drawComponent<Given extends object>(
   table: ElementTable,
   draw: (Default: (props: Given & { readonly children?: unknown }) => RenderElement) => RenderElement,
   drawDefault: (given: Given, index: number) => Promise<RenderElement>,
-): Promise<{ readonly drawing: RenderElement } | { readonly failure: string }> {
+): Promise<{ readonly drawing: RenderElement; readonly hasDefault: boolean } | { readonly failure: string }> {
   const given: Given[] = []
   let first: RenderElement
   try {
@@ -175,7 +176,7 @@ async function drawComponent<Given extends object>(
   } catch (error) {
     return { failure: threw(error) }
   }
-  if (given.length === 0) return { drawing: first }
+  if (given.length === 0) return { drawing: first, hasDefault: false }
   const pieces = await Promise.all(given.map((props, index) => drawDefault(props, index)))
   let used = 0
   let second: RenderElement
@@ -185,7 +186,7 @@ async function drawComponent<Given extends object>(
     return { failure: threw(error) }
   }
   if (used !== pieces.length) return { failure: `used Default ${times(pieces.length)}, then ${times(used)}, so Claude Code draws its own. A render must draw the same for the same props.` }
-  return { drawing: second }
+  return { drawing: second, hasDefault: true }
 }
 
 type MarkdownRender = {
@@ -263,19 +264,28 @@ export function createUi<State extends object>({ name, claude, router, progress,
       const drawClaudes = (text: string, isFirst: boolean) => next({ ...e, props: pieceProps(e.props, { text }, isFirst) } as typeof e)
       const drawings = await Promise.all(
         pieces.map(async (piece, index) => {
-          if ('text' in piece) return drawClaudes(piece.text, index === 0)
+          if ('text' in piece) return { drawing: await drawClaudes(piece.text, index === 0), hasClaudesRow: true }
           const { render, props: block } = piece
           const drawn = await drawComponent<{ readonly source?: string }>(
             table,
             (Default) => render.Component({ ...block, Default }),
             ({ source = block.source }, use) => drawClaudes(source, index === 0 && use === 0),
           )
-          if ('drawing' in drawn) return drawn.drawing
-          render.log(drawn.failure)
-          return drawClaudes(block.source, index === 0)
+          if ('failure' in drawn) {
+            render.log(drawn.failure)
+            return { drawing: await drawClaudes(block.source, index === 0), hasClaudesRow: true }
+          }
+          return { drawing: drawn.drawing, hasClaudesRow: drawn.hasDefault }
         }),
       )
-      return drawWith(table, () => Box({ flexDirection: 'column', children: drawings }))
+      return drawWith(table, () => {
+        const column = Box({
+          flexDirection: 'column',
+          children: drawings.map(({ drawing, hasClaudesRow }, index) => (index === 0 || hasClaudesRow ? drawing : Box({ marginTop: 1, children: drawing }))),
+        })
+        if (!e.props.isFirstOfReply || drawings[0]?.hasClaudesRow !== false) return column
+        return Box({ children: [Box({ minWidth: 2, children: Text({ color: 'text', children: bullet }) }), column] })
+      })
     })
   }
 
@@ -386,7 +396,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
     async restorePanes() {
       if (panes.size === 0) return
       for (const open of await claude.ui.panes()) {
-        if (panes.has(open.id)) openPanes.add(open.id)
+        if (open.isPlaced && panes.has(open.id)) openPanes.add(open.id)
       }
     },
   }

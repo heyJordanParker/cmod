@@ -74,6 +74,7 @@ export const register: Register = (on) => {
 }
 `,
     'src/mod.tsx': `import { defineMod } from '../node_modules/cmod-sdk/mod.js'
+import { Box } from '../node_modules/cmod-sdk/ui/elements.js'
 import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
@@ -85,7 +86,8 @@ export const ${definition} = defineMod({
 
   setup(mod) {
     mod.ui.pane(promptsPane)
-    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) => (hasSurvey ? <Default /> : <PromptCount count={mod.state.session.prompts} />))
+    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) =>
+      hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
 
     mod.on('UserPromptSubmit', () => {
       mod.state.session.prompts += 1
@@ -117,14 +119,45 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 `,
     'tests/mod.test.ts': `import { expect, test } from 'bun:test'
+import type { RenderPropsOf } from 'claude-code'
 import { testMod } from '../node_modules/cmod-sdk/testing.js'
+import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
 import { ${definition} } from '../src/mod.js'
+
+const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
 test('each prompt adds the count to the context', async () => {
   const tested = testMod(${definition})
   const answer = await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   expect(tested.state.session.prompts).toBe(1)
   expect(JSON.stringify(answer)).toContain('It has seen 1 prompt this session.')
+})
+
+test('the band keeps what Claude Code and other mods drew', async () => {
+  const tested = testMod(${definition})
+  expect(await tested.lines(slots.AbovePrompt, band)).toEqual([
+    'AbovePrompt',
+    '  hasSurvey: false',
+    '  isWorking: false',
+    '  maxRows: 12',
+    '  bodyColumns: 75',
+    '  scroll: {"offset":0,"bodyRows":12}',
+    '  view: {}',
+    'Prompts this session: 0',
+  ])
+})
+
+test('the band goes back to Claude Code during a survey', async () => {
+  const tested = testMod(${definition})
+  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).toEqual([
+    'AbovePrompt',
+    '  hasSurvey: true',
+    '  isWorking: false',
+    '  maxRows: 12',
+    '  bodyColumns: 75',
+    '  scroll: {"offset":0,"bodyRows":12}',
+    '  view: {}',
+  ])
 })
 `,
     [`skills/${name}/SKILL.md`]: `---
@@ -135,7 +168,11 @@ description: Explains what the ${name} mod does. Use when the user asks about th
 The ${name} mod counts the prompts of this session and shows the count in its panel and above the prompt.
 `,
     'package.json': json({ name, private: true, type: 'module', dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
-    'tsconfig.json': json({ extends: './.claude-plugin/types/tsconfig.json', include: ['hooks', 'src', 'types'] }),
+    'tsconfig.json': json({
+      extends: './.claude-plugin/types/tsconfig.json',
+      compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },
+      include: ['hooks', 'src', 'types'],
+    }),
   }
   if (!isProject) {
     files['.claude/CLAUDE.md'] = `# ${name}

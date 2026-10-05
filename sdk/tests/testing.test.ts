@@ -7,7 +7,6 @@ import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Text } from '../src/ui/elements.js'
 import { slots } from '../src/ui/slots.js'
-import { fakeFileSystem } from './jobs/fake-file-system.js'
 
 const tickets = defineMod({
   name: 'tickets',
@@ -60,6 +59,29 @@ test('fire fills the tool_use_id Claude Code gives each tool call', async () => 
   expect(seen).toEqual(['toolu_1', 'toolu_2'])
 })
 
+test('a Read of a file the test gave contents to lists it in files.read', async () => {
+  const seen: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'reads',
+      setup(mod) {
+        mod.on('PostToolUse', (input) => void seen.push(input.files))
+      },
+    }),
+    { files: { '/work/notes.md': '' } },
+  )
+
+  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/notes.md' }, tool_response: {} })
+  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work' }, tool_response: {} })
+  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/gone.md' }, tool_response: {} })
+
+  expect(seen).toEqual([
+    { read: ['/work/notes.md'], changed: [] },
+    { read: [], changed: [] },
+    { read: [], changed: [] },
+  ])
+})
+
 test('type runs a slash command and returns its reply', async () => {
   const tested = testMod(
     defineMod({
@@ -105,27 +127,23 @@ test('testMod answers a call to a mod it does not fake with the install command'
 })
 
 const project = '/work/dent'
-const projectFiles = fakeFileSystem({
+const files = {
   [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${project}/.git/worktrees/design/commondir`]: '../..\n',
   [`${project}/worktrees/design/.git`]: `gitdir: ${project}/.git/worktrees/design\n`,
   [`${project}/worktrees/design/Domain.md`]: '# Domain\n',
-})
+}
 
 function domainGuard(options: TestOptions<Record<never, never>>) {
-  const tested = testMod(
+  return testMod(
     defineMod({
       name: 'dent',
       setup(mod) {
         mod.use(permissions({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] }))
       },
     }),
-    options,
+    { ...options, files },
   )
-  tested.fakes.fs.stat = async (path) => ({ ...(await projectFiles.stat(path)), size: 0, mtimeMs: 0, isLink: false })
-  tested.fakes.fs.read = (path) => projectFiles.read(path)
-  tested.fakes.fs.exists = (path) => projectFiles.exists(path)
-  return tested
 }
 
 test('testMod scope project makes the mod a project plugin, and projectRoot alone does not', async () => {

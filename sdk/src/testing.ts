@@ -1,4 +1,4 @@
-import type { Args, ClassicHookInputs, CmodDependencies, CommandRunResult, EventResult, Frozen, Next, PaneOpenArgs, RenderChildren, RenderComponent, RenderElement, Timer } from 'claude-code'
+import type { Args, ClassicHookInputs, CmodDependencies, CommandPresentation, CommandRunResult, EventResult, Frozen, Next, PaneOpenArgs, RenderChildren, RenderComponent, RenderElement, Timer } from 'claude-code'
 import type { Reply } from './jobs/slash-command.js'
 import type { ModDefinition, ModEvent } from './mod.js'
 import type { Claude } from './runtime/claude.js'
@@ -48,6 +48,7 @@ export type TestOptions<State extends object> = {
   readonly projectRoot?: string
   readonly cwd?: string
   readonly dependencies?: { readonly [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
+  readonly files?: Readonly<Record<string, string>>
 }
 
 type FilledField = 'session_id' | 'transcript_path' | 'cwd' | 'hook_event_name' | 'tool_use_id'
@@ -72,12 +73,15 @@ export type TestedMod<State extends object> = {
 
 const defaultColumns = 80
 
+const presentation: CommandPresentation = { isFullscreen: false, columns: defaultColumns }
+
 const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] satisfies readonly ModEvent[]
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
   const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, agent: {}, clock: {}, cmod: {} }
   const shown: Shown = { toasts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [] }
+  const unplacedPanes = new Set<string>()
   const store = new Map<string, unknown>()
 
   const faked = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Result) | undefined) => {
@@ -114,14 +118,23 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       open: async (pane) => {
         calls.push({ call: 'ui.open', args: [pane] })
         const answer = fakes.ui.open === undefined ? { isPlaced: true as const } : await fakes.ui.open(pane)
-        if (answer.isPlaced) shown.openPanes.add(pane.id)
+        if (answer.isPlaced) {
+          shown.openPanes.add(pane.id)
+          unplacedPanes.delete(pane.id)
+        } else if (!shown.openPanes.has(pane.id)) {
+          unplacedPanes.add(pane.id)
+        }
         return answer
       },
       close: async (pane) => {
         calls.push({ call: 'ui.close', args: [pane] })
         shown.openPanes.delete(pane.id)
+        unplacedPanes.delete(pane.id)
       },
-      panes: async () => [...shown.openPanes].map((id) => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })),
+      panes: async () => [
+        ...[...shown.openPanes].map((id) => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })),
+        ...[...unplacedPanes].map((id) => ({ id, title: id, isShown: false, isFocused: false, isPlaced: false })),
+      ],
       resolve: () => elements,
     },
     process: {
@@ -198,6 +211,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   fake.claude.session.root = async () => projectRoot
   fake.claude.session.cwd = async () => cwd
   fake.fakes.cmod.call = fakeDependencies(options.dependencies ?? {})
+  Object.assign(fake.fakes.fs, fakeFiles(options.files ?? {}))
   const starting = options.state as Record<string, object> | undefined
   const declared = Object.entries(definition.state ?? {}) as [string, object][]
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
@@ -257,7 +271,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
       if (typed === null) throw new Error(`type takes a slash command the way the user types it, such as tested.type('/help'), and "${line}" does not start with /.`)
       const [, command = '', args = ''] = typed
       const unanswered: CommandRunResult = {}
-      const answer = await route('command.run', { command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: defaultColumns } }, unanswered)
+      const answer = await route('command.run', { command, args, origin: { kind: 'composer' }, presentation }, unanswered)
       if (answer === unanswered) throw new Error(`${name} has no slash command /${command}. Add it in setup with mod.use(slashCommand({ name: '${command}', … })).`)
       return replyOf(answer)
     },
@@ -279,10 +293,12 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
     },
     async moveTo(nextRoot, nextCwd = nextRoot) {
       await start()
-      const oldCwd = cwd
-      projectRoot = nextRoot
-      cwd = nextCwd
-      await fire('CwdChanged', { old_cwd: oldCwd, new_cwd: nextCwd })
+      const move = fakeNext('command.run', () => {
+        projectRoot = nextRoot
+        cwd = nextCwd
+        return {}
+      })
+      await lifecycle.route('command.run', { command: 'cd', args: nextRoot, origin: { kind: 'composer' }, presentation }, move)
     },
     get state() {
       const mod = lifecycle.mod
@@ -311,6 +327,32 @@ function fakeDependencies(dependencies: NonNullable<TestOptions<object>['depende
     if (answer.deny !== undefined) throw new Error(answer.deny)
     return answer.value
   }
+}
+
+function fakeFiles(files: NonNullable<TestOptions<object>['files']>): Pick<Fakes['fs'], 'read' | 'exists' | 'stat'> {
+  const folders = new Set(Object.keys(files).flatMap(foldersAbove))
+  const kindOf = (path: string) => {
+    if (Object.hasOwn(files, path)) return 'file'
+    return folders.has(path) ? 'dir' : undefined
+  }
+  return {
+    read: async (path) => {
+      const contents = Object.hasOwn(files, path) ? files[path] : undefined
+      if (contents === undefined) throw new Error(`ENOENT: no such file, read '${path}'. Give it contents with testMod(mod, { files: { '${path}': '…' } }).`)
+      return contents
+    },
+    exists: async (path) => kindOf(path) !== undefined,
+    stat: async (path, options) => {
+      const kind = kindOf(path)
+      if (kind === undefined) throw new Error(`ENOENT: no such file or directory, stat '${path}'`)
+      return { kind, size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve === true ? { realPath: path } : {}) }
+    },
+  }
+}
+
+function foldersAbove(path: string): string[] {
+  const names = path.split('/').slice(1, -1)
+  return ['/', ...names.map((_, index) => `/${names.slice(0, index + 1).join('/')}`)]
 }
 
 function fakeNext<N extends RoutedEvent>(event: N, below: (e: unknown) => unknown): Next<N> {

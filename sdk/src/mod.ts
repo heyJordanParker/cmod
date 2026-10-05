@@ -55,7 +55,6 @@ export type ModEvent =
   | 'PreCompact'
   | 'Stop'
   | 'StopFailure'
-  | 'CwdChanged'
 
 export type HookAnswer = {
   continue?: boolean

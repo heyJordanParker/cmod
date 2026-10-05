@@ -74,6 +74,7 @@ src/
 
 ```tsx
 import { defineMod } from '../node_modules/cmod-sdk/mod.js'
+import { Box } from '../node_modules/cmod-sdk/ui/elements.js'
 import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
@@ -85,7 +86,8 @@ export const myMod = defineMod({
 
   setup(mod) {
     mod.ui.pane(promptsPane)
-    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) => (hasSurvey ? <Default /> : <PromptCount count={mod.state.session.prompts} />))
+    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) =>
+      hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
 
     mod.on('UserPromptSubmit', () => {
       mod.state.session.prompts += 1
@@ -104,7 +106,11 @@ export type MyModState = { session: { prompts: number } }
 export const initialState: MyModState = { session: { prompts: 0 } }
 ```
 
-`src/panes/prompts.tsx` is the mod's panel, and `src/components/prompt-count.tsx` is what it draws. The `AbovePrompt` render draws the same component in the band above the prompt, and gives the band back to Claude Code's `Default` while Claude Code shows a survey:
+The `AbovePrompt` render draws the prompt count under `<Default />`, which is what Claude Code and the other mods drew in the band above the prompt. A render adds to the band, so other mods' lines stay. While Claude Code shows a survey, the render gives the whole band back to `Default`.
+
+`slots.ToolUse` changes a tool's own row, but a group of calls shows a condensed row (`slots.ToolGroup`) that Claude Code builds from the stored message, so a mod that hides a tool's input also sets `isExpanded` on `slots.ToolGroup` to unfold the group into `ToolUse` rows. No render reaches the permission dialog.
+
+`src/panes/prompts.tsx` is the mod's panel, and `src/components/prompt-count.tsx` is what the panel and the band draw:
 
 ```tsx
 export const promptsPane = definePane<MyModState>({
@@ -178,6 +184,8 @@ tracer is installing. Try again when it's ready.
 tracer has no method signatures.
 tracer: <the message of the error the method threw>
 ```
+
+When tracer is disabled, Claude Code unloads the mod that lists it and reports its own error, `Dependency "tracer" is disabled — enable it or remove the dependency`. "tracer is not installed" covers a dependency whose code did not load.
 
 A call runs inside the deadline of the slash command, tool, or other job that makes it, and 30 seconds anywhere else. In tests, `testMod(myMod, { dependencies: { tracer: { signatures: async () => [] } } })` answers for tracer.
 

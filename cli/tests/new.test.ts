@@ -18,7 +18,11 @@ test('new writes the repository layout with a defineMod that has one hook and on
   }
   expect(existsSync(join(root, '.gitattributes'))).toBe(false)
   expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules/\n.claude-plugin/types/\n')
-  expect(JSON.parse(await readFile(join(root, 'tsconfig.json'), 'utf8'))).toEqual({ extends: './.claude-plugin/types/tsconfig.json', include: ['hooks', 'src', 'types'] })
+  expect(JSON.parse(await readFile(join(root, 'tsconfig.json'), 'utf8'))).toEqual({
+    extends: './.claude-plugin/types/tsconfig.json',
+    compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },
+    include: ['hooks', 'src', 'types'],
+  })
   const manifest = JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8'))
   expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: ['cmod'] })
   const mod = await readFile(join(root, 'src/mod.tsx'), 'utf8')
@@ -41,7 +45,11 @@ test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {
   expect(mod).toContain("import { promptsPane } from './panes/prompts.js'")
   expect(mod).toContain("import { PromptCount } from './components/prompt-count.js'")
   expect(mod).toContain('mod.ui.pane(promptsPane)')
-  expect(mod).toContain('mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) => (hasSurvey ? <Default /> : <PromptCount count={mod.state.session.prompts} />))')
+  expect(mod).toContain("import { Box } from '../node_modules/cmod-sdk/ui/elements.js'")
+  expect(mod).toContain('hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)')
+  const tests = await read('tests/mod.test.ts')
+  expect(tests).toContain("test('the band keeps what Claude Code and other mods drew'")
+  expect(tests).toContain("test('the band goes back to Claude Code during a survey'")
   expect(await read('hooks/register.ts')).toContain("import { myMod } from '../src/mod.js'")
   expect(await read('src/state.ts')).toBe('export type MyModState = { session: { prompts: number } }\n\nexport const initialState: MyModState = { session: { prompts: 0 } }\n')
   expect(await read('src/panes/prompts.tsx')).toContain('render: (mod) => <PromptCount count={mod.state.session.prompts} />,')
@@ -51,6 +59,19 @@ test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {
   expect(facts).toContain("- `src/mod.tsx` holds the mod's `defineMod`.")
   expect(facts).toContain('- `src/panes/` holds one `definePane` per file.\n')
   expect(facts).toContain('- `src/components/` holds the components panes and slot renders draw with.\n')
+})
+
+test('a new mod runs its tests before Claude Code has loaded it', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'my-mod')
+  await cmod(home, 'new', 'my-mod')
+
+  const tests = Bun.spawn([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
+
+  expect(existsSync(join(root, '.claude-plugin/types'))).toBe(false)
+  expect(output).toContain(' 3 pass\n 0 fail\n')
+  expect(exitCode).toBe(0)
 })
 
 test('new --project writes the plugin into .claude/skills/<name>/ of the repository in the current folder', async () => {

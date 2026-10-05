@@ -17,14 +17,13 @@ export type CallEffects = {
   writes: FileAccess[]
   urls: string[]
   subagent: string | undefined
-  searchFolder: string | undefined
 }
 
 export function callEffects(use: ToolUse, workspace: { cwd: string; home: string; fs: FileSystem }): CallEffects {
   const { fs } = workspace
   const resolve = (path: string, folder = workspace.cwd) => resolvePath(expandHome(path, workspace.home), folder)
   const access = (path: string): FileAccess => ({ path: resolve(path), contents: undefined })
-  const effects: CallEffects = { shell: undefined, reads: [], writes: [], urls: [], subagent: undefined, searchFolder: undefined }
+  const effects: CallEffects = { shell: undefined, reads: [], writes: [], urls: [], subagent: undefined }
   if (use.tool === 'Bash') {
     const line = textField(use, 'command')
     const parsed = parseShellCommands(line)
@@ -48,11 +47,10 @@ export function callEffects(use: ToolUse, workspace: { cwd: string; home: string
   } else if (use.tool === 'Read') {
     effects.reads = [access(textField(use, 'file_path'))]
   } else if (use.tool === 'Grep') {
-    effects.searchFolder = resolve(optionalTextField(use, 'path') ?? '')
-    effects.reads = [{ path: effects.searchFolder, contents: undefined }]
+    effects.reads = [access(optionalTextField(use, 'path') ?? '')]
   } else if (use.tool === 'Glob') {
-    effects.searchFolder = resolve(optionalTextField(use, 'path') ?? '')
-    effects.reads = [{ path: resolve(textField(use, 'pattern'), effects.searchFolder), contents: undefined }]
+    const folder = resolve(optionalTextField(use, 'path') ?? '')
+    effects.reads = [{ path: resolve(textField(use, 'pattern'), folder), contents: undefined }]
   } else if (use.tool === 'WebFetch') {
     effects.urls = [textField(use, 'url')]
   } else if (use.tool === 'Agent') {

@@ -2,13 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { testMod } from '../../src/testing.js'
 import { dent } from './dent-mod.js'
-import { fakeFileSystem } from './fake-file-system.js'
 
 type Use = { tool: string; input: Record<string, unknown> }
 
 const root = '/work/dent'
 const home = '/test/home'
-const files = fakeFileSystem({
+const files = {
   [`${root}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${root}/.git/worktrees/design/commondir`]: '../..\n',
   [`${root}/worktrees/design/.git`]: `gitdir: ${root}/.git/worktrees/design\n`,
@@ -20,15 +19,12 @@ const files = fakeFileSystem({
   [`${home}/dotfiles/.git/HEAD`]: 'ref: refs/heads/master\n',
   [`${home}/dotfiles/Domain.md`]: '# Domain\n',
   [`${home}/dotfiles/a.ts`]: 'a\n',
-})
+}
 const allowed: EventResult<'tool.check'> = { decision: 'allow' }
 const answered = { result: { filePath: `${root}/app/cart.ts` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 
 function dentSession(gitStatus = '') {
-  const tested = testMod(dent, { scope: 'project', projectRoot: root })
-  tested.fakes.fs.stat = async (path) => ({ ...(await files.stat(path)), size: 0, mtimeMs: 0, isLink: false })
-  tested.fakes.fs.read = (path) => files.read(path)
-  tested.fakes.fs.exists = (path) => files.exists(path)
+  const tested = testMod(dent, { scope: 'project', projectRoot: root, files })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: gitStatus, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   let calls = 0
   const decide = (use: Use) => tested.fire('tool.check', { ...use, tool_use_id: `toolu_${(calls += 1)}` } as never, allowed)

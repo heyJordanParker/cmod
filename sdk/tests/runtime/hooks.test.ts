@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
-function fileWatcher(cwd = '/work') {
+function fileWatcher(cwd = '/work', files: string[] = []) {
   const seen: { event: string; files: unknown }[] = []
   const tested = testMod(
     defineMod({
@@ -13,7 +13,7 @@ function fileWatcher(cwd = '/work') {
         mod.on('PostToolUseFailure', (input) => void seen.push({ event: 'PostToolUseFailure', files: input.files }))
       },
     }),
-    { cwd },
+    { cwd, files: Object.fromEntries(files.map((path) => [path, ''])) },
   )
   return { tested, seen }
 }
@@ -86,8 +86,44 @@ test("a Glob call's files lists no folder", async () => {
   ])
 })
 
+test('a Grep of one file lists that file in files.read', async () => {
+  const { tested, seen } = fileWatcher('/work', ['/work/src/app.ts'])
+
+  await tested.fire('PostToolUse', { ...call('Grep', { pattern: 'TODO', path: 'src/app.ts' }), tool_response: {} })
+
+  expect(seen).toEqual([{ event: 'PostToolUse', files: { read: ['/work/src/app.ts'], changed: [] } }])
+})
+
+test('a Bash grep of a folder lists no folder in files.read', async () => {
+  const { tested, seen } = fileWatcher('/work', ['/work/src/button.tsx'])
+
+  await tested.fire('PostToolUse', { ...call('Bash', { command: 'grep -r button src' }), tool_response: {} })
+  await tested.fire('PostToolUse', { ...call('Bash', { command: 'rg button src' }), tool_response: {} })
+
+  expect(seen).toEqual([
+    { event: 'PostToolUse', files: { read: [], changed: [] } },
+    { event: 'PostToolUse', files: { read: [], changed: [] } },
+  ])
+})
+
+test('a Bash cat of a file lists that file in files.read', async () => {
+  const { tested, seen } = fileWatcher('/work', ['/work/notes.md'])
+
+  await tested.fire('PostToolUse', { ...call('Bash', { command: 'cat notes.md' }), tool_response: {} })
+
+  expect(seen).toEqual([{ event: 'PostToolUse', files: { read: ['/work/notes.md'], changed: [] } }])
+})
+
+test('a Bash read of a path that is not there lists nothing in files.read', async () => {
+  const { tested, seen } = fileWatcher()
+
+  await tested.fire('PostToolUse', { ...call('Bash', { command: 'cat missing.md' }), tool_response: {} })
+
+  expect(seen).toEqual([{ event: 'PostToolUse', files: { read: [], changed: [] } }])
+})
+
 test("a relative path resolves against the shell's folder", async () => {
-  const { tested, seen } = fileWatcher('/work/app')
+  const { tested, seen } = fileWatcher('/work/app', ['/work/app/lib/a.ts', '/test/home/notes.md'])
 
   await tested.fire('PreToolUse', call('Bash', { command: 'cat lib/a.ts ~/notes.md > ../summary.md' }))
 
@@ -95,7 +131,7 @@ test("a relative path resolves against the shell's folder", async () => {
 })
 
 test('a shell line naming a file through a variable lists only the files the SDK could identify', async () => {
-  const { tested, seen } = fileWatcher()
+  const { tested, seen } = fileWatcher('/work', ['/work/draft.md'])
 
   await tested.fire('PostToolUse', { ...call('Bash', { command: 'name=notes.md; cat "$name" draft.md > `date`.log' }), tool_response: {} })
 
@@ -103,7 +139,7 @@ test('a shell line naming a file through a variable lists only the files the SDK
 })
 
 test('a file named with a dollar sign outside the shell stays in files', async () => {
-  const { tested, seen } = fileWatcher()
+  const { tested, seen } = fileWatcher('/work', ['/work/build/Foo$Bar.class'])
 
   await tested.fire('PostToolUse', { ...call('Read', { file_path: '/work/build/Foo$Bar.class' }), tool_response: {} })
 
@@ -129,7 +165,7 @@ test('an input the SDK cannot read gives empty files and the PreToolUse hook sti
 })
 
 test('files is the same on PreToolUse and PostToolUse for one call', async () => {
-  const { tested, seen } = fileWatcher()
+  const { tested, seen } = fileWatcher('/work', ['/work/todo.md'])
   const move = call('Bash', { command: 'cat todo.md && mv notes.md archive' })
 
   await tested.fire('PreToolUse', move)

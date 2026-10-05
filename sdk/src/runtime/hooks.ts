@@ -47,7 +47,6 @@ const readFields: Record<ModEvent, readonly string[]> = {
   PreCompact: [],
   Stop: ['additionalContext'],
   StopFailure: [],
-  CwdChanged: [],
 }
 
 export function classicHook<E extends ModEvent>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls): RoutedHook<RoutedEvent> {
@@ -120,9 +119,10 @@ async function callFiles(name: string, claude: Claude, use: ToolUse, cwd: string
   try {
     const home = await claude.env.home()
     if (home === undefined) throw new Error('HOME is not set, so ~ in a path has no meaning.')
-    const { shell, reads, writes, searchFolder } = callEffects(use, { cwd, home, fs: claude.fs })
+    const { shell, reads, writes } = callEffects(use, { cwd, home, fs: claude.fs })
     const known = (accesses: FileAccess[]) => accesses.map(({ path }) => path).filter((path) => shell === undefined || !dynamicPattern.test(path))
-    return { read: searchFolder === undefined ? known(reads) : [], changed: known(writes) }
+    const read = await Promise.all(known(reads).map(async (path) => ((await claude.fs.stat(path).catch(() => undefined))?.kind === 'file' ? [path] : [])))
+    return { read: read.flat(), changed: known(writes) }
   } catch (error) {
     claude.ui.log(`${name}: the ${use.tool} call lists no files: ${messageOf(error)}`, { to: 'debug' })
     return { read: [], changed: [] }

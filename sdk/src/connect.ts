@@ -93,7 +93,6 @@ export function connect<State extends object>(on: On, definition: ModDefinition<
   on('classic.PreCompact', route)
   on('classic.Stop', route)
   on('classic.StopFailure', route)
-  on('classic.CwdChanged', route)
   on('tool.check', route)
   on('tool.call', route)
   on('prompt.submit', route)

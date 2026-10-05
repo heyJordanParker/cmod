@@ -11,12 +11,13 @@ import { fakeFileSystem } from './fake-file-system.js'
 const root = '/work/dent'
 const home = '/Users/jordan'
 const deadline = { ms: 2000, job: 'permissions' }
-const fs = fakeFileSystem({
+const files = {
   [`${root}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${root}/.git/worktrees/design/commondir`]: '../..\n',
   [`${root}/worktrees/design/.git`]: `gitdir: ${root}/.git/worktrees/design\n`,
   [`${root}/worktrees/design/Domain.md`]: '# Domain\n',
-})
+}
+const fs = fakeFileSystem(files)
 
 async function partFor() {
   let used: PartContext | undefined
@@ -100,11 +101,8 @@ test('spawn inside a prompt callback runs in the work tree', async () => {
         mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: (_input, mod) => readAll(mod.process.spawn(['git', 'status'])) }))
       },
     }),
-    { scope: 'project', projectRoot: root },
+    { scope: 'project', projectRoot: root, files },
   )
-  tested.fakes.fs.stat = async (path) => ({ ...(await fs.stat(path)), size: 0, mtimeMs: 0, isLink: false })
-  tested.fakes.fs.read = (path) => fs.read(path)
-  tested.fakes.fs.exists = (path) => fs.exists(path)
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.spawn = () => written('On branch design\n')
   const edit = { tool: 'Edit', file_path: `${root}/worktrees/design/Domain.md`, old_string: '#', new_string: '##', tool_use_id: 'toolu_1' } as never
