@@ -11,14 +11,14 @@ export type Progress = {
 const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const barWidth = 30
 const keptLogLines = 10
-let clearSpinner: (() => void) | undefined
+let clearSpinner: (() => () => void) | undefined
 
 export function startProgress(output: NodeJS.WriteStream = process.stdout): Progress {
   return output.isTTY ? terminalProgress(output) : lineProgress(output)
 }
 
-export function interruptProgress(): void {
-  clearSpinner?.()
+export function interruptProgress(): () => void {
+  return clearSpinner?.() ?? (() => {})
 }
 
 export function paint(output: NodeJS.WriteStream = process.stdout) {
@@ -48,7 +48,13 @@ function terminalProgress(output: NodeJS.WriteStream): Progress {
     if (timer) return
     output.write('\x1b[?25l')
     process.once('exit', showCursor)
-    clearSpinner = () => stop('')
+    clearSpinner = () => {
+      stop('')
+      return () => {
+        start()
+        draw()
+      }
+    }
     timer = setInterval(() => {
       frame += 1
       draw()

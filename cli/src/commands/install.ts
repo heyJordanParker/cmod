@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { isObject } from 'cmod-sdk/src/records.js'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { addMarketplace, changePlugin, listMarketplaces, listPlugins } from '../claude.js'
 import { readJson, tilde } from '../files.js'
 import { readPlugin, sourceOf } from '../plugin.js'
@@ -82,7 +83,11 @@ export async function installCmodPlugin(progress: Progress): Promise<void> {
   if (cmod?.scope === 'session') return
   const id = cmod?.id ?? 'cmod@cmod'
   progress.step('Installing the CMod plugin into Claude Code')
-  if (cmod === undefined && !(await listMarketplaces()).some((marketplace) => marketplace.name === 'cmod')) await addMarketplace('heyJordanParker/cmod')
+  if (cmod === undefined && !(await listMarketplaces()).some((marketplace) => marketplace.name === 'cmod')) {
+    await addMarketplace('heyJordanParker/cmod').catch((error: unknown) => {
+      throw new Error(`${messageOf(error)}\nLink the CMod checkout first: cmod link <checkout>`)
+    })
+  }
   await changePlugin('install', id)
   progress.succeed(`Installed ${id} into Claude Code`)
 }

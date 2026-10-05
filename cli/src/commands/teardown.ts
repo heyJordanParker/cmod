@@ -56,7 +56,7 @@ export async function teardownInTerminal(name: string, progress: Progress): Prom
     if (event.kind === 'done') progress.succeed(record?.uninstall ? `Ran the uninstall step of ${name} and removed what CMod set up for it` : `Removed what CMod set up for ${name}`)
     isAnswered ||= event.kind === 'missing' || event.kind === 'failed' || event.kind === 'done'
   })
-  if (!isAnswered) progress.fail(`Cancelled uninstalling ${name} on ${hold.signal}, before its uninstall step started.`)
+  if (!isAnswered) progress.fail(`Cancelled uninstalling ${name} on ${hold.signal}, before its uninstall step started. Run cmod teardown ${name} to finish.`)
   return code
 }
 

@@ -79,6 +79,21 @@ test('cmod try loads a fresh cmod new mod in a home without the CMod plugin', as
   )
 })
 
+test('cmod try before CMod is linked names the fix', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, {
+    'bin/claude': `#!/bin/sh\ncase "$*" in\n  "plugin list --json"|"plugin marketplace list --json") echo '[]' ;;\n  *) echo 'Repository not found' >&2; exit 1 ;;\nesac\n`,
+    'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+  })
+
+  const result = await cmod(home, 'try', root)
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toContain('plugin marketplace add heyJordanParker/cmod')
+  expect(result.stderr).toEndWith('Link the CMod checkout first: cmod link <checkout>\n')
+})
+
 test('cmod try sets the mod up itself, and leaves no record, data, approval or program link after the session', async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')

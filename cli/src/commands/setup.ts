@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
-import { constants } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
@@ -26,11 +25,11 @@ nothing. While a setup or teardown of the mod runs, another setup waits for it,
 then checks the mod again; a mod whose scripts changed meanwhile asks consent
 again. A setup whose process is gone is taken over at once. Ctrl+C, a closed
 terminal, or SIGTERM while it waits or before the install step starts stops the
-setup and removes what it set up. When one stops the install step of a mod
-that is not set up, the setup runs the mod's uninstall step, then removes what
-it set up. When one stops the install step of an upgrade, the setup keeps the
-version the record names, as a failed upgrade does. Once the install step has
-finished, the setup records the mod, then exits.
+setup and removes what it set up. When the install step of a mod that is not
+set up fails or is stopped, the setup runs the mod's uninstall step, then
+removes what it set up. When the install step of an upgrade fails or is
+stopped, the setup keeps the version the record names. Once the install step
+has finished, the setup records the mod, then exits.
 
 Options:
   --events            Print one event per line for a program to read:
@@ -187,8 +186,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
         emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
       )
       if (result.exitCode !== 0) {
-        const isCancelled = hold.signal !== undefined || heldSignals.some((signal) => result.exitCode === 128 + constants.signals[signal])
-        if (isCancelled && uninstall !== undefined && previous === undefined) {
+        if (uninstall !== undefined && previous === undefined) {
           const undone = await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
             if (event.kind === 'log') emit(event)
           })
@@ -265,7 +263,7 @@ async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean 
     `  It runs these commands in ${tilde(plugin.root)}:`,
     `    install    ${install === undefined ? style.dim('none') : style.cyan(install)}`,
     `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
-    ...(program === undefined ? [] : [`  It downloads the program ${style.cyan(program)} into ~/.local/bin.`]),
+    ...(program === undefined ? [] : [`  It puts the program ${style.cyan(program)} into ~/.local/bin.`]),
     '',
   ]
   process.stdout.write(`${lines.join('\n')}\n`)

@@ -303,7 +303,7 @@ test('setup --events on a failing install step prints failed with the exit code 
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('progress 1 2 Fetching\nlog curl: could not resolve host\nfailed 7\tcurl: could not resolve host\n')
+  expect(result.stdout).toBe('progress 1 2 Fetching\nlog curl: could not resolve host\nlog The uninstall step of demo exited 0.\nfailed 7\tcurl: could not resolve host\n')
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod/records/demo.json'))).toBe(false)
 })
@@ -687,6 +687,37 @@ test('Ctrl+C during the install step runs the uninstall step and leaves nothing'
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
+test('a fresh install step that traps Ctrl+C and exits 1 runs the uninstall step', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, `#!/bin/sh\ntrap 'exit 1' INT\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n`)
+  const store = join(home, '.local/share/cmod')
+
+  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(130)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
+  for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
+test('a fresh install step that fails runs the uninstall step and leaves nothing', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\necho "brew: no such formula" >&2\nexit 3\n')
+  const store = join(home, '.local/share/cmod')
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stdout).toContain('The uninstall step of demo exited 0.')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
+  for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
 test("Ctrl+C during an upgrade's install step keeps the version its record names", async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho "history the user built" > "$HOME/history.db"\n')
@@ -1021,6 +1052,65 @@ test('a setup that waits for a lock names the lock after a few seconds', async (
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
 }, 10_000)
 
+test('the spinner resumes after the lock-wait notice', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\n')
+  const holder = Bun.spawn(['sleep', '30'])
+  await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
+  const setup = cmodInTerminal(home, 'setup', root, '--yes')
+  await Bun.sleep(3500)
+
+  holder.kill()
+  await holder.exited
+  const { output } = await setup
+
+  const shown = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+  expect(shown.slice(shown.indexOf('which process'))).toContain('Installing demo…')
+}, 10_000)
+
+test('two setups of one mod run one at a time when ps prints no start time', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { 'bin/ps': '#!/bin/sh\necho "ps: bad -o argument \'lstart\'" >&2\nexit 1\n' })
+  const root = await createMod(home, '#!/bin/sh\necho "start $$" >> "$HOME/steps"\nsleep 1\necho "end $$" >> "$HOME/steps"\n')
+  const sha256 = await hashOf(root)
+  const first = startCmod(home, 'setup', root, '--events', '--consent', sha256)
+  await waitFor(join(home, 'steps'))
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  const second = startCmod(home, 'setup', root, '--events', '--consent', sha256)
+
+  const results = await Promise.all([first.done, second.done])
+
+  expect(results.map((result) => result.exitCode)).toEqual([0, 0])
+  expect((await readFile(join(home, 'steps'), 'utf8')).trim().split('\n').map((line) => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end'])
+}, 10_000)
+
+test('a lock whose holder recorded no start time is held while its process lives', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const holder = Bun.spawn(['sleep', '30'])
+  await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: '' })
+  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await Bun.sleep(1000)
+  const isWaiting = !existsSync(join(home, '.local/share/cmod/records/demo.json'))
+
+  holder.kill()
+  await holder.exited
+  const result = await setup.done
+
+  expect(isWaiting).toBe(true)
+  expect(result.stdout).toEndWith('done demo 0.1.0\n')
+}, 10_000)
+
+test('the consent question says it puts the program into ~/.local/bin', async () => {
+  const home = await temporaryHome()
+  const root = await createProgramMod(home, 'http://127.0.0.1:9/owner/hello-mod')
+
+  const result = await cmod(home, 'setup', root)
+
+  expect(result.exitCode).toBe(10)
+  expect(result.stdout).toContain('  It puts the program hello into ~/.local/bin.\n')
+})
+
 test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
@@ -1036,7 +1126,7 @@ test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async (
   holder.kill()
 
   expect(result.exitCode).toBe(130)
-  expect(result.stdout).toContain('✘ Cancelled uninstalling demo on SIGINT, before its uninstall step started.')
+  expect(result.stdout).toContain('✘ Cancelled uninstalling demo on SIGINT, before its uninstall step started. Run cmod teardown demo to finish.')
   expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
 })
 
