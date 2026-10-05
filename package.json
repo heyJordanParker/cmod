@@ -1,0 +1,9 @@
+{
+  "name": "cmod",
+  "private": true,
+  "type": "module",
+  "cmod": { "program": "cmod" },
+  "dependencies": {
+    "cmod-sdk": "file:./sdk/cmod-sdk-0.1.0.tgz"
+  }
+}

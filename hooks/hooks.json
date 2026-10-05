@@ -1,0 +1,4 @@
+{
+  "description": "cmod hooks module",
+  "modules": ["./register.ts"]
+}

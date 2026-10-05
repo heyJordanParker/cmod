@@ -1,0 +1,14 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "cmod",
+      "dependencies": {
+        "cmod-sdk": "file:./sdk/cmod-sdk-0.1.0.tgz",
+      },
+    },
+  },
+  "packages": {
+    "cmod-sdk": ["cmod-sdk@./sdk/cmod-sdk-0.1.0.tgz", {}],
+  }
+}

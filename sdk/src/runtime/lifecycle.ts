@@ -1,0 +1,375 @@
+import type { Args, EventResult, Frozen, HookStream, Next, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import { createProgress, createUi, type Progress, type ProgressLine } from '../api/ui.js'
+import type { Mod, ModDefinition, ModEvent, PartContext } from '../mod.js'
+import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
+import { listed, messageOf } from '../utils/text.js'
+import type { Claude } from './claude.js'
+import { beforeDeadline, toolDeadline } from '../jobs/tool-calls.js'
+import { answerCall, classicHook, dependencyCalls, notInstalled, userSkillHook, type RoutedEvent } from './hooks.js'
+import { createRouter, type Router } from './router.js'
+import { createState } from './state.js'
+import { toolCalls } from './tool-calls.js'
+
+export type Plugin = {
+  readonly name: string
+  readonly root: string
+  readonly version: string | undefined
+  readonly store: string
+  readonly isInstalled: boolean
+  readonly shouldRecord: boolean
+}
+
+export type Phase = 'starting' | 'installing' | 'waiting' | 'declined' | 'failed' | 'ready' | 'active'
+
+export type Lifecycle<State extends object> = {
+  readonly phase: Phase
+  readonly mod: Mod<State> | undefined
+  readonly failure: unknown
+  start(claude: Claude, read: (claude: Claude) => Promise<Plugin>): Promise<void>
+  route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>>
+}
+
+type ModRuntime = {
+  readonly claude: Claude
+  readonly router: Router
+  readonly progress: Progress
+  readonly dataFolder: string
+}
+
+type ActiveMod<State extends object> = {
+  readonly mod: Mod<State>
+  readonly added: readonly string[]
+}
+
+const cmodPluginName = 'cmod'
+
+const announcedKey = 'cmod-sdk:announced'
+
+const cmodCheckMs = 1000
+
+const cannotStart = /failed to start: /
+
+export async function readPlugin(claude: Claude): Promise<Plugin> {
+  const { name, root } = claude.plugin
+  const read: ReadFile = async (path) => ((await claude.fs.exists(path)) && (await claude.fs.stat(path)).kind === 'file' ? claude.fs.read(path) : undefined)
+  const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
+  const version = typeof manifest?.version === 'string' ? manifest.version : undefined
+  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+  const plugin = { name, root, version, store }
+  if (name === cmodPluginName) return { ...plugin, isInstalled: version !== undefined && (await cmodVersion(claude)) === version, shouldRecord: false }
+  const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {}
+  const record = await readRecord(read, store, name)
+  if (Object.keys(steps).length === 0) return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version }
+  const scripts = await scriptsSha256(steps, {
+    read: (path) => read(`${root}/${path}`),
+    list: async (folder) => (await claude.fs.list(`${root}/${folder}`)).filter((entry) => entry.kind === 'file').map((entry) => entry.name),
+  })
+  return { ...plugin, isInstalled: version !== undefined && record?.version === version && record.scriptsSha256 === scripts, shouldRecord: false }
+}
+
+async function readJson(read: ReadFile, path: string): Promise<unknown> {
+  const text = await read(path)
+  if (text === undefined) return undefined
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`${path} is not JSON (${messageOf(error)}). Fix the file, then run /reload-plugins.`)
+  }
+}
+
+async function cmodVersion(claude: Claude): Promise<string | undefined> {
+  const result = await claude.process.run(['cmod', '--version']).catch((error: unknown) => {
+    if (cannotStart.test(messageOf(error))) return undefined
+    throw error
+  })
+  if (result === undefined) return undefined
+  if (result.exitCode !== 0) throw new Error(`cmod --version exited ${result.exitCode}: ${lastLineOf(result.stderr) ?? 'no error output'}`)
+  return result.stdout.trim().split(/\s+/).at(-1)
+}
+
+export function createLifecycle<State extends object>(definition: ModDefinition<State>): Lifecycle<State> {
+  let router: Router = createRouter()
+  let phase: Phase = 'starting'
+  let runtime: Pick<ModRuntime, 'claude' | 'progress'> | undefined
+  let plugin: Plugin | undefined
+  let line: ProgressLine | undefined
+  let activation: Promise<void> | undefined
+  let mod: Mod<State> | undefined
+  let failure: unknown
+  let shouldRecord = false
+  let recording: Promise<void> | undefined
+
+  const claude = () => {
+    if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. connect(on, mod) starts it at session.start.`)
+    return runtime.claude
+  }
+
+  const showLine = () => {
+    line ??= runtime?.progress.start(`Installing ${definition.name}`)
+    return line as ProgressLine
+  }
+
+  const endLine = () => {
+    line?.end()
+    line = undefined
+  }
+
+  const fail = (reason: string, fix: string) => {
+    phase = 'failed'
+    failure ??= new Error(`${definition.name}: ${reason}. ${fix}`)
+    showLine().fail(reason, fix)
+  }
+
+  const finish = () => {
+    phase = 'ready'
+    claude().ui.invalidate('ui.render')
+  }
+
+  const writeRecord = async () => {
+    if (plugin === undefined || (await cmodVersion(claude())) === undefined) return
+    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'] }), (text) => {
+      if (parseEvent(text).kind === 'done') shouldRecord = false
+    })
+    if (shouldRecord) throw new Error(`cmod setup exit ${code ?? 'by signal'}: ${lastError}`)
+  }
+
+  const record = () => {
+    recording ??= writeRecord()
+      .catch((error: unknown) => claude().ui.log(`${definition.name} has no CMod record yet: ${messageOf(error)}`, { to: 'debug' }))
+      .finally(() => {
+        recording = undefined
+      })
+  }
+
+  const activate = async () => {
+    if (runtime === undefined || plugin === undefined) return
+    const activeRouter = createRouter()
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name) }).catch((error: unknown) => {
+      fail(`setup failed: ${messageOf(error)}`, 'Fix the mod’s setup, then run /reload-plugins.')
+      throw error
+    })
+    const { added } = active
+    mod = active.mod
+    router = activeRouter
+    phase = 'active'
+    runtime.claude.ui.invalidate('ui.render')
+    endLine()
+    const version = plugin.version ?? ''
+    if ((await runtime.claude.store.get(announcedKey)) === version) return
+    await runtime.claude.store.set(announcedKey, version)
+    runtime.claude.ui.toast(`${definition.name} is ready`)
+    if (added.length > 0) runtime.claude.ui.log(`${definition.name} added ${listed(added)}.`)
+  }
+
+  const askConsent = async (event: Extract<RunnerEvent, { kind: 'needs-consent' }>) => {
+    const name = definition.name
+    if ((await claude().session.surfaces()).length === 0) {
+      showLine().wait(`Waiting for consent: run cmod install ${name}`)
+      claude().ui.log(`${name} waits for consent to run ${event.install}. Run cmod install ${name} in a terminal.`)
+      return
+    }
+    showLine().wait('Waiting for your answer')
+    const removal = event.uninstall === '' ? '' : `, and ${event.uninstall} when you remove it`
+    const answer = await claude().ui.ask(`${name} runs ${event.install} to install${removal}. Run it now?`, { options: ['Install', 'Not now'], header: 'Install' })
+    if (answer === 'Install') return install(event.sha256)
+    phase = 'declined'
+    endLine()
+    claude().ui.log(`${name} is not installed. Run cmod install ${name} to install it.`)
+  }
+
+  const install = async (consent?: string): Promise<void> => {
+    if (plugin === undefined) return
+    if (plugin.name === cmodPluginName) return bootstrap()
+    phase = 'installing'
+    if ((await cmodVersion(claude())) === undefined) return waitForCMod()
+    endLine()
+    const progress = showLine()
+    let outcome: RunnerEvent | undefined
+    const argv = ['cmod', 'setup', plugin.root, '--events', ...(consent === undefined ? [] : ['--consent', consent])]
+    const { code, lastError } = await readLines(claude().process.spawn({ argv }), (text) => {
+      const event = parseEvent(text)
+      if (event.kind === 'progress') progress.report(event)
+      if (event.kind === 'done' || event.kind === 'failed' || event.kind === 'needs-consent') outcome = event
+    })
+    if (outcome?.kind === 'done') return finish()
+    if (outcome?.kind === 'needs-consent') return askConsent(outcome)
+    const reason = outcome?.kind === 'failed' ? `exit ${outcome.code}: ${outcome.message}` : `cmod setup exit ${code ?? 'by signal'}: ${lastError}`
+    fail(reason, `Fix the cause, then run: cmod install ${definition.name}`)
+  }
+
+  const waitForCMod = () => {
+    phase = 'waiting'
+    showLine().wait('Waiting for CMod')
+    let check: Promise<void> | undefined
+    const timer = claude().clock.every(cmodCheckMs, () => {
+      check ??= cmodVersion(claude())
+        .then((version) => {
+          check = undefined
+          if (version === undefined) return
+          timer.cancel()
+          return install()
+        })
+        .catch(report)
+    })
+  }
+
+  const bootstrap = async () => {
+    if (plugin === undefined || plugin.version === undefined) return
+    const progress = showLine()
+    phase = 'installing'
+    const env = { CMOD_PLUGIN_ROOT: plugin.root, CMOD_VERSION: plugin.version, CMOD_DATA: dataFolder(plugin.store, plugin.name) }
+    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: plugin.root, env }), (text) => {
+      const event = parseEvent(text)
+      if (event.kind === 'progress') progress.report(event)
+    })
+    if (code === 0) return finish()
+    fail(`bootstrap exit ${code ?? 'by signal'}: ${lastError}`, `Run ./setup/bootstrap.sh in ${plugin.root} to see the whole log.`)
+  }
+
+  const report = (error: unknown) => {
+    failure = error
+    if (phase !== 'failed') fail(messageOf(error), `Run cmod install ${definition.name} in a terminal to see the whole log.`)
+  }
+
+  return {
+    get phase() {
+      return phase
+    },
+    get mod() {
+      return mod
+    },
+    get failure() {
+      return failure
+    },
+    async start(claudeCalls, read) {
+      if (runtime !== undefined) return
+      runtime = { claude: claudeCalls, progress: createProgress(claudeCalls) }
+      const started = await read(claudeCalls).catch((error: unknown) => {
+        report(error)
+        return undefined
+      })
+      if (started === undefined) return
+      plugin = started
+      if (started.isInstalled) {
+        shouldRecord = started.shouldRecord
+        if (shouldRecord) record()
+        return activate().catch(report)
+      }
+      if (started.version === undefined) return fail('no version to install', 'Add "version" to .claude-plugin/plugin.json, then run /reload-plugins.')
+      void install().catch(report)
+    },
+    async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>> {
+      if (shouldRecord && event === 'classic.UserPromptSubmit') record()
+      if (phase === 'ready') activation ??= activate().catch(report)
+      if (activation !== undefined && phase !== 'active') await activation
+      if (event === 'cmod.call' && phase !== 'active' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) {
+        const isStopped = phase === 'declined' || phase === 'failed'
+        return { deny: isStopped ? notInstalled(definition.name) : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
+      }
+      const answer = router.dispatch(event, e, next)
+      const render = e as Frozen<Args<'ui.render'>>
+      if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined || !runtime.progress.isShown) return answer as Promise<EventResult<N>>
+      return runtime.progress.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.viewport?.columns) as EventResult<N>
+    },
+  }
+}
+
+async function createMod<State extends object>(definition: ModDefinition<State>, runtime: ModRuntime): Promise<ActiveMod<State>> {
+  const { claude, router, progress } = runtime
+  const added: string[] = []
+  const hookEvents: ModEvent[] = []
+  const adds = (feature: string) => {
+    added.push(feature)
+  }
+  const on: PartContext<State>['on'] = (event, hook) => router.add(event, hook)
+  const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()])
+  let cwd = startCwd
+  const area = createUi<State>({ name: definition.name, claude, router, progress, adds, mod: () => mod })
+  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
+  const mod: Mod<State> = {
+    name: definition.name,
+    state: modState.state,
+    dataFolder: runtime.dataFolder,
+    on(event, hook) {
+      if (!hookEvents.includes(event)) hookEvents.push(event)
+      router.add(`classic.${event}`, classicHook(definition.name, event, hook, claude, agents))
+    },
+    use: (part) => part({ mod, claude, on, adds }),
+    ui: area.ui,
+    process: {
+      run: (argv, init) => claude.process.run(argv, init),
+      spawn: (argv, init) => claude.process.spawn({ ...init, argv }),
+    },
+    fs: {
+      read: (path) => claude.fs.read(path),
+      write: (path, text) => claude.fs.write(path, text),
+      list: (path) => claude.fs.list(path),
+    },
+    http: { fetch: (url, init) => claude.http.fetch(url, init) },
+    settings: { read: (args) => claude.settings.read(args) },
+    session: {
+      get root() {
+        return modState.root
+      },
+      get cwd() {
+        return cwd
+      },
+    },
+    dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, toolDeadline, call, task)),
+  }
+  const followSession = async () => {
+    try {
+      const [nextRoot, nextCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
+      cwd = nextCwd
+      await modState.moveTo(nextRoot)
+    } catch (error) {
+      claude.ui.log(`${definition.name} keeps the state of ${modState.root} and tries the project folder again on the next prompt: ${messageOf(error)}`)
+    }
+  }
+  on('classic.SessionStart', async (e, next) => {
+    await modState.switchSession(e.session_id, e.source).catch((error: unknown) => {
+      claude.ui.log(`${definition.name} kept its session values from before the ${e.source}: ${messageOf(error)}`)
+    })
+    return next(e)
+  })
+  on('classic.CwdChanged', async (e, next) => {
+    await followSession()
+    return next(e)
+  })
+  on('classic.UserPromptSubmit', async (e, next) => {
+    await followSession()
+    return next(e)
+  })
+  on('skill.prompt', userSkillHook(claude))
+  const api = Object.fromEntries(Object.entries(definition.api ?? {}).map(([method, run]) => [method, (input: never) => run(input, mod)]))
+  on('cmod.call', (e, next) => (e.to === definition.name ? answerCall(definition.name, api, e) : next(e)))
+  const agents = toolCalls({ mod, claude, on, adds })
+  await modState.load()
+  await definition.setup(mod)
+  await area.restorePanes()
+  if (hookEvents.length > 0) added.push(`${hookEvents.length === 1 ? 'a hook' : 'hooks'} on ${listed(hookEvents)}`)
+  return { mod, added }
+}
+
+async function readLines(stream: HookStream<ProcessSpawnChunk, ProcessSpawnResult>, onLine: (text: string) => void): Promise<{ code: number | null; lastError: string }> {
+  let pending = ''
+  let lastError = ''
+  let piece = await stream.next()
+  while (piece.done !== true) {
+    if (piece.value.stream === 'stderr') {
+      lastError = lastLineOf(piece.value.text) ?? lastError
+    } else {
+      const lines = `${pending}${piece.value.text}`.split('\n')
+      pending = lines.pop() ?? ''
+      for (const text of lines) onLine(text)
+    }
+    piece = await stream.next()
+  }
+  if (pending !== '') onLine(pending)
+  return { code: piece.value.code, lastError }
+}
+
+function lastLineOf(text: string): string | undefined {
+  const trimmed = text.trim()
+  return trimmed === '' ? undefined : trimmed.slice(trimmed.lastIndexOf('\n') + 1).trim()
+}

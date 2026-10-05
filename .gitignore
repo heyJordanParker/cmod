@@ -1,0 +1,22 @@
+.DS_Store
+node_modules/
+.claude-plugin/types/
+sdk/*.js
+sdk/*.d.ts
+sdk/*.d.ts.map
+sdk/runtime/
+sdk/api/
+sdk/jobs/
+sdk/ui/
+sdk/utils/
+sdk/*.tgz
+cli/dist/
+
+# agent Evidence directories and Plans: session work product, never committed
+/docs/agents/
+/docs/plans/
+/.claude/*
+!/.claude/rules/
+
+# tracer's per-repo disk cache
+.tracer-cache/

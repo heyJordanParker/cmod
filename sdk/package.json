@@ -1,0 +1,45 @@
+{
+  "name": "cmod-sdk",
+  "version": "0.1.0",
+  "description": "Build Claude Code mods: hooks, panels, permissions, checks, and an install that just works.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heyJordanParker/cmod.git",
+    "directory": "sdk"
+  },
+  "files": [
+    "*.js",
+    "*.d.ts",
+    "*.d.ts.map",
+    "api/",
+    "jobs/",
+    "runtime/",
+    "ui/",
+    "utils/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "json-schema-to-ts": "^3.1.1"
+  },
+  "devDependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "@types/bun": "^1.4.2",
+    "@types/mdast": "^4.0.4",
+    "@types/picomatch": "^4.0.3",
+    "@types/shell-quote": "^1.7.5",
+    "mdast-util-from-markdown": "^2.1.0",
+    "mdast-util-gfm": "^3.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "picomatch": "^4.0.7",
+    "shell-quote": "^1.12.0",
+    "typescript": "^7.0.2"
+  }
+}
