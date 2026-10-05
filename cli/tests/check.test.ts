@@ -17,7 +17,7 @@ test('cmod check refuses an install command that names no script', async () => {
   const result = await cmod(home, 'check', root)
 
   expect(result.stdout).toContain(
-    'Checking the steps…\n✘ The steps have a problem\n    fix: package.json "cmod.install" runs "npm run setup", which names no script file in the mod: put the commands in a script, such as ./setup/install.sh\n',
+    'Checking the steps…\n✘ The steps have a problem\n    fix: package.json "cmod.install" runs "npm run setup", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/install.sh.\n',
   )
   expect(result.exitCode).toBe(1)
 })

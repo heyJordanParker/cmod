@@ -3,10 +3,11 @@ import type { EventResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } f
 import { modOf, targetWords } from '../../src/jobs/part-context.js'
 import { findProjectScope, type Workspace } from '../../src/jobs/permissions/find-project-scope.js'
 import { prompt } from '../../src/jobs/prompt.js'
+import { slashCommand } from '../../src/jobs/slash-command.js'
 import { tool } from '../../src/jobs/tool.js'
 import { defineMod, type PartContext } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
-import { fakeFileSystem } from './fake-file-system.js'
+import { fakeFiles } from '../../src/utils/fake-files.js'
 
 const root = '/work/dent'
 const home = '/Users/jordan'
@@ -17,7 +18,7 @@ const files = {
   [`${root}/worktrees/design/.git`]: `gitdir: ${root}/.git/worktrees/design\n`,
   [`${root}/worktrees/design/Domain.md`]: '# Domain\n',
 }
-const fs = fakeFileSystem(files)
+const fs = fakeFiles(files)
 
 async function partFor() {
   let used: PartContext | undefined
@@ -30,7 +31,7 @@ async function partFor() {
 
 test("in a project-scope plugin, a callback's mod.process.run runs in the work tree that holds the call's path", async () => {
   const { fake, context } = await partFor()
-  const workspace: Workspace = { cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
+  const workspace: Workspace = { root, cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
 
   await modOf(context, { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, root, workspace, deadline).process.run(['git', 'status'])
   await modOf(context, { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, root, workspace, deadline).process.run(['git', 'status'])
@@ -47,7 +48,7 @@ test("in a project-scope plugin, a callback's mod.process.run runs in the work t
 
 test("in any other plugin, a callback's mod.process.run runs in the session's folder", async () => {
   const { fake, context } = await partFor()
-  const workspace: Workspace = { cwd: root, home, fs, scope: undefined }
+  const workspace: Workspace = { root, cwd: root, home, fs, scope: undefined }
 
   await modOf(context, { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, root, workspace, deadline).process.run(['git', 'status'])
 
@@ -111,7 +112,23 @@ test('spawn inside a prompt callback runs in the work tree', async () => {
   const answer = await tested.fire('tool.call', edit, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.spawn').map((call) => call.args)).toEqual([[{ argv: ['git', 'status'], cwd: `${root}/worktrees/design` }]])
-  expect(answer.context).toEqual(['On branch design\n'])
+  expect(answer.context).toEqual(['# status\nOn branch design\n'])
+})
+
+test("a job's mod.cwd follows a move", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'where',
+      setup(mod) {
+        mod.use(slashCommand({ name: 'where', description: 'Name the working folder', reply: (_input, mod) => mod.cwd }))
+      },
+    }),
+    { projectRoot: '/work/a' },
+  )
+
+  expect(await tested.type('/where')).toEqual({ text: '/work/a' })
+  await tested.moveTo('/work/b')
+  expect(await tested.type('/where')).toEqual({ text: '/work/b' })
 })
 
 test("a spawn inside a job stops at the job's deadline", async () => {

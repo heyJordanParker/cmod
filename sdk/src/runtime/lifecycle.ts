@@ -1,5 +1,5 @@
 import type { Args, EventResult, Frozen, HookStream, Next, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import type { Mod, ModDefinition, ModEvent, PartContext } from '../mod.js'
+import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
 import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -54,9 +54,13 @@ const dependencyCallMs = 30_000
 
 const cannotStart = /failed to start: /
 
+const shellTools: readonly string[] = ['Bash', 'PowerShell']
+
+const nothingBelow = (async () => ({})) as unknown as Next<'classic.CwdChanged'>
+
 export async function readPlugin(claude: Claude): Promise<Plugin> {
   const { name, root } = claude.plugin
-  const read: ReadFile = async (path) => ((await claude.fs.exists(path)) && (await claude.fs.stat(path)).kind === 'file' ? claude.fs.read(path) : undefined)
+  const read: ReadFile = async (path) => ((await claude.fs.stat(path).catch(() => undefined))?.kind === 'file' ? claude.fs.read(path) : undefined)
   const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
   const version = typeof manifest?.version === 'string' ? manifest.version : undefined
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
@@ -67,7 +71,7 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   if (Object.keys(steps).length === 0) return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version }
   const scripts = await scriptsSha256(steps, {
     read: (path) => read(`${root}/${path}`),
-    list: async (folder) => (await filesBelow(claude, `${root}/${folder}`)).sort(),
+    list: (folder) => filesBelow(claude, `${root}/${folder}`),
   })
   return { ...plugin, isInstalled: version !== undefined && record?.version === version && record.scriptsSha256 === scripts, shouldRecord: false }
 }
@@ -196,7 +200,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
 
   const install = async (consent?: string): Promise<void> => {
     if (plugin === undefined) return
-    if (plugin.name === cmodPluginName) return bootstrap()
+    if (plugin.name === cmodPluginName) return bootstrap(plugin.root)
     phase = 'installing'
     if ((await cmodVersion(claude())) === undefined) return waitForCMod()
     endLine()
@@ -235,17 +239,15 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     })
   }
 
-  const bootstrap = async () => {
-    if (plugin === undefined || plugin.version === undefined) return
+  const bootstrap = async (root: string) => {
     const progress = showLine()
     phase = 'installing'
-    const env = { CMOD_PLUGIN_ROOT: plugin.root, CMOD_VERSION: plugin.version, CMOD_DATA: dataFolder(plugin.store, plugin.name) }
-    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: plugin.root, env }), (text) => {
+    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: root }), (text) => {
       const event = parseEvent(text)
       if (event.kind === 'progress') progress.report(event)
     })
     if (code === 0) return finish()
-    fail(`bootstrap exit ${code ?? 'by signal'}: ${lastError}`, `Run ./setup/bootstrap.sh in ${plugin.root} to see the whole log.`)
+    fail(`bootstrap exit ${code ?? 'by signal'}: ${lastError}`, `Run ./setup/bootstrap.sh in ${root} to see the whole log.`)
   }
 
   const report = (error: unknown) => {
@@ -338,15 +340,20 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),
   }
   const followSession = async () => {
+    const oldCwd = cwd
     try {
       const [nextRoot, nextCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
-      const hasMovedOnlyFolder = nextRoot === modState.root && nextCwd !== cwd
-      cwd = nextCwd
+      const hasMovedRoot = nextRoot !== modState.root
+      if (!hasMovedRoot && nextCwd === oldCwd) return
       await modState.moveTo(nextRoot)
-      if (hasMovedOnlyFolder) area.changed()
+      cwd = nextCwd
+      if (!hasMovedRoot) area.changed()
     } catch (error) {
-      claude.ui.log(`${definition.name} keeps the state of ${modState.root} and tries the project folder again on the next prompt: ${messageOf(error)}`)
+      claude.ui.log(`${definition.name} keeps the state of ${modState.root} until the next prompt or folder move: ${messageOf(error)}`)
+      return
     }
+    const moved: Parameters<ModHook<'CwdChanged'>>[0] = { session_id: await claude.session.id(), cwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: cwd }
+    await router.dispatch('classic.CwdChanged', moved as Frozen<Args<'classic.CwdChanged'>>, nothingBelow)
   }
   on('classic.SessionStart', async (e, next) => {
     await modState.switchSession(e.session_id, e.source).catch((error: unknown) => {
@@ -360,7 +367,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   })
   for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
     on(event, async (e, next) => {
-      if (e.tool_name === 'Bash') await followSession()
+      if (shellTools.includes(e.tool_name)) await followSession()
       return next(e)
     })
   }

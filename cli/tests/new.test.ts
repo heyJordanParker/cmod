@@ -2,11 +2,12 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { listFiles } from '../src/files.js'
 import { cmod, deleteTemporaryHomes, temporaryHome } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
-test('new writes the repository layout with a defineMod that has one hook and one panel, and installs its packages', async () => {
+test('new writes the repository layout with a defineMod that has one hook and one pane, and installs its packages', async () => {
   const home = await temporaryHome()
   const root = join(home, 'my-mod')
 
@@ -48,8 +49,10 @@ test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {
   expect(mod).toContain("import { Box } from '../node_modules/cmod-sdk/ui/elements.js'")
   expect(mod).toContain('hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)')
   const tests = await read('tests/mod.test.ts')
-  expect(tests).toContain("test('the band keeps what Claude Code and other mods drew'")
-  expect(tests).toContain("test('the band goes back to Claude Code during a survey'")
+  expect(tests).toContain("test('the band shows the prompt count on its last line'")
+  expect(tests).toContain("test('the band leaves the prompt count out during a survey'")
+  expect(tests).not.toContain("'  hasSurvey: false',")
+  expect(await read('skills/my-mod/SKILL.md')).toContain('shows the count in its pane and above the prompt.')
   expect(await read('hooks/register.ts')).toContain("import { myMod } from '../src/mod.js'")
   expect(await read('src/state.ts')).toBe('export type MyModState = { session: { prompts: number } }\n\nexport const initialState: MyModState = { session: { prompts: 0 } }\n')
   expect(await read('src/panes/prompts.tsx')).toContain('render: (mod) => <PromptCount count={mod.state.session.prompts} />,')
@@ -72,6 +75,21 @@ test('a new mod runs its tests before Claude Code has loaded it', async () => {
   expect(existsSync(join(root, '.claude-plugin/types'))).toBe(false)
   expect(output).toContain(' 3 pass\n 0 fail\n')
   expect(exitCode).toBe(0)
+})
+
+test("the README's 30-second mod is the template", async () => {
+  const home = await temporaryHome()
+  const source = join(home, 'my-mod/src')
+  await cmod(home, 'new', 'my-mod')
+  const readme = await readFile(join(import.meta.dir, '..', '..', 'README.md'), 'utf8')
+  const start = readme.indexOf('## Make a mod in 30 seconds')
+  const section = readme.slice(start, readme.indexOf('\n## ', start))
+  const template = await Promise.all((await listFiles(source)).map((path) => readFile(join(source, path), 'utf8')))
+
+  const blocks = [...section.matchAll(/```tsx?\n([\s\S]*?)```/g)].map((match) => match[1] as string)
+
+  expect(blocks).not.toEqual([])
+  for (const block of blocks) expect({ block, isInTemplate: template.some((file) => file.includes(block)) }).toEqual({ block, isInTemplate: true })
 })
 
 test('new --project writes the plugin into .claude/skills/<name>/ of the repository in the current folder', async () => {

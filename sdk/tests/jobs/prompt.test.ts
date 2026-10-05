@@ -25,7 +25,7 @@ test('prompt adds its text after a matching call', async () => {
   const afterCommit = await tested.fire('tool.call', bash('git add -A && git commit -m "fix: x"', 'toolu_1'), answered)
   const afterStatus = await tested.fire('tool.call', bash('git status', 'toolu_2'), answered)
 
-  expect(afterCommit).toEqual({ ...answered, context: ['Push only when the user asks.'] })
+  expect(afterCommit).toEqual({ ...answered, context: ['# push-reminder\nPush only when the user asks.'] })
   expect(afterStatus).toEqual(answered)
   expect(tested.shown.logs).toEqual(['notes added the push-reminder prompt after git commit.'])
 })
@@ -35,7 +35,7 @@ test('a prompt after a call gives Claude the string its callback returns', async
 
   const answer = await tested.fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['Committed with 1 command.'])
+  expect(answer.context).toEqual(['# reread\nCommitted with 1 command.'])
 })
 
 test('a prompt after a write gets the call to build its text with', async () => {
@@ -43,7 +43,7 @@ test('a prompt after a write gets the call to build its text with', async () => 
 
   const answer = await tested.fire('tool.call', { tool: 'Write', file_path: '/test/plugins/notes/README.md', content: 'x', tool_use_id: 'toolu_1' } as never, answered)
 
-  expect(answer.context).toEqual(['Reread /test/plugins/notes/README.md.'])
+  expect(answer.context).toEqual(['# reread\nReread /test/plugins/notes/README.md.'])
 })
 
 test("a prompt callback after a call gets the mod's own typed state, so it counts commits without capturing the mod from setup", async () => {
@@ -59,7 +59,7 @@ test("a prompt callback after a call gets the mod's own typed state, so it count
 
   const answer = await tested.fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['Commit 1 landed.'])
+  expect(answer.context).toEqual(['# commits\nCommit 1 landed.'])
   expect(tested.state.project.commits).toBe(1)
 })
 
@@ -72,7 +72,7 @@ test('a prompt after a write gets the path from the folder the shell was in befo
   }
   const tested = withPrompt(prompt({ name: 'cart', prompt: ({ call }) => (call !== undefined && 'path' in call ? call.path : undefined), after: { write: '**/cart.ts' } }), bashMovesFolder)
 
-  expect(await tested.fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['/test/plugins/notes/app/cart.ts'] })
+  expect(await tested.fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['# cart\n/test/plugins/notes/app/cart.ts'] })
 })
 
 test('a prompt callback can run past 5 seconds within its deadline', async () => {
@@ -119,25 +119,46 @@ test('a block with the same name below adds nothing and writes one debug line', 
   expect(tested.shown.logs).toEqual(['notes added the currentDate prompt.'])
 })
 
-test('a prompt with when adds its text beside each user prompt that when accepts', async () => {
-  const passedOn: unknown[] = []
-  const recorder: Part<void> = (part) => {
+const submitted = (text: string) => ({ text, wait: false, origin: { kind: 'user' } }) as never
+const entered = { text: '' } as never
+
+function contextBelow(passedOn: unknown[]): Part<void> {
+  return (part) => {
     part.on('prompt.submit', async (e, next) => {
       passedOn.push(e.context)
       return next(e)
     })
   }
-  const submitted = (text: string) => ({ text, wait: false, origin: { kind: 'user' } }) as never
-  const entered = { text: '' } as never
-  const byPattern = withPrompt(prompt({ name: 'release', prompt: ({ userPrompt }) => `Release steps for: ${userPrompt}`, when: /\brelease\b/i }), recorder)
-  const byFunction = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: (userPrompt) => userPrompt.startsWith('ship') }), recorder)
+}
+
+test('a prompt with when adds its text beside each user prompt that when accepts', async () => {
+  const passedOn: unknown[] = []
+  const byPattern = withPrompt(prompt({ name: 'release', prompt: ({ userPrompt }) => `Release steps for: ${userPrompt}`, when: /\brelease\b/i }), contextBelow(passedOn))
+  const byFunction = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: (userPrompt) => userPrompt.startsWith('ship') }), contextBelow(passedOn))
 
   await byPattern.fire('prompt.submit', submitted('Cut a Release'), entered)
   await byPattern.fire('prompt.submit', submitted('Fix the bug'), entered)
   await byFunction.fire('prompt.submit', submitted('ship it'), entered)
 
-  expect(passedOn).toEqual([['Release steps for: Cut a Release'], undefined, ['Run bun run release.']])
+  expect(passedOn).toEqual([['# release\nRelease steps for: Cut a Release'], undefined, ['# release\nRun bun run release.']])
   expect(byPattern.shown.logs).toEqual(['notes added the release prompt after matching user prompts.'])
+})
+
+test('a prompt with when shows its name above its text', async () => {
+  const passedOn: unknown[] = []
+  const tested = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: /release/ }), contextBelow(passedOn))
+
+  await tested.fire('prompt.submit', submitted('release it'), entered)
+
+  expect(passedOn).toEqual([['# release\nRun bun run release.']])
+})
+
+test('a prompt with after shows its name above its text', async () => {
+  const tested = withPrompt(prompt({ name: 'push-reminder', prompt: 'Push only when the user asks.', after: { command: 'git commit' } }))
+
+  const answer = await tested.fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
+
+  expect(answer.context).toEqual(['# push-reminder\nPush only when the user asks.'])
 })
 
 test('a callback that throws adds nothing and writes one debug line', async () => {

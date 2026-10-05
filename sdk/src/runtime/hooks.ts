@@ -47,6 +47,7 @@ const readFields: Record<ModEvent, readonly string[]> = {
   PreCompact: [],
   Stop: ['additionalContext'],
   StopFailure: [],
+  CwdChanged: [],
 }
 
 export function classicHook<E extends ModEvent>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls): RoutedHook<RoutedEvent> {
@@ -156,7 +157,7 @@ function classicResult(event: ModEvent, answer: HookAnswer): ClassicFields {
   return result
 }
 
-const strictness = ['allow', 'ask', 'deny'] as const
+export const strictness = ['allow', 'ask', 'deny'] as const
 
 function strictnessOf(result: ClassicFields): number {
   return strictness.findLastIndex((decision) => result[decision] !== undefined)

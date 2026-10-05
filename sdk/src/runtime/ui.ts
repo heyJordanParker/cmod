@@ -159,25 +159,29 @@ function threw(error: unknown): string {
   return `threw, so Claude Code draws its own: ${messageOf(error)}`
 }
 
+type DrawnPiece = { readonly drawing: RenderElement; readonly isClaudesRow: boolean }
+
 async function drawComponent<Given extends object>(
   table: ElementTable,
   draw: (Default: (props: Given & { readonly children?: unknown }) => RenderElement) => RenderElement,
-  drawDefault: (given: Given, index: number) => Promise<RenderElement>,
-): Promise<{ readonly drawing: RenderElement; readonly hasDefault: boolean } | { readonly failure: string }> {
-  const given: Given[] = []
+  drawDefault: (given: Given, call: { readonly index: number; readonly isClaudesRow: boolean }) => Promise<RenderElement>,
+): Promise<DrawnPiece | { readonly failure: string }> {
+  const calls: { readonly given: Given; readonly drawing: RenderElement }[] = []
   let first: RenderElement
   try {
     first = drawWith(table, () =>
       draw(({ children, ...props }) => {
-        given.push(props as Given)
-        return Box({})
+        const drawing = Box({})
+        calls.push({ given: props as Given, drawing })
+        return drawing
       }),
     )
   } catch (error) {
     return { failure: threw(error) }
   }
-  if (given.length === 0) return { drawing: first, hasDefault: false }
-  const pieces = await Promise.all(given.map((props, index) => drawDefault(props, index)))
+  if (calls.length === 0) return { drawing: first, isClaudesRow: false }
+  const whole = calls.findIndex((call) => call.drawing === first)
+  const pieces = await Promise.all(calls.map(({ given }, index) => drawDefault(given, { index, isClaudesRow: index === whole })))
   let used = 0
   let second: RenderElement
   try {
@@ -186,7 +190,16 @@ async function drawComponent<Given extends object>(
     return { failure: threw(error) }
   }
   if (used !== pieces.length) return { failure: `used Default ${times(pieces.length)}, then ${times(used)}, so Claude Code draws its own. A render must draw the same for the same props.` }
-  return { drawing: second, hasDefault: true }
+  return { drawing: second, isClaudesRow: whole >= 0 }
+}
+
+function drawPieces(pieces: readonly DrawnPiece[], isFirstOfReply?: boolean): RenderElement {
+  const column = Box({
+    flexDirection: 'column',
+    children: pieces.map(({ drawing, isClaudesRow }, index) => ((index > 0 || isFirstOfReply === false) && !isClaudesRow ? Box({ marginTop: 1, children: drawing }) : drawing)),
+  })
+  if (isFirstOfReply !== true || pieces[0]?.isClaudesRow !== false) return column
+  return Box({ children: [Box({ minWidth: 2, children: Text({ color: 'text', children: bullet }) }), column] })
 }
 
 type MarkdownRender = {
@@ -236,19 +249,17 @@ export function createUi<State extends object>({ name, claude, router, progress,
       const pieces = reader(props.text, renderOf)
       if (pieces.every((piece) => 'text' in piece)) return table.Markdown(props)
       const drawClaudes = (text: string) => table.Markdown({ ...props, text })
-      return Box({
-        flexDirection: 'column',
-        children: pieces.map((piece) => {
-          if ('text' in piece) return drawClaudes(piece.text)
-          const { render, props: block } = piece
-          try {
-            return drawWith(table, () => render.Component({ ...block, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) }))
-          } catch (error) {
-            render.log(threw(error))
-            return drawClaudes(block.source)
-          }
-        }),
+      const drawings = pieces.map((piece) => {
+        if ('text' in piece) return drawClaudes(piece.text)
+        const { render, props: block } = piece
+        try {
+          return drawWith(table, () => render.Component({ ...block, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) }))
+        } catch (error) {
+          render.log(threw(error))
+          return drawClaudes(block.source)
+        }
       })
+      return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })))
     }
   }
 
@@ -262,30 +273,21 @@ export function createUi<State extends object>({ name, claude, router, progress,
       if (pieces.every((piece) => 'text' in piece)) return next(e)
       const table = claude.ui.resolve(e)
       const drawClaudes = (text: string, isFirst: boolean) => next({ ...e, props: pieceProps(e.props, { text }, isFirst) } as typeof e)
-      const drawings = await Promise.all(
-        pieces.map(async (piece, index) => {
-          if ('text' in piece) return { drawing: await drawClaudes(piece.text, index === 0), hasClaudesRow: true }
+      const drawn = await Promise.all(
+        pieces.map(async (piece, index): Promise<DrawnPiece> => {
+          if ('text' in piece) return { drawing: await drawClaudes(piece.text, index === 0), isClaudesRow: true }
           const { render, props: block } = piece
-          const drawn = await drawComponent<{ readonly source?: string }>(
+          const component = await drawComponent<{ readonly source?: string }>(
             table,
             (Default) => render.Component({ ...block, Default }),
-            ({ source = block.source }, use) => drawClaudes(source, index === 0 && use === 0),
+            ({ source = block.source }, { isClaudesRow }) => drawClaudes(source, index === 0 && isClaudesRow),
           )
-          if ('failure' in drawn) {
-            render.log(drawn.failure)
-            return { drawing: await drawClaudes(block.source, index === 0), hasClaudesRow: true }
-          }
-          return { drawing: drawn.drawing, hasClaudesRow: drawn.hasDefault }
+          if (!('failure' in component)) return component
+          render.log(component.failure)
+          return { drawing: await drawClaudes(block.source, index === 0), isClaudesRow: true }
         }),
       )
-      return drawWith(table, () => {
-        const column = Box({
-          flexDirection: 'column',
-          children: drawings.map(({ drawing, hasClaudesRow }, index) => (index === 0 || hasClaudesRow ? drawing : Box({ marginTop: 1, children: drawing }))),
-        })
-        if (!e.props.isFirstOfReply || drawings[0]?.hasClaudesRow !== false) return column
-        return Box({ children: [Box({ minWidth: 2, children: Text({ color: 'text', children: bullet }) }), column] })
-      })
+      return drawWith(table, () => drawPieces(drawn, e.props.isFirstOfReply))
     })
   }
 
@@ -363,7 +365,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
           const drawn = await drawComponent(
             claude.ui.resolve(e),
             (Default) => Component({ ...e.props, Default } as unknown as SlotProps<S>),
-            (given, index) => next({ ...e, props: pieceProps(e.props, given, index === 0) } as typeof e),
+            (given, { index }) => next({ ...e, props: pieceProps(e.props, given, index === 0) } as typeof e),
           )
           if ('drawing' in drawn) return drawn.drawing
           log(drawn.failure)

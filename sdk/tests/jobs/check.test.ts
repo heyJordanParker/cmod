@@ -89,6 +89,72 @@ test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () =>
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/app/cart.ts`], { timeoutMs: 60000 }]])
 })
 
+test('a check after edits to src/** still runs after cd src', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'typed',
+      setup(mod) {
+        mod.use(check({ after: { write: 'src/**' }, run: ['tsc', '--noEmit'] }))
+      },
+    }),
+    { cwd: `${root}/src`, files: { [`${root}/src/a.ts`]: 'let a = 1' } },
+  )
+  tested.fakes.clock.after = () => ({ cancel: () => undefined })
+  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
+  await tested.fire('tool.call', editOf(`${root}/src/a.ts`, 'toolu_1'), answered)
+
+  expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/src/a.ts`], { timeoutMs: 60000 }]])
+})
+
+test('a shell write that names several matching files runs one command with each file once', async () => {
+  const tested = typed(typeCheck)
+
+  await tested.fire('tool.call', { tool: 'Bash', command: 'sed -i s/a/b/ a.ts b.ts README.md a.ts', tool_use_id: 'toolu_1' } as never, answered)
+
+  expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/a.ts`, `${root}/b.ts`], { timeoutMs: 60000 }]])
+})
+
+test('a write check does not run when no matched file still exists', async () => {
+  const tested = typed(typeCheck)
+  tested.fakes.fs.exists = async () => false
+
+  await tested.fire('tool.call', { tool: 'Bash', command: 'rm gone.ts', tool_use_id: 'toolu_1' } as never, answered)
+
+  expect(tested.calls.filter((call) => call.call === 'process.run')).toEqual([])
+})
+
+test('a command check in a project runs in the work tree the matched command runs in', async () => {
+  const project = '/work/dent'
+  const tested = testMod(
+    defineMod({
+      name: 'dent',
+      setup(mod) {
+        mod.use(check({ after: { command: 'git commit' }, run: ['bun', 'run', 'test:smoke'] }))
+      },
+    }),
+    {
+      scope: 'project',
+      projectRoot: project,
+      files: {
+        [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
+        [`${project}/.git/worktrees/design/commondir`]: '../..\n',
+        [`${project}/worktrees/design/.git`]: `gitdir: ${project}/.git/worktrees/design\n`,
+      },
+    },
+  )
+  tested.fakes.clock.after = () => ({ cancel: () => undefined })
+  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
+  await tested.fire('tool.call', { tool: 'Bash', command: 'cd worktrees/design && git commit -m x', tool_use_id: 'toolu_1' } as never, answered)
+  await tested.fire('tool.call', { tool: 'Bash', command: 'git add -A && git commit -m x', tool_use_id: 'toolu_2' } as never, answered)
+
+  expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([
+    [['bun', 'run', 'test:smoke'], { cwd: `${project}/worktrees/design`, timeoutMs: 60000 }],
+    [['bun', 'run', 'test:smoke'], { cwd: project, timeoutMs: 60000 }],
+  ])
+})
+
 test('a check with no target, no command, or a timeoutMs past 10 minutes throws in setup', () => {
   expect(() => check({ after: [], run: ['tsc'] })).toThrow("check: give after a target, such as { write: '**/*.ts' }.")
   expect(() => check({ after: { write: '**/*.ts' }, run: [] })).toThrow("check: the check after edits to **/*.ts has no command. Give run a command, such as ['bun', 'test'].")

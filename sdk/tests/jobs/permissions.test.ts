@@ -155,6 +155,21 @@ test('a project-scope rule matches Domain.md inside the project and not outside 
   expect(await tested.fire('tool.check', editCheck('/test/home/dotfiles/Domain.md', 'toolu_4'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
+test('a user-scope deny on Domain.md still denies after Claude runs cd docs', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'guard',
+      setup(mod) {
+        mod.use(permissions({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] }))
+      },
+    }),
+    { projectRoot: '/work/app', cwd: '/work/app/docs' },
+  )
+
+  expect(await tested.fire('tool.check', editCheck('/work/app/Domain.md', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
+  expect(await tested.fire('tool.check', editCheck('/work/app/docs/Domain.md', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+})
+
 test("a command rule's when runs in the folder the command cds into", async () => {
   const tested = inProject({ deny: [{ command: 'git commit', when: async (_call, mod) => (await mod.process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })

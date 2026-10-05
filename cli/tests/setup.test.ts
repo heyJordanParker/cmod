@@ -185,6 +185,25 @@ test('a step script at the plugin root is refused', async () => {
   expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
 })
 
+test('a step that runs make -C setup is refused at setup', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { install: 'make -C setup' } }),
+    'setup/Makefile': 'all:\n\techo installed\n',
+  })
+  const refusal = 'package.json "cmod.install" runs "make -C setup", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/install.sh.'
+  const { readPlugin } = await import(sdkLifecycle)
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.stderr).toBe(`cmod setup: ${refusal}\n`)
+  expect(result.exitCode).toBe(1)
+  expect(existsSync(join(home, '.local/share/cmod'))).toBe(false)
+  await expect(readPlugin(claudeOnDisk(home, { name: 'demo', root }))).rejects.toThrow(refusal)
+})
+
 test('setup --events asks consent for a mod that names only a program', async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
@@ -453,6 +472,34 @@ test('a download whose SHA-256 differs from SHA256SUMS fails and installs nothin
   for (const path of [join(home, '.local/bin/hello'), join(home, '.local/share/cmod/bin/hello'), join(home, '.local/share/cmod/records/hello-mod.json')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
+})
+
+test('a failed install leaves no program link', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
+  const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
+  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n' })
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(1)
+  for (const path of [join(home, '.local/bin/hello'), join(home, '.local/share/cmod/bin/hello'), join(home, '.local/share/cmod/records/hello-mod.json')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+})
+
+test('a failed install of a set-up mod keeps the program its record names', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
+  const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n' })
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(1)
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
+  expect(existsSync(join(home, '.local/share/cmod/records/hello-mod.json'))).toBe(true)
 })
 
 test('setup --events prints failed with the fix when the release holds no build for this platform, and writes no record', async () => {

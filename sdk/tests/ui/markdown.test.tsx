@@ -2,12 +2,13 @@ import { expect, spyOn, test } from 'bun:test'
 import type { Args, Frozen, Next, RenderElement } from 'claude-code'
 import { defineMod, type ModDefinition } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
-import { fakeClaude, testMod } from '../../src/testing.js'
+import { testMod } from '../../src/testing.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
 import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Markdown, Text } from '../../src/ui/elements.js'
 import { markdownBlocks, markdownSlots } from '../../src/ui/markdown.js'
 import { slots, type SlotProps } from '../../src/ui/slots.js'
+import { fakeClaude } from '../../src/utils/fake-claude.js'
 import { textOf } from '../../src/utils/fake-elements.js'
 
 declare const Bun: { spawnSync(argv: readonly string[]): { readonly stdout: { toString(): string }; readonly stderr: { toString(): string } } }
@@ -41,8 +42,8 @@ async function streamedAgainstWhole(reply: string) {
   const streamed = testMod(everyBlock)
   const differences: { readonly text: string; readonly streamed: string[]; readonly whole: string[] }[] = []
   for (const text of prefixesOf(reply)) {
-    await streamed.lines(slots.AssistantMessage, { text, isFirstOfReply: true })
-    const drawn = await streamed.lines(slots.AssistantMessage, { text, isFirstOfReply: true })
+    await streamed.lines(slots.AssistantMessage, { text, isFirstOfReply: true }, 'msg_1')
+    const drawn = await streamed.lines(slots.AssistantMessage, { text, isFirstOfReply: true }, 'msg_1')
     const whole = await testMod(everyBlock).lines(slots.AssistantMessage, { text, isFirstOfReply: true })
     if (JSON.stringify(drawn) !== JSON.stringify(whole)) differences.push({ text, streamed: drawn, whole })
   }
@@ -105,6 +106,41 @@ test("a mod's piece after the first has a blank line above it", async () => {
   expect(lines).toEqual(['AssistantMessage', '  text: "Before"', '  isFirstOfReply: true', '', 'PLAN'])
 })
 
+test("a mod's block opening a later text block of the reply has a blank line above it", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'headings',
+      setup(mod) {
+        mod.ui.render(markdownSlots.Heading, Shouted)
+      },
+    }),
+  )
+
+  const lines = await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.', isFirstOfReply: false })
+
+  expect(lines).toEqual(['', 'PLAN', 'AssistantMessage', '  text: "We read."', '  isFirstOfReply: false'])
+})
+
+test('a first block that draws its own row above Default keeps the bullet on the first row', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'labels',
+      setup(mod) {
+        mod.ui.render(markdownSlots.Heading, ({ Default }) => (
+          <Box flexDirection="column">
+            <Text>Heading:</Text>
+            <Default />
+          </Box>
+        ))
+      },
+    }),
+  )
+
+  const lines = await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.', isFirstOfReply: true })
+
+  expect(lines).toEqual(['⏺ Heading:', '  AssistantMessage', '    text: "# Plan"', '    isFirstOfReply: false', '  AssistantMessage', '    text: "We read."', '    isFirstOfReply: false'])
+})
+
 test('a reply whose first block a mod leaves to Default keeps the bullet Claude Code draws', async () => {
   const tested = testMod(
     defineMod({
@@ -144,11 +180,11 @@ test('a block still streaming is drawn by Default', async () => {
       },
     }),
   )
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true })
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true }, 'msg_1')
 
-  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Ste', isFirstOfReply: true })).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read.\\n\\n## Ste"', '    isFirstOfReply: false'])
-  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true })).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read.\\n\\n## Steps"', '    isFirstOfReply: false'])
-  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true })).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read."', '    isFirstOfReply: false', '', '  STEPS'])
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Ste', isFirstOfReply: true }, 'msg_1')).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read.\\n\\n## Ste"', '    isFirstOfReply: false'])
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }, 'msg_1')).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read.\\n\\n## Steps"', '    isFirstOfReply: false'])
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }, 'msg_1')).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read."', '    isFirstOfReply: false', '', '  STEPS'])
 })
 
 test('a heading stays drawn by its render while the paragraph directly below it streams', async () => {
@@ -160,9 +196,9 @@ test('a heading stays drawn by its render while the paragraph directly below it 
       },
     }),
   )
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\nWe', isFirstOfReply: true })
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\nWe', isFirstOfReply: true }, 'msg_1')
 
-  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\nWe read', isFirstOfReply: true })).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read"', '    isFirstOfReply: false'])
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\nWe read', isFirstOfReply: true }, 'msg_1')).toEqual(['⏺ PLAN', '  AssistantMessage', '    text: "We read"', '    isFirstOfReply: false'])
 })
 
 test('a streaming reply parses its finished blocks once', async () => {
@@ -176,13 +212,16 @@ test('a streaming reply parses its finished blocks once', async () => {
     }),
   )
 
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true })
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n```mermaid\ngra', isFirstOfReply: true })
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n```mermaid\ngraph TD\n```', isFirstOfReply: true })
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n```mermaid\ngraph TD\n```', isFirstOfReply: true })
+  const reply = '# Plan\n\nWe read.\n\n```mermaid\ngraph TD\n```'
 
-  expect(parse.mock.calls.map(([text]) => text)).toEqual(['# Plan\n\nWe', 'We read.\n\n```mermaid\ngra', '```mermaid\ngraph TD\n```'])
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true }, 'msg_1')
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n```mermaid\ngra', isFirstOfReply: true }, 'msg_1')
+  await tested.lines(slots.AssistantMessage, { text: reply, isFirstOfReply: true }, 'msg_1')
+  await tested.lines(slots.AssistantMessage, { text: reply, isFirstOfReply: true }, 'msg_1')
+  const charactersParsed = parse.mock.calls.reduce((sum, [text]) => sum + text.length, 0)
   parse.mockRestore()
+
+  expect(charactersParsed).toBe(reply.length + 'We'.length + '```mermaid\ngra'.length)
 })
 
 test('a list that continues across a blank line while streaming draws as one list', async () => {
@@ -194,9 +233,9 @@ test('a list that continues across a blank line while streaming draws as one lis
       },
     }),
   )
-  for (const text of prefixesOf('1. a\n\n2. b')) await tested.lines(slots.AssistantMessage, { text, isFirstOfReply: true })
+  for (const text of prefixesOf('1. a\n\n2. b')) await tested.lines(slots.AssistantMessage, { text, isFirstOfReply: true }, 'msg_1')
 
-  expect(await tested.lines(slots.AssistantMessage, { text: '1. a\n\n2. b', isFirstOfReply: true })).toEqual(['⏺ List from 1: "a\\nb"'])
+  expect(await tested.lines(slots.AssistantMessage, { text: '1. a\n\n2. b', isFirstOfReply: true }, 'msg_1')).toEqual(['⏺ List from 1: "a\\nb"'])
 })
 
 test('a streamed list draws as a whole one when its next item starts after a blank line', async () => {
@@ -274,15 +313,31 @@ test('Markdown in a pane applies the mod\'s markdown slots', async () => {
     }),
   )
 
-  expect(await tested.lines('notes')).toEqual(['NOTES', '## Shopping', 'Buy milk.', 'diagram: graph TD'])
+  expect(await tested.lines('notes')).toEqual(['NOTES', '', '## Shopping', '', 'Buy milk.', '', 'diagram: graph TD'])
 })
 
-test('two mods rendering different markdown slots both apply to one reply', async () => {
+test("a pane's Markdown puts a blank line above a mod's block, as a reply does", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'notes',
+      async setup(mod) {
+        mod.ui.render(markdownSlots.Heading, Shouted)
+        await mod.ui.pane(definePane({ id: 'notes', title: 'Notes', render: () => <Markdown text={'Before\n\n# Plan'} /> })).open()
+      },
+    }),
+  )
+
+  expect(await tested.lines('notes')).toEqual(['Before', '', 'PLAN'])
+})
+
+test('two mods drawing one reply give the same gaps as one mod', async () => {
+  const drawHeading = ({ text }: SlotProps<typeof markdownSlots.Heading>) => Text({ bold: true, children: text.toUpperCase() })
+  const drawDiagram = ({ lang, value, Default }: SlotProps<typeof markdownSlots.CodeBlock>) => (lang === 'mermaid' ? Text({ children: `diagram: ${value}` }) : Default({}))
   const headings = await started(
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(markdownSlots.Heading, ({ text }) => Text({ bold: true, children: text.toUpperCase() }))
+        mod.ui.render(markdownSlots.Heading, drawHeading)
       },
     }),
   )
@@ -290,7 +345,16 @@ test('two mods rendering different markdown slots both apply to one reply', asyn
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        mod.ui.render(markdownSlots.CodeBlock, ({ lang, value, Default }) => (lang === 'mermaid' ? Text({ children: `diagram: ${value}` }) : Default({})))
+        mod.ui.render(markdownSlots.CodeBlock, drawDiagram)
+      },
+    }),
+  )
+  const both = await started(
+    defineMod({
+      name: 'both',
+      setup(mod) {
+        mod.ui.render(markdownSlots.Heading, drawHeading)
+        mod.ui.render(markdownSlots.CodeBlock, drawDiagram)
       },
     }),
   )
@@ -298,9 +362,13 @@ test('two mods rendering different markdown slots both apply to one reply', asyn
   const claudeDraws = nextOf((e) => claude.ui.resolve(e).Text({ children: `claude: ${(e.props as { text: string }).text}` }))
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '# Plan\n\n```mermaid\ngraph TD\n```\n\nDone.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
-  const drawn = await headings.route('ui.render', reply, nextOf((e) => diagrams.route('ui.render', e, claudeDraws)))
+  const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
 
-  expect(textOf(drawn).split('\n')).toEqual(['⏺ PLAN', '  diagram: graph TD', '  claude: Done.'])
+  const byOne = rows(await both.route('ui.render', reply, claudeDraws))
+  const byTwo = rows(await headings.route('ui.render', reply, nextOf((e) => diagrams.route('ui.render', e, claudeDraws))))
+
+  expect(byOne).toEqual(['⏺ PLAN', '', '  diagram: graph TD', '  claude: Done.'])
+  expect(byTwo).toEqual(byOne)
 })
 
 test('a mod that renders no markdown slot never loads vendor-markdown', () => {

@@ -1,9 +1,11 @@
 import type { Part } from '../mod.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
-import { triggeredRun } from './check/triggered-checks.js'
-import { targetOf, type Target } from './permissions/match-target.js'
+import { callEffects, type ToolUse } from '../utils/call-effects.js'
+import { parentOf } from '../utils/paths.js'
 import { listed, messageOf } from '../utils/text.js'
 import { afterCall, modWithin, targetWords } from './part-context.js'
+import type { Workspace } from './permissions/find-project-scope.js'
+import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
 
 const defaultMs = 60_000
 
@@ -35,4 +37,21 @@ export function check<State extends object = Record<never, never>>(options: { re
     )
     context.announce(`a ${named}`)
   }
+}
+
+async function triggeredRun(after: readonly Target[], run: readonly string[], use: ToolUse, workspace: Workspace): Promise<{ command: string[]; folder: string } | undefined> {
+  const effects = callEffects(use, workspace)
+  const paths = new Set<string>()
+  let commandFolder: string | undefined
+  for (const target of after) {
+    const matched = await matchTarget(target, use, effects, workspace)
+    const { key } = targetOf(target)
+    if (key !== 'read' && key !== 'write') commandFolder ??= matched[0]?.folder
+    else for (const { call } of matched) if ('path' in call) paths.add(call.path)
+  }
+  const existing: string[] = []
+  for (const path of paths) if (await workspace.fs.exists(path)) existing.push(path)
+  const last = existing.at(-1)
+  if (last !== undefined) return { command: [...run, ...existing], folder: parentOf(last) }
+  return commandFolder === undefined ? undefined : { command: [...run], folder: commandFolder }
 }

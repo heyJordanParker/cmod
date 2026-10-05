@@ -13,7 +13,7 @@ export const help = `Usage: cmod new <name> [--project]
 
 ${summary}
 
-Creates a mod in ./<name>: a defineMod with one hook, one panel, and one render
+Creates a mod in ./<name>: a defineMod with one hook, one pane, and one render
 of the band above the prompt, a Skill, and a test. Then installs its packages.
 
 Options:
@@ -133,31 +133,15 @@ test('each prompt adds the count to the context', async () => {
   expect(JSON.stringify(answer)).toContain('It has seen 1 prompt this session.')
 })
 
-test('the band keeps what Claude Code and other mods drew', async () => {
+test('the band shows the prompt count on its last line', async () => {
   const tested = testMod(${definition})
-  expect(await tested.lines(slots.AbovePrompt, band)).toEqual([
-    'AbovePrompt',
-    '  hasSurvey: false',
-    '  isWorking: false',
-    '  maxRows: 12',
-    '  bodyColumns: 75',
-    '  scroll: {"offset":0,"bodyRows":12}',
-    '  view: {}',
-    'Prompts this session: 0',
-  ])
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  expect((await tested.lines(slots.AbovePrompt, band)).at(-1)).toBe('Prompts this session: 1')
 })
 
-test('the band goes back to Claude Code during a survey', async () => {
+test('the band leaves the prompt count out during a survey', async () => {
   const tested = testMod(${definition})
-  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).toEqual([
-    'AbovePrompt',
-    '  hasSurvey: true',
-    '  isWorking: false',
-    '  maxRows: 12',
-    '  bodyColumns: 75',
-    '  scroll: {"offset":0,"bodyRows":12}',
-    '  view: {}',
-  ])
+  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 0')
 })
 `,
     [`skills/${name}/SKILL.md`]: `---
@@ -165,7 +149,7 @@ name: ${name}
 description: Explains what the ${name} mod does. Use when the user asks about the ${name} mod.
 ---
 
-The ${name} mod counts the prompts of this session and shows the count in its panel and above the prompt.
+The ${name} mod counts the prompts of this session and shows the count in its pane and above the prompt.
 `,
     'package.json': json({ name, private: true, type: 'module', dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
     'tsconfig.json': json({

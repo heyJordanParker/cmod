@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
+import { statusLine } from '../src/jobs/status-line.js'
 import { tool } from '../src/jobs/tool.js'
 import { defineMod } from '../src/mod.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Text } from '../src/ui/elements.js'
+import { markdownSlots } from '../src/ui/markdown.js'
 import { slots } from '../src/ui/slots.js'
 
 const tickets = defineMod({
@@ -232,4 +234,96 @@ test('tested.lines draws a slot render with Default', async () => {
     '  hint: "? FOR SHORTCUTS"',
     'from hints',
   ])
+})
+
+const journal = defineMod({
+  name: 'journal',
+  setup(mod) {
+    mod.use(
+      slashCommand({
+        name: 'jot',
+        description: 'Add a line to the journal',
+        reply: async ({ args }, mod) => {
+          await mod.fs.write('/work/journal.md', `${await mod.fs.read('/work/journal.md')}${args}\n`)
+          return mod.fs.read('/work/journal.md')
+        },
+      }),
+    )
+    mod.use(slashCommand({ name: 'ls', description: 'List a folder', reply: async ({ args }, mod) => (await mod.fs.list(args)).map(({ name, kind }) => `${name} ${kind}`).join(', ') }))
+  },
+})
+
+test("a read after testMod's fake write sees the new text", async () => {
+  const tested = testMod(journal, { files: { '/work/journal.md': 'buy milk\n' } })
+
+  await tested.type('/jot call mum')
+
+  expect(await tested.type('/jot fix the sink')).toEqual({ text: 'buy milk\ncall mum\nfix the sink\n' })
+})
+
+test('fs.list in testMod lists the files given', async () => {
+  const tested = testMod(journal, { files: { '/work/journal.md': '', '/work/src/a.ts': 'a', '/work/src/lib/b.ts': 'b' } })
+
+  expect(await tested.type('/ls /work')).toEqual({ text: 'journal.md file, src dir' })
+  expect(await tested.type('/ls /work/src')).toEqual({ text: 'a.ts file, lib dir' })
+})
+
+const headings = defineMod({
+  name: 'headings',
+  setup(mod) {
+    mod.ui.render(markdownSlots.Heading, ({ text }) => Text({ bold: true, children: text.toUpperCase() }))
+  },
+})
+
+test('a second AssistantMessage drawn in one test is its own reply', async () => {
+  const tested = testMod(headings)
+  const reply = { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }
+
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true })
+
+  expect(await tested.lines(slots.AssistantMessage, reply)).toEqual(await testMod(headings).lines(slots.AssistantMessage, reply))
+})
+
+test('AssistantMessage draws that pass one requestId grow one streamed reply', async () => {
+  const tested = testMod(headings)
+
+  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true }, 'msg_1')
+
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }, 'msg_1')).toEqual([
+    '⏺ PLAN',
+    '  AssistantMessage',
+    '    text: "We read.\\n\\n## Steps"',
+    '    isFirstOfReply: false',
+  ])
+})
+
+test('clock.every fires when the test advances it', async () => {
+  let branch = 'main'
+  const intervals: number[] = []
+  const ticks: (() => void)[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'branch-line',
+      setup(mod) {
+        mod.use(statusLine({ text: () => branch, interval: 5000 }))
+      },
+    }),
+  )
+  tested.fakes.clock.every = (ms, tick) => {
+    intervals.push(ms)
+    ticks.push(tick)
+    return { cancel: () => undefined }
+  }
+  const settle = async () => {
+    for (let step = 0; step < 20; step += 1) await Promise.resolve()
+  }
+  await tested.start()
+  await settle()
+
+  branch = 'feature'
+  for (const tick of ticks) tick()
+  await settle()
+
+  expect(intervals).toEqual([5000])
+  expect(tested.shown.statuses).toEqual(['main', 'feature'])
 })

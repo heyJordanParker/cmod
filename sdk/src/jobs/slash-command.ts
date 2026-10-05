@@ -1,13 +1,13 @@
 import type { CommandRunResult } from 'claude-code'
 import type { Mod, Part } from '../mod.js'
 import { parse } from '../vendor.js'
-import { longestMs } from '../runtime/deadline.js'
+import { longestMs, type Deadline } from '../runtime/deadline.js'
 import { messageOf } from '../utils/text.js'
 import { modWithin } from './part-context.js'
 
 export type Reply = string | { text?: string; context?: string } | undefined
 
-const deadline = { ms: 30000, longestMs, job: 'slashCommand' }
+const deadline: Deadline = { ms: 30000, longestMs, job: 'slashCommand' }
 
 const commandName = /^[A-Za-z0-9_-]{1,64}$/
 

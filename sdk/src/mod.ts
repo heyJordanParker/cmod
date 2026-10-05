@@ -36,6 +36,8 @@ export type PaneHandle = {
   readonly isOpen: boolean
 }
 
+export { longestMs } from './runtime/deadline.js'
+export { notInstalled } from './runtime/dependencies.js'
 export { messageOf } from './utils/text.js'
 
 export type ModEvent =
@@ -55,6 +57,7 @@ export type ModEvent =
   | 'PreCompact'
   | 'Stop'
   | 'StopFailure'
+  | 'CwdChanged'
 
 export type HookAnswer = {
   continue?: boolean
@@ -83,7 +86,7 @@ export type HookAnswer = {
 
 type CallFiles = { read: string[]; changed: string[] }
 
-type HookInputs = Omit<ClassicHookInputs, 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure'> & {
+type HookInputs = Omit<ClassicHookInputs, 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'CwdChanged'> & {
   PreToolUse: {
     session_id: string
     cwd: string
@@ -97,6 +100,7 @@ type HookInputs = Omit<ClassicHookInputs, 'PreToolUse' | 'PostToolUse' | 'PostTo
   }
   PostToolUse: ClassicHookInputs['PostToolUse'] & { files: CallFiles }
   PostToolUseFailure: ClassicHookInputs['PostToolUseFailure'] & { files: CallFiles }
+  CwdChanged: Omit<ClassicHookInputs['CwdChanged'], 'transcript_path'>
 }
 
 export type ModHook<E extends ModEvent> = (input: HookInputs[E]) => HookAnswer | void | Promise<HookAnswer | void>

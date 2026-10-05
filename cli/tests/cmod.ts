@@ -13,13 +13,16 @@ exec "${process.execPath}" "${main}" "$@"
 
 export const cmodPluginListed = [{ id: 'cmod@cmod', version: '0.1.0', scope: 'user', enabled: true, installPath: '/cmod' }]
 
-export const claudeAnswering = (listed: unknown[]) => `#!/bin/sh
+export const claudeAnswering = (listed: unknown[], session = 'exit 1') => `#!/bin/sh
 echo "$*" >> "$HOME/claude-calls"
 case "$*" in
   "plugin list --json") echo '${JSON.stringify(listed)}' ;;
   "plugin marketplace list --json") echo '[]' ;;
   "plugin marketplace add heyJordanParker/cmod") ;;
   "plugin install cmod@"*" --json") echo '{"outcome":"ok","message":"Installed '"$3"'"}' ;;
+  "--plugin-dir "*)
+${session}
+    ;;
   *) exit 1 ;;
 esac
 `

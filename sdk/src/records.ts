@@ -134,12 +134,18 @@ function folderOf(path: string): string {
 }
 
 export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list: (folder: string) => Promise<string[]> }): Promise<string> {
-  const commands = [steps.install ?? '', steps.uninstall ?? '']
-  let text = [...commands, steps.program ?? ''].join('\0')
   const folders = new Set<string>()
-  for (const path of new Set(commands.flatMap(scriptPaths))) {
-    if ((await files.read(path)) !== undefined) folders.add(folderOf(path))
+  for (const key of ['install', 'uninstall'] as const) {
+    const command = steps[key]
+    if (command === undefined) continue
+    const scriptFolders: string[] = []
+    for (const path of scriptPaths(command)) {
+      if ((await files.read(path)) !== undefined) scriptFolders.push(folderOf(path))
+    }
+    if (scriptFolders.length === 0) throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/${key}.sh.`)
+    for (const folder of scriptFolders) folders.add(folder)
   }
+  let text = [steps.install ?? '', steps.uninstall ?? '', steps.program ?? ''].join('\0')
   for (const folder of [...folders].sort()) {
     for (const name of (await files.list(folder)).sort()) text += `\0${folder}/${name}\0${(await files.read(`${folder}/${name}`)) ?? ''}`
   }

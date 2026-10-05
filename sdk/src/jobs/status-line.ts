@@ -1,4 +1,5 @@
 import type { Mod, Part } from '../mod.js'
+import type { Deadline } from '../runtime/deadline.js'
 import { messageOf } from '../utils/text.js'
 import { modWithin } from './part-context.js'
 
@@ -8,7 +9,7 @@ export type Usage = {
   cost?: { usd: number }
 }
 
-const deadline = { ms: 2000, job: 'statusLine' }
+const deadline: Deadline = { ms: 2000, job: 'statusLine' }
 
 export function statusLine<State extends object = Record<never, never>>(options: {
   readonly text: (usage: Usage, mod: Mod<State>) => string | undefined | Promise<string | undefined>

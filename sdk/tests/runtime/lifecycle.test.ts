@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test'
-import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, FsStat, HookStream, Next, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
+import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, Next, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
 import { defineMod, type Mod } from '../../src/mod.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Plugin } from '../../src/runtime/lifecycle.js'
-import { fakeClaude } from '../../src/testing.js'
 import { scriptsSha256 } from '../../src/records.js'
 import { Text } from '../../src/ui/elements.js'
+import { fakeClaude } from '../../src/utils/fake-claude.js'
 import { rowsOf, textOf } from '../../src/utils/fake-elements.js'
+import { fakeFiles } from '../../src/utils/fake-files.js'
 
 const root = '/plugins/safe-delete'
 const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false }
@@ -15,7 +16,7 @@ const given = (plugin: Plugin) => async () => plugin
 
 const cmodMissing = async (): Promise<ProcessRunResult> => Promise.reject(new Error('failed to start: ENOENT: spawn cmod ENOENT'))
 
-const fileStat = async (): Promise<FsStat> => ({ kind: 'file', size: 1, mtimeMs: 0, isLink: false })
+const manifestOnly = { [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }' }
 
 const entriesIn = (files: Record<string, string>) => async (folder = ''): Promise<FsEntry[]> => {
   const prefix = `${folder.replaceAll('/./', '/')}/`
@@ -349,7 +350,7 @@ test('a setup that throws draws the error and leaves no hook registered', async 
   )
 })
 
-test("the CMod plugin's bootstrap gets CMOD_DATA, and its mod.dataFolder names the same folder", async () => {
+test("the CMod plugin runs its bootstrap from its root, and its mod.dataFolder names its data folder", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
@@ -370,7 +371,7 @@ test("the CMod plugin's bootstrap gets CMOD_DATA, and its mod.dataFolder names t
   await settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
-  expect(spawned.map((request) => request.env?.['CMOD_DATA'])).toEqual(['/home/.local/share/cmod/data/cmod'])
+  expect(spawned).toEqual([{ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: root }])
   expect(folder).toBe('/home/.local/share/cmod/data/cmod')
 })
 
@@ -392,14 +393,11 @@ test('readPlugin reads the install step, the version, and whether the record mat
     program: null,
   })
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => fileAt(path) !== undefined
-  fake.fakes.fs.stat = fileStat
-  fake.fakes.fs.read = async (path) => fileAt(path) as string
-  fake.fakes.fs.list = entriesIn(files)
+  Object.assign(fake.fakes.fs, fakeFiles(files))
 
   expect(await readPlugin(fake.claude)).toEqual({ ...pending, isInstalled: true, store: '/test/home/.local/share/cmod' })
 
-  files[`${root}/setup/install.sh`] = 'echo changed\n'
+  await fake.claude.fs.write(`${root}/setup/install.sh`, 'echo changed\n')
   expect((await readPlugin(fake.claude)).isInstalled).toBe(false)
 })
 
@@ -418,14 +416,11 @@ test("the SDK lists files in a script's subfolders", async () => {
   const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => fileAt(`${root}/${path}`), list: async (folder) => below(folder) })
   files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => fileAt(path) !== undefined
-  fake.fakes.fs.stat = fileStat
-  fake.fakes.fs.read = async (path) => fileAt(path) as string
-  fake.fakes.fs.list = entriesIn(files)
+  Object.assign(fake.fakes.fs, fakeFiles(files))
 
   expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
 
-  files[`${root}/setup/lib/brew.sh`] = 'brew install trash-cli\n'
+  await fake.claude.fs.write(`${root}/setup/lib/brew.sh`, 'brew install trash-cli\n')
 
   expect((await readPlugin(fake.claude)).isInstalled).toBe(false)
 })
@@ -436,9 +431,7 @@ test('a mod with a program and no install step runs setup and then turns on', as
     [`${root}/package.json`]: '{ "cmod": { "program": "safe-delete" } }',
   }
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => files[path] !== undefined
-  fake.fakes.fs.stat = fileStat
-  fake.fakes.fs.read = async (path) => files[path] as string
+  Object.assign(fake.fakes.fs, fakeFiles(files))
   fake.fakes.process.run = cmodOnPath
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
@@ -461,9 +454,7 @@ test('a mod with a program and no install step runs setup and then turns on', as
 
 test('a mod with no steps activates at once and writes its record in the background', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => path === `${root}/.claude-plugin/plugin.json`
-  fake.fakes.fs.stat = fileStat
-  fake.fakes.fs.read = async () => '{ "name": "safe-delete", "version": "0.2.0" }'
+  Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   fake.fakes.process.run = cmodOnPath
   const step = controlledStream()
   const spawned: ProcessSpawnRequest[] = []
@@ -493,9 +484,7 @@ test('a mod with no steps activates at once and writes its record in the backgro
 
 test('a mod with no steps writes its record silently, and retries on the next prompt while CMod is missing', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => path === `${root}/.claude-plugin/plugin.json`
-  fake.fakes.fs.stat = fileStat
-  fake.fakes.fs.read = async () => '{ "name": "safe-delete", "version": "0.2.0" }'
+  Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   let isOnPath = false
   fake.fakes.process.run = async () => (isOnPath ? cmodOnPath() : cmodMissing())
   const spawned: ProcessSpawnRequest[] = []
@@ -524,7 +513,6 @@ test('a mod with no steps writes its record silently, and retries on the next pr
 })
 
 test('a folder named in an install command does not stop the mod from starting', async () => {
-  const folder = `${root}/setup`
   const files: Record<string, string> = {
     [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
     [`${root}/package.json`]: '{ "cmod": { "install": "sh ./setup/install.sh setup" } }',
@@ -532,15 +520,8 @@ test('a folder named in an install command does not stop the mod from starting',
   }
   const sha = await scriptsSha256({ install: 'sh ./setup/install.sh setup' }, { read: async (path) => files[`${root}/${path}`.replaceAll('/./', '/')], list: async (folder) => (await entriesIn(files)(`${root}/${folder}`)).map((entry) => entry.name) })
   files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
-  const pathOf = (path: string) => path.replaceAll('/./', '/')
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => files[pathOf(path)] !== undefined || pathOf(path) === folder
-  fake.fakes.fs.stat = async (path) => ({ kind: pathOf(path) === folder ? 'dir' : 'file', size: 1, mtimeMs: 0, isLink: false })
-  fake.fakes.fs.read = async (path) => {
-    if (pathOf(path) === folder) throw new Error(`EISDIR: illegal operation on a directory, read ${path}`)
-    return files[pathOf(path)] as string
-  }
-  fake.fakes.fs.list = entriesIn(files)
+  Object.assign(fake.fakes.fs, fakeFiles(files))
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
 
@@ -551,9 +532,7 @@ test('a folder named in an install command does not stop the mod from starting',
 
 test('a plugin.json that is not JSON shows its path as a failure', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
-  fake.fakes.fs.exists = async (path) => path === `${root}/.claude-plugin/plugin.json`
-  fake.fakes.fs.stat = fileStat
-  fake.fakes.fs.read = async () => '{ "name": '
+  Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": ' }))
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
 
@@ -756,20 +735,24 @@ function folderPane() {
   fake.claude.ui.invalidate = (event) => {
     redraws.push(event)
   }
+  const moves: unknown[] = []
   const lifecycle = createLifecycle(
     defineMod({
       name: 'file-tree',
       state: { project: { expanded: [] as string[] } },
       setup(mod) {
         mod.ui.pane({ id: 'files', title: 'Files', render: (drawn) => Text({ children: `${drawn.projectRoot} ${drawn.cwd}` }) })
+        mod.on('CwdChanged', (input) => void moves.push(input))
       },
     }),
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
   const start = () => lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
   const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
-  return { lifecycle, session, redraws, start, drawn }
+  return { lifecycle, session, redraws, moves, start, drawn }
 }
+
+const movedTo = (oldCwd: string, newCwd: string) => ({ session_id: 'test-session', cwd: newCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: newCwd })
 
 const cd = (args: string) => ({ command: 'cd', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
 
@@ -799,8 +782,44 @@ test('a Bash cd in a command that fails still moves mod.cwd', async () => {
   expect(await drawn()).toBe('/work/a /work/a/lib')
 })
 
+test('a PowerShell cd moves mod.cwd', async () => {
+  const { lifecycle, session, redraws, start, drawn } = folderPane()
+  await start()
+  redraws.length = 0
+  session.cwd = '/work/a/lib'
+
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'PowerShell', tool_input: { command: 'Set-Location lib' } }, {})
+
+  expect(lifecycle.mod?.cwd).toBe('/work/a/lib')
+  expect(redraws).toEqual(['ui.render'])
+  expect(await drawn()).toBe('/work/a /work/a/lib')
+})
+
+test("a /cd fires the mod's CwdChanged hook with the old and new folder", async () => {
+  const { lifecycle, session, moves, start, drawn } = folderPane()
+  await start()
+  session.root = '/work/b'
+  session.cwd = '/work/b'
+
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+
+  expect(moves).toEqual([movedTo('/work/a', '/work/b')])
+  expect(await drawn()).toBe('/work/b /work/b')
+})
+
+test('a Bash cd fires CwdChanged', async () => {
+  const { lifecycle, session, moves, start } = folderPane()
+  await start()
+  session.cwd = '/work/a/lib'
+
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd lib' } }, {})
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'ls' } }, {})
+
+  expect(moves).toEqual([movedTo('/work/a', '/work/a/lib')])
+})
+
 test('a /cd the user cancels moves nothing', async () => {
-  const { lifecycle, redraws, start, drawn } = folderPane()
+  const { lifecycle, redraws, moves, start, drawn } = folderPane()
   await start()
   const mod = lifecycle.mod as Mod<{ project: { expanded: string[] } }>
   mod.state.project.expanded = ['src']
@@ -811,6 +830,7 @@ test('a /cd the user cancels moves nothing', async () => {
 
   expect([mod.projectRoot, mod.cwd, mod.state.project.expanded]).toEqual(['/work/a', '/work/a', ['src']])
   expect(redraws).toEqual([])
+  expect(moves).toEqual([])
   expect(await drawn()).toBe('/work/a /work/a')
 })
 
@@ -854,7 +874,7 @@ test("a project whose saved state fails to load leaves the mod in the project it
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect([mod.projectRoot, mod.state.project.expanded]).toEqual(['/work/a', ['src']])
-  expect(fake.shown.logs).toContain('file-tree keeps the state of /work/a and tries the project folder again on the next prompt: the store file is locked')
+  expect(fake.shown.logs).toContain('file-tree keeps the state of /work/a until the next prompt or folder move: the store file is locked')
 
   isStoreLocked = false
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})

@@ -73,7 +73,7 @@ export async function teardownInTerminal(name: string, progress: Progress): Prom
     progress.fail(`The uninstall step of ${name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix ${record.uninstall}, then run cmod teardown ${name}.`)
     return code
   }
-  progress.succeed(`Ran the uninstall step of ${name} and removed what CMod set up for it`)
+  progress.succeed(record.uninstall === null ? `Removed what CMod set up for ${name}` : `Ran the uninstall step of ${name} and removed what CMod set up for it`)
   return 0
 }
 

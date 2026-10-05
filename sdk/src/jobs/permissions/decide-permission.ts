@@ -1,3 +1,4 @@
+import { strictness } from '../../runtime/hooks.js'
 import { messageOf } from '../../utils/text.js'
 import { callBaseOf, callEffects, type CallEffects, type ToolCall, type ToolUse } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
@@ -15,11 +16,10 @@ export type PermissionRules<Mod> = { deny?: Rule<Mod>[]; ask?: Rule<Mod>[] }
 export type Decision = 'allow' | 'ask' | 'deny'
 export type Verdict = { decision: Decision; reason?: string }
 
-const strictness: Record<Decision, number> = { allow: 0, ask: 1, deny: 2 }
 const wordBoundary = '\\s;&|()<>\'"`='
 
 export function stricterVerdict<Result extends Verdict>(first: Result, second: Result): Result {
-  return strictness[second.decision] > strictness[first.decision] ? second : first
+  return strictness.indexOf(second.decision) > strictness.indexOf(first.decision) ? second : first
 }
 
 export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: ToolUse, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<Verdict | undefined> {

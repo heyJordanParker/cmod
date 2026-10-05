@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 import { dataFolder, formatEvent, readRecord, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
-import { fetchProgram, programSteps } from '../program.js'
+import { fetchProgram, programSteps, removeProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
 import { approve, isApproved, storePath } from '../store.js'
@@ -65,16 +65,16 @@ export function printFailure(error: Error): number {
   return 1
 }
 
-export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined }, progress: Progress): Promise<number> {
+export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined; isStartingClaude?: boolean }, progress: Progress): Promise<number> {
   const state = await checkSetup(plugin)
   if (state.isCurrent) {
     progress.succeed(`${plugin.name} ${plugin.version} is set up`)
-    noteNextStep(plugin, progress)
+    if (!options.isStartingClaude) noteNextStep(plugin, progress)
     return 0
   }
   if (state.needsConsent) {
     if (!options.yes && options.consent !== state.sha256 && !askConsent(plugin)) {
-      progress.fail(`${plugin.name} is not set up: its install step needs your consent. Run cmod install ${plugin.name} --yes after reading the commands.`)
+      progress.fail(`${plugin.name} is not set up: its install step needs your consent. Run the command again with --yes after reading the commands.`)
       return 10
     }
     await approve(plugin.name, state.sha256)
@@ -89,7 +89,7 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
   })
   if (code === 0) {
     progress.succeed(`${plugin.name} ${plugin.version} is ready`)
-    noteNextStep(plugin, progress)
+    if (!options.isStartingClaude) noteNextStep(plugin, progress)
   } else progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
   return code
 }
@@ -112,6 +112,7 @@ async function runSetup(plugin: Plugin, sha256: string, emit: (event: RunnerEven
       emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
     )
     if (result.exitCode !== 0) {
+      if (program !== undefined && (await readRecord(readText, storeFolder(process.env), plugin.name)) === undefined) await removeProgram(program)
       emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
       return 1
     }

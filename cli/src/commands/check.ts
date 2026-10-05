@@ -3,9 +3,9 @@ import { readdir } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
-import { isObject, scriptPaths } from 'cmod-sdk/src/records.js'
+import { isObject, scriptsSha256 } from 'cmod-sdk/src/records.js'
 import { listPlugins } from '../claude.js'
-import { readJson, readText, writeAtomically } from '../files.js'
+import { listFiles, readJson, readText, writeAtomically } from '../files.js'
 import { preparePackages, readPlugin, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { startProgress } from '../progress.js'
@@ -86,15 +86,12 @@ async function checkLayout(plugin: Plugin): Promise<Result> {
 }
 
 async function checkSteps(plugin: Plugin): Promise<Result> {
-  const problems: string[] = []
-  for (const key of ['install', 'uninstall'] as const) {
-    const command = plugin.steps[key]
-    if (command === undefined) continue
-    const scripts = await Promise.all(scriptPaths(command).map((path) => readText(join(plugin.root, path))))
-    if (scripts.every((script) => script === undefined)) problems.push(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod: put the commands in a script, such as ./setup/${key}.sh`)
-  }
-  if (problems.length > 0) return { status: 'fail', text: `The steps have ${problems.length === 1 ? 'a problem' : `${problems.length} problems`}`, fix: problems.join('\n    fix: ') }
   if (plugin.steps.install === undefined && plugin.steps.uninstall === undefined) return { status: 'skip', text: 'No install or uninstall step, so no step to check' }
+  try {
+    await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
+  } catch (error) {
+    return { status: 'fail', text: 'The steps have a problem', fix: (error as Error).message }
+  }
   return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
 }
 

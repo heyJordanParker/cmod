@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { decidePermission, type PermissionRules } from '../../../src/jobs/permissions/decide-permission.js'
 import { findProjectScope, type Workspace } from '../../../src/jobs/permissions/find-project-scope.js'
 import type { ToolUse } from '../../../src/utils/call-effects.js'
-import { fakeFileSystem } from '../fake-file-system.js'
+import { fakeFiles } from '../../../src/utils/fake-files.js'
 
 const home = '/Users/jordan'
 const root = '/work/dent'
@@ -20,10 +20,10 @@ const files = {
   [`${home}/dotfiles/Domain.md`]: '# Domain\n',
   [`${home}/.claude/skills/global/package.json`]: '{}',
 }
-const fs = fakeFileSystem(files)
+const fs = fakeFiles(files)
 
 async function dentWorkspace(cwd = root): Promise<Workspace> {
-  return { cwd, home, fs, scope: await findProjectScope(pluginRoot, home, fs) }
+  return { root, cwd, home, fs, scope: await findProjectScope(pluginRoot, home, fs) }
 }
 
 function edit(path: string): ToolUse {
@@ -54,7 +54,7 @@ describe('findProjectScope', () => {
   })
 
   test('a root whose layout cannot be read makes the project that root alone', async () => {
-    const brokenRoot = fakeFileSystem({ '/repo/.git': 'not a git file\n', '/repo/.claude/skills/p/package.json': '{}' })
+    const brokenRoot = fakeFiles({ '/repo/.git': 'not a git file\n', '/repo/.claude/skills/p/package.json': '{}' })
     const scope = await findProjectScope('/repo/.claude/skills/p', home, brokenRoot)
     expect(await scope?.workTreeOf('/repo/src/a.ts')).toBe('/repo')
   })
@@ -62,7 +62,7 @@ describe('findProjectScope', () => {
   test('other plugins act everywhere', async () => {
     expect(await findProjectScope(`${home}/.claude/skills/global`, home, fs)).toBeUndefined()
     expect(await findProjectScope(`${home}/.claude/plugins/cache/x/y`, home, fs)).toBeUndefined()
-    expect(await findProjectScope('/tmp/no-repo/.claude/skills/p', home, fakeFileSystem({ '/tmp/no-repo/.claude/skills/p/package.json': '{}' }))).toBeUndefined()
+    expect(await findProjectScope('/tmp/no-repo/.claude/skills/p', home, fakeFiles({ '/tmp/no-repo/.claude/skills/p/package.json': '{}' }))).toBeUndefined()
   })
 })
 

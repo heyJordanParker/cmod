@@ -36,11 +36,16 @@ export function prompt<State extends object = Record<never, never>>({ name, prom
       }
     }
 
+    const headedText = async (input: PromptInput, mod: Mod<State>) => {
+      const value = await textFor(input, mod)
+      return value === undefined ? undefined : `# ${name}\n${value}`
+    }
+
     if (when !== undefined) {
-      addAfterUserPrompts(part, when, (userPrompt) => textFor({ userPrompt }, modWithin(part, deadline)), log)
+      addAfterUserPrompts(part, when, (userPrompt) => headedText({ userPrompt }, modWithin(part, deadline)), log)
       part.announce(`the ${name} prompt after matching user prompts`)
     } else if (targets.length > 0) {
-      addAfterCalls(part, targets, textFor, log)
+      addAfterCalls(part, targets, headedText, log)
       part.announce(`the ${name} prompt after ${listed(targets.map(targetWords))}`)
     } else {
       addOncePerConversation(part, name, () => textFor({}, modWithin(part, deadline)), log)

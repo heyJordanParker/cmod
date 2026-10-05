@@ -1,5 +1,6 @@
 import type { Args, Frozen } from 'claude-code'
 import type { Mod, Part } from '../mod.js'
+import type { Deadline } from '../runtime/deadline.js'
 import type { ToolUse } from '../utils/call-effects.js'
 import { decidePermission, stricterVerdict, type PermissionRules as RulesFor, type Rule as RuleFor, type Verdict } from './permissions/decide-permission.js'
 import { targetOf } from './permissions/match-target.js'
@@ -11,7 +12,7 @@ export type { Target } from './permissions/match-target.js'
 export type Rule<State extends object = Record<never, never>> = RuleFor<Mod<State>>
 export type PermissionRules<State extends object = Record<never, never>> = RulesFor<Mod<State>>
 
-const deadline = { ms: 2000, job: 'permissions' }
+const deadline: Deadline = { ms: 2000, job: 'permissions' }
 
 export function permissions<State extends object = Record<never, never>>(rules: PermissionRules<State>): Part<void, State> {
   const count = (rules.deny?.length ?? 0) + (rules.ask?.length ?? 0)

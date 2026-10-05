@@ -110,7 +110,7 @@ The `AbovePrompt` render draws the prompt count under `<Default />`, which is wh
 
 `slots.ToolUse` changes a tool's own row, but a group of calls shows a condensed row (`slots.ToolGroup`) that Claude Code builds from the stored message, so a mod that hides a tool's input also sets `isExpanded` on `slots.ToolGroup` to unfold the group into `ToolUse` rows. No render reaches the permission dialog.
 
-`src/panes/prompts.tsx` is the mod's panel, and `src/components/prompt-count.tsx` is what the panel and the band draw:
+`src/panes/prompts.tsx` is the mod's pane:
 
 ```tsx
 export const promptsPane = definePane<MyModState>({
@@ -118,7 +118,11 @@ export const promptsPane = definePane<MyModState>({
   title: 'my-mod',
   render: (mod) => <PromptCount count={mod.state.session.prompts} />,
 })
+```
 
+`src/components/prompt-count.tsx` is what the pane and the band draw:
+
+```tsx
 export function PromptCount({ count }: { readonly count: number }): RenderElement {
   return <Text>{`Prompts this session: ${count}`}</Text>
 }

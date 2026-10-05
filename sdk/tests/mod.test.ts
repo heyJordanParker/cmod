@@ -5,7 +5,8 @@ import { tool } from '../src/jobs/tool.js'
 import { defineMod, type Mod, type PaneHandle, type Part } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
-import { fakeClaude, testMod, type TestCall, type TestedMod } from '../src/testing.js'
+import { testMod, type TestedMod } from '../src/testing.js'
+import { fakeClaude, type TestCall } from '../src/utils/fake-claude.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Text } from '../src/ui/elements.js'
 import { textOf } from '../src/utils/fake-elements.js'
@@ -417,9 +418,9 @@ test('a project value saved in one project is not seen in another', async () => 
   await tested.start()
   tested.state.project.expanded = ['src']
 
-  await tested.moveTo('/work/b', '/work/b/lib')
+  await tested.moveTo('/work/b')
 
-  expect(mods.map((mod) => [mod.projectRoot, mod.cwd])).toEqual([['/work/b', '/work/b/lib']])
+  expect(mods.map((mod) => [mod.projectRoot, mod.cwd])).toEqual([['/work/b', '/work/b']])
   expect(tested.state.project.expanded).toEqual([])
 
   await tested.moveTo('/work/a')
@@ -439,9 +440,9 @@ test("a tool's mod reads the project the session moved to", async () => {
   )
   await tested.start()
 
-  await tested.moveTo('/work/b', '/work/b/lib')
+  await tested.moveTo('/work/b')
 
-  expect(await tested.callTool('where', {})).toEqual({ result: '/work/b /work/b/lib' })
+  expect(await tested.callTool('where', {})).toEqual({ result: '/work/b /work/b' })
 })
 
 test('a project value keeps only the 20 projects used most recently', async () => {

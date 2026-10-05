@@ -96,7 +96,7 @@ async function matchedPath(patterns: string[], path: string, workspace: Workspac
 }
 
 async function pathMatches(patterns: string[], path: string, workspace: Workspace): Promise<boolean> {
-  const base = workspace.scope === undefined ? workspace.cwd : await workspace.scope.workTreeOf(path)
+  const base = workspace.scope === undefined ? workspace.root : await workspace.scope.workTreeOf(path)
   if (base === undefined) return false
   const target = path.toLowerCase()
   return patterns.some((pattern) => {

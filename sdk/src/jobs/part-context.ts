@@ -10,7 +10,7 @@ import { findProjectScope, type Workspace } from './permissions/find-project-sco
 import { targetOf, type Target } from './permissions/match-target.js'
 import type { FileSystem } from '../utils/paths.js'
 
-type Session = Omit<Workspace, 'cwd'>
+type Session = Omit<Workspace, 'root' | 'cwd'>
 
 type Stream = HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 
@@ -18,8 +18,8 @@ export function workspaceReader({ claude }: PartContext): () => Promise<Workspac
   let session: Promise<Session> | undefined
   return async () => {
     session ??= readSession(claude)
-    const [{ home, scope, fs }, cwd] = await Promise.all([session, claude.session.cwd()])
-    return { cwd, home, fs, scope }
+    const [{ home, scope, fs }, root, cwd] = await Promise.all([session, claude.session.root(), claude.session.cwd()])
+    return { root, cwd, home, fs, scope }
   }
 }
 
@@ -42,7 +42,7 @@ export function afterCall<State extends object>(
   const readWorkspace = workspaceReader(part)
   part.on('tool.call', async (e, next) => {
     const before = Promise.all([useOf(part, e), readWorkspace()])
-    await Promise.allSettled([before])
+    await before.catch(() => undefined)
     const result = await next(e)
     if (result.deny !== undefined || result.isError === true) return result
     const added = await before.then(([use, workspace]) => contextAfter(use, workspace)).catch(failed)
@@ -64,14 +64,7 @@ export function modWithin<State extends object>({ mod, claude }: PartContext<Sta
     const folder = cwd ?? (await workTree())
     return folder === undefined ? {} : { cwd: folder }
   }
-  return {
-    ...mod,
-    get projectRoot() {
-      return mod.projectRoot
-    },
-    get cwd() {
-      return mod.cwd
-    },
+  const overrides: Pick<Mod<State>, 'process' | 'fs' | 'http' | 'dependencies'> = {
     process: {
       async run(argv, init) {
         const folder = await folderOf(init?.cwd)
@@ -88,6 +81,7 @@ export function modWithin<State extends object>({ mod, claude }: PartContext<Sta
     http: { fetch: (url, init) => within('mod.http.fetch', mod.http.fetch(url, init)) },
     dependencies: dependencyCalls(claude, within),
   }
+  return Object.assign(Object.create(mod) as Mod<State>, overrides)
 }
 
 function spawnWithin(claude: Claude, deadline: Deadline, started: Promise<Stream>): Stream {
