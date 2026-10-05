@@ -1,10 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, utimes } from 'node:fs/promises'
+import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
-import { deleteUnclaimedLeftovers } from '../src/commands/setup.js'
 import { listFiles, readText } from '../src/files.js'
 import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
@@ -83,6 +82,12 @@ const isGone = (path: string) => lstat(path).then(
   () => false,
   () => true,
 )
+
+async function goneProcessId(): Promise<number> {
+  const child = Bun.spawn(['true'])
+  await child.exited
+  return child.pid
+}
 
 test('setup --events with an install step that prints four progress lines emits four progress events, then done, and writes the record', async () => {
   const home = await temporaryHome()
@@ -322,7 +327,7 @@ test('teardown runs the saved uninstall step after the plugin folder is deleted,
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${join(store, 'uninstall/demo/root')}\n`)
   expect(existsSync(join(store, 'records/demo.json'))).toBe(false)
-  expect(existsSync(join(store, 'records/demo.json.claim'))).toBe(false)
+  expect(existsSync(join(store, 'records/demo.json.lock'))).toBe(false)
   expect(existsSync(join(store, 'uninstall/demo'))).toBe(false)
 })
 
@@ -412,22 +417,24 @@ test('two teardowns of one mod run its uninstall once', async () => {
 
   const results = await Promise.all([cmod(home, 'teardown', 'demo', '--events'), cmod(home, 'teardown', 'demo', '--events')])
 
-  expect(results.map((result) => result.stdout).sort()).toEqual(['claimed demo\n', 'done demo\n'])
+  expect(results.map((result) => result.stdout).sort()).toEqual(['done demo\n', 'missing demo\n'])
   expect(results.map((result) => result.exitCode)).toEqual([0, 0])
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
 })
 
-test('reading a record while another teardown renames it to .claim between finding the file and opening it returns the record or nothing, never an error', async () => {
+test('reading a record while a teardown deletes it and a setup writes it again returns the record or nothing, never an error', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
   const store = join(home, '.local/share/cmod')
   const record = recordPath(store, 'demo')
-  let isRenaming = true
-  const renaming = (async () => {
-    while (isRenaming) {
-      await rename(record, `${record}.claim`)
-      await rename(`${record}.claim`, record)
+  const text = await readFile(record, 'utf8')
+  let isRewriting = true
+  const rewriting = (async () => {
+    while (isRewriting) {
+      await rm(record)
+      await Bun.write(`${record}.tmp`, text)
+      await rename(`${record}.tmp`, record)
     }
   })()
 
@@ -435,37 +442,69 @@ test('reading a record while another teardown renames it to .claim between findi
   for (let read = 0; read < 2000; read++) {
     outcomes.add(await readRecord(readText, store, 'demo').then((found) => found?.name ?? 'nothing', messageOf))
   }
-  isRenaming = false
-  await renaming
+  isRewriting = false
+  await rewriting
 
   expect([...outcomes].sort()).toEqual(['demo', 'nothing'])
 })
 
-test('a teardown claim older than 600 seconds is taken over, and a newer one is left alone', async () => {
+test('a setup that starts during a teardown waits, then sets up a mod whose saved step exists', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await rm(root, { recursive: true })
-  const records = join(home, '.local/share/cmod/records')
-  await Bun.write(join(records, 'demo.json.claim'), await readFile(join(records, 'demo.json'), 'utf8'))
-  await rm(join(records, 'demo.json'))
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\ntouch "$HOME/uninstalling"\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
+  const sha256 = await hashOf(root)
+  expect((await cmod(home, 'setup', root, '--events', '--consent', sha256)).exitCode).toBe(0)
+  const teardown = startCmod(home, 'teardown', 'demo', '--events')
+  await waitFor(join(home, 'uninstalling'))
 
-  const fresh = await cmod(home, 'teardown', 'demo', '--events')
+  const setup = await cmod(home, 'setup', root, '--events', '--consent', sha256)
 
-  expect(fresh.stdout).toBe('claimed demo\n')
-  expect(parseEvent(fresh.stdout.trim())).toEqual({ kind: 'claimed', name: 'demo' })
-  expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(true)
+  expect((await teardown.done).stdout).toBe('done demo\n')
+  expect(setup.stdout).toEndWith('done demo 0.1.0\n')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  const record = JSON.parse(await readFile(join(home, '.local/share/cmod/records/demo.json'), 'utf8'))
+  expect(existsSync(record.uninstall)).toBe(true)
+  expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
+})
 
-  const tenMinutesAgo = new Date(Date.now() - 601_000)
-  await utimes(join(records, 'demo.json.claim'), tenMinutesAgo, tenMinutesAgo)
+test('a teardown during an upgrade waits and removes version 0.2.0', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled $CMOD_VERSION" >> "$HOME/uninstalls"\n' })
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': '#!/bin/sh\ntouch "$HOME/installing"\nsleep 1\n' })
+  const upgrade = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await waitFor(join(home, 'installing'))
 
-  const abandoned = await cmod(home, 'teardown', 'demo', '--events')
+  const teardown = await cmod(home, 'teardown', 'demo', '--events')
 
-  expect(abandoned.stdout).toBe('done demo\n')
-  expect(abandoned.exitCode).toBe(0)
-  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${join(home, '.local/share/cmod/uninstall/demo/root')}\n`)
-  expect(existsSync(join(records, 'demo.json.claim'))).toBe(false)
-  expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
+  expect((await upgrade.done).stdout).toBe('done demo 0.2.0\n')
+  expect(teardown.stdout).toBe('done demo\n')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled 0.2.0\n')
+  for (const path of [join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo'), join(store, 'data/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+})
+
+test('a teardown takes over a lock whose process is gone', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\necho $$ > "$HOME/install-pid"\necho partial >> "$CMOD_DATA/partial"\nexec sleep 30\n')
+  const store = join(home, '.local/share/cmod')
+  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await waitFor(join(store, 'data/demo/partial'))
+  setup.child.kill('SIGKILL')
+  await setup.done
+  process.kill(Number(await readFile(join(home, 'install-pid'), 'utf8')))
+
+  const result = await cmod(home, 'teardown', 'demo', '--events')
+
+  expect(result.stdout).toBe('missing demo\n')
+  expect(result.exitCode).toBe(0)
+  for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
 test('a failed uninstall keeps the record, so teardown can run again', async () => {
@@ -480,28 +519,24 @@ test('a failed uninstall keeps the record, so teardown can run again', async () 
   expect(result.stdout).toBe('log zsh: no such file\nfailed 2\tzsh: no such file\n')
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
-  expect(existsSync(join(store, 'records/demo.json.claim'))).toBe(false)
+  expect(existsSync(join(store, 'uninstall/demo/uninstall.sh'))).toBe(true)
+  expect(existsSync(join(store, 'records/demo.json.lock'))).toBe(false)
 })
 
-test('teardown of a mod whose record is back after a failed uninstall keeps its data and its approval', async () => {
+test('a failed upgrade keeps the data and the approval of the version its record names', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const sha256 = await hashOf(root)
-  await cmod(home, 'setup', root, '--events', '--consent', sha256)
+  expect((await cmod(home, 'setup', root, '--events', '--consent', sha256)).exitCode).toBe(0)
   const store = join(home, '.local/share/cmod')
-  const environment = { HOME: process.env['HOME'], XDG_DATA_HOME: process.env['XDG_DATA_HOME'] }
-  Object.assign(process.env, { HOME: home, XDG_DATA_HOME: '' })
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': '#!/bin/sh\nexit 3\n' })
 
-  await deleteUnclaimedLeftovers('demo').finally(() => {
-    for (const [key, value] of Object.entries(environment)) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
-  })
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
+  expect(result.stdout).toBe('failed 3\t\n')
+  expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0' })
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
-  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({ demo: [sha256] })
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8')).demo).toContain(sha256)
 })
 
 test('setup downloads the named program for this platform, checks it against SHA256SUMS, links it, and counts its steps in the bar', async () => {
@@ -616,6 +651,22 @@ test('Ctrl+C during the install step of cmod setup leaves no program link', asyn
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
+test('Ctrl+C during the install step runs the uninstall step and leaves nothing', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n')
+  const store = join(home, '.local/share/cmod')
+
+  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(130)
+  expect(result.output).toContain('Cancelled the install step of demo on SIGINT.')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
+  for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
 test("Ctrl+C during cmod remove's uninstall step still removes the mod", async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
@@ -633,7 +684,7 @@ test("Ctrl+C during cmod remove's uninstall step still removes the mod", async (
 
   expect(result.exitCode).toBe(130)
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
-  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(store, 'records/hello-mod.json.claim'), join(store, 'uninstall/hello-mod')]) {
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(store, 'records/hello-mod.json.lock'), join(store, 'uninstall/hello-mod')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
@@ -752,7 +803,8 @@ test('Ctrl+C while cmod setup downloads the program installs nothing', async () 
   const result = await setup.done
 
   expect(result.exitCode).toBe(130)
-  expect(result.stdout).toContain('Cancelled the install step of hello-mod on SIGINT.')
+  expect(result.stdout).toContain('Cancelled setting up hello-mod on SIGINT, before its install step started.')
+  expect(result.stdout).not.toContain('Cancelled the install step')
   for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
@@ -784,7 +836,7 @@ test('SIGTERM to cmod setup --events during the install step leaves a recorded m
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({ 'hello-mod': [await hashOf(root)] })
 })
 
-test('concurrent setups of two mods keep both approvals', async () => {
+test('concurrent setups of eight mods keep every approval', async () => {
   const home = await temporaryHome()
   const names = Array.from({ length: 8 }, (_, index) => `mod-${index}`)
   const roots = names.map((name) => join(home, name))
@@ -818,7 +870,7 @@ test('SIGTERM to cmod teardown --events during the uninstall step still removes 
   expect(result.exitCode).toBe(143)
   expect(result.stdout).toBe('done demo\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
-  for (const path of [join(store, 'records/demo.json'), join(store, 'records/demo.json.claim'), join(store, 'data/demo'), join(store, 'uninstall/demo')]) {
+  for (const path of [join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'data/demo'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
 })
@@ -837,13 +889,25 @@ test('six concurrent setups of one mod run the install step once and all exit 0'
   expect(await readdir(join(store, 'records'))).toEqual(['demo.json'])
 }, 15_000)
 
-test('a setup lock older than 600 seconds is taken over', async () => {
+test('a setup deletes the staged uninstall folders a killed setup left', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  const lock = join(home, '.local/share/cmod/records/demo.json.setup')
-  await writeFiles(home, { '.local/share/cmod/records/demo.json.setup': '' })
-  const tenMinutesAgo = new Date(Date.now() - 601_000)
-  await utimes(lock, tenMinutesAgo, tenMinutesAgo)
+  const store = join(home, '.local/share/cmod')
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  await writeFiles(store, { 'uninstall/demo.tmp/uninstall.sh': 'left by a killed setup\n', 'uninstall/demo.old/uninstall.sh': 'left by a killed setup\n' })
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+
+  const result = await cmod(home, 'setup', root, '--events')
+
+  expect(result.stdout).toEndWith('done demo 0.2.0\n')
+  expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
+})
+
+test('a setup takes over a lock whose process is gone', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const lock = join(home, '.local/share/cmod/records/demo.json.lock')
+  await writeFiles(lock, { [String(await goneProcessId())]: '' })
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
@@ -851,6 +915,62 @@ test('a setup lock older than 600 seconds is taken over', async () => {
   expect(result.exitCode).toBe(0)
   expect(existsSync(lock)).toBe(false)
 })
+
+test('a stale consent lock whose process is gone does not stall setup', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const lock = join(home, '.local/share/cmod/consent.json.lock')
+  await writeFiles(lock, { [String(await goneProcessId())]: '' })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toEndWith('done demo 0.1.0\n')
+  expect(result.exitCode).toBe(0)
+  expect(existsSync(lock)).toBe(false)
+}, 5_000)
+
+test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const store = join(home, '.local/share/cmod')
+  const holder = Bun.spawn(['sleep', '30'])
+  await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: '' })
+  const setup = startCmod(home, 'setup', root, '--yes')
+  await Bun.sleep(500)
+
+  const cancelledAt = Date.now()
+  setup.child.kill('SIGINT')
+  const result = await setup.done
+  const waitedMs = Date.now() - cancelledAt
+  holder.kill()
+
+  expect(result.exitCode).toBe(130)
+  expect(waitedMs).toBeLessThan(1000)
+  expect(result.stdout).toContain('Cancelled setting up demo on SIGINT, before its install step started.')
+  expect(result.stdout).not.toContain('Cancelled the install step')
+  for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'uninstall/demo')]) {
+    expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
+  }
+})
+
+test('a mod whose scripts change while its setup waits asks consent again', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\ntouch "$HOME/installing"\nsleep 2\necho ran >> "$CMOD_DATA/runs"\n')
+  const approved = await hashOf(root)
+  const first = startCmod(home, 'setup', root, '--events', '--consent', approved)
+  await waitFor(join(home, 'installing'))
+  const second = startCmod(home, 'setup', root, '--events', '--consent', approved)
+  await Bun.sleep(700)
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
+  const changed = await hashOf(root)
+
+  const asked = await second.done
+
+  expect((await first.done).stdout).toBe('done demo 0.1.0\n')
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.exitCode).toBe(10)
+  expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\n')
+}, 15_000)
 
 test('setup --events prints failed with the fix when the release holds no build for this platform, and writes no record', async () => {
   const home = await temporaryHome()

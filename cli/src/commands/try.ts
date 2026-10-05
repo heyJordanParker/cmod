@@ -22,9 +22,10 @@ install step after asking consent for its install and uninstall commands, as
 cmod link does, then starts one Claude Code session with the mod loaded through
 --plugin-dir. When the session ends, even when its terminal closes, runs the
 mod's uninstall step and deletes its record, data folder, approval, and
-program, so the mod stays uninstalled. Ctrl+C at the consent question deletes
-the clone and changes nothing else. Ctrl+C, a closed terminal, or SIGTERM
-skips a session that has not started, and the uninstall step runs to its end.
+program, so the mod stays uninstalled. Ctrl+C or Ctrl+D at the consent
+question deletes the clone and changes nothing else. Ctrl+C, a closed terminal,
+or SIGTERM installs nothing more and skips a session that has not started, and
+the uninstall step runs to its end.
 The CMod plugin stays installed, as the cmod program does. A GitHub mod is
 cloned into a temporary folder that is deleted too. A mod another folder has
 set up is refused, so cmod try never replaces an installed copy. A checkout
@@ -59,7 +60,7 @@ export async function run(argv: string[]): Promise<number> {
     progress.step(`Installing packages for ${plugin.name}`)
     if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
     else progress.succeed(`${plugin.name} has no packages to install`)
-    await installCmodPlugin(progress)
+    await installCmodPlugin(progress, hold.abortSignal)
     const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
     if (code !== 0) return code
     try {

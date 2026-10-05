@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { version as sdkVersion } from 'cmod-sdk/package.json'
 import { listFiles } from '../src/files.js'
 import { cmod, deleteTemporaryHomes, temporaryHome } from './cmod.js'
 
@@ -76,6 +77,34 @@ test('a new mod runs its tests before Claude Code has loaded it', async () => {
   expect(existsSync(join(root, '.claude-plugin/types'))).toBe(false)
   expect(output).toContain(' 3 pass\n 0 fail\n')
   expect(exitCode).toBe(0)
+})
+
+test('a new mod runs its tests through bun run test', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'my-mod')
+  await cmod(home, 'new', 'my-mod')
+
+  const tests = Bun.spawn([process.execPath, 'run', 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
+
+  expect(output).toContain(' 3 pass\n 0 fail\n')
+  expect(exitCode).toBe(0)
+})
+
+test('cmod new whose package install fails leaves no folder and names CMOD_SDK', async () => {
+  const home = await temporaryHome()
+  const main = join(import.meta.dir, '..', 'src', 'main.ts')
+  const created = Bun.spawn([process.execPath, main, 'new', 'my-mod'], {
+    cwd: home,
+    env: { ...process.env, HOME: home, CMOD_SDK: `file:${join(home, 'cmod-sdk-0.1.0.tgz')}` },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stderr, exitCode] = await Promise.all([new Response(created.stderr).text(), created.exited])
+
+  expect(exitCode).toBe(1)
+  expect(existsSync(join(home, 'my-mod'))).toBe(false)
+  expect(stderr).toContain(`set CMOD_SDK to a cmod-sdk tarball, such as CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz`)
 })
 
 test("a new mod's survey test fails when the band's survey render throws", async () => {

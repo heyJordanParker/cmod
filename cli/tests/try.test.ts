@@ -17,7 +17,7 @@ function leftovers(home: string): string[] {
     join(store, 'bin/hello'),
     join(store, 'data/hello-mod'),
     join(store, 'records/hello-mod.json'),
-    join(store, 'records/hello-mod.json.claim'),
+    join(store, 'records/hello-mod.json.lock'),
     join(store, 'uninstall/hello-mod'),
   ]
   return paths.filter((path) => existsSync(path)).map((path) => path.slice(home.length + 1))
@@ -152,6 +152,31 @@ esac
   expect(existsSync(join(store, 'records/hello-mod.json'))).toBe(false)
   expect(existsSync(join(store, 'data/hello-mod'))).toBe(false)
   expect(await approvals(home)).toEqual({})
+})
+
+test('cmod try after a held SIGTERM installs nothing', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, {
+    'bin/claude': `#!/bin/sh
+echo "$*" >> "$HOME/claude-calls"
+case "$*" in
+  "plugin list --json") kill -TERM $PPID; sleep 0.3; echo '[]' ;;
+  "plugin marketplace list --json") echo '[]' ;;
+  "plugin marketplace add heyJordanParker/cmod") ;;
+  "plugin install cmod@"*" --json") echo '{"outcome":"ok","message":"Installed"}' ;;
+  *) exit 1 ;;
+esac
+`,
+    'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+  })
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(143)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
+  expect(result.stdout).not.toContain('Cancelled the install step')
+  expect(existsSync(join(home, '.local/share/cmod/records/demo.json'))).toBe(false)
 })
 
 test('a signal to the process group during the install step of cmod try leaves no program, approval or data', async () => {

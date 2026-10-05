@@ -20,7 +20,6 @@ export type RunnerEvent =
   | { kind: 'needs-consent'; sha256: string; install: string; uninstall: string }
   | { kind: 'done'; name: string; version?: string }
   | { kind: 'missing'; name: string }
-  | { kind: 'claimed'; name: string }
   | { kind: 'failed'; code: number; message: string }
 
 export const pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -171,8 +170,6 @@ export function formatEvent(event: RunnerEvent): string {
       return event.version === undefined ? `done ${event.name}` : `done ${event.name} ${event.version}`
     case 'missing':
       return `missing ${event.name}`
-    case 'claimed':
-      return `claimed ${event.name}`
     case 'failed':
       return `failed ${event.code}\t${event.message.replace(/\s*\n\s*/g, ' ')}`
   }
@@ -185,8 +182,8 @@ export function parseEvent(line: string): RunnerEvent {
   if (consent !== null) return { kind: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string }
   const done = /^done (\S+)(?: (\S+))?$/.exec(line)
   if (done !== null) return { kind: 'done', name: done[1] as string, ...(done[2] === undefined ? {} : { version: done[2] }) }
-  const named = /^(missing|claimed) (\S+)$/.exec(line)
-  if (named !== null) return { kind: named[1] as 'missing' | 'claimed', name: named[2] as string }
+  const missing = /^missing (\S+)$/.exec(line)
+  if (missing !== null) return { kind: 'missing', name: missing[1] as string }
   const failed = /^failed (-?\d+)(?:\t(.*))?$/.exec(line)
   if (failed !== null) return { kind: 'failed', code: Number(failed[1]), message: failed[2] ?? '' }
   return { kind: 'log', text: line.replace(/^log /, '') }

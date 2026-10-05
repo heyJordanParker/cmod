@@ -13,12 +13,13 @@ export const cmodPlugin = defineMod({
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
-      if (outcome.kind === 'done' || outcome.kind === 'missing') mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
+      const isAnswered = outcome.kind === 'done' || outcome.kind === 'missing' || outcome.kind === 'failed'
+      if (isAnswered) mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
       if (outcome.kind === 'done') mod.ui.toast(`${name} is uninstalled. A session that still runs it stops after /reload-plugins.`)
-      else if (exitCode !== 0) {
-        const error = outcome.kind === 'failed' ? outcome.message : stderr.trim().split('\n').at(-1)
-        mod.ui.toast(`cmod teardown ${name} exited ${exitCode}: ${error}`)
-      }
+      else if (outcome.kind === 'failed') {
+        const savedStep = `${mod.dataFolder.slice(0, mod.dataFolder.lastIndexOf('/data/'))}/uninstall/${name}/uninstall.sh`
+        mod.ui.toast(`cmod teardown ${name} exited ${exitCode}${outcome.message ? `: ${outcome.message}` : ''}. Fix ${savedStep}, then run cmod teardown ${name}.`)
+      } else if (exitCode !== 0) mod.ui.toast(`cmod teardown ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1)}`)
     }
 
     const watchRemovals = async () => {

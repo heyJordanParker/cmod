@@ -13,7 +13,7 @@ In Claude Code, add the mod's marketplace and install the mod:
 
 Claude Code installs the CMod plugin with the mod. CMod then fetches the cmod program, and the mod runs its install step. A progress bar shows each step. A notice tells you when the mod is ready.
 
-When you remove a mod with `/plugin uninstall`, CMod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
+When you remove a mod with `/plugin uninstall`, CMod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
 
 In a terminal, one command does the same:
 
@@ -49,6 +49,22 @@ To replace the text of a Skill a mod ships, put your own file at the same path i
 ```
 
 Claude reads your text in place of the mod's from the next time the Skill loads, and updates keep it. CMod drops the file's frontmatter, so the mod's own name and description stay. Delete the file to get the mod's text back.
+
+## Run CMod from a checkout
+
+To build mods before CMod has a release and cmod-sdk is on npm, run CMod from a clone of this repository. In the clone's folder:
+
+```sh
+bun install --cwd cli
+bun install --cwd sdk
+claude --plugin-dir . -p ok
+bun run --cwd sdk build
+env -C sdk bun pm pack
+bun cli/src/main.ts link .
+export CMOD_SDK=file:$PWD/sdk/cmod-sdk-0.1.0.tgz
+```
+
+The `claude` line loads the checkout once, so Claude Code writes `.claude-plugin/types/`, which the cmod-sdk build reads. `cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code. `CMOD_SDK` makes `cmod new` install cmod-sdk from the tarball you packed. Put the `export` line in your shell profile, with the clone's full path, to keep it in new shells.
 
 ## Make a mod in 30 seconds
 

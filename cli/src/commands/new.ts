@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { version as sdkVersion } from 'cmod-sdk/package.json'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { writeAtomically } from '../files.js'
 import { preparePackages, readPlugin } from '../plugin.js'
 import { capture } from '../process.js'
@@ -40,7 +42,14 @@ export async function run(argv: string[]): Promise<number> {
   progress.succeed(`Created ${name} in ${relative(process.cwd(), root) || '.'}`)
 
   progress.step(`Installing packages for ${name}`)
-  await preparePackages(await readPlugin(root))
+  try {
+    await preparePackages(await readPlugin(root))
+  } catch (error) {
+    await rm(root, { recursive: true, force: true })
+    throw new Error(
+      `Installing packages for ${name} failed, so cmod new deleted ${relative(process.cwd(), root)}: ${messageOf(error)}\nTo install cmod-sdk from a file, set CMOD_SDK to a cmod-sdk tarball, such as CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz, then run cmod new again.`,
+    )
+  }
   progress.succeed(`Installed packages for ${name}`)
   const next = values.project
     ? `start claude in this repository and trust it, and Claude Code loads ${name}`
@@ -151,7 +160,7 @@ description: Explains what the ${name} mod does. Use when the user asks about th
 
 The ${name} mod counts the prompts of this session and shows the count in its pane and above the prompt.
 `,
-    'package.json': json({ name, private: true, type: 'module', dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
+    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
     'tsconfig.json': json({
       extends: './.claude-plugin/types/tsconfig.json',
       compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },

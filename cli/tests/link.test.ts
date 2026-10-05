@@ -121,6 +121,40 @@ test('link installs no CMod plugin when a linked CMod checkout provides it', asy
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
 })
 
+const claudeBeforeCmodIsLinked = `#!/bin/sh
+echo "$*" >> "$HOME/claude-calls"
+case "$*" in
+  "plugin list --json")
+    if grep -q '~/Developer/cmod' "$HOME/.claude/settings.json" 2>/dev/null
+    then echo '[{"id":"cmod@inline","version":"0.1.0","scope":"session","enabled":true,"installPath":"'"$HOME"'/Developer/cmod"}]'
+    else echo '[]'
+    fi ;;
+  "plugin marketplace list --json") echo '[]' ;;
+  *) echo 'Repository not found' >&2; exit 1 ;;
+esac
+`
+
+test('cmod link of a mod before CMod is linked writes nothing to settings', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { 'bin/claude': claudeBeforeCmodIsLinked, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
+
+  const linked = await cmod(home, 'link', join(home, 'Developer/demo'))
+
+  expect(linked.exitCode).toBe(1)
+  expect(linked.stderr).toContain('plugin marketplace add heyJordanParker/cmod')
+  expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false)
+})
+
+test('cmod link of the CMod checkout still links it', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { 'bin/claude': claudeBeforeCmodIsLinked, 'Developer/cmod/.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.1.0' }) })
+
+  const linked = await cmod(home, 'link', join(home, 'Developer/cmod'))
+
+  expect(linked.exitCode).toBe(0)
+  expect(JSON.parse(await readFile(join(home, '.claude', 'settings.json'), 'utf8'))).toEqual({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/Developer/cmod' } })
+})
+
 test('link installs a repacked file: tarball dependency, not the copy already in node_modules', async () => {
   const home = await temporaryHome()
   const checkout = join(home, 'Developer', 'demo')

@@ -21,11 +21,13 @@ ${summary}
 Downloads the program its package.json "cmod.program" names into
 ~/.local/bin, runs the mod's install step from its package.json "cmod" key,
 saves its uninstall step, and records the mod as set up. An unchanged mod runs
-nothing. While one setup of a mod runs, another waits for it, then finds the
-mod set up. A setup that stopped more than 10 minutes ago without finishing is
-taken over by the next one. Ctrl+C, a closed terminal, or SIGTERM before the
-install step starts stops the setup and removes what it set up. Once the
-install step has finished, the setup records the mod, then exits.
+nothing. While a setup or teardown of the mod runs, another setup waits for it,
+then checks the mod again; a mod whose scripts changed meanwhile asks consent
+again. A setup whose process is gone is taken over at once. Ctrl+C, a closed
+terminal, or SIGTERM while it waits or before the install step starts stops the
+setup and removes what it set up. When one stops the install step, the setup
+runs the mod's uninstall step, then removes what it set up. Once the install
+step has finished, the setup records the mod, then exits.
 
 Options:
   --events            Print one event per line for a program to read:
@@ -55,12 +57,7 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function setupWithEvents(plugin: Plugin, consent: string | undefined): Promise<number> {
-  const state = await checkSetup(plugin)
-  if (!state.isCurrent && state.needsConsent && consent !== state.sha256) {
-    printEvent({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '' })
-    return 10
-  }
-  const code = state.isCurrent ? 0 : await runSetup(plugin, state, printEvent).catch(printFailure)
+  const code = await runSetup(plugin, consent, printEvent).catch(printFailure)
   if (code === 0) printEvent({ kind: 'done', name: plugin.name, version: plugin.version })
   return code
 }
@@ -76,30 +73,31 @@ export function printFailure(error: unknown): number {
 
 export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined }, progress: Progress): Promise<number> {
   using hold = holdSignals()
-  const state = await checkSetup(plugin)
-  if (!state.isCurrent && state.needsConsent && !options.yes && options.consent !== state.sha256 && !(await askConsent(plugin, hold.abortSignal))) {
-    progress.fail(`${plugin.name} is not set up: its install step needs your consent. Run the command again with --yes after reading the commands.`)
-    return 10
-  }
-  if (state.isCurrent) {
-    progress.succeed(`${plugin.name} ${plugin.version} is set up`)
-    return 0
-  }
   const heading = `Installing ${plugin.name}`
   const failure = { code: 0, message: '' }
-  progress.step(heading)
-  const code = await runSetup(plugin, state, (event) => {
-    if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
-    if (event.kind === 'log') progress.log(event.text)
-    if (event.kind === 'failed') Object.assign(failure, event)
-  })
+  let code = 10
+  while (code === 10) {
+    const { sha256, needsConsent } = await checkSetup(plugin)
+    const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, hold.abortSignal))
+    if (answer !== true) {
+      progress.fail(answer === false ? `${plugin.name} is not set up: its install step needs your consent. Run the command again with --yes after reading the commands.` : `Cancelled: ${plugin.name} is not set up.`)
+      return 10
+    }
+    progress.step(heading)
+    code = await runSetup(plugin, needsConsent ? sha256 : undefined, (event) => {
+      if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
+      if (event.kind === 'log') progress.log(event.text)
+      if (event.kind === 'failed') Object.assign(failure, event)
+    })
+  }
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
-  else if (hold.signal !== undefined) progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}.`)
-  else progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
+  else if (hold.signal === undefined) progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
+  else if (failure.code === 0) progress.fail(`Cancelled setting up ${plugin.name} on ${hold.signal}, before its install step started.`)
+  else progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}.`)
   return code
 }
 
-export const heldSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP', 'SIGTERM']
+const heldSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP', 'SIGTERM']
 
 export type SignalHold = { signal: NodeJS.Signals | undefined; readonly abortSignal: AbortSignal; [Symbol.dispose](): void }
 
@@ -131,13 +129,19 @@ function holdSignal(signal: NodeJS.Signals): void {
   }
 }
 
-export async function deleteUnclaimedLeftovers(name: string): Promise<boolean> {
+export function uninterruptible(argv: string[]): string[] {
+  return ['sh', '-c', `trap '' ${heldSignals.map((signal) => signal.replace(/^SIG/, '')).join(' ')}; exec "$@"`, 'sh', ...argv]
+}
+
+export function modLock(name: string): string {
+  return `${recordPath(storeFolder(process.env), name)}.lock`
+}
+
+export async function deleteUnrecordedLeftovers(name: string, cancel: AbortSignal): Promise<void> {
   const store = storeFolder(process.env)
-  const path = recordPath(store, name)
-  if (existsSync(`${path}.claim`) || existsSync(`${path}.setup`) || existsSync(path)) return false
+  if (existsSync(recordPath(store, name))) return
   await rm(dataFolder(store, name), { recursive: true, force: true })
-  await revokeApprovals(name)
-  return true
+  await revokeApprovals(name, cancel)
 }
 
 async function checkSetup(plugin: Plugin): Promise<SetupState> {
@@ -149,45 +153,57 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   return { sha256, isCurrent, needsConsent }
 }
 
-async function runSetup(plugin: Plugin, state: SetupState, emit: (event: RunnerEvent) => void): Promise<number> {
+async function runSetup(plugin: Plugin, consent: string | undefined, emit: (event: RunnerEvent) => void): Promise<number> {
   using hold = holdSignals()
-  const lock = `${recordPath(storeFolder(process.env), plugin.name)}.setup`
-  if (!(await takeLock(lock, () => hold.signal !== undefined))) return 1
+  await using lock = await takeLock(modLock(plugin.name), hold.abortSignal)
+  if (lock === undefined) return 1
+  const state = await checkSetup(plugin)
+  if (state.isCurrent) return 0
+  if (state.needsConsent && consent !== state.sha256) {
+    emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '' })
+    return 10
+  }
   let code = 1
   try {
-    code = (await checkSetup(plugin)).isCurrent ? 0 : await setUpMod(plugin, state, hold, emit)
+    code = await setUpMod(plugin, state, hold, emit)
     return code
   } finally {
-    await rm(lock, { force: true })
-    if (code !== 0) await deleteUnclaimedLeftovers(plugin.name)
+    if (code !== 0) await deleteUnrecordedLeftovers(plugin.name, hold.abortSignal)
   }
 }
 
 async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emit: (event: RunnerEvent) => void): Promise<number> {
-  const { install, program } = plugin.steps
+  const { install, uninstall, program } = plugin.steps
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
-  if (state.needsConsent) await approve(plugin.name, state.sha256)
+  if (state.needsConsent) await approve(plugin.name, state.sha256, hold.abortSignal)
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
   const folder = storePath('uninstall', plugin.name)
-  const staged = `${folder}.${process.pid}.tmp`
-  const replaced = `${folder}.${process.pid}.old`
+  const staged = `${folder}.tmp`
+  const replaced = `${folder}.old`
   let hasUninstall = false
   let isRecorded = false
   try {
     if (hold.signal !== undefined) return 1
     if (install !== undefined) {
-      const result = await runStep(['sh', '-c', install], plugin.root, await stepEnvironment(plugin.root, plugin.name, plugin.version), (event) =>
+      const environment = await stepEnvironment(plugin.root, plugin.name, plugin.version)
+      const result = await runStep(['sh', '-c', install], plugin.root, environment, (event) =>
         emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
       )
       if (result.exitCode !== 0) {
+        if (hold.signal !== undefined && uninstall !== undefined) {
+          await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
+            if (event.kind === 'log') emit(event)
+          })
+        }
         emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
         return 1
       }
     }
     hasUninstall = await saveUninstall(plugin, staged)
     if (hasUninstall) {
+      await rm(replaced, { recursive: true, force: true })
       if (existsSync(folder)) await rename(folder, replaced)
       await rename(staged, folder)
     }
@@ -241,7 +257,7 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
   return true
 }
 
-async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean> {
+async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean | undefined> {
   const style = paint()
   const { install, uninstall, program } = plugin.steps
   const lines = [
@@ -259,10 +275,12 @@ async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean>
   if (!process.stdin.isTTY) return false
   const prompt = createInterface({ input: process.stdin, output: process.stdout })
   prompt.on('SIGINT', () => process.kill(process.pid, 'SIGINT'))
+  const closed = new Promise<undefined>((resolve) => prompt.once('close', () => resolve(undefined)))
   try {
-    return /^y(es)?$/i.test((await prompt.question('Run them? [y/N] ', { signal: cancel })).trim())
+    const answer = await Promise.race([prompt.question('Run them? [y/N] ', { signal: cancel }), closed])
+    return answer === undefined ? undefined : /^y(es)?$/i.test(answer.trim())
   } catch (error) {
-    if ((error as Error).name === 'AbortError') return false
+    if ((error as Error).name === 'AbortError') return undefined
     throw error
   } finally {
     prompt.close()
