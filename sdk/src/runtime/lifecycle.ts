@@ -1,6 +1,7 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
 import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
+import { relativePath } from '../utils/paths.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
@@ -382,11 +383,12 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     },
     dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),
   }
-  const followSession = async () => {
+  const followSession = async (isAfterCd = false) => {
     try {
-      const [nextRoot, nextCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
+      const [nextRoot, reportedCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
       const oldCwd = cwd
       const hasMovedRoot = nextRoot !== modState.root
+      const nextCwd = isAfterCd && hasMovedRoot && relativePath(nextRoot, reportedCwd) === undefined ? nextRoot : reportedCwd
       if (!hasMovedRoot && nextCwd === oldCwd) return
       cwd = nextCwd
       await modState.moveTo(nextRoot).catch((error: unknown) => {
@@ -420,7 +422,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   }
   on('command.run', async (e, next) => {
     const answer = await next(e)
-    if (e.command === 'cd') await followSession()
+    if (e.command === 'cd') await followSession(true)
     return answer
   })
   on('skill.prompt', userSkillHook(claude))

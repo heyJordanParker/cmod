@@ -887,6 +887,48 @@ test('after /cd a pane that draws mod.cwd shows the new folder', async () => {
   expect(redrawnFolders).toEqual(['/work/b /work/b', '/work/b /work/b/lib'])
 })
 
+test('after /cd while Claude Code still reports the old cwd, the pane redraws once with the new root as mod.cwd', async () => {
+  const { lifecycle, session, redrawnFolders, moves, start } = folderPane()
+  await start()
+  redrawnFolders.length = 0
+  session.root = '/work/b'
+
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+
+  expect(redrawnFolders).toEqual(['/work/b /work/b'])
+  expect(moves).toEqual([movedTo('/work/a', '/work/b')])
+})
+
+test('a /cd the user cancels after a Bash cd out of the project keeps mod.cwd where the Bash cd left it', async () => {
+  const { lifecycle, session, moves, start } = folderPane()
+  await start()
+  session.cwd = '/tmp'
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd /tmp' } }, {})
+
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/a', '/tmp'])
+  expect(moves).toEqual([movedTo('/work/a', '/tmp')])
+})
+
+test('a Bash cd out of the project after a /cd whose project failed to load moves mod.cwd out of it', async () => {
+  const { fake, lifecycle, session, moves, start } = folderPane()
+  const storeGet = fake.claude.store.get
+  let isStoreLocked = false
+  fake.claude.store.get = async (key) => (isStoreLocked ? Promise.reject(new Error('the store file is locked')) : storeGet(key))
+  await start()
+  session.root = '/work/b'
+  isStoreLocked = true
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+  isStoreLocked = false
+  session.cwd = '/tmp'
+
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd /tmp' } }, {})
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/tmp'])
+  expect(moves).toEqual([movedTo('/work/a', '/tmp')])
+})
+
 test('a Bash cd fires CwdChanged', async () => {
   const { lifecycle, session, moves, start } = folderPane()
   await start()

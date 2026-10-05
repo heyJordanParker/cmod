@@ -13,7 +13,7 @@ List each claim of the change that depends on Claude Code itself: which events f
 
 These Facts were observed in Claude Code 2.1.289. Under a newer `claude --version`, the run proves each one it relies on again.
 
-- `/cd` fires the engine event `command.run` with `command: 'cd'`, and no classic hook. Its `next(e)` resolves after the move.
+- `/cd` fires the engine event `command.run` with `command: 'cd'`, and no classic hook. When its `next(e)` resolves, `$.session.root()` returns the new project, and `$.session.cwd()` still returns the old folder until the next prompt.
 - `classic.CwdChanged` fires only after a Bash command changes the shell's folder, and only when a settings or `hooks.json` hook for `CwdChanged` or `FileChanged` exists, which a cmod mod never has. The SDK fires `CwdChanged` to a mod's own hooks from `followSession` in `sdk/src/runtime/lifecycle.ts`.
 - A Bash `cd` moves the cwd, never `$.session.root()`.
 - Claude Code fires `classic.SessionStart` before every mod's `setup` has finished, and gives each hook 10 seconds. The SDK holds it at most 9 seconds for a mod to start (`sessionStartHoldMs` in `sdk/src/runtime/lifecycle.ts`). A mod that starts later runs its SessionStart hooks then, and Claude Code never reads their answer.

@@ -5,6 +5,7 @@ import { slashCommand } from '../src/jobs/slash-command.js'
 import { statusLine } from '../src/jobs/status-line.js'
 import { tool } from '../src/jobs/tool.js'
 import { defineMod } from '../src/mod.js'
+import type { Claude } from '../src/runtime/claude.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Text } from '../src/ui/elements.js'
@@ -329,7 +330,7 @@ test('clock.every in testMod fires only when the test ticks it', async () => {
   expect(ticked.shown.statuses).toEqual(['main', 'feature'])
 })
 
-test('moveTo with only a new cwd fires CwdChanged with mod.cwd already moved', async () => {
+function folderWatchIn(projectRoot: string) {
   const seen: unknown[] = []
   const tested = testMod(
     defineMod({
@@ -338,12 +339,55 @@ test('moveTo with only a new cwd fires CwdChanged with mod.cwd already moved', a
         mod.on('CwdChanged', (input) => void seen.push({ old: input.old_cwd, new: input.new_cwd, cwd: mod.cwd, projectRoot: mod.projectRoot }))
       },
     }),
-    { projectRoot: '/work/shop' },
+    { projectRoot },
   )
+  return { tested, seen }
+}
+
+test('moveTo with only a new cwd fires CwdChanged with mod.cwd already moved', async () => {
+  const { tested, seen } = folderWatchIn('/work/shop')
 
   await tested.moveTo('/work/shop', '/work/shop/src')
 
   expect(seen).toEqual([{ old: '/work/shop', new: '/work/shop/src', cwd: '/work/shop/src', projectRoot: '/work/shop' }])
+})
+
+test('moveTo another project and a folder in it fires CwdChanged for the /cd, then for the Bash cd', async () => {
+  const { tested, seen } = folderWatchIn('/work/a')
+
+  await tested.moveTo('/work/b', '/work/b/src')
+
+  expect(seen).toEqual([
+    { old: '/work/a', new: '/work/b', cwd: '/work/b', projectRoot: '/work/b' },
+    { old: '/work/b', new: '/work/b/src', cwd: '/work/b/src', projectRoot: '/work/b' },
+  ])
+})
+
+test("after /cd while Claude Code still reports the old cwd, the mod's cwd is the new root and CwdChanged fires once", async () => {
+  const { tested, seen } = folderWatchIn('/work/a')
+  const moved = { old: '/work/a', new: '/work/b', cwd: '/work/b', projectRoot: '/work/b' }
+
+  await tested.moveTo('/work/b')
+
+  expect(seen).toEqual([moved])
+
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+
+  expect(seen).toEqual([moved])
+})
+
+test('after moveTo another project, Claude Code reports the new root at once and the old cwd until the next prompt', async () => {
+  let session: Claude['session'] | undefined
+  const tested = testMod(defineMod({ name: 'session-reader', setup: (mod) => mod.use((context) => void (session = context.claude.session)) }), { projectRoot: '/work/a' })
+  const reported = async () => [await session?.root(), await session?.cwd()]
+
+  await tested.moveTo('/work/b')
+
+  expect(await reported()).toEqual(['/work/b', '/work/a'])
+
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+
+  expect(await reported()).toEqual(['/work/b', '/work/b'])
 })
 
 test('a test helper names the Fakes and TestCall types that cmod-sdk/testing.js exports', async () => {

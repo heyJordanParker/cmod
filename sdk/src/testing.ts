@@ -56,6 +56,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   const root = isProjectPlugin ? `${projectRoot}/.claude/skills/${name}` : `/test/plugins/${name}`
   const fake = fakeClaude({ name, root })
   let cwd = options.cwd ?? projectRoot
+  let cwdAfterPrompt: string | undefined
   let sessionId = 'test-session'
   let toolUses = 0
   let slotDraws = 0
@@ -111,6 +112,10 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   const fire = ((event: string, input: object, below: unknown = {}) => {
     if (event.includes('.')) return route(event as RoutedEvent, input, below)
     if (event === 'SessionStart') sessionId = (input as { session_id?: string }).session_id ?? sessionId
+    if (event === 'UserPromptSubmit') {
+      cwd = cwdAfterPrompt ?? cwd
+      cwdAfterPrompt = undefined
+    }
     const toolUse = toolUseEvents.includes(event) ? { tool_use_id: `toolu_${(toolUses += 1)}` } : {}
     const filled = { session_id: sessionId, transcript_path: '/test/transcript.jsonl', cwd, hook_event_name: event, ...toolUse, ...input }
     if (event !== 'PreToolUse') return route(`classic.${event as ModEvent}`, filled, below)
@@ -152,16 +157,17 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
     },
     async moveTo(nextRoot, nextCwd = nextRoot) {
       await start()
-      if (nextRoot === projectRoot) {
-        cwd = nextCwd
-        await fire('PostToolUse', { tool_name: 'Bash', tool_input: { command: `cd '${nextCwd}'` }, tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false } })
-        return
+      if (nextRoot !== projectRoot) {
+        await lifecycle.route('command.run', { command: 'cd', args: nextRoot, origin: { kind: 'composer' }, presentation }, async () => {
+          projectRoot = nextRoot
+          cwdAfterPrompt = nextRoot
+          return {}
+        })
+        if (nextCwd === nextRoot) return
       }
-      await lifecycle.route('command.run', { command: 'cd', args: nextRoot, origin: { kind: 'composer' }, presentation }, async () => {
-        projectRoot = nextRoot
-        cwd = nextCwd
-        return {}
-      })
+      cwd = nextCwd
+      cwdAfterPrompt = undefined
+      await fire('PostToolUse', { tool_name: 'Bash', tool_input: { command: `cd '${nextCwd}'` }, tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false } })
     },
     get state() {
       const mod = lifecycle.mod

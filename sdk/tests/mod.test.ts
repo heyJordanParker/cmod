@@ -445,6 +445,29 @@ test("a tool's mod reads the project the session moved to", async () => {
   expect(await tested.callTool('where', {})).toEqual({ result: '/work/b /work/b' })
 })
 
+test('a CwdChanged hook that refreshes runs once after /cd, before the next prompt', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'file-tree',
+      setup(mod) {
+        mod.on('CwdChanged', () => void mod.process.run(['git', 'status', '--porcelain'], { cwd: mod.projectRoot }))
+      },
+    }),
+    { projectRoot: '/work/a' },
+  )
+  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  const refreshedFolders = () => tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])
+  await tested.start()
+
+  await tested.moveTo('/work/b')
+
+  expect(refreshedFolders()).toEqual([{ cwd: '/work/b' }])
+
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+
+  expect(refreshedFolders()).toEqual([{ cwd: '/work/b' }])
+})
+
 test('a project value keeps only the 20 projects used most recently', async () => {
   const tested = testMod(projectFolders().definition, { projectRoot: '/work/0' })
   for (let project = 0; project <= 20; project += 1) {
