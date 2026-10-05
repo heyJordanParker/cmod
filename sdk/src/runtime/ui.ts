@@ -164,7 +164,7 @@ type DrawnPiece = { readonly drawing: RenderElement; readonly isClaudesRow: bool
 async function drawComponent<Given extends object>(
   table: ElementTable,
   draw: (Default: (props: Given & { readonly children?: unknown }) => RenderElement) => RenderElement,
-  drawDefault: (given: Given, call: { readonly index: number; readonly isClaudesRow: boolean }) => Promise<RenderElement>,
+  drawDefault: (given: Given, isClaudesRow: boolean) => Promise<RenderElement>,
 ): Promise<DrawnPiece | { readonly failure: string }> {
   const calls: { readonly given: Given; readonly drawing: RenderElement }[] = []
   let first: RenderElement
@@ -181,7 +181,7 @@ async function drawComponent<Given extends object>(
   }
   if (calls.length === 0) return { drawing: first, isClaudesRow: false }
   const whole = calls.findIndex((call) => call.drawing === first)
-  const pieces = await Promise.all(calls.map(({ given }, index) => drawDefault(given, { index, isClaudesRow: index === whole })))
+  const pieces = await Promise.all(calls.map(({ given }, index) => drawDefault(given, index === whole)))
   let used = 0
   let second: RenderElement
   try {
@@ -280,7 +280,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
           const component = await drawComponent<{ readonly source?: string }>(
             table,
             (Default) => render.Component({ ...block, Default }),
-            ({ source = block.source }, { isClaudesRow }) => drawClaudes(source, index === 0 && isClaudesRow),
+            ({ source = block.source }, isClaudesRow) => drawClaudes(source, index === 0 && isClaudesRow),
           )
           if (!('failure' in component)) return component
           render.log(component.failure)
@@ -362,14 +362,18 @@ export function createUi<State extends object>({ name, claude, router, progress,
         const log = logOnce(component)
         router.add('ui.render', async (e, next) => {
           if (e.component !== component) return next(e)
+          const table = claude.ui.resolve(e)
           const drawn = await drawComponent(
-            claude.ui.resolve(e),
+            table,
             (Default) => Component({ ...e.props, Default } as unknown as SlotProps<S>),
-            (given, { index }) => next({ ...e, props: pieceProps(e.props, given, index === 0) } as typeof e),
+            (given, isClaudesRow) => next({ ...e, props: pieceProps(e.props, given, isClaudesRow) } as typeof e),
           )
-          if ('drawing' in drawn) return drawn.drawing
-          log(drawn.failure)
-          return next(e)
+          if ('failure' in drawn) {
+            log(drawn.failure)
+            return next(e)
+          }
+          if (e.component !== 'AssistantMessage') return drawn.drawing
+          return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply))
         })
       },
       toast: (text) => claude.ui.toast(text),

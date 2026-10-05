@@ -542,6 +542,29 @@ test('a plugin.json that is not JSON shows its path as a failure', async () => {
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith(`>\n✗ Installing safe-delete  ${root}/.claude-plugin/plugin.json is not JSON`)
 })
 
+test('a plugin.json the mod cannot read fails the start with the read error', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const denied = `safe-delete: $.fs.stat(${root}/.claude-plugin/plugin.json) failed: EACCES`
+  fake.fakes.fs.stat = async () => Promise.reject(new Error(denied))
+  const { runs, definition } = trackedMod()
+  const lifecycle = createLifecycle(definition)
+
+  await lifecycle.start(fake.claude, readPlugin)
+
+  expect(runs).toEqual([])
+  expect(lifecycle.phase).toBe('failed')
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith(`>\n✗ Installing safe-delete  ${denied}`)
+})
+
+test.each(['ENOENT', 'ENOTDIR'])('a path Claude Code fails to stat with %s reads as a missing file', async (errno) => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const files = fakeFiles(manifestOnly)
+  Object.assign(fake.fakes.fs, files)
+  fake.fakes.fs.stat = async (path, options) => files.stat(path, options).catch(() => Promise.reject(new Error(`safe-delete: $.fs.stat(${path}) failed: ${errno}`)))
+
+  expect(await readPlugin(fake.claude)).toEqual({ ...pending, store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: true })
+})
+
 test('an error from cmod --version other than not found shows as a failure', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = async () => Promise.reject(new Error('cmod --version is still running after 30 s'))

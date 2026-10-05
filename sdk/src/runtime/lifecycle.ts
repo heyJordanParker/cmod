@@ -54,13 +54,21 @@ const dependencyCallMs = 30_000
 
 const cannotStart = /failed to start: /
 
+const missingPath = /(?:^|: )(?:ENOENT|ENOTDIR)\b/
+
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
 
 const nothingBelow = (async () => ({})) as unknown as Next<'classic.CwdChanged'>
 
 export async function readPlugin(claude: Claude): Promise<Plugin> {
   const { name, root } = claude.plugin
-  const read: ReadFile = async (path) => ((await claude.fs.stat(path).catch(() => undefined))?.kind === 'file' ? claude.fs.read(path) : undefined)
+  const read: ReadFile = async (path) => {
+    const stat = await claude.fs.stat(path).catch((error: unknown) => {
+      if (missingPath.test(messageOf(error))) return undefined
+      throw error
+    })
+    return stat?.kind === 'file' ? claude.fs.read(path) : undefined
+  }
   const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
   const version = typeof manifest?.version === 'string' ? manifest.version : undefined
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })

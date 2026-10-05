@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import type { Fakes, TestCall } from 'cmod-sdk/testing.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { statusLine } from '../src/jobs/status-line.js'
@@ -326,4 +327,25 @@ test('clock.every fires when the test advances it', async () => {
 
   expect(intervals).toEqual([5000])
   expect(tested.shown.statuses).toEqual(['main', 'feature'])
+})
+
+test('a test helper names the Fakes and TestCall types that cmod-sdk/testing.js exports', async () => {
+  const onMain = (fakes: Fakes) => {
+    fakes.process.run = async () => ({ exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  }
+  const expectBranchAsked = (calls: readonly TestCall[]) => {
+    expect(calls.filter((call) => call.call === 'process.run').map((call) => call.args[0])).toEqual([['git', 'branch', '--show-current']])
+  }
+  const tested = testMod(
+    defineMod({
+      name: 'branch',
+      setup(mod) {
+        mod.use(slashCommand({ name: 'branch', description: 'Name the branch', reply: async (_input, mod) => (await mod.process.run(['git', 'branch', '--show-current'])).stdout.trim() }))
+      },
+    }),
+  )
+  onMain(tested.fakes)
+
+  expect(await tested.type('/branch')).toEqual({ text: 'main' })
+  expectBranchAsked(tested.calls)
 })

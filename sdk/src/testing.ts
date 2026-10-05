@@ -10,6 +10,8 @@ import { fakeClaude, type Fakes, type Shown, type TestCall } from './utils/fake-
 import { elements, findButton, rowsOf } from './utils/fake-elements.js'
 import { fakeFiles } from './utils/fake-files.js'
 
+export type { Fakes, Shown, TestCall } from './utils/fake-claude.js'
+
 export type TestOptions<State extends object> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
   readonly scope?: 'user' | 'project'
