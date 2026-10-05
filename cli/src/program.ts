@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, symlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { isObject, pluginName, type InstallRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
+import { formatExit, messageOf } from 'cmod-sdk/src/utils/text.js'
 import { home, readJson, readText, tilde } from './files.js'
 import type { Plugin } from './plugin.js'
-import { capture, formatExit, runStep } from './process.js'
+import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { storePath } from './store.js'
 
@@ -44,7 +44,7 @@ export async function buildProgram(program: Program, progress: Progress): Promis
     else progress.log(event.text)
   })
   if (result.exitCode !== 0) {
-    progress.fail(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, result.lastError)}`)
+    progress.fail(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, result.lastError)}.`)
     throw new Error(`Fix the build in ${tilde(program.folder)}, then run the command again.`)
   }
   const folder = join(program.folder, program.output)

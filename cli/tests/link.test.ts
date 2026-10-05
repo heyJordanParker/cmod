@@ -85,6 +85,21 @@ test('link builds the program cli/ declares into the store and points ~/.local/b
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
 
+test('a failed build shows one sentence that ends with one period', async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer', 'hello-mod')
+  const build = 'echo "make: no rule for dist?" >&2; exit 2'
+  await writeFiles(checkout, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
+    'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
+  })
+
+  const result = await cmod(home, 'link', checkout)
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stdout).toContain(`✘ Building hello with "${build}" exited 2: make: no rule for dist.\n`)
+})
+
 test('link installs the CMod plugin through Claude Code when claude plugin list lacks it', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'bin/claude': claudeAnswering([]), 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })

@@ -14,11 +14,6 @@ export async function runStep(argv: string[], cwd: string, env: Record<string, s
   return { exitCode, lastError }
 }
 
-export function formatExit(code: number, reason: string): string {
-  const clause = reason.trim().replace(/\.$/, '')
-  return clause ? `exited ${code}: ${clause}` : `exited ${code}`
-}
-
 async function runLines(argv: string[], options: RunOptions, onLine: (line: Line) => void): Promise<number> {
   const child = spawn(argv, { ...options, stdout: 'pipe', stderr: 'pipe' })
   await Promise.all([readLines(child.stdout, (text) => onLine({ stream: 'stdout', text })), readLines(child.stderr, (text) => onLine({ stream: 'stderr', text }))])

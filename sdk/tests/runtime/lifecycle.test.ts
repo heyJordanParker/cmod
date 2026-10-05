@@ -666,8 +666,55 @@ test('a whitespace-only chunk of standard error keeps the last error line', asyn
   await settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
-    '>\n✗ Installing safe-delete  cmod setup exit 1: cmod setup: disk full\n  Fix the cause, then run: cmod install safe-delete',
+    '>\n✗ Installing safe-delete  cmod setup exited 1: cmod setup: disk full\n  Fix the cause, then run: cmod install safe-delete',
   )
+})
+
+test('an empty stderr from cmod setup leaves no bare colon in the session', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => finished([], 1)
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await settle()
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing safe-delete  cmod setup exited 1\n  Fix the cause, then run: cmod install safe-delete')
+  expect((lifecycle.failure as Error).message).toBe('safe-delete: cmod setup exited 1. Fix the cause, then run: cmod install safe-delete')
+})
+
+test('an empty stderr from the CMod bootstrap leaves no bare colon', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  fake.fakes.process.spawn = () => finished([], 1)
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
+  await settle()
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(`>\n✗ Installing cmod  bootstrap exited 1\n  Run ./setup/bootstrap.sh in ${root} to see the whole log.`)
+})
+
+test('an empty stderr from cmod --version leaves no bare colon', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = async () => ({ exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await settle()
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing safe-delete  cmod --version exited 1\n  Run cmod install safe-delete in a terminal to see the whole log.')
+})
+
+test('a reason ending in ? keeps one mark', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => finished(['failed 1\tIs Homebrew installed?'], 1)
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await settle()
+
+  expect((lifecycle.failure as Error).message).toBe('safe-delete: Is Homebrew installed? Fix the cause, then run: cmod install safe-delete')
 })
 
 type NotesState = { memory: { isTyping: boolean }; session: { draft: string }; global: { notes: string[] } }
@@ -914,6 +961,19 @@ test('a Bash call between /cd and the next prompt keeps mod.cwd on the new root'
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(moves).toEqual([movedTo('/work/a', '/work/b')])
+})
+
+test('a Bash cd back to the old folder during the lag shows on the next prompt', async () => {
+  const { lifecycle, session, moves, start } = folderPane()
+  await start()
+  session.root = '/work/b'
+  await fire(lifecycle, 'command.run', cd('../b'), {})
+  await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd /work/a' } }, {})
+
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/work/a'])
+  expect(moves).toEqual([movedTo('/work/a', '/work/b'), movedTo('/work/b', '/work/a')])
 })
 
 test('a /cd the user cancels after a Bash cd out of the project keeps mod.cwd where the Bash cd left it', async () => {

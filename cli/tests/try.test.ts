@@ -203,8 +203,8 @@ test('a signal to the process group during the install step of cmod try leaves n
   const result = await cmodInTerminal(home, 'try', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of hello-mod on SIGINT.')
-  expect(result.output).not.toContain('Fix the step')
+  expect(result.output).toContain('Cancelled on SIGINT. The install step of hello-mod exited 130.')
+  expect(result.output).not.toContain('Fix the install step')
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
   expect(leftovers(home)).toEqual([])
   expect(await approvals(home)).toEqual({})

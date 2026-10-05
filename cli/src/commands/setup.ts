@@ -4,9 +4,9 @@ import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
 import { dataFolder, formatEvent, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
+import { formatExit, messageOf } from 'cmod-sdk/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
-import { formatExit, runStep } from '../process.js'
+import { runStep } from '../process.js'
 import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
@@ -50,18 +50,24 @@ export async function run(argv: string[]): Promise<number> {
     options: { events: { type: 'boolean', default: false }, consent: { type: 'string' }, yes: { type: 'boolean', default: false } },
   })
   if (positionals.length !== 1) throw new Error(`cmod setup takes one plugin root.\n\n${help}`)
-  const plugin = await readPlugin(positionals[0] as string)
-  if (values.events) return setupWithEvents(plugin, values.consent)
+  const root = positionals[0] as string
+  if (values.events) return setupWithEvents(root, values.consent)
+  const plugin = await readPlugin(root)
   const progress = startProgress()
   const code = await setupInTerminal(plugin, { yes: values.yes, consent: values.consent }, progress)
   if (code === 0) noteNextStep(plugin, progress)
   return code
 }
 
-async function setupWithEvents(plugin: Plugin, consent: string | undefined): Promise<number> {
-  const code = await runSetup(plugin, consent, printEvent).catch(printFailure)
-  if (code === 0) printEvent({ kind: 'done', name: plugin.name, version: plugin.version })
-  return code
+async function setupWithEvents(root: string, consent: string | undefined): Promise<number> {
+  try {
+    const plugin = await readPlugin(root)
+    const code = await runSetup(plugin, consent, printEvent)
+    if (code === 0) printEvent({ kind: 'done', name: plugin.name, version: plugin.version })
+    return code
+  } catch (error) {
+    return printFailure(error)
+  }
 }
 
 export function printEvent(event: RunnerEvent): void {
@@ -93,9 +99,9 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
     })
   }
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
-  else if (hold.signal === undefined) progress.fail(`${failure.message} Fix the step, then run the command again.`)
+  else if (hold.signal === undefined) progress.fail(`${failure.message} Fix the install step, then run the command again.`)
   else if (failure.code === 0) progress.fail(`Cancelled setting up ${plugin.name} on ${hold.signal}, before its install step started.`)
-  else progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}. ${failure.message}`)
+  else progress.fail(`Cancelled on ${hold.signal}. ${failure.message}`)
   return code
 }
 

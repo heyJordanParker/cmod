@@ -2,7 +2,7 @@ import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChu
 import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
 import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { relativePath } from '../utils/paths.js'
-import { listed, messageOf } from '../utils/text.js'
+import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
 import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
@@ -113,7 +113,7 @@ async function cmodVersion(claude: Claude): Promise<string | undefined> {
     throw error
   })
   if (result === undefined) return undefined
-  if (result.exitCode !== 0) throw new Error(`cmod --version exited ${result.exitCode}: ${lastLineOf(result.stderr) ?? 'no error output'}`)
+  if (result.exitCode !== 0) throw new Error(`cmod --version ${formatExit(result.exitCode, lastLineOf(result.stderr) ?? '')}`)
   return result.stdout.trim().split(/\s+/).at(-1)
 }
 
@@ -149,7 +149,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
 
   const fail = (reason: string, fix: string) => {
     phase = 'failed'
-    failure ??= new Error(`${definition.name}: ${reason}. ${fix}`)
+    failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'} ${fix}`)
     showLine().fail(reason, fix)
   }
 
@@ -163,7 +163,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'] }), (text) => {
       if (parseEvent(text).kind === 'done') shouldRecord = false
     })
-    if (shouldRecord) throw new Error(`cmod setup exit ${code ?? 'by signal'}: ${lastError}`)
+    if (shouldRecord) throw new Error(`cmod setup ${formatExit(code, lastError)}`)
   }
 
   const record = () => {
@@ -235,7 +235,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     })
     if (outcome?.kind === 'done') return finish()
     if (outcome?.kind === 'needs-consent') return askConsent(outcome)
-    const reason = outcome?.kind === 'failed' ? outcome.message : `cmod setup exit ${code ?? 'by signal'}: ${lastError}`
+    const reason = outcome?.kind === 'failed' ? outcome.message : `cmod setup ${formatExit(code, lastError)}`
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`)
   }
 
@@ -271,7 +271,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
       if (event.kind === 'progress') progress.report(event)
     })
     if (code === 0) return finish()
-    fail(`bootstrap exit ${code ?? 'by signal'}: ${lastError}`, `Run ./setup/bootstrap.sh in ${root} to see the whole log.`)
+    fail(`bootstrap ${formatExit(code, lastError)}`, `Run ./setup/bootstrap.sh in ${root} to see the whole log.`)
   }
 
   const report = (error: unknown) => {
@@ -414,6 +414,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     return next(e)
   })
   on('classic.UserPromptSubmit', async (e, next) => {
+    staleCwd = undefined
     await followSession()
     return next(e)
   })

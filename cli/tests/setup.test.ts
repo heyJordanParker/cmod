@@ -213,11 +213,27 @@ test('a step script at the plugin root is refused', async () => {
     'install.sh': fourStepInstall,
   })
 
-  const result = await cmod(home, 'setup', root, '--events')
+  const result = await cmod(home, 'setup', root, '--yes')
 
   expect(result.stderr).toBe(`cmod setup: ${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: CMod asks consent for the whole folder of each script.\n`)
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
+})
+
+test('cmod setup --events with a refused cmod key prints one failed line', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { install: './install.sh' } }),
+    'install.sh': fourStepInstall,
+  })
+
+  const result = await cmod(home, 'setup', root, '--events')
+
+  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: CMod asks consent for the whole folder of each script.\n`)
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(1)
 })
 
 test('a step that runs make -C setup is refused at setup', async () => {
@@ -662,8 +678,8 @@ test('Ctrl+C during the install step of cmod setup leaves no program link', asyn
   const result = await cmodInTerminal(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of hello-mod on SIGINT.')
-  expect(result.output).not.toContain('Fix the step')
+  expect(result.output).toContain('Cancelled on SIGINT. The install step of hello-mod exited 130.')
+  expect(result.output).not.toContain('Fix the install step')
   for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
@@ -678,7 +694,7 @@ test('Ctrl+C during the install step runs the uninstall step and leaves nothing'
   const result = await cmodInTerminal(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of demo on SIGINT.')
+  expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 130.')
   expect(result.output).toContain('The uninstall step of demo undid the install.')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
@@ -711,7 +727,7 @@ test('a fresh install step that fails runs the uninstall step and leaves nothing
 
   expect(result.exitCode).toBe(1)
   expect(result.stdout).toContain('The uninstall step of demo undid the install.')
-  expect(result.stdout).toContain('✘ The install step of demo exited 3: brew: no such formula. Fix the step, then run the command again.\n')
+  expect(result.stdout).toContain('✘ The install step of demo exited 3: brew: no such formula. Fix the install step, then run the command again.\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
@@ -751,7 +767,8 @@ test("Ctrl+C during the undo keeps the install step's exit code and reason", asy
   const result = await cmodInTerminal(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of demo on SIGINT. The install step of demo exited 3: brew: no such formula.')
+  expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 3: brew: no such formula.')
+  expect(result.output).not.toContain('Cancelled the install step')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
 })
 
@@ -768,7 +785,7 @@ test("Ctrl+C during an upgrade's install step keeps the version its record names
   const result = await cmodInTerminal(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of demo on SIGINT.')
+  expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 130.')
   expect(await readFile(join(home, 'history.db'), 'utf8')).toBe('history the user built\n')
   expect(existsSync(join(home, 'uninstalls'))).toBe(false)
   expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0', scriptsSha256: installed })
@@ -790,7 +807,7 @@ sleep 1
   const result = await cmodInTerminal(home, 'setup', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(result.output).toContain('Cancelled the install step of demo on SIGINT.')
+  expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 130.')
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'consent.json.lock')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
@@ -934,7 +951,7 @@ test('Ctrl+C while cmod setup downloads the program installs nothing', async () 
 
   expect(result.exitCode).toBe(130)
   expect(result.stdout).toContain('Cancelled setting up hello-mod on SIGINT, before its install step started.')
-  expect(result.stdout).not.toContain('Cancelled the install step')
+  expect(result.stdout).not.toContain('Cancelled on')
   for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
@@ -1217,7 +1234,7 @@ test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   expect(result.exitCode).toBe(130)
   expect(waitedMs).toBeLessThan(1000)
   expect(result.stdout).toContain('Cancelled setting up demo on SIGINT, before its install step started.')
-  expect(result.stdout).not.toContain('Cancelled the install step')
+  expect(result.stdout).not.toContain('Cancelled on')
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }

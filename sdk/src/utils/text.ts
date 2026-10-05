@@ -6,3 +6,9 @@ export function listed(items: readonly string[]): string {
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+export function formatExit(code: number | null, reason: string): string {
+  const exit = code === null ? 'was stopped by a signal' : `exited ${code}`
+  const clause = reason.trim().replace(/[.!?]+$/, '')
+  return clause ? `${exit}: ${clause}` : exit
+}
