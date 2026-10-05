@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, symlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
-import { isObject, pluginName, type RunnerEvent } from 'cmod-sdk/src/records.js'
+import { isObject, pluginName, type InstallRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { home, readJson, readText, tilde } from './files.js'
 import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
@@ -91,7 +92,7 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
       await Bun.write(partial, build)
       await chmod(partial, 0o755)
       emit({ kind: 'progress', done: 1, total: programSteps, label: `Checking ${name} ${plugin.version}` })
-      const check = await capture([partial, '--version']).catch((error: Error) => ({ exitCode: 1, stdout: '', stderr: error.message }))
+      const check = await capture([partial, '--version']).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
       if (check.exitCode !== 0) {
         const detail = (check.stderr.trim() || check.stdout.trim()).split('\n').at(-1)
         throw new Error(`${url} downloaded, but ${name} --version exited ${check.exitCode}${detail ? `: ${detail}` : ''}. Attach the ${machine} build of ${name} to the v${plugin.version} release.`)
@@ -112,6 +113,11 @@ export async function removeProgram(name: string): Promise<boolean> {
   if (isLinked) await rm(entry)
   await rm(storePath('bin', name), { recursive: true, force: true })
   return isLinked
+}
+
+export async function restoreProgram(name: string, record: InstallRecord | undefined): Promise<void> {
+  if (record?.program === name) await linkProgram(name, storePath('bin', name, record.version, name))
+  else await removeProgram(name)
 }
 
 async function refuseTakenCommand(name: string): Promise<void> {

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isObject, readSteps, type Steps } from 'cmod-sdk/src/records.js'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { readJson } from './files.js'
 import { bunArgv, run } from './process.js'
 
@@ -30,7 +31,7 @@ export async function readPlugin(path: string): Promise<Plugin> {
   try {
     steps = readSteps(packageJson) ?? {}
   } catch (error) {
-    throw new Error(`${root}: ${(error as Error).message}`)
+    throw new Error(`${root}: ${messageOf(error)}`)
   }
 
   return {

@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util'
 import { changePlugin, listPlugins } from '../claude.js'
 import { isModFolder, readPlugin } from '../plugin.js'
 import { startProgress } from '../progress.js'
-import { setupInTerminal } from './setup.js'
+import { noteNextStep, setupInTerminal } from './setup.js'
 
 export const summary = 'Update mods through Claude Code and rerun changed install steps.'
 
@@ -36,7 +36,10 @@ export async function run(argv: string[]): Promise<number> {
     progress.succeed(`Updated ${mod.id} through Claude Code`)
     const updated = (await listPlugins()).find((plugin) => plugin.id === mod.id)
     if (updated === undefined) throw new Error(`Claude Code updated ${mod.id} but claude plugin list no longer shows it.`)
-    exitCode = Math.max(exitCode, await setupInTerminal(await readPlugin(updated.installPath), { yes: values.yes }, progress))
+    const plugin = await readPlugin(updated.installPath)
+    const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
+    if (code === 0) noteNextStep(plugin, progress)
+    exitCode = Math.max(exitCode, code)
   }
   return exitCode
 }

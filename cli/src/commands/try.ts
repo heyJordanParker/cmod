@@ -9,7 +9,7 @@ import { run as runCommand, runAttached } from '../process.js'
 import { startProgress } from '../progress.js'
 import { installCmodPlugin } from './install.js'
 import { setupInTerminal } from './setup.js'
-import { teardownInTerminal } from './teardown.js'
+import { deleteUnclaimedLeftovers, teardownInTerminal } from './teardown.js'
 
 export const summary = 'Start one throwaway Claude Code session with a mod set up.'
 
@@ -20,8 +20,9 @@ ${summary}
 Installs the CMod plugin into Claude Code when it lacks it and runs the mod's
 install step after asking consent for its install and uninstall commands, as
 cmod link does, then starts one Claude Code session with the mod loaded through
---plugin-dir. When the session ends, runs the mod's uninstall step and deletes
-its record, data folder, approval, and program, so the mod stays uninstalled.
+--plugin-dir. When the session ends, even when its terminal closes, runs the
+mod's uninstall step and deletes its record, data folder, approval, and
+program, so the mod stays uninstalled.
 The CMod plugin stays installed, as the cmod program does. A GitHub mod is
 cloned into a temporary folder that is deleted too. A mod another folder has
 set up is refused, so cmod try never replaces an installed copy. A checkout
@@ -56,11 +57,21 @@ export async function run(argv: string[]): Promise<number> {
     if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
     else progress.succeed(`${plugin.name} has no packages to install`)
     await installCmodPlugin(progress)
+    let code = 1
     try {
-      const code = await setupInTerminal(plugin, { yes: values.yes, isStartingClaude: true }, progress)
-      return code === 0 ? await runAttached(['claude', '--plugin-dir', plugin.root, ...forwarded]) : code
+      code = await setupInTerminal(plugin, { yes: values.yes }, progress)
+    } finally {
+      if (code !== 0 && record === undefined) await deleteUnclaimedLeftovers(plugin.name)
+    }
+    if (code !== 0) return code
+    const signals = ['SIGINT', 'SIGHUP', 'SIGTERM'] as const
+    const ignoreSignal = () => {}
+    for (const signal of signals) process.on(signal, ignoreSignal)
+    try {
+      return await runAttached(['claude', '--plugin-dir', plugin.root, ...forwarded])
     } finally {
       if (record === undefined) await teardownInTerminal(plugin.name, progress)
+      for (const signal of signals) process.off(signal, ignoreSignal)
     }
   } finally {
     if (clone !== undefined) await rm(clone, { recursive: true, force: true })

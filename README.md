@@ -91,8 +91,6 @@ export const myMod = defineMod({
 
     mod.on('UserPromptSubmit', () => {
       mod.state.session.prompts += 1
-      const prompts = mod.state.session.prompts === 1 ? '1 prompt' : `${mod.state.session.prompts} prompts`
-      return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: `The my-mod mod is loaded. It has seen ${prompts} this session.` } }
     })
   },
 })

@@ -1,16 +1,17 @@
-import type { Args, ClassicHookInputs, CmodDependencies, CommandPresentation, CommandRunResult, EventResult, Frozen, Next, PaneOpenArgs, RenderChildren, RenderComponent, RenderElement } from 'claude-code'
+import type { Args, ClassicHookInputs, CmodDependencies, CommandPresentation, CommandRunResult, EventResult, Frozen, PaneOpenArgs, RenderChildren, RenderComponent, RenderElement } from 'claude-code'
 import type { Reply } from './jobs/slash-command.js'
 import type { ModDefinition, ModEvent } from './mod.js'
+import { storeFolder } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, notInstalled } from './runtime/dependencies.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { createLifecycle } from './runtime/lifecycle.js'
+import { fakeClaude, type Fakes, type Shown, type TestCall } from './testing/fake-claude.js'
+import { elements, findButton, rowsOf } from './testing/fake-elements.js'
+import { fakeFiles } from './testing/fake-files.js'
 import type { Slot, SlotProps } from './ui/slots.js'
-import { fakeClaude, type Fakes, type Shown, type TestCall } from './utils/fake-claude.js'
-import { elements, findButton, rowsOf } from './utils/fake-elements.js'
-import { fakeFiles } from './utils/fake-files.js'
 
-export type { Fakes, Shown, TestCall } from './utils/fake-claude.js'
+export type { Fakes, Shown, TestCall } from './testing/fake-claude.js'
 
 export type TestOptions<State extends object> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
@@ -34,7 +35,7 @@ export type TestedMod<State extends object> = {
   type(line: string): Promise<Reply>
   callTool(name: string, input: Record<string, unknown>): Promise<EventResult<'tool.call'>>
   press(paneId: string, key: string): Promise<void>
-  moveTo(projectRoot: string): Promise<void>
+  moveTo(projectRoot: string, cwd?: string): Promise<void>
   readonly state: Readonly<State>
   readonly calls: readonly TestCall[]
   readonly fakes: Fakes
@@ -70,14 +71,21 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   let started: Promise<void> | undefined
 
   const start = async () => {
-    started ??= lifecycle.start(fake.claude, async () => ({ name, root, version: '0.0.0', store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: false }))
+    started ??= lifecycle.start(fake.claude, async (claude) => ({
+      name,
+      root,
+      version: '0.0.0',
+      store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
+      isInstalled: true,
+      shouldRecord: false,
+    }))
     await started
     if (lifecycle.phase !== 'active') throw lifecycle.failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)
   }
 
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {
     await start()
-    return lifecycle.route(event, input as Frozen<Args<N>>, fakeNext(event, () => below))
+    return lifecycle.route(event, input as Frozen<Args<N>>, async () => below as EventResult<N>)
   }
 
   const drawPane = async (paneId: string) => {
@@ -96,7 +104,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   const drawSlot = async (component: RenderComponent, props: object, requestId = `${component}_${(slotDraws += 1)}`) => {
     await start()
     const input = { surface: 'terminal', component, requestId, props } as Frozen<Args<'ui.render'>>
-    const drawing = await lifecycle.route('ui.render', input, fakeNext('ui.render', (e) => plainOutput(e as Args<'ui.render'>)))
+    const drawing = await lifecycle.route('ui.render', input, async (e) => plainOutput(e as Args<'ui.render'>))
     return { drawing, columns: defaultColumns }
   }
 
@@ -142,14 +150,18 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
       if (button === undefined) throw new Error(`The pane "${paneId}" of ${name} draws no Button with the key or label "${key}".`)
       await button.props.onPress()
     },
-    async moveTo(nextRoot) {
+    async moveTo(nextRoot, nextCwd = nextRoot) {
       await start()
-      const move = fakeNext('command.run', () => {
+      if (nextRoot === projectRoot) {
+        cwd = nextCwd
+        await fire('PostToolUse', { tool_name: 'Bash', tool_input: { command: `cd '${nextCwd}'` }, tool_response: { stdout: '', stderr: '', interrupted: false, isImage: false } })
+        return
+      }
+      await lifecycle.route('command.run', { command: 'cd', args: nextRoot, origin: { kind: 'composer' }, presentation }, async () => {
         projectRoot = nextRoot
-        cwd = nextRoot
+        cwd = nextCwd
         return {}
       })
-      await lifecycle.route('command.run', { command: 'cd', args: nextRoot, origin: { kind: 'composer' }, presentation }, move)
     },
     get state() {
       const mod = lifecycle.mod
@@ -170,18 +182,6 @@ function fakeDependencies(dependencies: NonNullable<TestOptions<object>['depende
     if (answer.deny !== undefined) throw new Error(answer.deny)
     return answer.value
   }
-}
-
-function fakeNext<N extends RoutedEvent>(event: N, below: (e: unknown) => unknown): Next<N> {
-  const next = Object.assign(async (e: unknown) => below(e), {
-    event,
-    signal: new AbortController().signal,
-    origin: { plugin: 'engine', tier: 'core' },
-    trace: [],
-    budget: { ms: 0, remainingMs: Number.POSITIVE_INFINITY },
-    is: () => true,
-  })
-  return Object.assign(next, { to: next }) as unknown as Next<N>
 }
 
 function plainOutput({ component, props }: Args<'ui.render'>): RenderElement {

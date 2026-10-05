@@ -4,6 +4,7 @@ import { builtinModules } from 'node:module'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { isObject, scriptsSha256 } from 'cmod-sdk/src/records.js'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { listPlugins } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
 import { preparePackages, readPlugin, type Plugin } from '../plugin.js'
@@ -70,7 +71,7 @@ async function checkPackages(plugin: Plugin): Promise<Result> {
     if (!(await preparePackages(plugin))) return { status: 'skip', text: 'No package.json, so no packages to install' }
     return { status: 'pass', text: 'Packages installed from package.json' }
   } catch (error) {
-    return { status: 'fail', text: `Installing packages failed: ${(error as Error).message}`, fix: 'Fix the dependencies in package.json, then run cmod check again.' }
+    return { status: 'fail', text: `Installing packages failed: ${messageOf(error)}`, fix: 'Fix the dependencies in package.json, then run cmod check again.' }
   }
 }
 
@@ -90,7 +91,7 @@ async function checkSteps(plugin: Plugin): Promise<Result> {
   try {
     await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
   } catch (error) {
-    return { status: 'fail', text: 'The steps have a problem', fix: (error as Error).message }
+    return { status: 'fail', text: 'The steps have a problem', fix: messageOf(error) }
   }
   return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
 }
@@ -201,7 +202,7 @@ async function fetchTool(tool: { name: string; version: string; program: string 
     await runCommand(bun.argv, { cwd: folder, env: bun.env })
     return program
   } catch (error) {
-    return { status: 'skip', text: `${tool.program} skipped: fetching ${tool.name} ${tool.version} failed (${(error as Error).message.split('\n')[0]}). Check the network, then run cmod check again.` }
+    return { status: 'skip', text: `${tool.program} skipped: fetching ${tool.name} ${tool.version} failed (${messageOf(error).split('\n')[0]}). Check the network, then run cmod check again.` }
   }
 }
 

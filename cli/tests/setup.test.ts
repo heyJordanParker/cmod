@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, utimes } from 'node:fs/promises'
+import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { deleteUnclaimedLeftovers } from '../src/commands/teardown.js'
 import { readText } from '../src/files.js'
 import { cmod, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
@@ -69,7 +70,7 @@ const claudeOnDisk = (home: string, plugin: { name: string; root: string }) => (
     exists: async (path: string) => existsSync(path),
     stat: async (path: string) => ({ kind: (await stat(path)).isFile() ? 'file' : 'dir' }),
     read: (path: string) => readFile(path, 'utf8'),
-    list: async (folder: string) => (await readdir(folder, { withFileTypes: true })).map((entry) => ({ name: entry.name, kind: entry.isFile() ? 'file' : entry.isDirectory() ? 'dir' : 'symlink' })),
+    list: async (folder: string) => (await readdir(folder, { withFileTypes: true })).map((entry) => ({ name: entry.name, kind: entry.isFile() ? 'file' : entry.isDirectory() ? 'dir' : 'other', isLink: entry.isSymbolicLink() })),
   },
 })
 
@@ -155,10 +156,29 @@ test('an update that changes only setup/lib asks consent again', async () => {
   expect(changed).not.toBe(approved)
 })
 
-test('the CLI and the SDK hash a mod with a nested setup/lib the same', async () => {
+test('a changed script behind a symbolic link asks consent again', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeFiles(root, { 'scripts/install.sh': fourStepInstall })
+  await rm(join(root, 'setup/install.sh'))
+  await symlink('../scripts/install.sh', join(root, 'setup/install.sh'))
+  const approved = await hashOf(root)
+  expect((await cmod(home, 'setup', root, '--events', '--consent', approved)).exitCode).toBe(0)
+  await writeFiles(root, { 'scripts/install.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
+  const changed = await hashOf(root)
+
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.exitCode).toBe(10)
+  expect(changed).not.toBe(approved)
+})
+
+test('the CLI and the SDK hash a mod with a nested setup/lib and a symbolic link the same', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\n. ./setup/lib/common.sh\n')
-  await writeFiles(root, { 'setup/lib/common.sh': 'echo safe\n', 'setup/lib/shell/zsh.sh': 'echo zsh\n' })
+  await writeFiles(root, { 'setup/lib/common.sh': 'echo safe\n', 'setup/lib/shell/zsh.sh': 'echo zsh\n', 'shared/aliases.sh': 'echo aliases\n' })
+  await symlink('../../shared/aliases.sh', join(root, 'setup/lib/aliases.sh'))
   const asked = parseEvent((await cmod(home, 'setup', root, '--events')).stdout.trim())
   if (asked.kind !== 'needs-consent') throw new Error(`cmod setup printed ${asked.kind}, not needs-consent`)
   expect((await cmod(home, 'setup', root, '--events', '--consent', asked.sha256)).exitCode).toBe(0)
@@ -194,6 +214,37 @@ test('a step that runs make -C setup is refused at setup', async () => {
     'setup/Makefile': 'all:\n\techo installed\n',
   })
   const refusal = 'package.json "cmod.install" runs "make -C setup", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/install.sh.'
+  const { readPlugin } = await import(sdkLifecycle)
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.stderr).toBe(`cmod setup: ${refusal}\n`)
+  expect(result.exitCode).toBe(1)
+  expect(existsSync(join(home, '.local/share/cmod'))).toBe(false)
+  await expect(readPlugin(claudeOnDisk(home, { name: 'demo', root }))).rejects.toThrow(refusal)
+})
+
+test('a link to a folder in a step folder is refused', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeFiles(root, { 'shared/lib.sh': 'echo shared\n' })
+  await symlink('../shared', join(root, 'setup/shared'))
+  const refusal = './setup/shared links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.'
+  const { readPlugin } = await import(sdkLifecycle)
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.stderr).toBe(`cmod setup: ${refusal}\n`)
+  expect(result.exitCode).toBe(1)
+  expect(existsSync(join(home, '.local/share/cmod'))).toBe(false)
+  await expect(readPlugin(claudeOnDisk(home, { name: 'demo', root }))).rejects.toThrow(refusal)
+})
+
+test('a link to nothing in a step folder is refused', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await symlink('../missing.sh', join(root, 'setup/missing.sh'))
+  const refusal = './setup/missing.sh links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.'
   const { readPlugin } = await import(sdkLifecycle)
 
   const result = await cmod(home, 'setup', root, '--yes')
@@ -331,6 +382,22 @@ test('teardown runs an uninstall that sources setup/lib after the mod\'s folder 
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('alias removed\n')
 })
 
+test('teardown runs an uninstall step reached through a symbolic link', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeFiles(root, { 'scripts/uninstall.sh': '#!/bin/sh\necho "uninstalled through the link" >> "$HOME/uninstalls"\n' })
+  await rm(join(root, 'setup/uninstall.sh'))
+  await symlink('../scripts/uninstall.sh', join(root, 'setup/uninstall.sh'))
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  await rm(root, { recursive: true })
+
+  const result = await cmod(home, 'teardown', 'demo', '--events')
+
+  expect(result.stdout).toBe('done demo\n')
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled through the link\n')
+})
+
 test('two teardowns of one mod run its uninstall once', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
@@ -361,7 +428,7 @@ test('reading a record while another teardown renames it to .claim between findi
 
   const outcomes = new Set<string>()
   for (let read = 0; read < 2000; read++) {
-    outcomes.add(await readRecord(readText, store, 'demo').then((found) => found?.name ?? 'nothing', (error: Error) => error.message))
+    outcomes.add(await readRecord(readText, store, 'demo').then((found) => found?.name ?? 'nothing', messageOf))
   }
   isRenaming = false
   await renaming
@@ -500,6 +567,25 @@ test('a failed install of a set-up mod keeps the program its record names', asyn
   expect(result.exitCode).toBe(1)
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
   expect(existsSync(join(home, '.local/share/cmod/records/hello-mod.json'))).toBe(true)
+})
+
+test('a failed upgrade keeps the program the record names', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
+  const repository = `${server.url.origin}/owner/hello-mod`
+  const root = await createProgramMod(home, repository)
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.3.0/hello': '#!/bin/sh\necho "hello 0.3.0"\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0', repository }),
+    'setup/install.sh': '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n',
+  })
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(1)
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
+  expect(JSON.parse(await readFile(join(home, '.local/share/cmod/records/hello-mod.json'), 'utf8'))).toMatchObject({ version: '0.2.0', program: 'hello' })
 })
 
 test('setup --events prints failed with the fix when the release holds no build for this platform, and writes no record', async () => {

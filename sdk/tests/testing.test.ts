@@ -11,6 +11,8 @@ import { Box, Button, Image, Text } from '../src/ui/elements.js'
 import { markdownSlots } from '../src/ui/markdown.js'
 import { slots } from '../src/ui/slots.js'
 
+declare const Bun: { sleep(ms: number): Promise<void> }
+
 const tickets = defineMod({
   name: 'tickets',
   state: { project: { isFrozen: false, opened: [] as readonly string[] } },
@@ -298,35 +300,50 @@ test('AssistantMessage draws that pass one requestId grow one streamed reply', a
   ])
 })
 
-test('clock.every fires when the test advances it', async () => {
+test('clock.every in testMod fires only when the test ticks it', async () => {
   let branch = 'main'
+  const branchLine = defineMod({
+    name: 'branch-line',
+    setup(mod) {
+      mod.use(statusLine({ text: () => branch, interval: 1 }))
+    },
+  })
+  const unticked = testMod(branchLine)
+  const ticked = testMod(branchLine)
   const intervals: number[] = []
   const ticks: (() => void)[] = []
-  const tested = testMod(
-    defineMod({
-      name: 'branch-line',
-      setup(mod) {
-        mod.use(statusLine({ text: () => branch, interval: 5000 }))
-      },
-    }),
-  )
-  tested.fakes.clock.every = (ms, tick) => {
+  ticked.fakes.clock.every = (ms, tick) => {
     intervals.push(ms)
     ticks.push(tick)
     return { cancel: () => undefined }
   }
-  const settle = async () => {
-    for (let step = 0; step < 20; step += 1) await Promise.resolve()
-  }
-  await tested.start()
-  await settle()
+  await Promise.all([unticked.start(), ticked.start()])
 
   branch = 'feature'
+  await Bun.sleep(20)
   for (const tick of ticks) tick()
-  await settle()
+  await Bun.sleep(0)
 
-  expect(intervals).toEqual([5000])
-  expect(tested.shown.statuses).toEqual(['main', 'feature'])
+  expect(intervals).toEqual([1])
+  expect(unticked.shown.statuses).toEqual(['main'])
+  expect(ticked.shown.statuses).toEqual(['main', 'feature'])
+})
+
+test('moveTo with only a new cwd fires CwdChanged with mod.cwd already moved', async () => {
+  const seen: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'folder-watch',
+      setup(mod) {
+        mod.on('CwdChanged', (input) => void seen.push({ old: input.old_cwd, new: input.new_cwd, cwd: mod.cwd, projectRoot: mod.projectRoot }))
+      },
+    }),
+    { projectRoot: '/work/shop' },
+  )
+
+  await tested.moveTo('/work/shop', '/work/shop/src')
+
+  expect(seen).toEqual([{ old: '/work/shop', new: '/work/shop/src', cwd: '/work/shop/src', projectRoot: '/work/shop' }])
 })
 
 test('a test helper names the Fakes and TestCall types that cmod-sdk/testing.js exports', async () => {

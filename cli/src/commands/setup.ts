@@ -2,9 +2,10 @@ import { copyFile, mkdir, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { dataFolder, formatEvent, readRecord, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from 'cmod-sdk/src/records.js'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
-import { fetchProgram, programSteps, removeProgram } from '../program.js'
+import { fetchProgram, programSteps, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
 import { approve, isApproved, storePath } from '../store.js'
@@ -39,7 +40,10 @@ export async function run(argv: string[]): Promise<number> {
   if (positionals.length !== 1) throw new Error(`cmod setup takes one plugin root.\n\n${help}`)
   const plugin = await readPlugin(positionals[0] as string)
   if (values.events) return setupWithEvents(plugin, values.consent)
-  return setupInTerminal(plugin, { yes: values.yes, consent: values.consent }, startProgress())
+  const progress = startProgress()
+  const code = await setupInTerminal(plugin, { yes: values.yes, consent: values.consent }, progress)
+  if (code === 0) noteNextStep(plugin, progress)
+  return code
 }
 
 async function setupWithEvents(plugin: Plugin, consent: string | undefined): Promise<number> {
@@ -60,16 +64,15 @@ export function printEvent(event: RunnerEvent): void {
   process.stdout.write(`${formatEvent(event)}\n`)
 }
 
-export function printFailure(error: Error): number {
-  printEvent({ kind: 'failed', code: 1, message: error.message })
+export function printFailure(error: unknown): number {
+  printEvent({ kind: 'failed', code: 1, message: messageOf(error) })
   return 1
 }
 
-export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined; isStartingClaude?: boolean }, progress: Progress): Promise<number> {
+export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined }, progress: Progress): Promise<number> {
   const state = await checkSetup(plugin)
   if (state.isCurrent) {
     progress.succeed(`${plugin.name} ${plugin.version} is set up`)
-    if (!options.isStartingClaude) noteNextStep(plugin, progress)
     return 0
   }
   if (state.needsConsent) {
@@ -87,10 +90,8 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
     if (event.kind === 'log') progress.log(event.text)
     if (event.kind === 'failed') Object.assign(failure, event)
   })
-  if (code === 0) {
-    progress.succeed(`${plugin.name} ${plugin.version} is ready`)
-    if (!options.isStartingClaude) noteNextStep(plugin, progress)
-  } else progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
+  if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
+  else progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
   return code
 }
 
@@ -112,7 +113,7 @@ async function runSetup(plugin: Plugin, sha256: string, emit: (event: RunnerEven
       emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
     )
     if (result.exitCode !== 0) {
-      if (program !== undefined && (await readRecord(readText, storeFolder(process.env), plugin.name)) === undefined) await removeProgram(program)
+      if (program !== undefined) await restoreProgram(program, await readRecord(readText, storeFolder(process.env), plugin.name))
       emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
       return 1
     }
@@ -177,6 +178,6 @@ function askConsent(plugin: Plugin): boolean {
   return confirm('Run them?')
 }
 
-function noteNextStep(plugin: Plugin, progress: Progress): void {
+export function noteNextStep(plugin: Plugin, progress: Progress): void {
   progress.note(`Start Claude Code to use ${plugin.name}, or run /reload-plugins in a session that is running.`)
 }

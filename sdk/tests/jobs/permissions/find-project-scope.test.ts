@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { decidePermission, type PermissionRules } from '../../../src/jobs/permissions/decide-permission.js'
 import { findProjectScope, type Workspace } from '../../../src/jobs/permissions/find-project-scope.js'
 import type { ToolUse } from '../../../src/utils/call-effects.js'
-import { fakeFiles } from '../../../src/utils/fake-files.js'
+import { fakeFiles } from '../../../src/testing/fake-files.js'
 
 const home = '/Users/jordan'
 const root = '/work/dent'
@@ -23,7 +23,7 @@ const files = {
 const fs = fakeFiles(files)
 
 async function dentWorkspace(cwd = root): Promise<Workspace> {
-  return { root, cwd, home, fs, scope: await findProjectScope(pluginRoot, home, fs) }
+  return { projectRoot: root, cwd, home, fs, scope: await findProjectScope(pluginRoot, home, fs) }
 }
 
 function edit(path: string): ToolUse {

@@ -1,4 +1,4 @@
-import type { Args, EventResult, Frozen, HookStream, Next, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Args, EventResult, Frozen, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
 import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
@@ -6,7 +6,7 @@ import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
 import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
 import { classicHook, userSkillHook, type RoutedEvent } from './hooks.js'
-import { createRouter, type Router } from './router.js'
+import { createRouter, type Router, type RouterNext } from './router.js'
 import { createState } from './state.js'
 import { toolCalls } from './tool-calls.js'
 import { createProgress, createUi, type Progress, type ProgressLine } from './ui.js'
@@ -27,7 +27,7 @@ export type Lifecycle<State extends object> = {
   readonly mod: Mod<State> | undefined
   readonly failure: unknown
   start(claude: Claude, read: (claude: Claude) => Promise<Plugin>): Promise<void>
-  route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>>
+  route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
 }
 
 type ModRuntime = {
@@ -58,8 +58,6 @@ const missingPath = /(?:^|: )(?:ENOENT|ENOTDIR)\b/
 
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
 
-const nothingBelow = (async () => ({})) as unknown as Next<'classic.CwdChanged'>
-
 export async function readPlugin(claude: Claude): Promise<Plugin> {
   const { name, root } = claude.plugin
   const read: ReadFile = async (path) => {
@@ -87,8 +85,8 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
 async function filesBelow(claude: Claude, folder: string): Promise<string[]> {
   const entries = await claude.fs.list(folder)
   const paths = await Promise.all(
-    entries.map(async ({ name, kind }) => {
-      if (kind === 'file') return [name]
+    entries.map(async ({ name, kind, isLink }) => {
+      if (kind === 'file' || isLink) return [name]
       if (kind === 'dir') return (await filesBelow(claude, `${folder}/${name}`)).map((path) => `${name}/${path}`)
       return []
     }),
@@ -154,7 +152,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     claude().ui.invalidate('ui.render')
   }
 
-  const writeRecord = async () => {
+  const recordThroughCmod = async () => {
     if (plugin === undefined || (await cmodVersion(claude())) === undefined) return
     const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'] }), (text) => {
       if (parseEvent(text).kind === 'done') shouldRecord = false
@@ -163,7 +161,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   }
 
   const record = () => {
-    recording ??= writeRecord()
+    recording ??= recordThroughCmod()
       .catch((error: unknown) => claude().ui.log(`${definition.name} has no CMod record yet: ${messageOf(error)}`, { to: 'debug' }))
       .finally(() => {
         recording = undefined
@@ -174,7 +172,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
     const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name) }).catch((error: unknown) => {
-      fail(`setup failed: ${messageOf(error)}`, 'Fix the mod’s setup, then run /reload-plugins.')
+      fail(messageOf(error), 'Fix it, then run /reload-plugins.')
       throw error
     })
     const { added } = active
@@ -230,21 +228,24 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     phase = 'waiting'
     showLine().wait('Waiting for CMod')
     let check: Promise<void> | undefined
+    const stop = () => {
+      timer.cancel()
+      longWait.cancel()
+    }
     const timer = claude().clock.every(cmodCheckMs, () => {
       check ??= cmodVersion(claude())
         .then((version) => {
           check = undefined
-          if (version === undefined || phase !== 'waiting') return
-          timer.cancel()
-          limit.cancel()
+          if (version === undefined) return
+          stop()
           return install()
         })
-        .catch(report)
+        .catch((error: unknown) => {
+          stop()
+          report(error)
+        })
     })
-    const limit = claude().clock.after(cmodWaitMs, () => {
-      timer.cancel()
-      fail(`CMod did not start in ${cmodWaitMs / 1000} seconds`, 'Install it with cmod install cmod, then run /reload-plugins.')
-    })
+    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for CMod to download cmod. See CMod's own line."))
   }
 
   const bootstrap = async (root: string) => {
@@ -290,7 +291,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
       if (started.version === undefined) return fail('no version to install', 'Add "version" to .claude-plugin/plugin.json, then run /reload-plugins.')
       void install().catch(report)
     },
-    async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>> {
+    async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>> {
       if (shouldRecord && event === 'classic.UserPromptSubmit') record()
       if (phase === 'ready') activation ??= activate().catch(report)
       if (activation !== undefined && phase !== 'active') await activation
@@ -348,20 +349,20 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),
   }
   const followSession = async () => {
-    const oldCwd = cwd
     try {
       const [nextRoot, nextCwd] = await Promise.all([claude.session.root(), claude.session.cwd()])
+      const oldCwd = cwd
       const hasMovedRoot = nextRoot !== modState.root
+      cwd = nextCwd
       if (!hasMovedRoot && nextCwd === oldCwd) return
       await modState.moveTo(nextRoot)
-      cwd = nextCwd
       if (!hasMovedRoot) area.changed()
+      if (nextCwd === oldCwd) return
+      const moved: Parameters<ModHook<'CwdChanged'>>[0] = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
+      await router.dispatch('classic.CwdChanged', moved as Frozen<Args<'classic.CwdChanged'>>, async () => ({}))
     } catch (error) {
       claude.ui.log(`${definition.name} keeps the state of ${modState.root} until the next prompt or folder move: ${messageOf(error)}`)
-      return
     }
-    const moved: Parameters<ModHook<'CwdChanged'>>[0] = { session_id: await claude.session.id(), cwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: cwd }
-    await router.dispatch('classic.CwdChanged', moved as Frozen<Args<'classic.CwdChanged'>>, nothingBelow)
   }
   on('classic.SessionStart', async (e, next) => {
     await modState.switchSession(e.session_id, e.source).catch((error: unknown) => {
@@ -395,7 +396,11 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     names.add(key)
   }
   await modState.load()
-  await definition.setup(mod)
+  try {
+    await definition.setup(mod)
+  } catch (error) {
+    throw new Error(`its setup function threw: ${messageOf(error)}`, { cause: error })
+  }
   await area.restorePanes()
   if (hookEvents.length > 0) added.push(`${hookEvents.length === 1 ? 'a hook' : 'hooks'} on ${listed(hookEvents)}`)
   return { mod, added }

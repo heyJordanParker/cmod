@@ -193,12 +193,12 @@ async function drawComponent<Given extends object>(
   return { drawing: second, isClaudesRow: whole >= 0 }
 }
 
-function drawPieces(pieces: readonly DrawnPiece[], isFirstOfReply?: boolean): RenderElement {
+function drawPieces(pieces: readonly DrawnPiece[], place: 'pane' | 'opensReply' | 'inReply'): RenderElement {
   const column = Box({
     flexDirection: 'column',
-    children: pieces.map(({ drawing, isClaudesRow }, index) => ((index > 0 || isFirstOfReply === false) && !isClaudesRow ? Box({ marginTop: 1, children: drawing }) : drawing)),
+    children: pieces.map(({ drawing, isClaudesRow }, index) => ((index > 0 || place === 'inReply') && !isClaudesRow ? Box({ marginTop: 1, children: drawing }) : drawing)),
   })
-  if (isFirstOfReply !== true || pieces[0]?.isClaudesRow !== false) return column
+  if (place !== 'opensReply' || pieces[0]?.isClaudesRow !== false) return column
   return Box({ children: [Box({ minWidth: 2, children: Text({ color: 'text', children: bullet }) }), column] })
 }
 
@@ -259,7 +259,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
           return drawClaudes(block.source)
         }
       })
-      return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })))
+      return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })), 'pane')
     }
   }
 
@@ -287,7 +287,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
           return { drawing: await drawClaudes(block.source, index === 0), isClaudesRow: true }
         }),
       )
-      return drawWith(table, () => drawPieces(drawn, e.props.isFirstOfReply))
+      return drawWith(table, () => drawPieces(drawn, e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
     })
   }
 
@@ -373,7 +373,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
             return next(e)
           }
           if (e.component !== 'AssistantMessage') return drawn.drawing
-          return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply))
+          return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
         })
       },
       toast: (text) => claude.ui.toast(text),

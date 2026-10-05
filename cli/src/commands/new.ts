@@ -91,8 +91,6 @@ export const ${definition} = defineMod({
 
     mod.on('UserPromptSubmit', () => {
       mod.state.session.prompts += 1
-      const prompts = mod.state.session.prompts === 1 ? '1 prompt' : \`\${mod.state.session.prompts} prompts\`
-      return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: \`The ${name} mod is loaded. It has seen \${prompts} this session.\` } }
     })
   },
 })
@@ -126,11 +124,10 @@ import { ${definition} } from '../src/mod.js'
 
 const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
-test('each prompt adds the count to the context', async () => {
+test('each prompt adds one to the count', async () => {
   const tested = testMod(${definition})
-  const answer = await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   expect(tested.state.session.prompts).toBe(1)
-  expect(JSON.stringify(answer)).toContain('It has seen 1 prompt this session.')
 })
 
 test('the band shows the prompt count on its last line', async () => {
@@ -141,7 +138,10 @@ test('the band shows the prompt count on its last line', async () => {
 
 test('the band leaves the prompt count out during a survey', async () => {
   const tested = testMod(${definition})
-  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 0')
+  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  const logs = [...tested.shown.logs]
+  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
+  expect(tested.shown.logs).toEqual(logs)
 })
 `,
     [`skills/${name}/SKILL.md`]: `---

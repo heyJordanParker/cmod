@@ -5,7 +5,7 @@ import { installProgram, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { addPluginFolder, settingsPath } from '../settings.js'
 import { installCmodPlugin } from './install.js'
-import { setupInTerminal } from './setup.js'
+import { noteNextStep, setupInTerminal } from './setup.js'
 
 export const summary = 'Load a checkout in every new Claude Code session.'
 
@@ -40,5 +40,7 @@ export async function run(argv: string[]): Promise<number> {
   progress.succeed(`${added ? 'Linked' : 'Already linked'} ${tilde(plugin.root)} in ${tilde(settingsPath())}`)
 
   await installCmodPlugin(progress)
-  return setupInTerminal(plugin, { yes: values.yes }, progress)
+  const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
+  if (code === 0) noteNextStep(plugin, progress)
+  return code
 }

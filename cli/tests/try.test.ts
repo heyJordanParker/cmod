@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -13,8 +13,7 @@ const helloMod = {
   'setup/uninstall.sh': '#!/bin/sh\necho uninstalled >> "$HOME/uninstalls"\n',
 }
 
-const sessionListingSetup = `cmod setup "$2" --yes > /dev/null
-for path in .local/share/cmod/records/hello-mod.json .local/share/cmod/data/hello-mod/runs .local/bin/hello; do
+const sessionListingSetup = `for path in .local/share/cmod/records/hello-mod.json .local/share/cmod/data/hello-mod/runs .local/bin/hello; do
   test -e "$HOME/$path" && echo "$path" >> "$HOME/during"
 done`
 
@@ -59,11 +58,11 @@ test('cmod try loads a fresh cmod new mod in a home without the CMod plugin', as
   )
 })
 
-test('cmod try leaves no record, data, approval or program link after the session', async () => {
+test('cmod try sets the mod up itself, and leaves no record, data, approval or program link after the session', async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
   const store = join(home, '.local/share/cmod')
-  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, sessionListingSetup), 'bin/cmod': cmodFromSource })
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, sessionListingSetup) })
   await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
   await writeFiles(root, helloMod)
 
@@ -73,6 +72,79 @@ test('cmod try leaves no record, data, approval or program link after the sessio
   expect(await readFile(join(home, 'during'), 'utf8')).toBe('.local/share/cmod/records/hello-mod.json\n.local/share/cmod/data/hello-mod/runs\n.local/bin/hello\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   for (const path of [join(store, 'records/hello-mod.json'), join(store, 'data/hello-mod'), join(store, 'uninstall/hello-mod'), join(store, 'bin/hello'), join(home, '.local/bin/hello')]) {
+    expect({ path, exists: existsSync(path) }).toEqual({ path, exists: false })
+  }
+  expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
+test('cmod try tears down when the terminal sends SIGHUP', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'kill -HUP $PPID $$') })
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, helloMod)
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(129)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
+  for (const path of [join(store, 'records/hello-mod.json'), join(store, 'uninstall/hello-mod'), join(home, '.local/bin/hello')]) {
+    expect({ path, exists: existsSync(path) }).toEqual({ path, exists: false })
+  }
+})
+
+test('cmod try starts no session and tears nothing down when the mod is not set up', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
+  await writeFiles(root, helloMod)
+
+  const result = await cmod(home, 'try', root)
+
+  expect(result.exitCode).toBe(10)
+  expect(result.stdout).not.toContain('claude --plugin-dir')
+  expect(result.stdout).not.toContain('tear down')
+})
+
+test('Ctrl+C before the session starts ends cmod try at once', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(home, {
+    'bin/claude': `#!/bin/sh
+echo "$*" >> "$HOME/claude-calls"
+case "$*" in
+  "plugin list --json") kill -INT $PPID; sleep 1; echo '${JSON.stringify(cmodPluginListed)}' ;;
+  "--plugin-dir "*) ;;
+  *) exit 1 ;;
+esac
+`,
+  })
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, helloMod)
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(130)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
+  expect(existsSync(join(store, 'records/hello-mod.json'))).toBe(false)
+})
+
+test('a failed install in cmod try leaves no approval or data', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  const store = join(home, '.local/share/cmod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
+  await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
+  await writeFiles(root, { ...helloMod, 'setup/install.sh': '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\necho "brew: no such formula" >&2\nexit 3\n' })
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stdout).not.toContain('claude --plugin-dir')
+  expect(result.stdout).not.toContain('tear down')
+  for (const path of [join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(home, '.local/bin/hello')]) {
     expect({ path, exists: existsSync(path) }).toEqual({ path, exists: false })
   }
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
@@ -102,7 +174,7 @@ test('cmod try keeps the setup of a checkout that was set up before it', async (
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
   const store = join(home, '.local/share/cmod')
-  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, sessionListingSetup), 'bin/cmod': cmodFromSource })
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, sessionListingSetup) })
   await writeFiles(store, { 'bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
   await writeFiles(root, helloMod)
   expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)

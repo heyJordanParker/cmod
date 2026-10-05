@@ -1,3 +1,4 @@
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { version } from '../package.json'
 import * as check from './commands/check.js'
 import * as download from './commands/download.js'
@@ -61,7 +62,7 @@ if (name === '--version' || name === '-v') {
       process.exitCode = await command.run(argv)
     } catch (error) {
       interruptProgress()
-      process.stderr.write(`cmod ${name}: ${(error as Error).message}\n`)
+      process.stderr.write(`cmod ${name}: ${messageOf(error)}\n`)
       process.exitCode = 1
     }
   }

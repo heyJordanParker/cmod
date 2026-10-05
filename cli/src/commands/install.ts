@@ -5,7 +5,7 @@ import { addMarketplace, changePlugin, listMarketplaces, listPlugins } from '../
 import { readJson, tilde } from '../files.js'
 import { readPlugin, sourceOf } from '../plugin.js'
 import { startProgress, type Progress } from '../progress.js'
-import { setupInTerminal } from './setup.js'
+import { noteNextStep, setupInTerminal } from './setup.js'
 
 export const summary = 'Install a mod through Claude Code and run its install step.'
 
@@ -52,7 +52,10 @@ async function installByName(argument: string, yes: boolean, progress: Progress)
   const installed = (await listPlugins()).find((plugin) => plugin.name === argument || plugin.id === argument)
   if (installed !== undefined) {
     await installCmodPlugin(progress)
-    return setupInTerminal(await readPlugin(installed.installPath), { yes }, progress)
+    const plugin = await readPlugin(installed.installPath)
+    const code = await setupInTerminal(plugin, { yes }, progress)
+    if (code === 0) noteNextStep(plugin, progress)
+    return code
   }
   const at = argument.lastIndexOf('@')
   const marketplaceName = at > 0 ? argument.slice(at + 1) : undefined
@@ -68,7 +71,10 @@ async function installPlugin(id: string, yes: boolean, progress: Progress): Prom
   if (installed === undefined) throw new Error(`Claude Code installed ${id} but claude plugin list does not show it.`)
   progress.succeed(`Installed ${id} into Claude Code`)
   await installCmodPlugin(progress)
-  return setupInTerminal(await readPlugin(installed.installPath), { yes }, progress)
+  const plugin = await readPlugin(installed.installPath)
+  const code = await setupInTerminal(plugin, { yes }, progress)
+  if (code === 0) noteNextStep(plugin, progress)
+  return code
 }
 
 export async function installCmodPlugin(progress: Progress): Promise<void> {

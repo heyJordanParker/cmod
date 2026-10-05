@@ -1,15 +1,15 @@
 import { expect, expectTypeOf, test } from 'bun:test'
-import type { AgentInfo, Args, ClassicHookInputs, Frozen, Next, RenderElement } from 'claude-code'
+import type { AgentInfo, Args, ClassicHookInputs, EventResult, Frozen, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import { defineMod, type Mod, type PaneHandle, type Part } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
 import { testMod, type TestedMod } from '../src/testing.js'
-import { fakeClaude, type TestCall } from '../src/utils/fake-claude.js'
+import { fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
+import { textOf } from '../src/testing/fake-elements.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Text } from '../src/ui/elements.js'
-import { textOf } from '../src/utils/fake-elements.js'
 import type { TracerSignature } from './tracer.js'
 
 const base = { session_id: 'session-1', transcript_path: '/tmp/transcript.jsonl', cwd: '/work', permission_mode: 'default' }
@@ -163,9 +163,9 @@ test('a PreToolUse hook in a subagent sees agent_id and agent_type', async () =>
   )
   await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
   const envelope = { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls' } as Frozen<Args<'classic.PreToolUse'>>
-  const preToolUse = Object.assign(() => lifecycle.route('classic.PreToolUse', envelope, Object.assign(async () => ({}), { event: 'classic.PreToolUse' }) as unknown as Next<'classic.PreToolUse'>), { event: 'tool.call' })
+  const preToolUse = async () => (await lifecycle.route('classic.PreToolUse', envelope, async () => ({}))) as EventResult<'tool.call'>
 
-  await lifecycle.route('tool.call', { ...envelope, agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, preToolUse as unknown as Next<'tool.call'>)
+  await lifecycle.route('tool.call', { ...envelope, agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, preToolUse)
 
   expect(seen).toEqual([
     {

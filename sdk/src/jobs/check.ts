@@ -3,7 +3,7 @@ import { longestMs, type Deadline } from '../runtime/deadline.js'
 import { callEffects, type ToolUse } from '../utils/call-effects.js'
 import { parentOf } from '../utils/paths.js'
 import { listed, messageOf } from '../utils/text.js'
-import { afterCall, modWithin, targetWords } from './part-context.js'
+import { afterCall, modOf, targetWords } from './part-context.js'
 import type { Workspace } from './permissions/find-project-scope.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
 
@@ -27,7 +27,7 @@ export function check<State extends object = Record<never, never>>(options: { re
         if (triggered === undefined) return []
         try {
           const { command, folder } = triggered
-          const { exitCode, stdout, stderr } = await modWithin(context, deadline, async () => workspace.scope?.workTreeOf(folder)).process.run(command)
+          const { exitCode, stdout, stderr } = await modOf(context, { folder }, workspace, deadline).process.run(command)
           return exitCode === 0 ? [] : [`${command.join(' ')} exited with ${exitCode}:\n${`${stdout}${stderr}`.trim()}`]
         } catch (error) {
           return [`The ${named} failed: ${messageOf(error)}`]

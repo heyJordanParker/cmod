@@ -10,7 +10,7 @@ import { findProjectScope, type Workspace } from './permissions/find-project-sco
 import { targetOf, type Target } from './permissions/match-target.js'
 import type { FileSystem } from '../utils/paths.js'
 
-type Session = Omit<Workspace, 'root' | 'cwd'>
+type Session = Omit<Workspace, 'projectRoot' | 'cwd'>
 
 type Stream = HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 
@@ -18,8 +18,8 @@ export function workspaceReader({ claude }: PartContext): () => Promise<Workspac
   let session: Promise<Session> | undefined
   return async () => {
     session ??= readSession(claude)
-    const [{ home, scope, fs }, root, cwd] = await Promise.all([session, claude.session.root(), claude.session.cwd()])
-    return { root, cwd, home, fs, scope }
+    const [{ home, scope, fs }, projectRoot, cwd] = await Promise.all([session, claude.session.root(), claude.session.cwd()])
+    return { projectRoot, cwd, home, fs, scope }
   }
 }
 
@@ -54,8 +54,8 @@ async function useOf({ toolCalls }: PartContext, e: Frozen<Args<'tool.call'>>): 
   return { tool: e.tool, input: toolInputOf(e), ...(await toolCalls.agentOf(e.tool_use_id)) }
 }
 
-export function modOf<State extends object>(context: PartContext<State>, call: ToolCall, folder: string, workspace: Workspace, deadline: Deadline): Mod<State> {
-  return modWithin(context, deadline, async () => workspace.scope?.workTreeOf('path' in call ? call.path : folder))
+export function modOf<State extends object>(context: PartContext<State>, { call, folder }: { readonly call?: ToolCall; readonly folder: string }, workspace: Workspace, deadline: Deadline): Mod<State> {
+  return modWithin(context, deadline, async () => workspace.scope?.workTreeOf(call !== undefined && 'path' in call ? call.path : folder))
 }
 
 export function modWithin<State extends object>({ mod, claude }: PartContext<State>, deadline: Deadline, workTree: () => Promise<string | undefined> = async () => undefined): Mod<State> {

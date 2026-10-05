@@ -26,7 +26,7 @@ export function permissions<State extends object = Record<never, never>>(rules: 
       try {
         const [agent, workspace] = await Promise.all([context.toolCalls.agentOf(e.tool_use_id), readWorkspace()])
         const use: ToolUse = { tool: e.tool, input: e.input, ...agent }
-        return await decidePermission(rules, use, workspace, (call, folder) => modOf(context, call, folder, workspace, deadline))
+        return await decidePermission(rules, use, workspace, (call, folder) => modOf(context, { call, folder }, workspace, deadline))
       } catch (error) {
         return { decision: 'deny', reason: `The permissions job could not read the session, so it denies the call: ${messageOf(error)}` }
       }

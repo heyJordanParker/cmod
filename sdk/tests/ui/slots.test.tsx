@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import type { RenderElement, RenderPropsOf } from 'claude-code'
 import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { textOf } from '../../src/testing/fake-elements.js'
 import { Box, Text } from '../../src/ui/elements.js'
 import { markdownSlots } from '../../src/ui/markdown.js'
 import { type Slot, slots } from '../../src/ui/slots.js'
-import { textOf } from '../../src/utils/fake-elements.js'
 
 const bashRow: RenderPropsOf['ToolUse'] = { tool_use_id: 'toolu_1', tool: 'Bash', input: { command: 'deploy --token s3cret' }, isRunning: false, isErrored: false, isInterrupted: false }
 

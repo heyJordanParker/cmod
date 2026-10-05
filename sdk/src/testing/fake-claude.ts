@@ -123,7 +123,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     clock: {
       now: async () => Date.now(),
       after: faked('clock.after', () => fakes.clock.after ?? realTimer),
-      every: faked('clock.every', () => fakes.clock.every ?? realInterval),
+      every: faked('clock.every', () => fakes.clock.every ?? idleInterval),
     },
     session: {
       id: async () => 'test-session',
@@ -158,15 +158,12 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
 
 declare function setTimeout(fn: () => void, ms: number): unknown
 declare function clearTimeout(timeout: unknown): void
-declare function setInterval(fn: () => void, ms: number): unknown
-declare function clearInterval(interval: unknown): void
 
 function realTimer(ms: number, fn: () => void): Timer {
   const timeout = setTimeout(fn, ms)
   return { cancel: () => clearTimeout(timeout) }
 }
 
-function realInterval(ms: number, fn: () => void): Timer {
-  const interval = setInterval(fn, ms)
-  return { cancel: () => clearInterval(interval) }
+function idleInterval(): Timer {
+  return { cancel: () => undefined }
 }

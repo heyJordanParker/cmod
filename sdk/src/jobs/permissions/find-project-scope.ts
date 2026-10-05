@@ -2,7 +2,7 @@ import { nameOf, parentOf, resolvePath, type FileSystem } from '../../utils/path
 
 export type ProjectScope = { workTreeOf: (path: string) => Promise<string | undefined> }
 
-export type Workspace = { root: string; cwd: string; home: string; fs: FileSystem; scope: ProjectScope | undefined }
+export type Workspace = { projectRoot: string; cwd: string; home: string; fs: FileSystem; scope: ProjectScope | undefined }
 
 export async function findProjectScope(pluginRoot: string, home: string, fs: FileSystem): Promise<ProjectScope | undefined> {
   const skills = parentOf(pluginRoot)

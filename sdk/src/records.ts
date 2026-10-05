@@ -147,7 +147,12 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
   }
   let text = [steps.install ?? '', steps.uninstall ?? '', steps.program ?? ''].join('\0')
   for (const folder of [...folders].sort()) {
-    for (const name of (await files.list(folder)).sort()) text += `\0${folder}/${name}\0${(await files.read(`${folder}/${name}`)) ?? ''}`
+    for (const name of (await files.list(folder)).sort()) {
+      const path = `${folder}/${name}`
+      const content = await files.read(path)
+      if (content === undefined) throw new Error(`${path} links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.`)
+      text += `\0${path}\0${content}`
+    }
   }
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')

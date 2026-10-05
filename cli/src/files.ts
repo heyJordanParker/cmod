@@ -1,5 +1,6 @@
 import { mkdir, readdir, rename } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 
 export async function readText(path: string): Promise<string | undefined> {
   return Bun.file(path)
@@ -12,7 +13,7 @@ export async function readText(path: string): Promise<string | undefined> {
 
 export async function listFiles(folder: string): Promise<string[]> {
   return (await readdir(folder, { recursive: true, withFileTypes: true }))
-    .filter((entry) => entry.isFile())
+    .filter((entry) => entry.isFile() || entry.isSymbolicLink())
     .map((entry) => relative(folder, join(entry.parentPath, entry.name)))
     .sort()
 }
@@ -23,7 +24,7 @@ export async function readJson(path: string): Promise<unknown> {
   try {
     return JSON.parse(text)
   } catch (error) {
-    throw new Error(`${path} is not valid JSON: ${(error as Error).message}`)
+    throw new Error(`${path} is not valid JSON: ${messageOf(error)}`)
   }
 }
 

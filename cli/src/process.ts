@@ -36,13 +36,7 @@ export async function run(argv: string[], options: RunOptions = {}): Promise<str
 }
 
 export async function runAttached(argv: string[], options: RunOptions = {}): Promise<number> {
-  const ignoreInterrupt = () => {}
-  process.on('SIGINT', ignoreInterrupt)
-  try {
-    return await spawn(argv, { ...options, stdout: 'inherit', stderr: 'inherit', stdin: 'inherit' }).exited
-  } finally {
-    process.off('SIGINT', ignoreInterrupt)
-  }
+  return spawn(argv, { ...options, stdout: 'inherit', stderr: 'inherit', stdin: 'inherit' }).exited
 }
 
 export function bunArgv(...args: string[]): { argv: string[]; env: Record<string, string | undefined> } {

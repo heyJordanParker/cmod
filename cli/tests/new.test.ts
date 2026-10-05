@@ -30,6 +30,7 @@ test('new writes the repository layout with a defineMod that has one hook and on
   expect(mod).toContain('export const myMod = defineMod({')
   expect(mod).toContain("mod.on('UserPromptSubmit'")
   expect(mod).not.toContain('mod.ui.toast')
+  expect(mod).not.toContain('additionalContext')
   expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toContain('connect(on, myMod)')
 })
 
@@ -75,6 +76,21 @@ test('a new mod runs its tests before Claude Code has loaded it', async () => {
   expect(existsSync(join(root, '.claude-plugin/types'))).toBe(false)
   expect(output).toContain(' 3 pass\n 0 fail\n')
   expect(exitCode).toBe(0)
+})
+
+test("a new mod's survey test fails when the band's survey render throws", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'my-mod')
+  await cmod(home, 'new', 'my-mod')
+  const mod = join(root, 'src/mod.tsx')
+  await Bun.write(mod, (await readFile(mod, 'utf8')).replace('hasSurvey ? <Default /> :', "hasSurvey ? (() => { throw new Error('the survey render broke') })() :"))
+
+  const tests = Bun.spawn([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
+
+  expect(output).toContain('(fail) the band leaves the prompt count out during a survey')
+  expect(output).toContain(' 2 pass\n 1 fail\n')
+  expect(exitCode).toBe(1)
 })
 
 test("the README's 30-second mod is the template", async () => {

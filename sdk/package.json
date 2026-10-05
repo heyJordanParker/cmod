@@ -1,7 +1,7 @@
 {
   "name": "cmod-sdk",
   "version": "0.1.0",
-  "description": "Build Claude Code mods: hooks, panels, permissions, checks, and an install that just works.",
+  "description": "Build Claude Code mods: hooks, panes, permissions, checks, and an install that just works.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -15,6 +15,7 @@
     "*.d.ts.map",
     "jobs/",
     "runtime/",
+    "testing/",
     "ui/",
     "utils/",
     "src/"

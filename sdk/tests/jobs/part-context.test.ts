@@ -7,7 +7,7 @@ import { slashCommand } from '../../src/jobs/slash-command.js'
 import { tool } from '../../src/jobs/tool.js'
 import { defineMod, type PartContext } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
-import { fakeFiles } from '../../src/utils/fake-files.js'
+import { fakeFiles } from '../../src/testing/fake-files.js'
 
 const root = '/work/dent'
 const home = '/Users/jordan'
@@ -31,12 +31,12 @@ async function partFor() {
 
 test("in a project-scope plugin, a callback's mod.process.run runs in the work tree that holds the call's path", async () => {
   const { fake, context } = await partFor()
-  const workspace: Workspace = { root, cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
+  const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
 
-  await modOf(context, { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, root, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, root, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, `${root}/worktrees/design/app`, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { tool: 'Edit', path: `${root}/Domain.md` }, root, workspace, deadline).process.run(['git', 'status'], { cwd: '/tmp', timeoutMs: 9000 })
+  await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, folder: root }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, folder: `${root}/worktrees/design/app` }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: { tool: 'Edit', path: `${root}/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'], { cwd: '/tmp', timeoutMs: 9000 })
 
   expect(fake.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])).toEqual([
     { cwd: `${root}/worktrees/design`, timeoutMs: 2000 },
@@ -48,9 +48,9 @@ test("in a project-scope plugin, a callback's mod.process.run runs in the work t
 
 test("in any other plugin, a callback's mod.process.run runs in the session's folder", async () => {
   const { fake, context } = await partFor()
-  const workspace: Workspace = { root, cwd: root, home, fs, scope: undefined }
+  const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: undefined }
 
-  await modOf(context, { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, root, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
 
   expect(fake.calls.find((call) => call.call === 'process.run')?.args[1]).toEqual({ timeoutMs: 2000 })
 })

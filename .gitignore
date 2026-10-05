@@ -6,6 +6,7 @@ sdk/*.d.ts
 sdk/*.d.ts.map
 sdk/runtime/
 sdk/jobs/
+sdk/testing/
 sdk/ui/
 sdk/utils/
 sdk/*.tgz

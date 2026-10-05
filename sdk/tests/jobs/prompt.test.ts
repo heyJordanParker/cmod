@@ -144,23 +144,6 @@ test('a prompt with when adds its text beside each user prompt that when accepts
   expect(byPattern.shown.logs).toEqual(['notes added the release prompt after matching user prompts.'])
 })
 
-test('a prompt with when shows its name above its text', async () => {
-  const passedOn: unknown[] = []
-  const tested = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: /release/ }), contextBelow(passedOn))
-
-  await tested.fire('prompt.submit', submitted('release it'), entered)
-
-  expect(passedOn).toEqual([['# release\nRun bun run release.']])
-})
-
-test('a prompt with after shows its name above its text', async () => {
-  const tested = withPrompt(prompt({ name: 'push-reminder', prompt: 'Push only when the user asks.', after: { command: 'git commit' } }))
-
-  const answer = await tested.fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
-
-  expect(answer.context).toEqual(['# push-reminder\nPush only when the user asks.'])
-})
-
 test('a callback that throws adds nothing and writes one debug line', async () => {
   const tested = withPrompt(
     prompt({

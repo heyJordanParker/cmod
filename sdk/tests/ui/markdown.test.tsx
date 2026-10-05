@@ -1,15 +1,15 @@
 import { expect, spyOn, test } from 'bun:test'
-import type { Args, Frozen, Next, RenderElement } from 'claude-code'
+import type { Args, Frozen, RenderElement } from 'claude-code'
 import { defineMod, type ModDefinition } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { testMod } from '../../src/testing.js'
+import { fakeClaude } from '../../src/testing/fake-claude.js'
+import { textOf } from '../../src/testing/fake-elements.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
 import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Markdown, Text } from '../../src/ui/elements.js'
 import { markdownBlocks, markdownSlots } from '../../src/ui/markdown.js'
 import { slots, type SlotProps } from '../../src/ui/slots.js'
-import { fakeClaude } from '../../src/utils/fake-claude.js'
-import { textOf } from '../../src/utils/fake-elements.js'
 
 declare const Bun: { spawnSync(argv: readonly string[]): { readonly stdout: { toString(): string }; readonly stderr: { toString(): string } } }
 declare const process: { readonly execPath: string }
@@ -359,13 +359,13 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
     }),
   )
   const claude = fakeClaude({ name: 'claude', root: '/test' }).claude
-  const claudeDraws = nextOf((e) => claude.ui.resolve(e).Text({ children: `claude: ${(e.props as { text: string }).text}` }))
+  const claudeDraws = async (e: Frozen<Args<'ui.render'>>) => claude.ui.resolve(e).Text({ children: `claude: ${(e.props as { text: string }).text}` })
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '# Plan\n\n```mermaid\ngraph TD\n```\n\nDone.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
   const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
 
   const byOne = rows(await both.route('ui.render', reply, claudeDraws))
-  const byTwo = rows(await headings.route('ui.render', reply, nextOf((e) => diagrams.route('ui.render', e, claudeDraws))))
+  const byTwo = rows(await headings.route('ui.render', reply, (e) => diagrams.route('ui.render', e, claudeDraws)))
 
   expect(byOne).toEqual(['⏺ PLAN', '', '  diagram: graph TD', '  claude: Done.'])
   expect(byTwo).toEqual(byOne)
@@ -412,10 +412,6 @@ async function started(definition: ModDefinition) {
   const lifecycle = createLifecycle(definition)
   await lifecycle.start(fakeClaude({ name: definition.name, root }).claude, async () => ({ name: definition.name, root, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
   return lifecycle
-}
-
-function nextOf(draw: (e: Frozen<Args<'ui.render'>>) => RenderElement | Promise<RenderElement>): Next<'ui.render'> {
-  return Object.assign(async (e: Frozen<Args<'ui.render'>>) => draw(e), { event: 'ui.render' }) as unknown as Next<'ui.render'>
 }
 
 function loadsVendorMarkdown(render: string, slot: string, props: string): string {

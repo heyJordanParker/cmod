@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { decidePermission, stricterVerdict, type PermissionRules } from '../../../src/jobs/permissions/decide-permission.js'
 import type { Workspace } from '../../../src/jobs/permissions/find-project-scope.js'
 import type { ToolCall, ToolUse } from '../../../src/utils/call-effects.js'
-import { fakeFiles } from '../../../src/utils/fake-files.js'
+import { fakeFiles } from '../../../src/testing/fake-files.js'
 
 type TestMod = { name: string }
 
@@ -15,7 +15,7 @@ const allowListOnly = (call: { isFullyParsed: boolean; commands: [string, ...str
 
 function workspaceWith(files: Record<string, string> = {}, links: Record<string, string> = {}): Workspace {
   const fs = fakeFiles(files, links)
-  return { root: cwd, cwd, home, fs: { ...fs, stat: (path) => fs.stat(path, { resolve: true }) }, scope: undefined }
+  return { projectRoot: cwd, cwd, home, fs: { ...fs, stat: (path) => fs.stat(path, { resolve: true }) }, scope: undefined }
 }
 
 function bash(command: string): ToolUse {
@@ -239,7 +239,7 @@ describe('content of an edit', () => {
 
   test('the file is not read when no rule needs its content', async () => {
     const fs = fakeFiles({ '/work/app/a.ts': 'x' })
-    const workspace: Workspace = { root: cwd, cwd, home, scope: undefined, fs: { ...fs, read: () => Promise.reject(new Error('read')) } }
+    const workspace: Workspace = { projectRoot: cwd, cwd, home, scope: undefined, fs: { ...fs, read: () => Promise.reject(new Error('read')) } }
     expect(await decide({ deny: [{ write: '**/*.ts' }] }, { tool: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'x', new_string: 'y' } }, workspace)).toEqual({ decision: 'deny' })
   })
 })

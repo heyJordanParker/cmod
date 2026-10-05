@@ -12,7 +12,7 @@ async function start($: EngineInterface, e: Frozen<Args<'session.start'>>, next:
 }
 
 function route<N extends RoutedEvent>(_$: EngineInterface, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>> {
-  return lifecycle.route(next.event, e, next)
+  return lifecycle.route(next.event, e, (passed: unknown) => next(passed as Args<N>) as Promise<EventResult<N>>)
 }
 
 function claudeOf($: EngineInterface): Claude {

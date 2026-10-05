@@ -91,7 +91,7 @@ function addAfterCalls<State extends object>(
       for (const target of targets) {
         const [matched] = await matchTarget(target, use, effects, workspace)
         if (matched === undefined) continue
-        const value = await textFor({ call: matched.call }, modOf(part, matched.call, matched.folder, workspace, deadline))
+        const value = await textFor({ call: matched.call }, modOf(part, matched, workspace, deadline))
         return value === undefined ? [] : [value]
       }
       return []
