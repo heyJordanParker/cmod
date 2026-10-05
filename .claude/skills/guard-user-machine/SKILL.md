@@ -1,6 +1,6 @@
 ---
 name: guard-user-machine
-description: Change code that acts on the User's machine (consent, a mod's install and uninstall steps, the program link, `cmod try`, teardown, and permission rules), where two parts of CMod that disagree open a hole the User never agreed to. TRIGGER when editing `sdk/src/records.ts`, `cli/src/files.ts`, `cli/src/program.ts`, `cli/src/commands/setup.ts`, `teardown.ts`, or `try.ts`, the CMod plugin's `src/mod.ts`, `readPlugin` in `sdk/src/runtime/lifecycle.ts`, or `sdk/src/jobs/permissions/`. DO NOT TRIGGER for what a mod author writes against; use /change-public-api.
+description: Change code that acts on the User's machine (consent, a mod's install and uninstall steps, the program link, `cmod try`, teardown, and permission rules), where two parts of CMod that disagree open a hole the User never agreed to. TRIGGER when editing `sdk/src/records.ts`, `cli/src/store.ts`, `cli/src/files.ts`, `cli/src/program.ts`, `cli/src/commands/setup.ts`, `teardown.ts`, or `try.ts`, the CMod plugin's `src/mod.ts`, `readPlugin` in `sdk/src/runtime/lifecycle.ts`, or `sdk/src/jobs/permissions/`. DO NOT TRIGGER for what a mod author writes against; use /change-public-api.
 ---
 
 # Guard User Machine
@@ -12,6 +12,7 @@ A mod runs its steps on the User's machine with the User's consent, and CMod cle
 - `scriptsSha256` in `sdk/src/records.ts` decides consent, for the cmod program (`cli/src/commands/setup.ts`, `cli/src/commands/check.ts`) and the SDK (`readPlugin` in `sdk/src/runtime/lifecycle.ts`) alike.
 - `readSteps` in `sdk/src/records.ts` is the one parser of the `package.json` `cmod` key.
 - `restoreProgram` in `cli/src/program.ts` decides which program version `~/.local/bin/<program>` points at.
+- `takeLock` in `cli/src/store.ts` decides which cmod command changes a mod. Setup and teardown take one lock per mod, `records/<name>.json.lock/<pid>` in the CMod store (`modLock` in `cli/src/commands/setup.ts`), and approvals change under `consent.json.lock/<pid>`. A lock whose holder's process is gone is taken over at once.
 
 ### Change the decider, never a copy of it
 A second check beside it disagrees with it on the first input nobody listed.
@@ -26,7 +27,7 @@ Example: when the listers skipped links and `read` followed them, a changed file
 ## 3. Keep the four guarantees
 
 ### Make every cleanup survive every way a session ends
-SIGINT, SIGHUP from a closed terminal, and SIGTERM each still run the cleanup. `cmod try` handles all three for the whole session it starts, so its teardown always runs.
+SIGINT, SIGHUP from a closed terminal, and SIGTERM each still run the cleanup. `holdSignals` in `cli/src/commands/setup.ts` holds all three. `setupInTerminal`, `teardownInTerminal`, both `--events` paths, `cmod unlink`, and `cmod try` for its whole session share one hold, and the signal is raised again when the last of them ends. Every uninstall step runs under `uninterruptible`, to its end.
 
 ### Never delete what an installed mod still uses
 `cmod try` refuses when another root owns the mod's record. The CMod plugin decides a removal from the user-scope `enabledPlugins` alone (`mod.settings.read({ source: 'user' })`), because Claude Code keeps an uninstalled plugin's folder for 6 hours (`.orphaned_at`).
@@ -39,7 +40,7 @@ Permission patterns resolve against `projectRoot`, never `cwd`, which follows Cl
 
 ## 4. Test with the input that breaks it, red before green
 
-Write each test with /write-test, and watch it fail on the code before the fix. Inputs that break this code: a changed file behind a symbolic link, SIGHUP to `cmod try` while the fake `claude` runs, a `cd` before the call, and an upgrade that fails after the new program is linked.
+Write each test with /write-test, and watch it fail on the code before the fix. Inputs that break this code: a changed file behind a symbolic link, SIGHUP to `cmod try` while the fake `claude` runs, a `cd` before the call, an upgrade that fails after the new program is linked, two commands on one mod at once, and a lock whose holder's process is gone.
 Never: a fake that does the work the code under test must do, such as a fake `claude` that runs setup itself.
 
 ### Prove session ends and installs in Claude Code with /verify-live

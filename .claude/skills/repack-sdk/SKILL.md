@@ -9,7 +9,7 @@ A consumer runs what was packed, never what is in `sdk/src/`. Prove the package,
 
 - The consumers are the CMod plugin at the repository root and the sample mods `file-tree` and `architecture-diagrams`, checked out beside this repository. Each depends on `sdk/cmod-sdk-<version>.tgz`.
 - A mod reaches cmod-sdk only as real files in its own `node_modules`, because Claude Code refuses a symbolic link there. A `file:` folder dependency installs one link per file, so every mod depends on the tarball.
-- The cmod program is the exception: `cli/` depends on the `sdk/` folder and imports `cmod-sdk/src/records.js` through those per-file links, so it reads `sdk/src/` edits with no repack.
+- The cmod program is the exception: `cli/` depends on the `sdk/` folder and imports `cmod-sdk/src/` modules through those per-file links, so it reads `sdk/src/` edits with no repack.
 
 ## 1. Register a new source folder
 
@@ -20,6 +20,7 @@ IF the change adds a folder under `sdk/src/`:
 ## 2. Delete the build output, then build
 
 `tsc` never deletes the output of a module that was renamed, moved, or deleted, and the pack takes whatever lies in `sdk/`. The build output is every path `sdk/package.json` `files` names except `src/`, plus `sdk/*.tgz`.
+The build reads Claude Code's types from `.claude-plugin/types/`, which git ignores and Claude Code writes when it first loads the checkout. In a checkout without it, such as a new worktree, run `claude --plugin-dir . -p ok` from the repository root first, as README.md's "Run CMod from a checkout" does.
 Example: from the repository root, `rm -rf sdk/jobs sdk/runtime sdk/testing sdk/ui sdk/utils sdk/*.js sdk/*.d.ts sdk/*.d.ts.map sdk/*.tgz`, then `bun run --cwd sdk build`.
 
 ## 3. Pack, then read the tarball

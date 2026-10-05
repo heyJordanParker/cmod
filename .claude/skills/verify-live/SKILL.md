@@ -16,7 +16,7 @@ These Facts were observed in Claude Code 2.1.289. Under a newer `claude --versio
 - `/cd` fires the engine event `command.run` with `command: 'cd'`, and no classic hook. Its `next(e)` resolves after the move.
 - `classic.CwdChanged` fires only after a Bash command changes the shell's folder, and only when a settings or `hooks.json` hook for `CwdChanged` or `FileChanged` exists, which a cmod mod never has. The SDK fires `CwdChanged` to a mod's own hooks from `followSession` in `sdk/src/runtime/lifecycle.ts`.
 - A Bash `cd` moves the cwd, never `$.session.root()`.
-- Claude Code fires `classic.SessionStart` before every mod's `setup` has finished.
+- Claude Code fires `classic.SessionStart` before every mod's `setup` has finished, and gives each hook 10 seconds. The SDK holds it at most 9 seconds for a mod to start (`sessionStartHoldMs` in `sdk/src/runtime/lifecycle.ts`). A mod that starts later runs its SessionStart hooks then, and Claude Code never reads their answer.
 - Elements built by Claude Code's `Box` are opaque: a render reads no `props` or `children` from them.
 - The condensed `ToolGroup` row and the permission dialog draw from data no render changes.
 - A hook cannot read `addMargin`.

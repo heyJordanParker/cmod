@@ -27,7 +27,7 @@ Example: `check` runs commands and `prompt` adds text, so neither takes an optio
 ## 2. Keep imports flowing one way
 
 - `utils/` imports only `utils/` and the vendored libraries.
-- `ui/` imports only `ui/` and types from `mod.ts`.
+- `ui/` imports only `ui/`, the vendored libraries, and types from `mod.ts`.
 - `runtime/` builds on `ui/` and `utils/`.
 - `jobs/` builds on `runtime/` and `utils/`.
 - `testing/` holds the test kit's fakes, and only `testing.ts` imports it.
