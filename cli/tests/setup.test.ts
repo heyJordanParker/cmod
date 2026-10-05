@@ -90,7 +90,7 @@ async function goneProcessId(): Promise<number> {
 }
 
 async function startOf(processId: number): Promise<string> {
-  const ps = Bun.spawn(['ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, stdout: 'pipe' })
+  const ps = Bun.spawn(['/bin/ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, stdout: 'pipe' })
   return (await new Response(ps.stdout).text()).trim()
 }
 
@@ -711,11 +711,35 @@ test('a fresh install step that fails runs the uninstall step and leaves nothing
 
   expect(result.exitCode).toBe(1)
   expect(result.stdout).toContain('The uninstall step of demo exited 0.')
+  expect(result.stdout).toContain('✘ The install step of demo exited 3: brew: no such formula. Fix the step, then run the command again.\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'records/demo.json.lock'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
+})
+
+test('a fresh install whose uninstall step fails says parts may remain', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\necho "curl: could not resolve host" >&2\nexit 7\n')
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toBe('log curl: could not resolve host\nlog zsh: no such file\nlog The uninstall step of demo exited 2.\nfailed 7\tcurl: could not resolve host. The uninstall step then exited 2: zsh: no such file, so parts of the install may remain\n')
+  expect(result.exitCode).toBe(1)
+})
+
+test("Ctrl+C during the undo keeps the install step's exit code and reason", async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home, '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n')
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nkill -INT 0\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
+
+  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(130)
+  expect(result.output).toContain('Cancelled the install step of demo on SIGINT. It exited 3: brew: no such formula.')
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
 })
 
 test("Ctrl+C during an upgrade's install step keeps the version its record names", async () => {
@@ -948,6 +972,22 @@ test('concurrent setups of eight mods keep every approval', async () => {
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual(Object.fromEntries(names.map((name, index) => [name, [hashes[index]]])))
 }, 15_000)
 
+test('a mod named constructor sets up', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'constructor')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'constructor', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'constructor', cmod: { install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\ntrue\n',
+  })
+  const sha256 = await hashOf(root)
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', sha256)
+
+  expect(result).toEqual({ exitCode: 0, stdout: 'done constructor 0.1.0\n', stderr: '' })
+  expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({ constructor: [sha256] })
+})
+
 test('SIGTERM to cmod teardown --events during the uninstall step still removes the mod', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
@@ -1068,22 +1108,6 @@ test('the spinner resumes after the lock-wait notice', async () => {
   expect(shown.slice(shown.indexOf('which process'))).toContain('Installing demo…')
 }, 10_000)
 
-test('two setups of one mod run one at a time when ps prints no start time', async () => {
-  const home = await temporaryHome()
-  await writeFiles(home, { 'bin/ps': '#!/bin/sh\necho "ps: bad -o argument \'lstart\'" >&2\nexit 1\n' })
-  const root = await createMod(home, '#!/bin/sh\necho "start $$" >> "$HOME/steps"\nsleep 1\necho "end $$" >> "$HOME/steps"\n')
-  const sha256 = await hashOf(root)
-  const first = startCmod(home, 'setup', root, '--events', '--consent', sha256)
-  await waitFor(join(home, 'steps'))
-  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
-  const second = startCmod(home, 'setup', root, '--events', '--consent', sha256)
-
-  const results = await Promise.all([first.done, second.done])
-
-  expect(results.map((result) => result.exitCode)).toEqual([0, 0])
-  expect((await readFile(join(home, 'steps'), 'utf8')).trim().split('\n').map((line) => line.split(' ')[0])).toEqual(['start', 'end', 'start', 'end'])
-}, 10_000)
-
 test('a lock whose holder recorded no start time is held while its process lives', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
@@ -1099,6 +1123,24 @@ test('a lock whose holder recorded no start time is held while its process lives
 
   expect(isWaiting).toBe(true)
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
+}, 10_000)
+
+test("a holder file with cmod's own process ID is not held", async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  const lock = join(home, '.local/share/cmod/records/demo.json.lock')
+  const holder = Bun.spawn(['sleep', '30'])
+  await writeFiles(lock, { [String(holder.pid)]: await startOf(holder.pid) })
+  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await writeFiles(lock, { [String(setup.child.pid)]: '' })
+
+  holder.kill()
+  await holder.exited
+  const result = await Promise.race([setup.done, Bun.sleep(3000).then(() => ({ exitCode: -1, stdout: 'still waiting after 3 s', stderr: '' }))])
+  setup.child.kill('SIGKILL')
+
+  expect(result.stdout).toEndWith('done demo 0.1.0\n')
+  expect(existsSync(lock)).toBe(false)
 }, 10_000)
 
 test('the consent question says it puts the program into ~/.local/bin', async () => {

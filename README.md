@@ -146,6 +146,14 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 
 `state` groups the mod's values by how long they last: `memory` until `/clear`, `--resume`, `/branch`, or a reload of Claude Code or its plugins, `session` for this conversation, `project` for this project, and `global` for every project. CMod saves every value except `memory`. A `session` value comes back on `--resume`, starts over on `/clear`, and is copied by `/branch`. Put values the mod works out again on every prompt, such as a git status, in `memory`.
 
+A mod that changes the machine, such as by adding a shell alias, names its install and uninstall steps in the `cmod` key of its `package.json`:
+
+```json
+"cmod": { "install": "./setup/install.sh", "uninstall": "./setup/uninstall.sh" }
+```
+
+When the first install of a mod fails or is stopped, CMod runs its uninstall step, so the uninstall step must work on a partial install.
+
 Start `claude`, and the mod runs on every prompt. `cmod check` runs every check. `cmod publish` releases the mod on GitHub.
 
 ## Call another mod

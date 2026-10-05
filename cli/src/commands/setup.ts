@@ -93,10 +93,14 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
     })
   }
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
-  else if (hold.signal === undefined) progress.fail(`The install step of ${plugin.name} exited ${failure.code}${failure.message ? `: ${failure.message}` : ''}. Fix the step, then run cmod setup ${tilde(plugin.root)}.`)
+  else if (hold.signal === undefined) progress.fail(`The install step of ${plugin.name} ${formatExit(failure.code, failure.message)}. Fix the step, then run the command again.`)
   else if (failure.code === 0) progress.fail(`Cancelled setting up ${plugin.name} on ${hold.signal}, before its install step started.`)
-  else progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}.`)
+  else progress.fail(`Cancelled the install step of ${plugin.name} on ${hold.signal}. It ${formatExit(failure.code, failure.message)}.`)
   return code
+}
+
+function formatExit(code: number, reason: string): string {
+  return `exited ${code}${reason ? `: ${reason}` : ''}`
 }
 
 const heldSignals: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP', 'SIGTERM']
@@ -186,13 +190,15 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
         emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
       )
       if (result.exitCode !== 0) {
+        const reasons = [result.lastError]
         if (uninstall !== undefined && previous === undefined) {
           const undone = await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
             if (event.kind === 'log') emit(event)
           })
           emit({ kind: 'log', text: `The uninstall step of ${plugin.name} exited ${undone.exitCode}.` })
+          if (undone.exitCode !== 0) reasons.push(`The uninstall step then ${formatExit(undone.exitCode, undone.lastError)}, so parts of the install may remain`)
         }
-        emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
+        emit({ kind: 'failed', code: result.exitCode, message: reasons.filter(Boolean).join('. ') })
         return 1
       }
     }

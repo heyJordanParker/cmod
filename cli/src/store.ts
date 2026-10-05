@@ -78,7 +78,7 @@ async function placeLock(path: string, started: string): Promise<boolean> {
 }
 
 async function isHolding(processId: number, started: string | undefined): Promise<boolean> {
-  if (started === undefined || !isRunning(processId)) return false
+  if (started === undefined || processId === process.pid || !isRunning(processId)) return false
   if (started === '') return true
   const current = await startTime(processId)
   return current === '' || current === started
@@ -114,7 +114,7 @@ export async function approve(name: string, sha256: string): Promise<void> {
 
 export async function revokeApprovals(name: string, sha256?: string): Promise<void> {
   await changeConsent((consent) => {
-    const approved = Object.hasOwn(consent, name) ? consent[name] : undefined
+    const approved = consent[name]
     if (approved === undefined) return false
     const kept = approved.filter((hash) => sha256 !== undefined && hash !== sha256)
     if (kept.length === approved.length) return false
@@ -137,7 +137,6 @@ async function changeConsent(change: (consent: Record<string, string[]>) => bool
 async function readConsent(): Promise<Record<string, string[]>> {
   const path = storePath('consent.json')
   const value = await readJson(path)
-  if (value === undefined) return {}
-  if (!isObject(value)) throw new Error(`${path} is not a map of plugin names to approved hashes. Delete it, and CMod asks again.`)
-  return value as Record<string, string[]>
+  if (value !== undefined && !isObject(value)) throw new Error(`${path} is not a map of plugin names to approved hashes. Delete it, and CMod asks again.`)
+  return Object.assign(Object.create(null), value)
 }
