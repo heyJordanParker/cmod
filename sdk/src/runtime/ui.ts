@@ -194,12 +194,12 @@ async function drawComponent<Given extends object>(
 }
 
 function drawPieces(pieces: readonly DrawnPiece[], place: 'pane' | 'opensReply' | 'inReply'): RenderElement {
-  const column = Box({
-    flexDirection: 'column',
-    children: pieces.map(({ drawing, isClaudesRow }, index) => ((index > 0 || place === 'inReply') && !isClaudesRow ? Box({ marginTop: 1, children: drawing }) : drawing)),
-  })
-  if (place !== 'opensReply' || pieces[0]?.isClaudesRow !== false) return column
-  return Box({ children: [Box({ minWidth: 2, children: Text({ color: 'text', children: bullet }) }), column] })
+  const spaced = pieces.map(({ drawing, isClaudesRow }, index) => ((index > 0 || place === 'inReply') && !isClaudesRow ? Box({ marginTop: 1, children: drawing }) : drawing))
+  const column = (drawings: readonly RenderElement[]) => Box({ flexDirection: 'column', children: drawings })
+  const [opening, ...rest] = spaced
+  if (place !== 'opensReply' || opening === undefined) return column(spaced)
+  if (pieces[0]?.isClaudesRow !== true) return Box({ children: [Box({ minWidth: 2, children: Text({ color: 'text', children: bullet }) }), column(spaced)] })
+  return column([opening, Box({ paddingLeft: 2, children: column(rest) })])
 }
 
 type MarkdownRender = {

@@ -21,12 +21,12 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
 
 const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-test('a removed enabledPlugins key runs cmod teardown --events with that plugin\'s name, and done shows "<name> is uninstalled"', async () => {
+test("a removed enabledPlugins key runs cmod teardown --events with that plugin's name, and the uninstall toast tells the user to reload", async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'progress 1 1 Removing the alias\ndone four-step\n', stderr: '' } })
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
-  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled'])
+  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. Run /reload-plugins to stop it in this session.'])
   expect(tested.state.global.installedPlugins).toEqual(['cmod'])
 })
 

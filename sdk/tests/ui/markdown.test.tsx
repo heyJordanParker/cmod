@@ -103,7 +103,7 @@ test("a mod's piece after the first has a blank line above it", async () => {
 
   const lines = await tested.lines(slots.AssistantMessage, { text: 'Before\n\n# Plan', isFirstOfReply: true })
 
-  expect(lines).toEqual(['AssistantMessage', '  text: "Before"', '  isFirstOfReply: true', '', 'PLAN'])
+  expect(lines).toEqual(['AssistantMessage', '  text: "Before"', '  isFirstOfReply: true', '', '  PLAN'])
 })
 
 test("a mod's block opening a later text block of the reply has a blank line above it", async () => {
@@ -153,7 +153,7 @@ test('a reply whose first block a mod leaves to Default keeps the bullet Claude 
 
   const lines = await tested.lines(slots.AssistantMessage, { text: '```ts\nconst a = 1\n```\n\n```mermaid\ngraph TD\n```', isFirstOfReply: true })
 
-  expect(lines).toEqual(['AssistantMessage', '  text: "```ts\\nconst a = 1\\n```"', '  isFirstOfReply: true', '', 'diagram: graph TD'])
+  expect(lines).toEqual(['AssistantMessage', '  text: "```ts\\nconst a = 1\\n```"', '  isFirstOfReply: true', '', '  diagram: graph TD'])
 })
 
 test('a CodeBlock render draws a custom language and leaves other languages to Default', async () => {
@@ -168,7 +168,7 @@ test('a CodeBlock render draws a custom language and leaves other languages to D
 
   const lines = await tested.lines(slots.AssistantMessage, { text: 'Before\n\n```mermaid\ngraph TD\n```\n\n```ts\nconst a = 1\n```', isFirstOfReply: true })
 
-  expect(lines).toEqual(['AssistantMessage', '  text: "Before"', '  isFirstOfReply: true', '', 'diagram: graph TD', 'AssistantMessage', '  text: "```ts\\nconst a = 1\\n```"', '  isFirstOfReply: false'])
+  expect(lines).toEqual(['AssistantMessage', '  text: "Before"', '  isFirstOfReply: true', '', '  diagram: graph TD', '  AssistantMessage', '    text: "```ts\\nconst a = 1\\n```"', '    isFirstOfReply: false'])
 })
 
 test('a block still streaming is drawn by Default', async () => {
@@ -286,7 +286,7 @@ test("a markdown component that throws keeps Claude's drawing of its block", asy
     }),
   )
 
-  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nBody', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "# Plan"', '  isFirstOfReply: true', 'AssistantMessage', '  text: "Body"', '  isFirstOfReply: false'])
+  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nBody', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "# Plan"', '  isFirstOfReply: true', '  AssistantMessage', '    text: "Body"', '    isFirstOfReply: false'])
   expect(tested.shown.logs).toEqual(['broken added a render of markdown Heading.', 'broken: the markdown Heading render threw, so Claude Code draws its own: no font'])
 })
 
@@ -330,9 +330,13 @@ test("a pane's Markdown puts a blank line above a mod's block, as a reply does",
   expect(await tested.lines('notes')).toEqual(['Before', '', 'PLAN'])
 })
 
+const drawHeading = ({ text }: SlotProps<typeof markdownSlots.Heading>) => Text({ bold: true, children: text.toUpperCase() })
+
+const drawDiagram = ({ lang, value, Default }: SlotProps<typeof markdownSlots.CodeBlock>) => (lang === 'mermaid' ? Text({ children: `diagram: ${value}` }) : Default({}))
+
+const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
+
 test('two mods drawing one reply give the same gaps as one mod', async () => {
-  const drawHeading = ({ text }: SlotProps<typeof markdownSlots.Heading>) => Text({ bold: true, children: text.toUpperCase() })
-  const drawDiagram = ({ lang, value, Default }: SlotProps<typeof markdownSlots.CodeBlock>) => (lang === 'mermaid' ? Text({ children: `diagram: ${value}` }) : Default({}))
   const headings = await started(
     defineMod({
       name: 'headings',
@@ -362,13 +366,38 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
   const claudeDraws = async (e: Frozen<Args<'ui.render'>>) => claude.ui.resolve(e).Text({ children: `claude: ${(e.props as { text: string }).text}` })
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '# Plan\n\n```mermaid\ngraph TD\n```\n\nDone.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
-  const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
-
   const byOne = rows(await both.route('ui.render', reply, claudeDraws))
   const byTwo = rows(await headings.route('ui.render', reply, (e) => diagrams.route('ui.render', e, claudeDraws)))
 
   expect(byOne).toEqual(['⏺ PLAN', '', '  diagram: graph TD', '  claude: Done.'])
   expect(byTwo).toEqual(byOne)
+})
+
+const claudeWithBullet = fakeClaude({ name: 'claude', root: '/test' }).claude
+
+async function drawsLikeClaude(e: Frozen<Args<'ui.render'>>): Promise<RenderElement> {
+  const table = claudeWithBullet.ui.resolve(e)
+  const { text, isFirstOfReply } = e.props as { readonly text: string; readonly isFirstOfReply: boolean }
+  return isFirstOfReply ? table.Box({ children: [table.Box({ minWidth: 2, children: table.Text({ children: '⏺' }) }), table.Text({ children: text })] }) : table.Text({ children: text })
+}
+
+test("a reply drawn by two mods keeps every block under the bullet's text", async () => {
+  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => mod.ui.render(markdownSlots.Heading, drawHeading) }))
+  const diagrams = await started(defineMod({ name: 'architecture-diagrams', setup: (mod) => mod.ui.render(markdownSlots.CodeBlock, drawDiagram) }))
+  const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '## Request flow\n\n```mermaid\ngraph LR\n```\n\nThe flowchart shows a request.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
+
+  const diagramsAbove = rows(await diagrams.route('ui.render', reply, (e) => headings.route('ui.render', e, drawsLikeClaude)))
+  const headingsAbove = rows(await headings.route('ui.render', reply, (e) => diagrams.route('ui.render', e, drawsLikeClaude)))
+
+  expect(diagramsAbove).toEqual(['⏺ REQUEST FLOW', '', '  diagram: graph LR', '  The flowchart shows a request.'])
+  expect(headingsAbove).toEqual(diagramsAbove)
+})
+
+test("a reply Claude's text opens keeps a mod's later block under the bullet's text", async () => {
+  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => mod.ui.render(markdownSlots.Heading, drawHeading) }))
+  const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: 'One sentence.\n\n### Done', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
+
+  expect(rows(await headings.route('ui.render', reply, drawsLikeClaude))).toEqual(['⏺ One sentence.', '', '  DONE'])
 })
 
 test('a mod that renders no markdown slot never loads vendor-markdown', () => {

@@ -125,6 +125,9 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   let failure: unknown
   let shouldRecord = false
   let recording: Promise<void> | undefined
+  let missedSessionStart: Frozen<Args<'classic.SessionStart'>> | undefined
+  let settleStart: () => void = () => undefined
+  const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
 
   const claude = () => {
     if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. connect(on, mod) starts it at session.start.`)
@@ -181,6 +184,9 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     phase = 'active'
     runtime.claude.ui.invalidate('ui.render')
     endLine()
+    if (missedSessionStart !== undefined && Object.keys(await activeRouter.dispatch('classic.SessionStart', missedSessionStart, async () => ({}))).length > 0) {
+      runtime.claude.ui.log(`${definition.name} finished installing after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks.`, { to: 'debug' })
+    }
     const version = plugin.version ?? ''
     if ((await runtime.claude.store.get(announcedKey)) === version) return
     await runtime.claude.store.set(announcedKey, version)
@@ -277,24 +283,30 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
       runtime = { claude: claudeCalls, progress: createProgress(claudeCalls) }
-      const started = await read(claudeCalls).catch((error: unknown) => {
-        report(error)
-        return undefined
-      })
-      if (started === undefined) return
-      plugin = started
-      if (started.isInstalled) {
-        shouldRecord = started.shouldRecord
-        if (shouldRecord) record()
-        return activate().catch(report)
+      try {
+        const started = await read(claudeCalls).catch((error: unknown) => {
+          report(error)
+          return undefined
+        })
+        if (started === undefined) return
+        plugin = started
+        if (started.isInstalled) {
+          shouldRecord = started.shouldRecord
+          if (shouldRecord) record()
+          return await activate().catch(report)
+        }
+        if (started.version === undefined) return fail('no version to install', 'Add "version" to .claude-plugin/plugin.json, then run /reload-plugins.')
+        void install().catch(report)
+      } finally {
+        settleStart()
       }
-      if (started.version === undefined) return fail('no version to install', 'Add "version" to .claude-plugin/plugin.json, then run /reload-plugins.')
-      void install().catch(report)
     },
     async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>> {
+      if (event === 'classic.SessionStart') await startSettled
       if (shouldRecord && event === 'classic.UserPromptSubmit') record()
       if (phase === 'ready') activation ??= activate().catch(report)
       if (activation !== undefined && phase !== 'active') await activation
+      if (event === 'classic.SessionStart' && phase !== 'active') missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
       if (event === 'cmod.call' && phase !== 'active' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) {
         const isStopped = phase === 'declined' || phase === 'failed'
         return { deny: isStopped ? notInstalled(definition.name) : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
