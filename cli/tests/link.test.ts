@@ -142,6 +142,7 @@ test('cmod link of a mod before CMod is linked writes nothing to settings', asyn
 
   expect(linked.exitCode).toBe(1)
   expect(linked.stderr).toContain('plugin marketplace add heyJordanParker/cmod')
+  expect(linked.stderr).toEndWith('Link the CMod checkout first: cmod link <checkout>\n')
   expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false)
 })
 

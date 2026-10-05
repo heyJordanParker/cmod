@@ -1,7 +1,11 @@
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { isObject, storeFolder } from 'cmod-sdk/src/records.js'
-import { readJson, tilde, writeAtomically } from './files.js'
+import { isObject, recordPath, storeFolder } from 'cmod-sdk/src/records.js'
+import { readJson, readText, tilde, writeAtomically } from './files.js'
+import { capture } from './process.js'
+import { interruptProgress } from './progress.js'
+
+const lockNoticeMs = 3000
 
 export function storePath(...parts: string[]): string {
   return join(storeFolder(process.env), ...parts)
@@ -15,18 +19,32 @@ export async function recordNames(): Promise<string[]> {
   return entries.filter((entry) => entry.endsWith('.json')).map((entry) => entry.slice(0, -'.json'.length)).sort()
 }
 
+export function modLock(name: string): string {
+  return `${recordPath(storeFolder(process.env), name)}.lock`
+}
+
 export async function takeLock(path: string, cancel: AbortSignal): Promise<AsyncDisposable | undefined> {
   await mkdir(dirname(path), { recursive: true })
-  for (let hasWaited = false; !(await placeLock(path)); ) {
+  const started = await startTime(process.pid)
+  let noticeAt = Date.now() + lockNoticeMs
+  while (!(await placeLock(path, started))) {
     const holders = await readdir(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return []
       throw error
     })
-    const gone = holders.filter((holder) => !isRunning(Number(holder)))
-    for (const holder of gone) await rm(join(path, holder), { force: true })
-    if (gone.length === holders.length) continue
-    if (hasWaited && cancel.aborted) return undefined
-    hasWaited = true
+    const live: string[] = []
+    for (const holder of holders) {
+      const holderStarted = await startTime(Number(holder))
+      if (holderStarted !== '' && (await readText(join(path, holder))) === holderStarted) live.push(holder)
+      else await rm(join(path, holder), { force: true })
+    }
+    if (live.length === 0) continue
+    if (cancel.aborted) return undefined
+    if (Date.now() >= noticeAt) {
+      noticeAt = Number.POSITIVE_INFINITY
+      interruptProgress()
+      process.stderr.write(`Waiting for ${tilde(path)}, which process ${live.join(', ')} holds.\n`)
+    }
     await Bun.sleep(100)
   }
   const holder = join(path, String(process.pid))
@@ -40,10 +58,10 @@ export async function takeLock(path: string, cancel: AbortSignal): Promise<Async
   }
 }
 
-async function placeLock(path: string): Promise<boolean> {
+async function placeLock(path: string, started: string): Promise<boolean> {
   const staged = `${path}.${process.pid}.tmp`
   await mkdir(staged, { recursive: true })
-  await writeFile(join(staged, String(process.pid)), '')
+  await writeFile(join(staged, String(process.pid)), started)
   return rename(staged, path).then(
     () => true,
     async (error: NodeJS.ErrnoException) => {
@@ -54,23 +72,17 @@ async function placeLock(path: string): Promise<boolean> {
   )
 }
 
-function isRunning(processId: number): boolean {
-  try {
-    process.kill(processId, 0)
-    return true
-  } catch (error) {
-    const { code } = error as NodeJS.ErrnoException
-    if (code !== 'ESRCH' && code !== 'EPERM') throw error
-    return code === 'EPERM'
-  }
+async function startTime(processId: number): Promise<string> {
+  const { stdout } = await capture(['ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } })
+  return stdout.trim()
 }
 
 export async function isApproved(name: string, sha256: string): Promise<boolean> {
   return (await readConsent())[name]?.includes(sha256) ?? false
 }
 
-export async function approve(name: string, sha256: string, cancel: AbortSignal): Promise<void> {
-  await changeConsent(cancel, (consent) => {
+export async function approve(name: string, sha256: string): Promise<void> {
+  await changeConsent((consent) => {
     const approved = consent[name] ?? []
     if (approved.includes(sha256)) return false
     consent[name] = [...approved, sha256]
@@ -78,20 +90,24 @@ export async function approve(name: string, sha256: string, cancel: AbortSignal)
   })
 }
 
-export async function revokeApprovals(name: string, cancel: AbortSignal): Promise<void> {
-  await changeConsent(cancel, (consent) => {
+export async function revokeApprovals(name: string, sha256?: string): Promise<void> {
+  await changeConsent((consent) => {
     if (!Object.hasOwn(consent, name)) return false
-    delete consent[name]
+    const kept = (consent[name] ?? []).filter((approved) => sha256 !== undefined && approved !== sha256)
+    if (kept.length > 0) consent[name] = kept
+    else delete consent[name]
     return true
   })
 }
 
-async function changeConsent(cancel: AbortSignal, change: (consent: Record<string, string[]>) => boolean): Promise<void> {
-  const path = storePath('consent.json.lock')
-  await using lock = await takeLock(path, cancel)
-  if (lock === undefined) throw new Error(`A running cmod command holds ${tilde(path)}, and a signal stopped the wait for it. Run the command again.`)
-  const consent = await readConsent()
-  if (change(consent)) await writeAtomically(storePath('consent.json'), `${JSON.stringify(consent, null, 2)}\n`)
+async function changeConsent(change: (consent: Record<string, string[]>) => boolean): Promise<void> {
+  const lock = await takeLock(storePath('consent.json.lock'), new AbortController().signal)
+  try {
+    const consent = await readConsent()
+    if (change(consent)) await writeAtomically(storePath('consent.json'), `${JSON.stringify(consent, null, 2)}\n`)
+  } finally {
+    await lock?.[Symbol.asyncDispose]()
+  }
 }
 
 async function readConsent(): Promise<Record<string, string[]>> {

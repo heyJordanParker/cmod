@@ -91,12 +91,13 @@ test('a new mod runs its tests through bun run test', async () => {
   expect(exitCode).toBe(0)
 })
 
-test('cmod new whose package install fails leaves no folder and names CMOD_SDK', async () => {
+test('cmod new with CMOD_SDK set names its value when the install fails', async () => {
   const home = await temporaryHome()
   const main = join(import.meta.dir, '..', 'src', 'main.ts')
+  const tarball = join(home, 'cmod-sdk-0.1.0.tgz')
   const created = Bun.spawn([process.execPath, main, 'new', 'my-mod'], {
     cwd: home,
-    env: { ...process.env, HOME: home, CMOD_SDK: `file:${join(home, 'cmod-sdk-0.1.0.tgz')}` },
+    env: { ...process.env, HOME: home, CMOD_SDK: `file:${tarball}` },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -104,7 +105,8 @@ test('cmod new whose package install fails leaves no folder and names CMOD_SDK',
 
   expect(exitCode).toBe(1)
   expect(existsSync(join(home, 'my-mod'))).toBe(false)
-  expect(stderr).toContain(`set CMOD_SDK to a cmod-sdk tarball, such as CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz`)
+  expect(stderr).toContain(`CMOD_SDK is file:${tarball}, and bun could not install it. Point CMOD_SDK at a cmod-sdk tarball, such as CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz, then run cmod new again.`)
+  expect(stderr).not.toContain('set CMOD_SDK')
 })
 
 test("a new mod's survey test fails when the band's survey render throws", async () => {

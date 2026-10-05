@@ -154,29 +154,28 @@ esac
   expect(await approvals(home)).toEqual({})
 })
 
-test('cmod try after a held SIGTERM installs nothing', async () => {
+test('a held signal before cmod setup approves and downloads nothing', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'demo')
-  await writeFiles(home, {
-    'bin/claude': `#!/bin/sh
-echo "$*" >> "$HOME/claude-calls"
-case "$*" in
-  "plugin list --json") kill -TERM $PPID; sleep 0.3; echo '[]' ;;
-  "plugin marketplace list --json") echo '[]' ;;
-  "plugin marketplace add heyJordanParker/cmod") ;;
-  "plugin install cmod@"*" --json") echo '{"outcome":"ok","message":"Installed"}' ;;
-  *) exit 1 ;;
-esac
-`,
-    'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+  const requests: string[] = []
+  using server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request) => {
+      requests.push(new URL(request.url).pathname)
+      return new Response('Not Found', { status: 404 })
+    },
   })
+  await writeFiles(home, { 'bin/git': '#!/bin/sh\ncp -R "$HOME/hello-mod/." "$5"\nkill -TERM $PPID\nsleep 0.3\n' })
+  await writeFiles(join(home, 'hello-mod'), { ...helloMod, '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0', repository: `${server.url.origin}/owner/hello-mod` }) })
 
-  const result = await cmod(home, 'try', root, '--yes')
+  const result = await cmod(home, 'try', 'owner/hello-mod', '--yes')
 
   expect(result.exitCode).toBe(143)
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
-  expect(result.stdout).not.toContain('Cancelled the install step')
-  expect(existsSync(join(home, '.local/share/cmod/records/demo.json'))).toBe(false)
+  expect(result.stdout).toContain('Cancelled setting up hello-mod on SIGTERM, before its install step started.')
+  expect(requests).toEqual([])
+  expect(existsSync(join(home, 'claude-calls'))).toBe(false)
+  expect(existsSync(join(home, '.local/share/cmod/consent.json'))).toBe(false)
+  expect(leftovers(home)).toEqual([])
 })
 
 test('a signal to the process group during the install step of cmod try leaves no program, approval or data', async () => {

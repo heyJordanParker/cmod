@@ -64,7 +64,9 @@ bun cli/src/main.ts link .
 export CMOD_SDK=file:$PWD/sdk/cmod-sdk-0.1.0.tgz
 ```
 
-The `claude` line loads the checkout once, so Claude Code writes `.claude-plugin/types/`, which the cmod-sdk build reads. `cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code. `CMOD_SDK` makes `cmod new` install cmod-sdk from the tarball you packed. Put the `export` line in your shell profile, with the clone's full path, to keep it in new shells.
+The `claude` line loads the checkout once, so Claude Code writes `.claude-plugin/types/`, which the cmod-sdk build reads. It prints `cmod: hooks module did not load`, which is expected there: the CMod plugin's packages are not installed yet. `cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code. `CMOD_SDK` makes `cmod new` install cmod-sdk from the tarball you packed. Put the `export` line in your shell profile, with the clone's full path, to keep it in new shells.
+
+Then move out of the clone, such as with `cd ..`, before `cmod new`, so the new mod is not created inside the CMod checkout.
 
 ## Make a mod in 30 seconds
 

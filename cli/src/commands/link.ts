@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util'
+import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { tilde } from '../files.js'
 import { preparePackages, readPlugin } from '../plugin.js'
 import { installProgram, readProgram } from '../program.js'
@@ -28,7 +29,11 @@ export async function run(argv: string[]): Promise<number> {
   if (positionals.length > 1) throw new Error(`cmod link takes at most one path.\n\n${help}`)
   const plugin = await readPlugin(positionals[0] ?? '.')
   const progress = startProgress()
-  if (plugin.name !== 'cmod') await installCmodPlugin(progress)
+  if (plugin.name !== 'cmod') {
+    await installCmodPlugin(progress).catch((error: unknown) => {
+      throw new Error(`${messageOf(error)}\nLink the CMod checkout first: cmod link <checkout>`)
+    })
+  }
 
   progress.step(`Installing packages for ${plugin.name}`)
   if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)

@@ -81,14 +81,12 @@ test('a removed plugin that is not a cmod mod answers missing and shows nothing'
 })
 
 test('a failed removal is not retried in the next session and its toast names the fix', async () => {
-  const failed = { 'four-step': { exitCode: 1, stdout: 'log removing the alias\nfailed 2\tzsh: no such file: ~/.zshrc.d/four-step\n', stderr: '' } }
+  const message = 'The uninstall step of four-step exited 2: zsh: no such file: ~/.zshrc.d/four-step. Fix ~/.local/share/cmod/uninstall/four-step/uninstall.sh, then run cmod teardown four-step.'
+  const failed = { 'four-step': { exitCode: 1, stdout: `log removing the alias\nfailed 2\t${message}\n`, stderr: '' } }
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, failed)
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
-  expect(tested.shown.toasts).toEqual([
-    'cmod is ready',
-    'cmod teardown four-step exited 1: zsh: no such file: ~/.zshrc.d/four-step. Fix /test/home/.local/share/cmod/uninstall/four-step/uninstall.sh, then run cmod teardown four-step.',
-  ])
+  expect(tested.shown.toasts).toEqual(['cmod is ready', message])
 
   const next = testRemovals(tested.state.global.installedPlugins, { 'cmod@fixtures': true }, failed)
   await next.tested.fire('SessionStart', { source: 'startup' })

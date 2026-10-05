@@ -12,7 +12,7 @@ A mod runs its steps on the User's machine with the User's consent, and CMod cle
 - `scriptsSha256` in `sdk/src/records.ts` decides consent, for the cmod program (`cli/src/commands/setup.ts`, `cli/src/commands/check.ts`) and the SDK (`readPlugin` in `sdk/src/runtime/lifecycle.ts`) alike.
 - `readSteps` in `sdk/src/records.ts` is the one parser of the `package.json` `cmod` key.
 - `restoreProgram` in `cli/src/program.ts` decides which program version `~/.local/bin/<program>` points at.
-- `takeLock` in `cli/src/store.ts` decides which cmod command changes a mod. Setup and teardown take one lock per mod, `records/<name>.json.lock/<pid>` in the CMod store (`modLock` in `cli/src/commands/setup.ts`), and approvals change under `consent.json.lock/<pid>`. A lock whose holder's process is gone is taken over at once.
+- `takeLock` in `cli/src/store.ts` decides which cmod command changes a mod. Setup and teardown take one lock per mod, `records/<name>.json.lock/<pid>` in the CMod store (`modLock` in `cli/src/store.ts`), and approvals change under `consent.json.lock/<pid>`. A lock whose holder's process is gone, or whose process ID now belongs to another process (its start time differs), is taken over at once.
 
 ### Change the decider, never a copy of it
 A second check beside it disagrees with it on the first input nobody listed.

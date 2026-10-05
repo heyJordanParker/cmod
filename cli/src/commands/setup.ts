@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
+import { constants } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
@@ -10,7 +11,7 @@ import { runStep } from '../process.js'
 import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
-import { approve, isApproved, revokeApprovals, storePath, takeLock } from '../store.js'
+import { approve, isApproved, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
 
@@ -25,9 +26,11 @@ nothing. While a setup or teardown of the mod runs, another setup waits for it,
 then checks the mod again; a mod whose scripts changed meanwhile asks consent
 again. A setup whose process is gone is taken over at once. Ctrl+C, a closed
 terminal, or SIGTERM while it waits or before the install step starts stops the
-setup and removes what it set up. When one stops the install step, the setup
-runs the mod's uninstall step, then removes what it set up. Once the install
-step has finished, the setup records the mod, then exits.
+setup and removes what it set up. When one stops the install step of a mod
+that is not set up, the setup runs the mod's uninstall step, then removes what
+it set up. When one stops the install step of an upgrade, the setup keeps the
+version the record names, as a failed upgrade does. Once the install step has
+finished, the setup records the mod, then exits.
 
 Options:
   --events            Print one event per line for a program to read:
@@ -133,23 +136,12 @@ export function uninterruptible(argv: string[]): string[] {
   return ['sh', '-c', `trap '' ${heldSignals.map((signal) => signal.replace(/^SIG/, '')).join(' ')}; exec "$@"`, 'sh', ...argv]
 }
 
-export function modLock(name: string): string {
-  return `${recordPath(storeFolder(process.env), name)}.lock`
-}
-
-export async function deleteUnrecordedLeftovers(name: string, cancel: AbortSignal): Promise<void> {
-  const store = storeFolder(process.env)
-  if (existsSync(recordPath(store, name))) return
-  await rm(dataFolder(store, name), { recursive: true, force: true })
-  await revokeApprovals(name, cancel)
-}
-
 async function checkSetup(plugin: Plugin): Promise<SetupState> {
   const { install, uninstall, program } = plugin.steps
   const sha256 = await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
   const record = await readRecord(readText, storeFolder(process.env), plugin.name)
   const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256
-  const needsConsent = (install ?? uninstall ?? program) !== undefined && !(await isApproved(plugin.name, sha256))
+  const needsConsent = !isCurrent && (install ?? uninstall ?? program) !== undefined && !(await isApproved(plugin.name, sha256))
   return { sha256, isCurrent, needsConsent }
 }
 
@@ -163,20 +155,23 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
     emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '' })
     return 10
   }
+  const store = storeFolder(process.env)
   let code = 1
   try {
     code = await setUpMod(plugin, state, hold, emit)
     return code
   } finally {
-    if (code !== 0) await deleteUnrecordedLeftovers(plugin.name, hold.abortSignal)
+    if (code !== 0 && state.needsConsent) await revokeApprovals(plugin.name, state.sha256)
+    if (code !== 0 && !existsSync(recordPath(store, plugin.name))) await rm(dataFolder(store, plugin.name), { recursive: true, force: true })
   }
 }
 
 async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emit: (event: RunnerEvent) => void): Promise<number> {
+  if (hold.signal !== undefined) return 1
   const { install, uninstall, program } = plugin.steps
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
-  if (state.needsConsent) await approve(plugin.name, state.sha256, hold.abortSignal)
+  if (state.needsConsent) await approve(plugin.name, state.sha256)
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
   const folder = storePath('uninstall', plugin.name)
@@ -192,10 +187,12 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
         emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
       )
       if (result.exitCode !== 0) {
-        if (hold.signal !== undefined && uninstall !== undefined) {
-          await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
+        const isCancelled = hold.signal !== undefined || heldSignals.some((signal) => result.exitCode === 128 + constants.signals[signal])
+        if (isCancelled && uninstall !== undefined && previous === undefined) {
+          const undone = await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
             if (event.kind === 'log') emit(event)
           })
+          emit({ kind: 'log', text: `The uninstall step of ${plugin.name} exited ${undone.exitCode}.` })
         }
         emit({ kind: 'failed', code: result.exitCode, message: result.lastError })
         return 1

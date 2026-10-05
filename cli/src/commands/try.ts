@@ -60,7 +60,7 @@ export async function run(argv: string[]): Promise<number> {
     progress.step(`Installing packages for ${plugin.name}`)
     if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
     else progress.succeed(`${plugin.name} has no packages to install`)
-    await installCmodPlugin(progress, hold.abortSignal)
+    if (hold.signal === undefined) await installCmodPlugin(progress)
     const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
     if (code !== 0) return code
     try {

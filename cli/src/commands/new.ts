@@ -46,9 +46,12 @@ export async function run(argv: string[]): Promise<number> {
     await preparePackages(await readPlugin(root))
   } catch (error) {
     await rm(root, { recursive: true, force: true })
-    throw new Error(
-      `Installing packages for ${name} failed, so cmod new deleted ${relative(process.cwd(), root)}: ${messageOf(error)}\nTo install cmod-sdk from a file, set CMOD_SDK to a cmod-sdk tarball, such as CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz, then run cmod new again.`,
-    )
+    const tarball = `CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz`
+    const sdk = process.env['CMOD_SDK']
+    const fix = sdk
+      ? `CMOD_SDK is ${sdk}, and bun could not install it. Point CMOD_SDK at a cmod-sdk tarball, such as ${tarball}, then run cmod new again.`
+      : `To install cmod-sdk from a file, set CMOD_SDK to a cmod-sdk tarball, such as ${tarball}, then run cmod new again.`
+    throw new Error(`Installing packages for ${name} failed, so cmod new deleted ${relative(process.cwd(), root)}: ${messageOf(error)}\n${fix}`)
   }
   progress.succeed(`Installed packages for ${name}`)
   const next = values.project

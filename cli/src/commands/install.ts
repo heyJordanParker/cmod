@@ -77,9 +77,9 @@ async function installPlugin(id: string, yes: boolean, progress: Progress): Prom
   return code
 }
 
-export async function installCmodPlugin(progress: Progress, cancel?: AbortSignal): Promise<void> {
+export async function installCmodPlugin(progress: Progress): Promise<void> {
   const cmod = (await listPlugins()).find((plugin) => plugin.name === 'cmod')
-  if (cmod?.scope === 'session' || cancel?.aborted) return
+  if (cmod?.scope === 'session') return
   const id = cmod?.id ?? 'cmod@cmod'
   progress.step('Installing the CMod plugin into Claude Code')
   if (cmod === undefined && !(await listMarketplaces()).some((marketplace) => marketplace.name === 'cmod')) await addMarketplace('heyJordanParker/cmod')
