@@ -31,8 +31,9 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
   if (!isObject(declared) || typeof declared['build'] !== 'string' || typeof declared['output'] !== 'string') {
     throw new Error(`${tilde(folder)} declares a "cmod" build without "build" and "output". Write "cmod": { "build": "<command>", "output": "<folder>" }.`)
   }
-  const name = manifest['name']
-  if (typeof name !== 'string' || !pluginName.test(name)) throw new Error(`${tilde(folder)} names its program "${String(name)}". The manifest's "name" is the command, such as "hello".`)
+  const commands = isObject(manifest['bin']) ? Object.keys(manifest['bin']) : []
+  const name = commands.length === 1 ? commands[0] : manifest['name']
+  if (typeof name !== 'string' || !pluginName.test(name)) throw new Error(`${tilde(folder)} names its program "${String(name)}". The manifest's one "bin" command, or else its "name", is the command, such as "hello".`)
   return { name, folder, build: declared['build'], output: declared['output'] }
 }
 

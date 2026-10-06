@@ -8,12 +8,12 @@ afterEach(deleteTemporaryHomes)
 
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 
-async function committedMod(home: string, build: string): Promise<string> {
+async function committedMod(home: string, build: string, manifest: Record<string, unknown> = { name: 'hello' }): Promise<string> {
   const root = join(home, 'cmod')
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.2.0' }),
     'package.json': JSON.stringify({ name: 'cmod', cmod: { program: 'hello' } }),
-    'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
+    'cli/package.json': JSON.stringify({ ...manifest, cmod: { build, output: 'dist' } }),
     'cli/src/main.ts': 'console.log("hello")\n',
   })
   const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
@@ -73,6 +73,18 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   const expected = []
   for (const asset of assets.slice(0, -1)) expected.push(`${new Bun.CryptoHasher('sha256').update(await Bun.file(asset).arrayBuffer()).digest('hex')}  ${basename(asset)}`)
   expect(sums).toBe(`${expected.join('\n')}\n`)
+})
+
+test('publish names the program of a scoped npm package by its one bin command', async () => {
+  const home = await temporaryHome()
+  const build = `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`
+  const root = await committedMod(home, build, { name: '@owner/hello-cli', bin: { hello: 'bin/hello' } })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain(`/hello-${platforms[0]}\n`)
 })
 
 test('publish refuses a build that is not named <program>-<os>-<arch>', async () => {
