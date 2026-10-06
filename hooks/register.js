@@ -250,7 +250,7 @@ function toolInputOf(envelope) {
   return Object.fromEntries(Object.entries(envelope).filter(([key]) => !reservedKeys.includes(key)));
 }
 var keptCalls = 100;
-function toolCalls({ claude, on }) {
+function toolCalls(claude, router) {
   let mainAgentType;
   const agentIds = new Map;
   const cwds = new Map;
@@ -258,15 +258,15 @@ function toolCalls({ claude, on }) {
     if (e.agent_id === undefined)
       mainAgentType = e.agent_type;
   };
-  on("classic.SessionStart", (e, next) => {
+  router.add("classic.SessionStart", (e, next) => {
     noteAgent(e);
     return next(e);
   });
-  on("classic.UserPromptSubmit", (e, next) => {
+  router.add("classic.UserPromptSubmit", (e, next) => {
     noteAgent(e);
     return next(e);
   });
-  on("tool.call", async (e, next) => {
+  router.add("tool.call", async (e, next) => {
     if (e.agentId === undefined)
       return next(e);
     agentIds.set(e.tool_use_id, e.agentId);
@@ -276,7 +276,7 @@ function toolCalls({ claude, on }) {
       agentIds.delete(e.tool_use_id);
     }
   });
-  on("classic.PreToolUse", async (e, next) => {
+  router.add("classic.PreToolUse", async (e, next) => {
     cwds.set(e.tool_use_id, await claude.session.cwd());
     for (const oldest of cwds.keys()) {
       if (cwds.size <= keptCalls)
@@ -286,7 +286,7 @@ function toolCalls({ claude, on }) {
     return next(e);
   });
   for (const event of ["classic.PostToolUse", "classic.PostToolUseFailure"]) {
-    on(event, async (e, next) => {
+    router.add(event, async (e, next) => {
       try {
         return await next(e);
       } finally {
@@ -4654,7 +4654,6 @@ async function createMod(definition, runtime) {
   const announce = (feature) => {
     added.push(feature);
   };
-  const on = (event, hook) => router.add(event, hook);
   const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()]);
   let cwd = startCwd;
   let loadedCwd = startCwd;
@@ -4670,7 +4669,7 @@ async function createMod(definition, runtime) {
         hookEvents.push(event);
       router.add(`classic.${event}`, classicHook(definition.name, event, hook, claude, agents));
     },
-    use: (part) => part({ mod, claude, on, announce, reserveName, toolCalls: agents }),
+    use: (job) => job({ mod, claude, on: (event, hook) => router.add(event, hook), announce, reserveName, toolCalls: agents }),
     ui: area.ui,
     process: {
       run: (argv, init) => claude.process.run(argv, init),
@@ -4720,34 +4719,34 @@ async function createMod(definition, runtime) {
       claude.ui.log(`${definition.name} keeps the state of ${modState.root} until the next prompt or folder move: ${messageOf(error)}`);
     }
   };
-  on("classic.SessionStart", async (e, next) => {
+  router.add("classic.SessionStart", async (e, next) => {
     await modState.switchSession(e.session_id, e.source).catch((error) => {
       claude.ui.log(`${definition.name} kept its session values from before the ${e.source}: ${messageOf(error)}`);
     });
     return next(e);
   });
-  on("classic.UserPromptSubmit", async (e, next) => {
+  router.add("classic.UserPromptSubmit", async (e, next) => {
     staleCwd = undefined;
     await followSession();
     return next(e);
   });
   for (const event of ["classic.PostToolUse", "classic.PostToolUseFailure"]) {
-    on(event, async (e, next) => {
+    router.add(event, async (e, next) => {
       if (shellTools.includes(e.tool_name))
         await followSession();
       return next(e);
     });
   }
-  on("command.run", async (e, next) => {
+  router.add("command.run", async (e, next) => {
     const answer = await next(e);
     if (e.command === "cd")
       await followSession(true);
     return answer;
   });
-  on("skill.prompt", userSkillHook(claude));
+  router.add("skill.prompt", userSkillHook(claude));
   const api = Object.fromEntries(Object.entries(definition.api ?? {}).map(([method, run]) => [method, (input) => run(input, mod)]));
-  on("cmod.call", (e, next) => e.to === definition.name ? answerCall(definition.name, api, e) : next(e));
-  const agents = toolCalls({ claude, on });
+  router.add("cmod.call", (e, next) => e.to === definition.name ? answerCall(definition.name, api, e) : next(e));
+  const agents = toolCalls(claude, router);
   const names = new Set;
   const reserveName = (kind, name, taken) => {
     const key = `${kind}:${name}`;
@@ -4797,15 +4796,8 @@ function lastLineOf(text) {
 
 // node_modules/@cmodjs/core/connect.js
 var lifecycle;
-async function startMod($, e, next) {
-  await lifecycle.start(claudeOf($), readPlugin);
-  return next(e);
-}
-function routeToMod(_$, e, next) {
-  return lifecycle.route(next.event, e, (passed) => next(passed));
-}
-function claudeOf($) {
-  return {
+async function startMod($, eventInput, passOn) {
+  const claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
     ui: {
       toast: (text, options) => $.ui.toast(text, options),
@@ -4861,6 +4853,11 @@ function claudeOf($) {
     },
     cmod: { call: (input) => $.cmod.call(input) }
   };
+  await lifecycle.start(claude, readPlugin);
+  return passOn(eventInput);
+}
+function routeToMod(_$, eventInput, passOn) {
+  return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed));
 }
 function connect(on, definition) {
   lifecycle = createLifecycle(definition);
@@ -4901,7 +4898,7 @@ function defineMod(definition) {
   return definition;
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-sKoacM/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-HYw87y/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -4944,10 +4941,10 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-sKoacM/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-HYw87y/release/hooks/register.ts
 function register(on) {
-  on("engine.create", async (_$, e, next) => {
-    const built = await next(e);
+  on("engine.create", async (_$, eventInput, passOn) => {
+    const built = await passOn(eventInput);
     const cmod = {
       async call(input) {
         return { deny: notInstalled(input.to) };
