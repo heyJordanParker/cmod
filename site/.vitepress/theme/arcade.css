@@ -1,0 +1,114 @@
+/* one-up: the score that floats off a copy button */
+
+.one-up {
+  position: relative;
+}
+
+.one-up::before {
+  content: '+1UP';
+  position: absolute;
+  inset-block-end: 100%;
+  inset-inline-start: 50%;
+  translate: -50% 0;
+  color: var(--cm-green);
+  font-family: var(--cm-font-display);
+  font-size: 0.75rem;
+  font-variant-ligatures: none;
+  letter-spacing: 0.1em;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.one-up[data-copied='true']::before {
+  animation: one-up 900ms var(--cm-ease) both;
+}
+
+@keyframes one-up {
+  from {
+    opacity: 1;
+    translate: -50% 0.25rem;
+  }
+  to {
+    opacity: 0;
+    translate: -50% -1.25rem;
+  }
+}
+
+/* arcade: the toast and the invader the cheat codes show */
+
+.arcade__toast {
+  position: fixed;
+  z-index: 100;
+  inset-block-end: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+  inset-inline-start: 50%;
+  max-width: calc(100% - 2rem);
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--cm-radius);
+  background: var(--cm-navy-900);
+  box-shadow: var(--cm-shadow-floating);
+  color: var(--cm-green);
+  font-family: var(--cm-font-display);
+  font-size: 0.875rem;
+  font-variant-ligatures: none;
+  text-align: center;
+  opacity: 0;
+  translate: -50% 1rem;
+  transition: opacity 200ms ease, translate 300ms var(--cm-ease);
+  pointer-events: none;
+}
+
+.arcade__toast[data-shown='true'] {
+  opacity: 1;
+  translate: -50% 0;
+}
+
+.arcade__invader {
+  position: fixed;
+  z-index: 99;
+  inset-block-end: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  inset-inline-start: 0;
+  display: none;
+  width: 2.75rem;
+  fill: var(--cm-green);
+  pointer-events: none;
+}
+
+html[data-arcade='true'] {
+  --vp-font-family-base: var(--cm-font-display);
+
+  font-variant-ligatures: none;
+}
+
+html[data-arcade='true'] body::after {
+  content: '';
+  position: fixed;
+  z-index: 98;
+  inset: 0;
+  background: repeating-linear-gradient(to bottom, oklch(0 0 0 / 0.18) 0 1px, transparent 1px 3px);
+  pointer-events: none;
+}
+
+html[data-arcade='true'] .arcade__invader {
+  display: block;
+  animation: arcade-march 14s steps(56) infinite;
+}
+
+@keyframes arcade-march {
+  from {
+    translate: -3rem 0;
+  }
+  to {
+    translate: 100vw 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .one-up[data-copied='true']::before,
+  html[data-arcade='true'] .arcade__invader {
+    animation: none;
+  }
+
+  .arcade__toast {
+    transition: none;
+  }
+}

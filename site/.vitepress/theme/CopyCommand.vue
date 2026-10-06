@@ -14,7 +14,7 @@ async function copy(): Promise<void> {
 <template>
   <div class="command">
     <code class="command__text"><span class="command__prompt" aria-hidden="true">$</span>{{ command }}</code>
-    <button class="command__copy" type="button" :data-copied="isCopied" :aria-label="`Copy ${command}`" @click="copy">
+    <button class="command__copy one-up" type="button" :data-copied="isCopied" :aria-label="`Copy ${command}`" @click="copy">
       <span class="command__label command__label--idle">Copy</span>
       <span class="command__label command__label--done" aria-live="polite">Copied</span>
     </button>

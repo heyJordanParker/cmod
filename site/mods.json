@@ -1,0 +1,14 @@
+[
+  {
+    "name": "file-tree",
+    "description": "A Files pane beside the conversation: the files Claude read and edited this session, and the files git shows as changed.",
+    "author": "Jordan Parker",
+    "isComingSoon": true
+  },
+  {
+    "name": "architecture-diagrams",
+    "description": "Diagrams Claude draws while it explains a system: modules and arrows in box characters, in a Diagrams pane and in the reply.",
+    "author": "Jordan Parker",
+    "isComingSoon": true
+  }
+]

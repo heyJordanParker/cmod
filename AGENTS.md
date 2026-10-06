@@ -14,3 +14,5 @@ Claude Mod Manager (cmod) installs Claude Code mods, runs their install and unin
 - `core/docs/` ships inside `@cmodjs/core` as the mod author docs, so a change to the Public API changes `core/docs/` in the same commit.
 - The sample mods `file-tree` and `architecture-diagrams` are checked out beside this repository.
 - `site/` is claudemodmanager.com, a VitePress site GitHub Pages serves. Its landing page is `site/index.md`, and its docs are `core/docs/` of the latest release tag, copied in at build. `bun run --cwd site dev` serves it locally with the working tree's `core/docs/`.
+- `site/mods.json` is the list the site's Mods page shows, and a pull request adds a mod to it.
+- The site's build writes `llms.txt`, `llms-full.txt`, and a Markdown copy of each docs page, and `site/public/og.png` is the image a shared link shows.
