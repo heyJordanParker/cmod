@@ -1,0 +1,57 @@
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .claude-plugin/icon.png, .github/workflows/site.yml]
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Take the docs from the latest release, so the site matches what npm installs
+        run: git checkout "$(git describe --tags --abbrev=0 --match 'v*')" -- core/docs
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Build the site
+        run: |
+          bun install --cwd site --frozen-lockfile
+          bun run --cwd site build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

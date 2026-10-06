@@ -13,3 +13,4 @@ Claude Mod Manager (CMod) installs Claude Code mods, runs their install and unin
 - Raising that version in all three files, with the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges, and pushing to `main` releases both npm packages and the CMod plugin. CONTRIBUTING.md has the release steps.
 - `core/docs/` ships inside `@cmodjs/core` as the mod author docs, so a change to the Public API changes `core/docs/` in the same commit.
 - The sample mods `file-tree` and `architecture-diagrams` are checked out beside this repository.
+- `site/` is claudemodmanager.com, a VitePress site GitHub Pages serves. Its landing page is `site/index.md`, and its docs are `core/docs/` of the latest release tag, copied in at build. `bun run --cwd site dev` serves it locally with the working tree's `core/docs/`.

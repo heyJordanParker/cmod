@@ -1,0 +1,17 @@
+{
+  "name": "claudemodmanager.com",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "copy": "rm -rf docs public/icon.png && cp -R ../core/docs docs && mkdir -p public && cp ../.claude-plugin/icon.png public/icon.png",
+    "dev": "bun run copy && vitepress dev",
+    "build": "bun run copy && vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "@fontsource-variable/ibm-plex-sans": "5.3.0",
+    "@fontsource-variable/pixelify-sans": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "vitepress": "1.6.4"
+  }
+}

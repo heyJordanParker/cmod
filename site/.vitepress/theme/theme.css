@@ -1,0 +1,93 @@
+:root {
+  --cm-navy-900: oklch(0.185 0.03 262);
+  --cm-navy-800: oklch(0.225 0.035 262);
+  --cm-navy-700: oklch(0.27 0.04 262);
+  --cm-navy-600: oklch(0.33 0.045 262);
+  --cm-beige-100: oklch(0.93 0.018 85);
+  --cm-beige-300: oklch(0.84 0.025 82);
+  --cm-beige-500: oklch(0.7 0.03 80);
+  --cm-blue-600: oklch(0.47 0.19 264);
+  --cm-blue-500: oklch(0.56 0.19 264);
+  --cm-blue-400: oklch(0.7 0.14 264);
+  --cm-coral: oklch(0.72 0.14 38);
+  --cm-green: oklch(0.82 0.16 150);
+  --cm-text-1: oklch(0.96 0.01 85);
+  --cm-text-2: oklch(0.8 0.02 255);
+  --cm-text-3: oklch(0.66 0.02 255);
+
+  --cm-radius: 0.675rem;
+  --cm-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --cm-shadow-subtle: 0 0 0 1px oklch(1 0 0 / 0.08);
+  --cm-shadow-elevated: 0 0 0 1px oklch(1 0 0 / 0.13);
+  --cm-shadow-floating: 0 0 0 1px oklch(1 0 0 / 0.18), 8px 6px 36px 0 oklch(0 0 0 / 0.45), 0 4px 16px 0 oklch(0 0 0 / 0.3);
+
+  --vp-font-family-base: 'IBM Plex Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --cm-font-display: 'Pixelify Sans Variable', var(--vp-font-family-mono);
+}
+
+.VPNavBarTitle .title,
+.vp-doc h1,
+.vp-doc h2,
+.home h1,
+.home h2,
+.home .kicker {
+  font-variant-ligatures: none;
+}
+
+.dark {
+  --vp-c-bg: var(--cm-navy-800);
+  --vp-c-bg-alt: var(--cm-navy-900);
+  --vp-c-bg-elv: var(--cm-navy-700);
+  --vp-c-bg-soft: var(--cm-navy-700);
+  --vp-c-text-1: var(--cm-text-1);
+  --vp-c-text-2: var(--cm-text-2);
+  --vp-c-text-3: var(--cm-text-3);
+  --vp-c-brand-1: var(--cm-blue-400);
+  --vp-c-brand-2: var(--cm-blue-500);
+  --vp-c-brand-3: var(--cm-blue-500);
+  --vp-c-brand-soft: oklch(from var(--cm-blue-500) l c h / 0.2);
+  --vp-c-tip-1: var(--cm-blue-400);
+  --vp-c-tip-soft: oklch(from var(--cm-blue-500) l c h / 0.16);
+  --vp-c-divider: oklch(1 0 0 / 0.08);
+  --vp-c-gutter: var(--cm-navy-900);
+  --vp-code-block-bg: var(--cm-navy-900);
+  --vp-code-bg: var(--cm-navy-700);
+  --vp-code-color: var(--cm-beige-100);
+  --vp-nav-bg-color: var(--cm-navy-800);
+  --vp-sidebar-bg-color: var(--cm-navy-900);
+  --vp-local-search-bg: var(--cm-navy-800);
+  --vp-local-search-result-bg: var(--cm-navy-700);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.VPNavBarTitle .title {
+  font-family: var(--cm-font-display);
+  font-weight: 600;
+}
+
+.VPNavBarTitle .logo {
+  border-radius: 22%;
+}
+
+.vp-doc h1,
+.vp-doc h2 {
+  font-family: var(--cm-font-display);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.vp-doc h2 {
+  border-top: 0;
+}
+
+.vp-doc p,
+.vp-doc li {
+  text-wrap: pretty;
+}
