@@ -133,7 +133,7 @@ test('a teardown that fails before any event shows its last line of standard err
 test('cmod.call denies a call no mod takes with the install command', async () => {
   const hooks = new Map<string, (...args: unknown[]) => Promise<EngineCreateResult>>()
   const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => void hooks.set(event, hook)
-  register(on as unknown as On, {})
+  register(on as unknown as On)
 
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
 

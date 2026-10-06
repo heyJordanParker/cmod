@@ -62,7 +62,7 @@ The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 1. It fails when the three versions differ.
 2. It installs Claude Code to write `.claude-plugin/types/`, then checks and tests `@cmodjs/core` and `@cmodjs/cli`, and builds `@cmodjs/core`.
 3. It publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.
-4. It releases the CMod plugin on GitHub with `cmod publish`, which builds the cmod program for each machine and attaches the builds to the release.
+4. It releases the CMod plugin on GitHub with `cmod publish`, which builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
 
 Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway.
 

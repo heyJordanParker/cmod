@@ -51,6 +51,7 @@ jobs:
         if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
           test -d .claude-plugin/types
 

@@ -59,11 +59,11 @@ Each of these says `Fix it, then run /reload-plugins.`
 `hooks/hooks.json` names `hooks/register.ts` as the plugin's hooks module. `register.ts` calls `connect` and does nothing else:
 
 ```ts
-import type { Register } from 'claude-code'
+import type { On } from 'claude-code'
 import { connect } from '../node_modules/@cmodjs/core/connect.js'
 import { greeter } from '../src/mod.js'
 
-export const register: Register = (on) => {
+export function register(on: On): void {
   connect(on, greeter)
 }
 ```
@@ -72,7 +72,7 @@ export const register: Register = (on) => {
 connect<State>(on: On, definition: ModDefinition<State>): void
 ```
 
-`connect` registers one handler per Claude Code event the mod can use, and routes each event to the mod. Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module.
+`connect` registers one handler per Claude Code event the mod can use, and routes each event to the mod. Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
 
 ## What `mod` can call
 

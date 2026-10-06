@@ -30,7 +30,7 @@ my-mod/
 
 The template is a working example to replace. It counts the prompts of the session in `state.session.prompts`, shows the count in a pane titled with the mod's name and above the prompt, and tests both. Replace the counter, the pane, the component, the Skill, and the tests with the mod's own.
 
-A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Types such as `RenderElement` and `Register` come from the `claude-code` module.
+A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Types such as `RenderElement` and `On` come from the `claude-code` module.
 
 ## Type-check after the first session
 

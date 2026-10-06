@@ -1,4 +1,8 @@
-# Claude Mod Manager
+<p align="center">
+  <img src=".claude-plugin/icon.png" alt="Claude Mod Manager" width="160">
+</p>
+
+<h1 align="center">Claude Mod Manager</h1>
 
 Claude Mod Manager (CMod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, slash commands, tools, and permission rules, and it can run its own install step. CMod installs mods, runs their install and uninstall steps with your consent, and helps you build and publish your own.
 
@@ -22,6 +26,13 @@ cmod install <owner>/<repo>
 ```
 
 A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The CMod plugin puts `cmod` in `~/.local/bin` the first time it runs. `cmod list` shows every plugin Claude Code has, and whether CMod set up each mod.
+
+## What the CMod plugin runs
+
+The CMod plugin runs two programs, and sends no data anywhere:
+
+- **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/bin/cmod` to it. That download is its only network request.
+- **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
 
 ## Change a mod
 
@@ -123,7 +134,7 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 ```
 
-Start `claude`, and the mod counts every prompt. `cmod check` checks the layout, the imports, and the lint, validates the mod with Claude Code, and runs its tests. It type-checks the mod once that first session has written `.claude-plugin/types/`, and skips the type check before. `cmod publish` releases the mod on GitHub.
+Start `claude`, and the mod counts every prompt. `cmod check` checks the layout, the imports, and the lint, validates the mod with Claude Code, and runs its tests. It type-checks the mod once that first session has written `.claude-plugin/types/`, and skips the type check before. `cmod publish` releases the mod on GitHub, and prints the link that lists it in Anthropic's plugin directory.
 
 ## Docs
 

@@ -75,6 +75,61 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(sums).toBe(`${expected.join('\n')}\n`)
 })
 
+async function committedHooksMod(home: string): Promise<string> {
+  const root = join(home, 'greeter')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'cmod' }),
+    'hooks/hooks.json': JSON.stringify({ description: 'greeter hooks module', modules: ['./register.ts'] }),
+    'hooks/register.ts': "import { greet } from '../src/greet.js'\n\nexport function register(on) {\n  on('session.start', greet)\n}\n",
+    'src/greet.ts': "export async function greet($, e, next) {\n  await $.ui.toast('hello')\n  return next(e)\n}\n",
+    '.github/workflows/release.yml': 'name: Release\n',
+    '.claude/skills/repack/SKILL.md': '# Repack\n',
+  })
+  const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
+  await git('init', '-q')
+  await git('add', '.')
+  await git('commit', '-q', '-m', 'mod')
+  await git('remote', 'add', 'origin', 'https://github.com/owner/greeter.git')
+  return root
+}
+
+async function zipText(archive: string, entry: string): Promise<string> {
+  return new Response(Bun.spawn(['unzip', '-p', archive, entry], { stdout: 'pipe' }).stdout).text()
+}
+
+test('publish --dry-run bundles the hooks module into one file, and leaves out .github/ and .claude/', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home)
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
+  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
+  expect(JSON.parse(await zipText(archive, 'hooks/hooks.json'))).toEqual({ description: 'greeter hooks module', modules: ['./register.js'] })
+  const bundle = await zipText(archive, 'hooks/register.js')
+  expect(bundle).toContain('function greet($, e, next)')
+  expect(bundle).toContain('function register(on)')
+  expect(bundle).not.toContain('import ')
+  const tree = join(dirname(archive), 'release')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(`plugin validate ${tree} --strict\n`)
+  expect(result.stdout).toContain(`and ${tree} to its release branch. Nothing was pushed:`)
+})
+
+test('publish stops when claude plugin validate refuses the release', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home)
+  await writeFiles(home, { 'bin/claude': "#!/bin/sh\necho '✘ register is exported as \"register\", which is not a function declared at the top of this file' >&2\nexit 1\n" })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toContain('--strict exited 1:\n✘ register is exported as "register", which is not a function declared at the top of this file')
+})
+
 test('publish names the program of a scoped npm package by its one bin command', async () => {
   const home = await temporaryHome()
   const build = `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`

@@ -82,22 +82,30 @@ cmod publish [path] [--dry-run]
 
 Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`:
 
-1. Builds the release archive from the committed files with `git archive`, leaving out `cli/`.
-2. Builds the program `cli/` declares.
-3. Writes `SHA256SUMS` for every file of the release.
-4. Writes `.claude-plugin/marketplace.json`, listing the archive and the CMod plugin.
-5. Commits that file, tags `v<version>`, pushes, and creates the GitHub release.
+1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`.
+2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file.
+3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
+4. Commits the release as the `release` branch, and builds the release archive from that commit.
+5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
+6. Writes `.claude-plugin/marketplace.json`, listing the archive and the CMod plugin.
+7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release.
+8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
+
+The release keeps `package.json` and `bun.lock`, so Claude Code still installs the mod's packages for its install and uninstall steps. `main` keeps the source only.
 
 It needs, and refuses to start without:
 
 - the mod's folder as the root of a git repository with at least one commit, because `git archive` builds from `HEAD`
+- `node_modules` in the mod's folder, from `bun install`, when the hooks module imports a package
+- a `register` declared as a function in the hooks module, as `cmod new` writes it, because the validator refuses a bundled `register` that is not one
+- the `claude` command, which validates the release
 - an `origin` remote on GitHub
 - a `package.json` with no dependency on a `file:` or `link:` path, which no user has
 - a `"program"` in the `cmod` key of `package.json` that names the program `cli/` declares, when `cli/` declares one
 - the network, to hash the CMod plugin release it lists, unless the mod is CMod itself
 - for a real publish, a working tree with no uncommitted changes, a `v<version>` tag that does not exist yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
-`--dry-run` builds and writes everything, and pushes nothing. It allows uncommitted changes and an existing tag, and builds from the last commit.
+`--dry-run` builds and writes everything, and pushes nothing. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
 
 ## Install mods
 

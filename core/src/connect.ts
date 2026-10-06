@@ -6,12 +6,12 @@ import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle
 
 let lifecycle: Lifecycle<object>
 
-async function start($: EngineInterface, e: Frozen<Args<'session.start'>>, next: Next<'session.start'>): Promise<EventResult<'session.start'>> {
+async function startMod($: EngineInterface, e: Frozen<Args<'session.start'>>, next: Next<'session.start'>): Promise<EventResult<'session.start'>> {
   await lifecycle.start(claudeOf($), readPlugin)
   return next(e)
 }
 
-function route<N extends RoutedEvent>(_$: EngineInterface, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>> {
+function routeToMod<N extends RoutedEvent>(_$: EngineInterface, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>> {
   return lifecycle.route(next.event, e, (passed: unknown) => next(passed as Args<N>) as Promise<EventResult<N>>)
 }
 
@@ -76,32 +76,32 @@ function claudeOf($: EngineInterface): Claude {
 
 export function connect<State extends object>(on: On, definition: ModDefinition<State>): void {
   lifecycle = createLifecycle(definition)
-  on('session.start', start)
-  on('classic.SessionStart', route)
-  on('classic.SessionEnd', route)
-  on('classic.UserPromptSubmit', route)
-  on('classic.InstructionsLoaded', route)
-  on('classic.PreToolUse', route)
-  on('classic.PermissionRequest', route)
-  on('classic.PermissionDenied', route)
-  on('classic.PostToolUse', route)
-  on('classic.PostToolUseFailure', route)
-  on('classic.PostToolBatch', route)
-  on('classic.SubagentStart', route)
-  on('classic.SubagentStop', route)
-  on('classic.Notification', route)
-  on('classic.PreCompact', route)
-  on('classic.Stop', route)
-  on('classic.StopFailure', route)
-  on('tool.check', route)
-  on('tool.call', route)
-  on('prompt.submit', route)
-  on('prompt.context', route)
-  on('command.run', route)
-  on('session.measure', route)
-  on('skill.prompt', route)
-  on('ui.render', route)
-  on('ui.press', route)
-  on('ui.close', route)
-  on('cmod.call', route)
+  on('session.start', startMod)
+  on('classic.SessionStart', routeToMod)
+  on('classic.SessionEnd', routeToMod)
+  on('classic.UserPromptSubmit', routeToMod)
+  on('classic.InstructionsLoaded', routeToMod)
+  on('classic.PreToolUse', routeToMod)
+  on('classic.PermissionRequest', routeToMod)
+  on('classic.PermissionDenied', routeToMod)
+  on('classic.PostToolUse', routeToMod)
+  on('classic.PostToolUseFailure', routeToMod)
+  on('classic.PostToolBatch', routeToMod)
+  on('classic.SubagentStart', routeToMod)
+  on('classic.SubagentStop', routeToMod)
+  on('classic.Notification', routeToMod)
+  on('classic.PreCompact', routeToMod)
+  on('classic.Stop', routeToMod)
+  on('classic.StopFailure', routeToMod)
+  on('tool.check', routeToMod)
+  on('tool.call', routeToMod)
+  on('prompt.submit', routeToMod)
+  on('prompt.context', routeToMod)
+  on('command.run', routeToMod)
+  on('session.measure', routeToMod)
+  on('skill.prompt', routeToMod)
+  on('ui.render', routeToMod)
+  on('ui.press', routeToMod)
+  on('ui.close', routeToMod)
+  on('cmod.call', routeToMod)
 }

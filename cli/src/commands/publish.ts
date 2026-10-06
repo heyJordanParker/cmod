@@ -1,9 +1,11 @@
-import { mkdtemp } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, posix } from 'node:path'
 import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { isObject } from '@cmodjs/core/src/records.js'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../../package.json'
 import { tilde, writeAtomically } from '../files.js'
 import { readPlugin } from '../plugin.js'
@@ -18,12 +20,16 @@ export const help = `Usage: cmod publish [path] [--dry-run]
 ${summary}
 
 Releases the mod at path (default: the current folder) at the version in its
-plugin.json. Builds the release archive from the committed files with git
-archive, leaving out cli/, builds the program cli/ declares, writes SHA256SUMS
-for every file of the release, and writes .claude-plugin/marketplace.json
-listing the archive and the CMod plugin. Then commits that file, tags
-v<version>, pushes, and creates the GitHub release. It refuses a package.json
-that depends on a file: or link: path, which no user has.
+plugin.json. Builds the release from the committed files, leaving out cli/,
+.github/, and .claude/, and bundles the hooks module with its packages into one
+file, so Anthropic's plugin directory can read all of the mod's code. Checks
+the release with claude plugin validate --strict and commits it as the release
+branch. Builds the release archive from that commit and the program cli/
+declares, writes SHA256SUMS for every file of the release, and writes
+.claude-plugin/marketplace.json listing the archive and the CMod plugin. Then
+commits that file, tags v<version>, pushes the tag and the release branch, and
+creates the GitHub release. It refuses a package.json that depends on a file:
+or link: path, which no user has.
 
 Options:
   --dry-run  Build and write everything, and push nothing`
@@ -31,6 +37,10 @@ Options:
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 
 const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
+
+const leftOut = ['cli', '.github', '.claude']
+
+const releaseBranch = 'release'
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { 'dry-run': { type: 'boolean', default: false } } })
@@ -59,11 +69,22 @@ export async function run(argv: string[]): Promise<number> {
 
   const progress = startProgress()
   const output = await mkdtemp(join(tmpdir(), `cmod-publish-${plugin.name}-`))
+  const tree = join(output, releaseBranch)
+  progress.step('Building the release')
+  const bundle = await buildReleaseTree(plugin.root, output, tree, git)
+  const leftOutFolders = leftOut.map((folder) => `${folder}/`).join(', ')
+  progress.succeed(`Built ${tree} from ${isDirty ? 'the last commit, without the uncommitted changes' : 'HEAD'}, without ${leftOutFolders}${bundle === undefined ? '' : `, with the hooks module and its packages bundled into hooks/${bundle}`}`)
+
+  progress.step('Checking the release with claude plugin validate --strict')
+  await runCommand(['claude', 'plugin', 'validate', tree, '--strict'])
+  progress.succeed('claude plugin validate --strict passed on the release')
+
+  if (!dryRun) await git('fetch', 'origin', releaseBranch).catch(() => '')
+  const release = await commitRelease(output, tree, tag, git)
   const archive = join(output, `${plugin.name}-${plugin.version}.zip`)
-  progress.step('Building the release archive')
-  await git('archive', '--format=zip', '--output', archive, 'HEAD', '--', '.', ':(exclude)cli')
+  await git('archive', '--format=zip', '--output', archive, release)
   const sha256 = await fileSha256(archive)
-  progress.succeed(`Built ${archive} from ${isDirty ? 'the last commit, without the uncommitted changes' : 'HEAD'}, without cli/, sha256 ${sha256}`)
+  progress.succeed(`Built ${archive} from the release, sha256 ${sha256}`)
 
   let programs: string[] = []
   if (program !== undefined) {
@@ -93,18 +114,68 @@ export async function run(argv: string[]): Promise<number> {
   progress.succeed(`Wrote ${marketplacePath}`)
 
   const assets = [archive, ...programs, sums]
+  const directoryLink = `https://github.com/${repository}/tree/${releaseBranch}`
   if (dryRun) {
-    process.stdout.write(`\nDry run: ${tag} would release these files to https://github.com/${repository}, and nothing was pushed:\n${assets.map((asset) => `  ${asset}`).join('\n')}\n`)
+    process.stdout.write(`\nDry run: ${tag} would release these files to https://github.com/${repository}, and ${tree} to its ${releaseBranch} branch. Nothing was pushed:\n${assets.map((asset) => `  ${asset}`).join('\n')}\n`)
     return 0
   }
   progress.step(`Releasing ${tag}`)
   await git('add', marketplacePath)
   await git('commit', '--message', `release ${tag}`)
   await git('tag', tag)
-  await git('push', 'origin', 'HEAD', tag)
+  await git('push', '--atomic', 'origin', 'HEAD', tag, `${release}:refs/heads/${releaseBranch}`)
   await runCommand(['gh', 'release', 'create', tag, ...assets, '--repo', repository, '--title', `${plugin.name} ${plugin.version}`, '--generate-notes'])
   progress.succeed(`Released ${tag}: https://github.com/${repository}/releases/tag/${tag}`)
+  process.stdout.write(`\nTo list ${plugin.name} in Anthropic's plugin directory, open https://claude.ai/directory/manage, select Submit new, and paste this as the Repository:\n  ${directoryLink}\n`)
   return 0
+}
+
+async function buildReleaseTree(root: string, output: string, tree: string, git: (...args: string[]) => Promise<string>): Promise<string | undefined> {
+  const tar = join(output, `${releaseBranch}.tar`)
+  await git('archive', '--format=tar', '--output', tar, 'HEAD', '--', '.', ...leftOut.map((folder) => `:(exclude)${folder}`))
+  await mkdir(tree)
+  await runCommand(['tar', '-xf', tar, '-C', tree])
+  const borrowed = ['node_modules', '.claude-plugin/types'].filter((path) => existsSync(join(root, path)) && existsSync(join(tree, posix.dirname(path))))
+  for (const path of borrowed) await symlink(join(root, path), join(tree, path))
+  try {
+    return await bundleHooks(root, tree)
+  } finally {
+    for (const path of borrowed) await unlink(join(tree, path))
+  }
+}
+
+async function bundleHooks(root: string, tree: string): Promise<string | undefined> {
+  const hooksPath = join(tree, 'hooks', 'hooks.json')
+  if (!existsSync(hooksPath)) return undefined
+  const hooks = JSON.parse(await readFile(hooksPath, 'utf8')) as Record<string, unknown>
+  const [module] = Array.isArray(hooks['modules']) ? hooks['modules'] : []
+  if (typeof module !== 'string') return undefined
+  const failed = (reason: string) => {
+    const install = existsSync(join(root, 'node_modules')) ? '' : ` ${tilde(root)} has no node_modules, so run bun install there, then cmod publish again.`
+    return new Error(`Bundling hooks/${module} failed: ${reason}${install}`)
+  }
+  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'] }).catch((error: unknown) => {
+    throw failed(messageOf(error))
+  })
+  const [bundled] = built.outputs
+  if (!built.success || bundled === undefined) throw failed(built.logs.map(String).join('\n'))
+  const bundle = posix.join(posix.dirname(module), `${posix.basename(module, posix.extname(module))}.js`)
+  await Bun.write(join(tree, 'hooks', bundle), bundled)
+  await Bun.write(hooksPath, `${JSON.stringify({ ...hooks, modules: [`./${bundle}`] }, null, 2)}\n`)
+  return bundle
+}
+
+async function commitRelease(output: string, tree: string, tag: string, git: (...args: string[]) => Promise<string>): Promise<string> {
+  const [name = '', email = ''] = (await git('log', '-1', '--format=%an%n%ae')).trim().split('\n')
+  const gitFolder = (await git('rev-parse', '--absolute-git-dir')).trim()
+  const releaseGit = (...args: string[]) =>
+    runCommand(['git', '--git-dir', gitFolder, '--work-tree', tree, ...args], {
+      env: { ...process.env, GIT_INDEX_FILE: join(output, `${releaseBranch}.index`), GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email },
+    })
+  await releaseGit('add', '--all', '--force', tree)
+  const treeId = (await releaseGit('write-tree')).trim()
+  const parent = (await git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${releaseBranch}`).catch(() => '')).trim()
+  return (await releaseGit('commit-tree', treeId, ...(parent === '' ? [] : ['-p', parent]), '-m', `release ${tag}`)).trim()
 }
 
 function githubRepository(remote: string): string {

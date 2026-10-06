@@ -21,6 +21,7 @@ case "$*" in
   "plugin marketplace list --json") echo '[]' ;;
   "plugin marketplace add heyJordanParker/cmod") ;;
   "plugin install cmod@"*" --json") echo '{"outcome":"ok","message":"Installed '"$3"'"}' ;;
+  "plugin validate "*" --strict") echo 'Validation passed' ;;
   "--plugin-dir "*)
 ${session}
     ;;

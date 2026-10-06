@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/heyJordanParker/cmod/main/.claude-plugin/icon.png" alt="Claude Mod Manager" width="128">
+</p>
+
 # @cmodjs/cli
 
 The `cmod` command of Claude Mod Manager. Claude Mod Manager (CMod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step that runs with your consent.
