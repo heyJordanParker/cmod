@@ -30,6 +30,7 @@ export type TestedMod<State extends object> = {
   start(): Promise<void>
   fire<E extends ModEvent>(event: E, input: TestInput<E>, below?: EventResult<`classic.${E}`>): Promise<EventResult<`classic.${E}`>>
   fire<N extends RoutedEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
+  settle(): Promise<void>
   lines(paneId: string): Promise<string[]>
   lines<S extends Slot<object, object, { readonly component: RenderComponent }>>(slot: S, props: Omit<SlotProps<S>, 'Default'>, requestId?: string): Promise<string[]>
   type(line: string): Promise<Reply>
@@ -126,6 +127,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   return {
     start,
     fire,
+    settle: fake.settle,
     lines: (async (target: string | { readonly component: RenderComponent }, props: object = {}, requestId?: string) => {
       const { drawing, columns } = typeof target === 'string' ? await drawPane(target) : await drawSlot(target.component, props, requestId)
       return rowsOf(drawing, columns).map((row) => row.trimEnd())

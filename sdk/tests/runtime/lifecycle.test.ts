@@ -57,10 +57,6 @@ function finished(lines: readonly string[], code: number) {
 
 const cmodOnPath = async (): Promise<ProcessRunResult> => ({ exitCode: 0, stdout: 'cmod 0.1.0\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-async function settle(): Promise<void> {
-  for (let tick = 0; tick < 50; tick += 1) await Promise.resolve()
-}
-
 const postToolUse: ClassicHookInputs['PostToolUse'] = {
   session_id: 's',
   transcript_path: '/t',
@@ -113,7 +109,7 @@ test('a mod with a pending install registers nothing until done, then runs setup
   step.print('progress 1 4 Checking Homebrew')
   step.print('log Homebrew 4.6.0')
   step.print('progress 2 4 Installing trash')
-  await settle()
+  await fake.settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
   expect(await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})).toEqual({})
@@ -123,7 +119,7 @@ test('a mod with a pending install registers nothing until done, then runs setup
   step.print('progress 4 4 Adding the zsh alias')
   step.print('done safe-delete 0.2.0')
   step.exit(0)
-  await settle()
+  await fake.settle()
 
   expect(runs).toEqual([])
 
@@ -144,7 +140,7 @@ test('a call to a mod still installing fails with when to retry', async () => {
   const below = { value: [{ name: 'parse', line: 1 }] }
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })).toEqual({
     deny: "safe-delete is installing. Try again when it's ready.",
@@ -160,7 +156,7 @@ test('a call to a mod whose install was declined fails with the install command'
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: [] })).toEqual({
     deny: 'safe-delete is not installed. Run cmod install safe-delete.',
@@ -184,7 +180,7 @@ test('needs-consent asks in the question dialog, and Install runs the setup agai
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(asked).toEqual([
     ['safe-delete runs ./setup/install.sh to install, and ./setup/uninstall.sh when you remove it. Run it now?', { options: ['Install', 'Not now'], header: 'Install' }],
@@ -206,7 +202,7 @@ test('Not now declines the install with one notice naming cmod install, and setu
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(fake.shown.logs).toEqual(['safe-delete is not installed. Run cmod install safe-delete to install it.'])
@@ -222,7 +218,7 @@ test('a failed install draws the sentence cmod setup wrote and its fix, and setu
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(runs).toEqual([])
@@ -240,7 +236,7 @@ test('an install error longer than the band shows its fix in full', async () => 
   const narrowBand = { ...abovePrompt, viewport: { columns: 40, rows: 30 } }
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
     '>',
@@ -277,17 +273,17 @@ test('a waiting mod continues its install once the cmod program appears, with no
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
   const cmodCheck = timers.find((timer) => timer.ms === 1000)
   cmodCheck?.fire()
-  await settle()
+  await fake.settle()
 
   expect(spawned).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for CMod')
 
   isOnPath = true
   cmodCheck?.fire()
-  await settle()
+  await fake.settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
   expect(cmodCheck?.isCancelled).toBe(true)
@@ -314,15 +310,15 @@ test('a mod keeps waiting for CMod past 60 seconds and starts once CMod is ready
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
   timers.find((made) => made.ms === 60_000)?.fire()
-  await settle()
+  await fake.settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(">\n◌ Installing safe-delete  Still waiting for CMod to download cmod. See CMod's own line.")
 
   fake.fakes.process.run = cmodOnPath
   timers.find((made) => made.ms === 1000)?.fire()
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
@@ -392,7 +388,7 @@ test("the CMod plugin runs its bootstrap from its root, and its mod.dataFolder n
   )
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(spawned).toEqual([{ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: root }])
@@ -485,7 +481,7 @@ test('a mod with a program and no install step runs setup and then turns on', as
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, readPlugin)
-  await settle()
+  await fake.settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
   expect(runs).toEqual([])
@@ -509,7 +505,7 @@ test('a mod with no steps activates at once and writes its record in the backgro
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, readPlugin)
-  await settle()
+  await fake.settle()
 
   expect(runs).toEqual(['setup'])
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
@@ -517,9 +513,9 @@ test('a mod with no steps activates at once and writes its record in the backgro
 
   step.print('done safe-delete 0.2.0')
   step.exit(0)
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', { ...postToolUse, hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, {})
-  await settle()
+  await fake.settle()
 
   expect(spawned).toHaveLength(1)
   expect(await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})).toEqual({ additionalContext: ['safe-delete saw it'] })
@@ -539,7 +535,7 @@ test('a mod with no steps writes its record silently, and retries on the next pr
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, readPlugin)
-  await settle()
+  await fake.settle()
 
   expect(runs).toEqual(['setup'])
   expect(spawned).toEqual([])
@@ -548,7 +544,7 @@ test('a mod with no steps writes its record silently, and retries on the next pr
 
   isOnPath = true
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
-  await settle()
+  await fake.settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
   expect(await fire(lifecycle, 'ui.render', abovePrompt, prompt)).toBe(prompt)
@@ -614,7 +610,7 @@ test('an error from cmod --version other than not found shows as a failure', asy
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(runs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
@@ -629,7 +625,7 @@ test('cmod missing from PATH is waiting, not a failure', async () => {
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for CMod')
 })
@@ -643,7 +639,7 @@ test('a question dialog that fails shows as a failure, not as Not now', async ()
   const lifecycle = createLifecycle(definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(fake.shown.logs).toEqual([])
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
@@ -663,7 +659,7 @@ test('a whitespace-only chunk of standard error keeps the last error line', asyn
   step.printError('cmod setup: disk full')
   step.printError('   ')
   step.exit(1)
-  await settle()
+  await fake.settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
     '>\n✗ Installing safe-delete  cmod setup exited 1: cmod setup: disk full\n  Fix the cause, then run: cmod install safe-delete',
@@ -677,7 +673,7 @@ test('an empty stderr from cmod setup leaves no bare colon in the session', asyn
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing safe-delete  cmod setup exited 1\n  Fix the cause, then run: cmod install safe-delete')
   expect((lifecycle.failure as Error).message).toBe('safe-delete: cmod setup exited 1. Fix the cause, then run: cmod install safe-delete')
@@ -689,7 +685,7 @@ test('an empty stderr from the CMod bootstrap leaves no bare colon', async () =>
   const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
-  await settle()
+  await fake.settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(`>\n✗ Installing cmod  bootstrap exited 1\n  Run ./setup/bootstrap.sh in ${root} to see the whole log.`)
 })
@@ -700,7 +696,7 @@ test('an empty stderr from cmod --version leaves no bare colon', async () => {
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing safe-delete  cmod --version exited 1\n  Run cmod install safe-delete in a terminal to see the whole log.')
 })
@@ -712,7 +708,7 @@ test('a reason ending in ? keeps one mark', async () => {
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   expect((lifecycle.failure as Error).message).toBe('safe-delete: Is Homebrew installed? Fix the cause, then run: cmod install safe-delete')
 })
@@ -738,14 +734,14 @@ function notesIn(projectRoot: string) {
   const startConversation = (id: string) => {
     fake.claude.session.id = async () => id
   }
-  return { session, moveTo, startConversation }
+  return { session, moveTo, startConversation, settle: fake.settle }
 }
 
 test('a global value is the same in every project', async () => {
   const notes = notesIn('/work/a')
   const first = await notes.session()
   first.state.global.notes = ['buy milk']
-  await settle()
+  await notes.settle()
 
   notes.moveTo('/work/b')
   const reloaded = await notes.session()
@@ -757,7 +753,7 @@ test('a session value comes back after a code reload, and a new conversation sta
   const notes = notesIn('/work/a')
   const first = await notes.session()
   first.state.session.draft = 'call mum'
-  await settle()
+  await notes.settle()
 
   const reloaded = await notes.session()
 
@@ -774,7 +770,7 @@ test('a memory value starts from its default after a code reload, and a session 
   const first = await notes.session()
   first.state.memory.isTyping = true
   first.state.session.draft = 'call mum'
-  await settle()
+  await notes.settle()
 
   const reloaded = await notes.session()
 
@@ -1066,11 +1062,11 @@ test('two overlapping folder moves that both fail leave mod.cwd at the last load
   session.root = '/work/b'
   session.cwd = '/work/b'
   const first = fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
-  await settle()
+  await fake.settle()
   session.root = '/work/c'
   session.cwd = '/work/c'
   const second = fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
-  await settle()
+  await fake.settle()
 
   failLockedReads()
   await Promise.all([first, second])
@@ -1080,11 +1076,11 @@ test('two overlapping folder moves that both fail leave mod.cwd at the last load
 })
 
 test('a /cd the user cancels moves nothing', async () => {
-  const { lifecycle, redraws, moves, start, drawn } = folderPane()
+  const { fake, lifecycle, redraws, moves, start, drawn } = folderPane()
   await start()
   const mod = lifecycle.mod as Mod<{ project: { expanded: string[] } }>
   mod.state.project.expanded = ['src']
-  await settle()
+  await fake.settle()
   redraws.length = 0
 
   await fire(lifecycle, 'command.run', cd('../b'), {})
@@ -1110,7 +1106,7 @@ test('two projects setting one project value keep both', async () => {
 
   inA.state.project.expanded = ['src']
   inB.state.project.expanded = ['docs']
-  await settle()
+  await first.settle()
 
   expect((await sessionIn('/work/a')).state.project.expanded).toEqual(['src'])
   expect((await sessionIn('/work/b')).state.project.expanded).toEqual(['docs'])
@@ -1127,7 +1123,7 @@ test("a project whose saved state fails to load leaves the mod in the project it
   await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
   const mod = lifecycle.mod as Mod<{ project: { expanded: string[] } }>
   mod.state.project.expanded = ['src']
-  await settle()
+  await fake.settle()
   projectRoot = '/work/b'
   isStoreLocked = true
 
@@ -1187,7 +1183,7 @@ test('a mod that starts after SessionStart passed runs its SessionStart hooks on
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   step.print('done safe-delete 0.2.0')
   step.exit(0)
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
@@ -1214,7 +1210,7 @@ test('a mod whose install finished before SessionStart runs its SessionStart hoo
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
   await lifecycle.start(fake.claude, given(pending))
-  await settle()
+  await fake.settle()
 
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
@@ -1241,9 +1237,9 @@ test('a SessionStart held past the limit passes on and replays once the mod star
     return { ...pending, isInstalled: true }
   })
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {}).finally(() => (isAnswered = true))
-  await settle()
+  await fake.settle()
   timers.find((made) => made.ms === 9_000)?.fire()
-  await settle()
+  await fake.settle()
 
   expect(isAnswered).toBe(true)
   expect(await answer).toEqual({})
@@ -1298,7 +1294,7 @@ test('a late SessionStart replay that throws leaves the mod active', async () =>
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   step.print('done safe-delete 0.2.0')
   step.exit(0)
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(lifecycle.phase).toBe('active')
@@ -1325,7 +1321,7 @@ test("a mod that finishes installing before /clear replays only the cleared sess
   await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'first' }, {})
   step.print('done safe-delete 0.2.0')
   step.exit(0)
-  await settle()
+  await fake.settle()
   await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'second', source: 'clear' }, {})
 
   expect(seen).toEqual(['clear second'])

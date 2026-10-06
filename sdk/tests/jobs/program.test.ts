@@ -35,10 +35,6 @@ function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpaw
   return { tested, ready }
 }
 
-async function settle(): Promise<void> {
-  for (let tick = 0; tick < 200; tick += 1) await Promise.resolve()
-}
-
 test('a first line unix:/tmp/x.sock resolves ready() to the socket and http://localhost', async () => {
   const spawned: ProcessSpawnRequest[] = []
   const { tested, ready } = preview((request) => {
@@ -99,15 +95,15 @@ test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
   }
 
   const started = await ready()
-  const answer = started.ready()
-  await settle()
+  const answered = expect(started.ready()).rejects.toThrow(
+    'preview: the preview-server program stopped: it did not start again after 5 tries: listen EADDRINUSE (start 6). Fix it, then run /reload-plugins.',
+  )
+  await tested.settle()
 
   expect(delays).toEqual([1000, 2000, 4000, 8000, 16000])
   expect(starts).toBe(6)
   expect(started.state).toBe('fatal')
-  await expect(answer).rejects.toThrow(
-    'preview: the preview-server program stopped: it did not start again after 5 tries: listen EADDRINUSE (start 6). Fix it, then run /reload-plugins.',
-  )
+  await answered
 })
 
 test('a program that crashes six times in a session with long runs between stays running', async () => {
@@ -125,7 +121,7 @@ test('a program that crashes six times in a session with long runs between stays
 
   const started = await ready()
   await started.ready()
-  await settle()
+  await tested.settle()
 
   expect(delays).toEqual([1000, 1000, 1000, 1000, 1000, 1000])
   expect(starts).toBe(7)
@@ -146,7 +142,7 @@ test('a program that has not exited is in backoff between starts, and ready() wa
   }
 
   const started = await ready()
-  await settle()
+  await tested.settle()
   expect(started.state).toBe('backoff')
   const answer = started.ready()
   pending.shift()?.()

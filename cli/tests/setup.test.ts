@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { listFiles, readText } from '../src/files.js'
-import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -54,6 +54,8 @@ function serveRelease(files: Record<string, string>, delayMs = 0) {
 async function waitFor(path: string): Promise<void> {
   while (!existsSync(path)) await Bun.sleep(10)
 }
+
+const lockNotice = 'Waiting for ~/.local/share/cmod/records/demo.json.lock'
 
 async function createProgramMod(home: string, repository: string): Promise<string> {
   const root = join(home, 'hello-mod')
@@ -945,7 +947,7 @@ test('Ctrl+C while cmod setup downloads the program installs nothing', async () 
   const store = join(home, '.local/share/cmod')
 
   const setup = startCmod(home, 'setup', root, '--yes')
-  await Bun.sleep(500)
+  await setup.waitForOutput('Downloading hello 0.2.0')
   setup.child.kill('SIGINT')
   const result = await setup.done
 
@@ -1098,9 +1100,7 @@ test('a lock held by a live process that is not its holder is taken over', async
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
   await writeFiles(lock, { '1': 'Thu Jan  1 00:00:00 2026' })
 
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  const result = await Promise.race([setup.done, Bun.sleep(3000).then(() => ({ exitCode: -1, stdout: 'still waiting after 3 s', stderr: '' }))])
-  setup.child.kill('SIGKILL')
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(existsSync(lock)).toBe(false)
@@ -1112,13 +1112,13 @@ test('a setup that waits for a lock names the lock after a few seconds', async (
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await Bun.sleep(3500)
+  await setup.waitForOutput(lockNotice)
 
   holder.kill()
   await holder.exited
   const result = await setup.done
 
-  expect(result.stderr).toBe(`Waiting for ~/.local/share/cmod/records/demo.json.lock, which process ${holder.pid} holds.\n`)
+  expect(result.stderr).toBe(`${lockNotice}, which process ${holder.pid} holds.\n`)
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
 }, 10_000)
 
@@ -1127,14 +1127,14 @@ test('the spinner resumes after the lock-wait notice', async () => {
   const root = await createMod(home, '#!/bin/sh\n')
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
-  const setup = cmodInTerminal(home, 'setup', root, '--yes')
-  await Bun.sleep(3500)
+  const setup = startCmodInTerminal(home, 'setup', root, '--yes')
+  await setup.waitForOutput(lockNotice)
 
   holder.kill()
   await holder.exited
-  const { output } = await setup
+  const { stdout } = await setup.done
 
-  const shown = output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+  const shown = stdout.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
   expect(shown.slice(shown.indexOf('which process'))).toContain('Installing demo…')
 }, 10_000)
 
@@ -1144,14 +1144,13 @@ test('a lock whose holder recorded no start time is held while its process lives
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: '' })
   const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await Bun.sleep(1000)
-  const isWaiting = !existsSync(join(home, '.local/share/cmod/records/demo.json'))
+  await setup.waitForOutput(lockNotice)
 
   holder.kill()
   await holder.exited
   const result = await setup.done
 
-  expect(isWaiting).toBe(true)
+  expect(result.stderr).toBe(`${lockNotice}, which process ${holder.pid} holds.\n`)
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
 }, 10_000)
 
@@ -1166,8 +1165,7 @@ test("a holder file with cmod's own process ID is not held", async () => {
 
   holder.kill()
   await holder.exited
-  const result = await Promise.race([setup.done, Bun.sleep(3000).then(() => ({ exitCode: -1, stdout: 'still waiting after 3 s', stderr: '' }))])
-  setup.child.kill('SIGKILL')
+  const result = await setup.done
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(existsSync(lock)).toBe(false)
@@ -1191,7 +1189,7 @@ test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async (
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const removal = startCmod(home, 'remove', 'demo')
-  await Bun.sleep(500)
+  await removal.waitForOutput(lockNotice)
 
   removal.child.kill('SIGINT')
   const result = await removal.done
@@ -1200,7 +1198,7 @@ test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async (
   expect(result.exitCode).toBe(130)
   expect(result.stdout).toContain('✘ Cancelled uninstalling demo on SIGINT, before its uninstall step started. Run cmod teardown demo to finish.')
   expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
-})
+}, 10_000)
 
 test('a current mod whose approval is gone sets up without asking', async () => {
   const home = await temporaryHome()
@@ -1223,7 +1221,7 @@ test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const setup = startCmod(home, 'setup', root, '--yes')
-  await Bun.sleep(500)
+  await setup.waitForOutput(lockNotice)
 
   const cancelledAt = Date.now()
   setup.child.kill('SIGINT')
@@ -1238,18 +1236,19 @@ test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   for (const path of [join(store, 'data/demo'), join(store, 'records/demo.json'), join(store, 'uninstall/demo')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
-})
+}, 10_000)
 
 test('a mod whose scripts change while its setup waits asks consent again', async () => {
   const home = await temporaryHome()
-  const root = await createMod(home, '#!/bin/sh\ntouch "$HOME/installing"\nsleep 2\necho ran >> "$CMOD_DATA/runs"\n')
+  const root = await createMod(home, '#!/bin/sh\ntouch "$HOME/installing"\nwhile [ -d "$HOME" ] && [ ! -e "$HOME/finish" ]; do sleep 0.01; done\necho ran >> "$CMOD_DATA/runs"\n')
   const approved = await hashOf(root)
   const first = startCmod(home, 'setup', root, '--events', '--consent', approved)
   await waitFor(join(home, 'installing'))
   const second = startCmod(home, 'setup', root, '--events', '--consent', approved)
-  await Bun.sleep(700)
+  await second.waitForOutput(lockNotice)
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
   const changed = await hashOf(root)
+  await writeFiles(home, { finish: '' })
 
   const asked = await second.done
 

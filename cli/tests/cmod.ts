@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -44,21 +45,44 @@ export async function cmod(home: string, ...args: string[]): Promise<{ exitCode:
 
 export function startCmod(home: string, ...args: string[]) {
   const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: environment(home), stdout: 'pipe', stderr: 'pipe' })
-  const done = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }))
-  return { child, done }
+  return { child, ...watchOutput(child) }
 }
 
 export async function cmodInTerminal(home: string, ...args: string[]): Promise<{ exitCode: number; output: string }> {
+  const { exitCode, stdout } = await startCmodInTerminal(home, ...args).done
+  return { exitCode, output: stdout }
+}
+
+export function startCmodInTerminal(home: string, ...args: string[]) {
   const child = Bun.spawn(['script', '-q', '/dev/null', 'sh', '-c', 'trap : INT; "$0" "$@"; exit $?', process.execPath, main, ...args], {
     cwd: home,
     env: environment(home),
     stdin: 'ignore',
     stdout: 'pipe',
-    stderr: 'ignore',
+    stderr: 'pipe',
   })
-  await Bun.write(join(home, 'terminal-pid'), `${child.pid}\n`)
-  const [output, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  return { exitCode, output }
+  writeFileSync(join(home, 'terminal-pid'), `${child.pid}\n`)
+  return { child, ...watchOutput(child) }
+}
+
+function watchOutput(child: { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array>; exitCode: number | null; exited: Promise<number> }) {
+  const output = { stdout: '', stderr: '' }
+  let isDone = false
+  const read = async (name: 'stdout' | 'stderr') => {
+    const decoder = new TextDecoder()
+    for await (const bytes of child[name]) output[name] += decoder.decode(bytes, { stream: true })
+  }
+  const done = Promise.all([read('stdout'), read('stderr'), child.exited]).then(([, , exitCode]) => {
+    isDone = true
+    return { exitCode, ...output }
+  })
+  async function waitForOutput(text: string): Promise<void> {
+    while (!output.stdout.includes(text) && !output.stderr.includes(text)) {
+      if (isDone) throw new Error(`cmod exited ${child.exitCode} before it printed "${text}". It printed:\n${output.stdout}${output.stderr}`)
+      await Bun.sleep(10)
+    }
+  }
+  return { done, waitForOutput }
 }
 
 function environment(home: string): Record<string, string | undefined> {

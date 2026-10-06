@@ -343,8 +343,7 @@ test('mod.ui.progress draws a bar line above the prompt while its task runs', as
 
   expect(textOf(drawn)).toBe(`>\n⠋ Indexing files  ${'█'.repeat(15)}${'░'.repeat(15)}  2/4  Reading src`)
   finish()
-  await Promise.resolve()
-  await Promise.resolve()
+  await tested.settle()
   expect(await tested.fire('ui.render', abovePrompt as never, prompt)).toBe(prompt)
 })
 
@@ -918,7 +917,7 @@ test('a closed pane does not open when its state changes', async () => {
   await tested.type('/diagrams')
 
   tested.state.session.shown = 1
-  await Promise.resolve()
+  await tested.settle()
 
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 60 }])
   expect(tested.shown.openPanes).toEqual(new Set())

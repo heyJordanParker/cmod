@@ -6,10 +6,6 @@ import { testMod } from '../../src/testing.js'
 
 const measured: Args<'session.measure'> = { context: { window: 200000 }, rateLimits: [], changed: ['cost'] }
 
-async function settle(): Promise<void> {
-  for (let tick = 0; tick < 20; tick += 1) await Promise.resolve()
-}
-
 test('the line shows when the mod turns on and is sent again only when its text changes', async () => {
   let branch = 'main'
   const seen: unknown[] = []
@@ -29,13 +25,13 @@ test('the line shows when the mod turns on and is sent again only when its text 
     }),
   )
   await tested.start()
-  await settle()
+  await tested.settle()
 
   await tested.fire('session.measure', measured, { changed: ['cost'] })
-  await settle()
+  await tested.settle()
   branch = 'feature'
   await tested.fire('session.measure', measured, { changed: ['cost'] })
-  await settle()
+  await tested.settle()
 
   expect(tested.shown.statuses).toEqual(['main · test-model', 'feature · test-model'])
   expect(seen[0]).toEqual({ model: 'test-model', context: { window: 200000 }, cost: { usd: 0 } })
@@ -53,7 +49,7 @@ test("text gets the mod's own typed state, so the line shows state without captu
     }),
   )
   await tested.start()
-  await settle()
+  await tested.settle()
 
   expect(tested.shown.statuses).toEqual(['on main'])
 })
@@ -76,11 +72,11 @@ test('a text that throws keeps the last line and writes one debug line', async (
     }),
   )
   await tested.start()
-  await settle()
+  await tested.settle()
   fails = true
 
   await tested.fire('session.measure', measured, { changed: ['cost'] })
-  await settle()
+  await tested.settle()
 
   expect(tested.shown.statuses).toEqual(['main'])
   expect(tested.shown.logs).toEqual(['branch-line added a status line.'])
@@ -104,7 +100,7 @@ test('a file read in text that passes the 2 s deadline keeps the line hidden and
     return { cancel: () => undefined }
   }
   await tested.start()
-  await settle()
+  await tested.settle()
 
   expect(deadlines).toEqual([2000])
   expect(tested.shown.statuses).toEqual([])

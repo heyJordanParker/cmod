@@ -34,6 +34,7 @@ export type FakeClaude = {
   readonly fakes: Fakes
   readonly shown: Shown
   readonly store: Map<string, unknown>
+  settle(): Promise<void>
 }
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
@@ -153,7 +154,15 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     cmod: { call: rejected('cmod.call', () => fakes.cmod.call) },
   }
 
-  return { claude, calls, fakes, shown, store }
+  const settle = async () => {
+    let seen: number
+    do {
+      seen = calls.length
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    } while (calls.length !== seen)
+  }
+
+  return { claude, calls, fakes, shown, store, settle }
 }
 
 declare function setTimeout(fn: () => void, ms: number): unknown

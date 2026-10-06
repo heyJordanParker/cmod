@@ -1,18 +1,17 @@
 import { expect, test } from 'bun:test'
+import type { ProcessRunResult } from 'claude-code'
 import type { Fakes, TestCall } from 'cmod-sdk/testing.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { statusLine } from '../src/jobs/status-line.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod } from '../src/mod.js'
+import { defineMod, type Mod } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Text } from '../src/ui/elements.js'
 import { markdownSlots } from '../src/ui/markdown.js'
 import { slots } from '../src/ui/slots.js'
-
-declare const Bun: { sleep(ms: number): Promise<void> }
 
 const tickets = defineMod({
   name: 'tickets',
@@ -321,13 +320,52 @@ test('clock.every in testMod fires only when the test ticks it', async () => {
   await Promise.all([unticked.start(), ticked.start()])
 
   branch = 'feature'
-  await Bun.sleep(20)
+  await unticked.settle()
   for (const tick of ticks) tick()
-  await Bun.sleep(0)
+  await ticked.settle()
 
   expect(intervals).toEqual([1])
   expect(unticked.shown.statuses).toEqual(['main'])
   expect(ticked.shown.statuses).toEqual(['main', 'feature'])
+})
+
+async function showGitLetters(mod: Mod): Promise<void> {
+  const root = (await mod.process.run(['git', 'rev-parse', '--show-toplevel'])).stdout.trim()
+  const status = await mod.process.run(['git', 'status', '--porcelain'], { cwd: root })
+  mod.ui.toast(`${root}: ${status.stdout.trim()}`)
+}
+
+const gitAnswer = (argv: readonly string[]): ProcessRunResult => ({ exitCode: 0, stdout: argv[1] === 'rev-parse' ? '/work/shop\n' : ' M README.md\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
+test("settle runs a handler's unawaited work that chains two macrotasks", async () => {
+  let clock: Claude['clock'] | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'git-letters',
+      setup(mod) {
+        clock = mod.use(({ claude }) => claude.clock)
+        mod.on('Stop', () => void showGitLetters(mod))
+      },
+    }),
+  )
+  tested.fakes.process.run = (argv) => new Promise((resolve) => clock?.after(0, () => resolve(gitAnswer(argv))))
+
+  await tested.fire('Stop', { stop_hook_active: false })
+  await tested.settle()
+
+  expect(tested.shown.toasts).toContain('/work/shop: M README.md')
+})
+
+test('settle returns while a fake is held open by the test', async () => {
+  const answers: (() => void)[] = []
+  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => mod.on('Stop', () => void showGitLetters(mod)) }))
+  tested.fakes.process.run = (argv) => new Promise((resolve) => answers.push(() => resolve(gitAnswer(argv))))
+
+  await tested.fire('Stop', { stop_hook_active: false })
+  await tested.settle()
+
+  expect(answers).toHaveLength(1)
+  expect(tested.shown.toasts).not.toContain('/work/shop: M README.md')
 })
 
 function folderWatchIn(projectRoot: string) {

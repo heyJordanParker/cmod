@@ -77,7 +77,7 @@ test('cmod try loads a fresh cmod new mod in a home without the CMod plugin', as
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(
     `plugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n--plugin-dir ${root}\n`,
   )
-})
+}, 15_000)
 
 test('cmod try before CMod is linked names the fix', async () => {
   const home = await temporaryHome()

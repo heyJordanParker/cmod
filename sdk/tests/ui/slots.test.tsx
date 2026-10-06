@@ -241,8 +241,7 @@ test("the install progress bar still draws above a mod's AbovePrompt render", as
 
   expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts', `⠋ Indexing files  ${'█'.repeat(15)}${'░'.repeat(15)}  2/4  Reading src`])
   finish()
-  await Promise.resolve()
-  await Promise.resolve()
+  await tested.settle()
   expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts'])
 })
 
