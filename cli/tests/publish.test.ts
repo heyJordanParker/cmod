@@ -120,6 +120,19 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   expect(result.stdout).toContain(`and ${tree} to its release branch. Nothing was pushed:`)
 })
 
+test('publish writes a control character in the bundle as a \\u escape, so a reader sees it', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, { 'src/greet.ts': "export async function greet($, e, next) {\n  await $.ui.toast('delete\u007f')\n  return next(e)\n}\n" })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const bundle = await zipText(archive, 'hooks/register.js')
+  expect(bundle).toContain('"delete\\u007f"')
+  expect(bundle).not.toContain('\u007f')
+})
+
 test('a "files" list in package.json limits the release to its paths, .claude-plugin/, package.json, the README, and the license', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, {
@@ -137,6 +150,22 @@ test('a "files" list in package.json limits the release to its paths, .claude-pl
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
   expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
+})
+
+test('a "files" list that leaves out the install step still releases its folder, so the mod installs', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, {
+    'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'src'], cmod: { install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho installed\n',
+  })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
+  expect(entries).toContain('setup/install.sh')
 })
 
 test('publish refuses a "files" path that matches no committed file', async () => {

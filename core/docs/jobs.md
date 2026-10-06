@@ -174,6 +174,7 @@ type Rule<State> = Target & {
 - When CMod cannot read the call or the session, it denies the call with the reason.
 - For a PowerShell command, or a Bash command CMod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one.
 - `permissions({})` throws `permissions: give it a deny or an ask rule, or remove it from setup.`
+- A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it the mod does not start.
 
 `when` gets the call, typed by the target's key. `jobs/permissions.js` exports each type:
 
@@ -360,11 +361,11 @@ type JobContext<State> = {
 
 - `claude` reaches Claude Code itself. [The claude members](#the-claude-members) lists each one.
 - `claude.store` is where CMod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind CMod's back.
-- `on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on.
+- `on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. A job with a handler on `tool.check`, `classic.PreToolUse`, or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
 - `announce` adds a phrase to the list CMod logs when the mod first starts.
 - `reserveName` throws `taken` when the mod already reserved that `kind` and `name`. A job calls it to refuse a duplicate.
 - `toolCalls.agentOf(toolUseId)` resolves `{ agentId?, agentType? }`, the subagent behind a call.
-- `toolCalls.cwdOf(toolUseId)` returns the working folder at the call's `PreToolUse`, or `undefined` once its `PostToolUse` or `PostToolUseFailure` has run. CMod keeps the folders of the last 100 calls.
+- `toolCalls.cwdOf(toolUseId)` returns the working folder when the call ran, or `undefined` once its `PostToolUse` or `PostToolUseFailure` has run. CMod keeps the folders of the last 100 calls.
 
 ```ts
 import { defineMod, type Job } from '../node_modules/@cmodjs/core/mod.js'

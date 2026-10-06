@@ -6,7 +6,7 @@ import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
 import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
-import { classicHook, userSkillHook, type RoutedEvent } from './hooks.js'
+import { classicHook, permissionEvents, userSkillHook, type RoutedEvent } from './hooks.js'
 import { createRouter, type Router, type RouterNext } from './router.js'
 import { createState } from './state.js'
 import { toolCalls } from './tool-calls.js'
@@ -36,6 +36,7 @@ type ModRuntime = {
   readonly router: Router
   readonly progress: Progress
   readonly dataFolder: string
+  readonly checksPermissions: () => boolean
 }
 
 type ActiveMod<State extends object> = {
@@ -120,7 +121,7 @@ async function cmodVersion(claude: Claude): Promise<string | undefined> {
   return result.stdout.trim().split(/\s+/).at(-1)
 }
 
-export function createLifecycle<State extends object>(definition: ModDefinition<State>): Lifecycle<State> {
+export function createLifecycle<State extends object>(definition: ModDefinition<State>, checksPermissions: () => boolean = () => true): Lifecycle<State> {
   let router: Router = createRouter()
   let phase: Phase = 'starting'
   let runtime: Pick<ModRuntime, 'claude' | 'progress'> | undefined
@@ -136,7 +137,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
 
   const claude = () => {
-    if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. connect(on, mod) starts it at session.start.`)
+    if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod) starts it at session.start.`)
     return runtime.claude
   }
 
@@ -180,7 +181,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   const activate = async () => {
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name) }).catch((error: unknown) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), checksPermissions }).catch((error: unknown) => {
       fail(messageOf(error), 'Fix it, then run /reload-plugins.')
       throw error
     })
@@ -447,6 +448,10 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   }
   await failsAs('its state did not load', () => modState.load())
   await failsAs('its setup function threw', () => definition.setup(mod))
+  const permissionHooks = permissionEvents.filter((event) => router.has(event))
+  if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
+    throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`)
+  }
   await failsAs('its open panes did not load', () => area.restorePanes())
   if (hookEvents.length > 0) added.push(`${hookEvents.length === 1 ? 'a hook' : 'hooks'} on ${listed(hookEvents)}`)
   return { mod, added }

@@ -34,6 +34,11 @@ export function toolCalls(claude: Claude, router: Router): ToolCalls {
     return next(e)
   })
   router.add('tool.call', async (e, next) => {
+    cwds.set(e.tool_use_id, await claude.session.cwd())
+    for (const oldest of cwds.keys()) {
+      if (cwds.size <= keptCalls) break
+      cwds.delete(oldest)
+    }
     if (e.agentId === undefined) return next(e)
     agentIds.set(e.tool_use_id, e.agentId)
     try {
@@ -41,14 +46,6 @@ export function toolCalls(claude: Claude, router: Router): ToolCalls {
     } finally {
       agentIds.delete(e.tool_use_id)
     }
-  })
-  router.add('classic.PreToolUse', async (e, next) => {
-    cwds.set(e.tool_use_id, await claude.session.cwd())
-    for (const oldest of cwds.keys()) {
-      if (cwds.size <= keptCalls) break
-      cwds.delete(oldest)
-    }
-    return next(e)
   })
   for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
     router.add(event, async (e, next) => {

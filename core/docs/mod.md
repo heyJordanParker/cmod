@@ -1,6 +1,6 @@
 # Define a mod
 
-`defineMod` describes a mod: its name, its state, the methods it offers other mods, and the `setup` function that attaches everything to Claude Code. `connect` hands the definition to Claude Code.
+`defineMod` describes a mod: its name, its state, the methods it offers other mods, and the `setup` function that attaches everything to Claude Code. `registerMod` registers the definition with Claude Code.
 
 ## defineMod
 
@@ -51,28 +51,43 @@ When a step fails, the mod does not start. Its progress line above the prompt na
 - `its state did not load: <error>` when reading the saved values or a `state.json` fails.
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
+- `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PreToolUse` or `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
 
 Each of these says `Fix it, then run /reload-plugins.`
 
-## Connect the mod to Claude Code
+## Register the mod with Claude Code
 
-`hooks/hooks.json` names `hooks/register.ts` as the plugin's hooks module. `register.ts` calls `connect` and does nothing else:
+`hooks/hooks.json` names `hooks/register.ts` as the plugin's hooks module. `register.ts` calls `registerMod` and does nothing else:
 
 ```ts
 import type { On } from 'claude-code'
-import { connect } from '../node_modules/@cmodjs/core/connect.js'
+import { registerMod } from '../node_modules/@cmodjs/core/register.js'
 import { greeter } from '../src/mod.js'
 
-export function register(on: On): void {
-  connect(on, greeter)
+export function register(addHook: On): void {
+  registerMod(addHook, greeter)
 }
 ```
 
 ```ts
-connect<State>(on: On, definition: ModDefinition<State>): void
+registerMod<State>(addHook: On, definition: ModDefinition<State>): void
+registerPermissionCheck(addHook: On): void
 ```
 
-`connect` registers one handler per Claude Code event the mod can use, and routes each event to the mod. Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
+`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. It leaves out Claude Code's permission check, the events `tool.check`, `PreToolUse`, and `PermissionRequest`.
+
+A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers a hook on `PreToolUse` or `PermissionRequest`, the `permissions` job, and a job of your own on `tool.check`:
+
+```ts
+export function register(addHook: On): void {
+  registerMod(addHook, guard)
+  registerPermissionCheck(addHook)
+}
+```
+
+A mod without it has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its progress line names the line to add.
+
+Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. The plugin directory reads the bundled module too, and flags it when the name of `register`'s first parameter is declared anywhere else in the bundle. `@cmodjs/core` declares `on` as the method `mod.on`, so name that parameter `addHook`. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
 
 ## What `mod` can call
 

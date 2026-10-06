@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/core",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Build Claude Code mods: hooks, panes, permissions, checks, and an install that just works.",
   "license": "MIT",
   "type": "module",
@@ -25,7 +25,7 @@
     "docs/"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker",
+    "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser --define process=undefined && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker",
     "check": "tsc -p tsconfig.json --noEmit && oxlint --deny-warnings",
     "test": "bun test"
   },

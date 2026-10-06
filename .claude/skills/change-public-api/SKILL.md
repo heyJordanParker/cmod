@@ -1,13 +1,13 @@
 ---
 name: change-public-api
-description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `testing.ts`, `connect.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, README.md, or a sample mod, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
+description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `testing.ts`, `register.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, README.md, or a sample mod, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
 ---
 
 # Change Public API
 
 A mod author learns Claude Mod Manager (CMod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
 
-- The Public API is `core/src/mod.ts`, `core/src/testing.ts`, `core/src/connect.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal.
+- The Public API is `core/src/mod.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.
 
 ## 1. Find every place the idea appears
@@ -42,11 +42,18 @@ Never: the test kit's printout of a fake element's props, a store key, or `lifec
 
 Claude Code reads a plugin's hooks module and types file before it loads them, and `claude plugin validate --strict` runs the same check. Claude Code 2.1.289 refuses:
 
-- `$` passed to a function in another module. Each call is spelled `$.noun.event(...)` in the module that registers the hook, as `connect.ts`'s `claudeOf` spells them.
+- `$` passed to a function in another module. Each call is spelled `$.noun.event(...)` in the module that registers the hook, as `register.ts`'s `startMod` spells them.
 - A module that keeps the table `next(e)` returns at `engine.create` for later use.
 - A types file that augments any module but `'claude-code'`. A mod's `api` types add to `CmodDependencies` there.
+- An event registered twice without a matcher, or an event name that is not a string literal.
 
-The validator accepts the shape of the hooks `connect.ts` registers: each a top-level function in `connect.ts`, registered there with `on`, sharing one module-level `lifecycle`. A new hook keeps that shape.
+The validator accepts the shape of the hooks `register.ts` registers: each a top-level function in `register.ts`, registered there with `addHook`, sharing one module-level `lifecycle`. A new hook keeps that shape.
+
+Anthropic's plugin directory reads the bundle `cmod publish` writes and flags:
+
+- A name the bundle declares twice, when it is `$`, `register`'s first parameter, or a hook's third parameter. `mod.on` is a declaration of `on`, so `register`'s first parameter is `addHook`.
+- `addHook` or `$` passed anywhere but as one whole argument to a function declared at the top of the same file.
+- A hook on `tool.check`, `classic.PreToolUse`, or `classic.PermissionRequest` that answers anything but `next(e)` or a fixed `deny` or `ask`. `registerPermissionCheck` holds those three, so only a mod that decides permissions ships them.
 
 The template's `tsconfig.json` repeats the JSX options, because Bun needs them before Claude Code first loads the mod and writes the `.claude-plugin/types/tsconfig.json` the template extends.
 

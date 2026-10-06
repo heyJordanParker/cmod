@@ -6,6 +6,8 @@ import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle
 
 let lifecycle: Lifecycle<object>
 
+let checksPermissions = false
+
 async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.start'>>, passOn: Next<'session.start'>): Promise<EventResult<'session.start'>> {
   const claude: Claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
@@ -71,34 +73,39 @@ function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Froz
   return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>)
 }
 
-export function connect<State extends object>(on: On, definition: ModDefinition<State>): void {
-  lifecycle = createLifecycle(definition)
-  on('session.start', startMod)
-  on('classic.SessionStart', routeToMod)
-  on('classic.SessionEnd', routeToMod)
-  on('classic.UserPromptSubmit', routeToMod)
-  on('classic.InstructionsLoaded', routeToMod)
-  on('classic.PreToolUse', routeToMod)
-  on('classic.PermissionRequest', routeToMod)
-  on('classic.PermissionDenied', routeToMod)
-  on('classic.PostToolUse', routeToMod)
-  on('classic.PostToolUseFailure', routeToMod)
-  on('classic.PostToolBatch', routeToMod)
-  on('classic.SubagentStart', routeToMod)
-  on('classic.SubagentStop', routeToMod)
-  on('classic.Notification', routeToMod)
-  on('classic.PreCompact', routeToMod)
-  on('classic.Stop', routeToMod)
-  on('classic.StopFailure', routeToMod)
-  on('tool.check', routeToMod)
-  on('tool.call', routeToMod)
-  on('prompt.submit', routeToMod)
-  on('prompt.context', routeToMod)
-  on('command.run', routeToMod)
-  on('session.measure', routeToMod)
-  on('skill.prompt', routeToMod)
-  on('ui.render', routeToMod)
-  on('ui.press', routeToMod)
-  on('ui.close', routeToMod)
-  on('cmod.call', routeToMod)
+export function registerMod<State extends object>(addHook: On, definition: ModDefinition<State>): void {
+  checksPermissions = false
+  lifecycle = createLifecycle(definition, () => checksPermissions)
+  addHook('session.start', startMod)
+  addHook('classic.SessionStart', routeToMod)
+  addHook('classic.SessionEnd', routeToMod)
+  addHook('classic.UserPromptSubmit', routeToMod)
+  addHook('classic.InstructionsLoaded', routeToMod)
+  addHook('classic.PermissionDenied', routeToMod)
+  addHook('classic.PostToolUse', routeToMod)
+  addHook('classic.PostToolUseFailure', routeToMod)
+  addHook('classic.PostToolBatch', routeToMod)
+  addHook('classic.SubagentStart', routeToMod)
+  addHook('classic.SubagentStop', routeToMod)
+  addHook('classic.Notification', routeToMod)
+  addHook('classic.PreCompact', routeToMod)
+  addHook('classic.Stop', routeToMod)
+  addHook('classic.StopFailure', routeToMod)
+  addHook('tool.call', routeToMod)
+  addHook('prompt.submit', routeToMod)
+  addHook('prompt.context', routeToMod)
+  addHook('command.run', routeToMod)
+  addHook('session.measure', routeToMod)
+  addHook('skill.prompt', routeToMod)
+  addHook('ui.render', routeToMod)
+  addHook('ui.press', routeToMod)
+  addHook('ui.close', routeToMod)
+  addHook('cmod.call', routeToMod)
+}
+
+export function registerPermissionCheck(addHook: On): void {
+  checksPermissions = true
+  addHook('tool.check', routeToMod)
+  addHook('classic.PreToolUse', routeToMod)
+  addHook('classic.PermissionRequest', routeToMod)
 }

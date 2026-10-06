@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, posix } from 'node:path'
 import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
-import { isObject } from '@cmodjs/core/src/records.js'
+import { isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../../package.json'
 import { tilde, writeAtomically } from '../files.js'
@@ -22,9 +22,11 @@ ${summary}
 Releases the mod at path (default: the current folder) at the version in its
 plugin.json. Builds the release from the committed files, leaving out cli/,
 .github/, and .claude/. A "files" list in package.json limits the release to
-those paths, plus .claude-plugin/, package.json, the README, and the license,
-the way npm does. Bundles the hooks module with its packages into one
-file, so Anthropic's plugin directory can read all of the mod's code. Checks
+those paths, plus the folders of the install and uninstall steps,
+.claude-plugin/, package.json, the README, and the license, the way npm
+does. Bundles the hooks module with its packages into one file, writing each
+control character as a \\u escape, so Anthropic's plugin directory can read
+all of the mod's code. Checks
 the release with claude plugin validate --strict and commits it as the release
 branch. Builds the release archive from that commit and the program cli/
 declares, writes SHA256SUMS for every file of the release, and writes
@@ -75,7 +77,8 @@ export async function run(argv: string[]): Promise<number> {
   if (listed !== undefined && !(Array.isArray(listed) && listed.every((path) => typeof path === 'string'))) {
     throw new Error(`${tilde(plugin.root)}/package.json has a "files" key that is not a list of paths. Write it as "files": ["hooks", "src", "skills"], or remove it to release every committed file.`)
   }
-  const released = listed === undefined ? ['.'] : await releasedPaths(listed, git)
+  const stepFolders = [plugin.steps.install, plugin.steps.uninstall].flatMap((command) => (command === undefined ? [] : scriptPaths(command))).map((path) => posix.dirname(posix.normalize(path)))
+  const released = listed === undefined ? ['.'] : await releasedPaths(listed, [...alwaysReleased, ...stepFolders], git)
 
   const progress = startProgress()
   const output = await mkdtemp(join(tmpdir(), `cmod-publish-${plugin.name}-`))
@@ -83,7 +86,7 @@ export async function run(argv: string[]): Promise<number> {
   progress.step('Building the release')
   const bundle = await buildReleaseTree(plugin.root, output, tree, released, git)
   const leftOutFolders = leftOut.map((folder) => `${folder}/`).join(', ')
-  const contents = listed === undefined ? `without ${leftOutFolders}` : `with only the paths package.json "files" lists and ${alwaysReleased.join(', ')}`
+  const contents = listed === undefined ? `without ${leftOutFolders}` : `with only the paths package.json "files" lists, the folders of its install steps, and ${alwaysReleased.join(', ')}`
   progress.succeed(`Built ${tree} from ${isDirty ? 'the last commit, without the uncommitted changes' : 'HEAD'}, ${contents}${bundle === undefined ? '' : `, and the hooks module and its packages bundled into hooks/${bundle}`}`)
 
   progress.step('Checking the release with claude plugin validate --strict')
@@ -141,13 +144,13 @@ export async function run(argv: string[]): Promise<number> {
   return 0
 }
 
-async function releasedPaths(listed: readonly string[], git: (...args: string[]) => Promise<string>): Promise<string[]> {
+async function releasedPaths(listed: readonly string[], needed: readonly string[], git: (...args: string[]) => Promise<string>): Promise<string[]> {
   const committed = async (path: string) => (await git('ls-files', '--', `:(glob)${path}`)).trim() !== ''
   for (const path of listed) {
     if (!(await committed(path))) throw new Error(`package.json "files" lists ${path}, which matches no committed file. Commit it or remove it from "files", then run cmod publish again.`)
   }
   const always: string[] = []
-  for (const path of alwaysReleased) if (!listed.includes(path) && (await committed(path))) always.push(path)
+  for (const path of new Set(needed)) if (!listed.includes(path) && (await committed(path))) always.push(path)
   return [...listed, ...always].map((path) => `:(glob)${path}`)
 }
 
@@ -181,9 +184,17 @@ async function bundleHooks(root: string, tree: string): Promise<string | undefin
   const [bundled] = built.outputs
   if (!built.success || bundled === undefined) throw failed(built.logs.map(String).join('\n'))
   const bundle = posix.join(posix.dirname(module), `${posix.basename(module, posix.extname(module))}.js`)
-  await Bun.write(join(tree, 'hooks', bundle), bundled)
+  await Bun.write(join(tree, 'hooks', bundle), escapeControlCharacters(await bundled.text()))
   await Bun.write(hooksPath, `${JSON.stringify({ ...hooks, modules: [`./${bundle}`] }, null, 2)}\n`)
   return bundle
+}
+
+function escapeControlCharacters(code: string): string {
+  return Array.from(code, (character) => {
+    const point = character.charCodeAt(0)
+    const isControl = (point < 0x20 && !'\t\n\r'.includes(character)) || point === 0x7f
+    return isControl ? `\\u${point.toString(16).padStart(4, '0')}` : character
+  }).join('')
 }
 
 async function commitRelease(output: string, tree: string, tag: string, git: (...args: string[]) => Promise<string>): Promise<string> {

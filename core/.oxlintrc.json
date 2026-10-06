@@ -42,7 +42,7 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(connect|mod|records|testing)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
+              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(register|mod|records|testing)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
           }
@@ -56,7 +56,7 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((jobs|runtime|testing|utils)/|(connect|records|testing)\\.js$)", "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
+              { "regex": "^(\\.\\./)+((jobs|runtime|testing|utils)/|(register|records|testing)\\.js$)", "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
               { "regex": "^(\\.\\./)+mod\\.js$", "allowTypeImports": true, "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
@@ -71,7 +71,7 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((jobs|testing)/|(connect|testing)\\.js$)", "message": "runtime/ builds on ui/ and utils/." },
+              { "regex": "^(\\.\\./)+((jobs|testing)/|(register|testing)\\.js$)", "message": "runtime/ builds on ui/ and utils/." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
           }
@@ -85,7 +85,7 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((testing|ui)/|(connect|testing)\\.js$)", "message": "jobs/ builds on runtime/ and utils/." },
+              { "regex": "^(\\.\\./)+((testing|ui)/|(register|testing)\\.js$)", "message": "jobs/ builds on runtime/ and utils/." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
           }

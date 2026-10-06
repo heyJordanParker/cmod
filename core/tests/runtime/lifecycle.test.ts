@@ -360,6 +360,26 @@ test('a mod whose state fails to load says its state did not load', async () => 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing broken  its state did not load: the store file is locked\n  Fix it, then run /reload-plugins.')
 })
 
+test('a mod that decides permissions without registerPermissionCheck does not start, and names the line to add', async () => {
+  const fake = fakeClaude({ name: 'guard', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PreToolUse', () => undefined) }), () => false)
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
+    '>\n✗ Installing guard  it decides permissions on classic.PreToolUse, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod\n  Fix it, then run /reload-plugins.',
+  )
+})
+
+test('a mod that decides permissions starts once registerPermissionCheck registered the permission events', async () => {
+  const fake = fakeClaude({ name: 'guard', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PreToolUse', () => undefined) }), () => true)
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
+
+  expect(lifecycle.phase).toBe('active')
+})
+
 test('a mod whose open panes cannot be read says its open panes did not load', async () => {
   const fake = fakeClaude({ name: 'broken', root })
   fake.claude.ui.panes = async () => Promise.reject(new Error('the pane list is unavailable'))

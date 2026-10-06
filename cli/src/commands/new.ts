@@ -78,11 +78,11 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
     'hooks/register.ts': `import type { On } from 'claude-code'
-import { connect } from '../node_modules/@cmodjs/core/connect.js'
+import { registerMod } from '../node_modules/@cmodjs/core/register.js'
 import { ${definition} } from '../src/mod.js'
 
-export function register(on: On): void {
-  connect(on, ${definition})
+export function register(addHook: On): void {
+  registerMod(addHook, ${definition})
 }
 `,
     'src/mod.tsx': `import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -175,7 +175,7 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
 
 - \`node_modules/@cmodjs/core/docs/\` holds the docs of the installed \`@cmodjs/core\`. They match this version, and training data does not. Read the doc for the part you change, starting at \`index.md\`, before Claude Mod Manager (CMod) work.
 - \`tsc\` fails, and \`cmod check\` skips its type check, until Claude Code first loads the mod and writes \`.claude-plugin/types/\`. Run \`cmod link\`, start \`claude\` once, then type-check.
-- \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only connects it to Claude Code.
+- \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only registers it with Claude Code.
 - \`src/panes/\` holds one \`definePane\` per file.
 - \`src/components/\` holds the components panes and slot renders draw with.
 - \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.

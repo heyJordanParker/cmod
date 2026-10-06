@@ -15,7 +15,7 @@ my-mod/
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
 ├── hooks/hooks.json                    names hooks/register.ts as the hooks module
-├── hooks/register.ts                   connect(on, myMod), and nothing else
+├── hooks/register.ts                   registerMod(addHook, myMod), and nothing else
 ├── src/mod.tsx                         defineMod: the state, the setup, the hooks, the panes
 ├── src/state.ts                        the starting state
 ├── src/panes/prompts.tsx               one definePane per file
@@ -74,7 +74,7 @@ A mod imports from the files below, and every other file in this package is inte
 | `mod.js` | `Claude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
 | `mod.js` | `ModEvent`, `ModHook`, `HookAnswer` | [hooks.md](hooks.md) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
-| `connect.js` | `connect` | [mod.md](mod.md) |
+| `register.js` | `registerMod`, `registerPermissionCheck` | [mod.md](mod.md) |
 | `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `TestCall` | [testing.md](testing.md) |
 | `ui/define-pane.js` | `definePane`, `Pane` | [ui.md](ui.md) |
 | `ui/elements.js` | `Box`, `Text`, `Button`, `Link`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `drawWith` | [ui.md](ui.md) |

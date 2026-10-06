@@ -22,6 +22,8 @@ export type RoutedEvent =
   | 'ui.close'
   | 'cmod.call'
 
+export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.PreToolUse', 'classic.PermissionRequest']
+
 type ClassicFields = Record<string, unknown>
 
 type PreToolUseInput = Parameters<ModHook<'PreToolUse'>>[0]

@@ -448,7 +448,7 @@ function loadsVendorMarkdown(render: string, slot: string, props: string): strin
     const { testMod } = await import('${src}testing.ts')
     const { slots } = await import('${src}ui/slots.ts')
     const { Text } = await import('${src}ui/elements.ts')
-    await import('${src}connect.ts')
+    await import('${src}register.ts')
     const { markdownSlots } = ${render.includes('markdownSlots') ? `await import('${src}ui/markdown.ts')` : '{}'}
     const tested = testMod(defineMod({ name: 'probe', setup(mod) { ${render} } }))
     await tested.lines(${slot}, ${props})

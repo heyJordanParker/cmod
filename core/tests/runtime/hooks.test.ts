@@ -22,6 +22,10 @@ function call(tool_name: string, tool_input: Record<string, unknown>) {
   return { tool_name, tool_input, tool_use_id: 'toolu_1' }
 }
 
+function toolCall({ tool_name, tool_input, tool_use_id }: ReturnType<typeof call>) {
+  return { ...tool_input, tool: tool_name, tool_use_id } as never
+}
+
 test("an Edit's file is in files.changed", async () => {
   const { tested, seen } = fileWatcher()
   const edit = call('Edit', { file_path: '/work/src/app.ts', old_string: 'a', new_string: 'b' })
@@ -183,6 +187,7 @@ test("a cd inside a Bash line resolves the same on PreToolUse and PostToolUse wh
   const edit = call('Bash', { command: 'cd app && sed -i s/a/b/ notes.md' })
 
   await tested.fire('PreToolUse', edit)
+  await tested.fire('tool.call', toolCall(edit))
   await tested.fire('PostToolUse', { ...edit, cwd: '/work/app', tool_response: {} })
 
   const files = { read: [], changed: ['/work/app/notes.md'] }
@@ -196,18 +201,19 @@ test('a call with no Post event is forgotten once 100 newer calls are recorded',
   const { tested, seen } = fileWatcher()
   const edit = call('Bash', { command: 'sed -i s/a/b/ notes.md' })
 
-  await tested.fire('PreToolUse', edit)
-  for (let index = 0; index < 100; index += 1) await tested.fire('PreToolUse', { ...call('Read', { file_path: '/work/a.ts' }), tool_use_id: `toolu_newer_${index}` })
+  await tested.fire('tool.call', toolCall(edit))
+  for (let index = 0; index < 100; index += 1) await tested.fire('tool.call', toolCall({ ...call('Read', { file_path: '/work/a.ts' }), tool_use_id: `toolu_newer_${index}` }))
   await tested.fire('PostToolUseFailure', { ...edit, cwd: '/work/app', error: 'sed failed' })
 
   expect(seen.at(-1)).toEqual({ event: 'PostToolUseFailure', files: { read: [], changed: ['/work/app/notes.md'] } })
 })
 
-test('a PostToolUseFailure resolves against the folder its PreToolUse recorded, then frees it', async () => {
+test('a PostToolUseFailure resolves against the folder its tool.call recorded, then frees it', async () => {
   const { tested, seen } = fileWatcher()
   const edit = call('Bash', { command: 'sed -i s/a/b/ notes.md' })
 
   await tested.fire('PreToolUse', edit)
+  await tested.fire('tool.call', toolCall(edit))
   await tested.fire('PostToolUseFailure', { ...edit, cwd: '/work/app', error: 'sed failed' })
   await tested.fire('PostToolUseFailure', { ...edit, cwd: '/work/app', error: 'sed failed' })
 

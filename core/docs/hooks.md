@@ -12,6 +12,8 @@ type ModHook<E> = (input: HookInputs[E]) => HookAnswer | void | Promise<HookAnsw
 
 Add hooks in `setup`. Each `mod.on` adds one more hook. Several hooks on one event all run.
 
+A hook on `PreToolUse` or `PermissionRequest` takes part in Claude Code's permission check, so the mod's `hooks/register.ts` calls `registerPermissionCheck(addHook)` after `registerMod` ([mod.md](mod.md)). Without it the mod does not start.
+
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 

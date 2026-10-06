@@ -34,7 +34,7 @@ test('new writes the repository layout with a defineMod that has one hook and on
   expect(mod).toContain("mod.on('UserPromptSubmit'")
   expect(mod).not.toContain('mod.ui.toast')
   expect(mod).not.toContain('additionalContext')
-  expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toContain('connect(on, myMod)')
+  expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toContain('registerMod(addHook, myMod)')
 })
 
 test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {

@@ -82,8 +82,8 @@ cmod publish [path] [--dry-run]
 
 Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`:
 
-1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus `.claude-plugin/`, `package.json`, the README, and the license, the way `npm publish` reads it. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
-2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file.
+1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, the README, and the license, the way `npm publish` reads it. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
+2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, writes each control character in it as a `\u` escape, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file.
 3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
