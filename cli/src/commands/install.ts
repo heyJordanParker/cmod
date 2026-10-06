@@ -56,7 +56,7 @@ export async function run(argv: string[]): Promise<number> {
 async function installByName(argument: string, yes: boolean, progress: Progress): Promise<number> {
   const installed = (await listPlugins()).find((plugin) => plugin.name === argument || plugin.id === argument)
   if (installed !== undefined) {
-    if (await usesCmod(installed.installPath, installed.name)) return installMod(installed, yes, progress)
+    if (await usesCmod(installed.installPath, installed.name)) return installMods([installed], yes, progress)
     if (installed.scope !== 'session') return installPlugin(installed.id, yes, progress)
     progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it. Run /reload-plugins in a session that is running.`)
     return 0
@@ -74,15 +74,20 @@ async function installPlugin(id: string, yes: boolean, progress: Progress): Prom
   const installed = (await listPlugins()).find((plugin) => plugin.id === id)
   if (installed === undefined) throw new Error(`Claude Code installed ${id} but claude plugin list does not show it.`)
   progress.succeed(`Installed ${id} into Claude Code`)
-  return (await usesCmod(installed.installPath, installed.name)) ? installMod(installed, yes, progress) : 0
+  return (await usesCmod(installed.installPath, installed.name)) ? installMods([installed], yes, progress) : 0
 }
 
-export async function installMod(installed: InstalledPlugin, yes: boolean, progress: Progress): Promise<number> {
+export async function installMods(mods: InstalledPlugin[], yes: boolean, progress: Progress): Promise<number> {
+  if (mods.length === 0) return 0
   await installCmodPlugin(progress)
-  const plugin = await readPlugin(installed.installPath)
-  const code = await setupInTerminal(plugin, { yes }, progress)
-  if (code === 0) noteNextStep(plugin, progress)
-  return code
+  let exitCode = 0
+  for (const installed of mods) {
+    const plugin = await readPlugin(installed.installPath)
+    const code = await setupInTerminal(plugin, { yes }, progress)
+    if (code === 0) noteNextStep(plugin, progress)
+    exitCode = Math.max(exitCode, code)
+  }
+  return exitCode
 }
 
 export async function installCmodPlugin(progress: Progress): Promise<void> {

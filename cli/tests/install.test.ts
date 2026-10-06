@@ -239,6 +239,22 @@ test('cmod update updates every plugin Claude Code holds, and reruns the install
   expect(existsSync(join(storeOf(home), 'records/plain.json'))).toBe(false)
 })
 
+test('cmod update of two mods installs the CMod plugin once', async () => {
+  const home = await marketplaceHome({ 'file-tree': modFiles('file-tree'), diagrams: modFiles('diagrams') })
+  expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'diagrams@market', '--yes')).exitCode).toBe(0)
+  await claudeCalls(home)
+
+  const result = await cmod(home, 'update')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('✔ file-tree 0.1.0 is ready\n')
+  expect(result.stdout).toContain('✔ diagrams 0.1.0 is ready\n')
+  expect(await claudeCalls(home)).toBe(
+    'plugin list --json\nplugin update cmod@cmod --json\nplugin update diagrams@market --json\nplugin update file-tree@market --json\nplugin list --json\nplugin list --json\nplugin install cmod@cmod --json\n',
+  )
+})
+
 test('cmod update with no name updates the mods after a plugin whose update fails, and exits 1', async () => {
   const home = await marketplaceHome({ archived: plainFiles('archived'), 'file-tree': modFiles('file-tree') })
   expect((await cmod(home, 'install', 'archived@market')).exitCode).toBe(0)

@@ -1,4 +1,4 @@
 core/ export-ignore
 .claude/ export-ignore
-CLAUDE.md export-ignore
+AGENTS.md export-ignore
 .github/ export-ignore
