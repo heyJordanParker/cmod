@@ -36,7 +36,7 @@ The CMod plugin runs two programs, and sends no data anywhere:
 
 It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its link at `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
 
-Every mod built with CMod, the CMod plugin included, adds one hook on each Claude Code event a mod can use. So the CMod plugin hooks permission checks (`tool.check`, `PreToolUse` and `PermissionRequest`), tool calls, prompts, and what Claude Code draws. On a permission check or a tool call, the CMod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
+Every mod built with CMod, the CMod plugin included, adds one hook on each Claude Code event a mod can use, and only a mod that decides permissions hooks Claude Code's permission check. So the CMod plugin hooks tool calls, prompts, and what Claude Code draws, and no permission check. On a tool call, the CMod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
 
 ## Change a mod
 

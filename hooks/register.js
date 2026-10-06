@@ -1,3 +1,18 @@
+// node_modules/@cmodjs/core/runtime/deadline.js
+var longestMs = 600000;
+function beforeDeadline(claude, { ms, job }, call, task) {
+  return new Promise((resolve, reject) => {
+    const passed = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`;
+    const timer = claude.clock.after(ms, () => reject(new Error(`${call} passed ${passed}`)));
+    task.then((value) => {
+      timer.cancel();
+      resolve(value);
+    }, (error) => {
+      timer.cancel();
+      reject(error);
+    });
+  });
+}
 // node_modules/@cmodjs/core/utils/text.js
 function listed(items) {
   if (items.length <= 1)
@@ -11,6 +26,32 @@ function formatExit(code, reason) {
   const exit = code === null ? "was stopped by a signal" : `exited ${code}`;
   const clause = reason.trim().replace(/[.!?]+$/, "");
   return clause ? `${exit}: ${clause}` : exit;
+}
+
+// node_modules/@cmodjs/core/runtime/dependencies.js
+async function answerCall(name, api, e) {
+  const method = Object.hasOwn(api, e.method) ? api[e.method] : undefined;
+  if (method === undefined)
+    return { deny: `${name} has no method ${e.method}.` };
+  try {
+    return { value: await method(e.input) };
+  } catch (error) {
+    return { deny: `${name}: ${messageOf(error)}` };
+  }
+}
+function dependencyCalls(claude, within) {
+  const methodsOf = (to) => new Proxy({}, { get: (_methods, method) => typeof method === "string" && method !== "then" ? (input) => within(`mod.dependencies.${to}.${method}`, claude.cmod.call({ to, method, input })) : undefined });
+  return new Proxy({}, { get: (_dependencies, to) => typeof to === "string" && to !== "then" ? methodsOf(to) : undefined });
+}
+function notInstalled(name) {
+  return `${name} is not installed. Run cmod install ${name}.`;
+}
+
+// node_modules/@cmodjs/core/mod.js
+function defineMod(definition) {
+  if (definition.name.trim() === "")
+    throw new Error("defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.");
+  return definition;
 }
 
 // node_modules/@cmodjs/core/records.js
@@ -209,41 +250,6 @@ function relativePath(base, path) {
   return path.startsWith(prefix) ? path.slice(prefix.length) : undefined;
 }
 
-// node_modules/@cmodjs/core/runtime/deadline.js
-var longestMs = 600000;
-function beforeDeadline(claude, { ms, job }, call, task) {
-  return new Promise((resolve, reject) => {
-    const passed = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`;
-    const timer = claude.clock.after(ms, () => reject(new Error(`${call} passed ${passed}`)));
-    task.then((value) => {
-      timer.cancel();
-      resolve(value);
-    }, (error) => {
-      timer.cancel();
-      reject(error);
-    });
-  });
-}
-
-// node_modules/@cmodjs/core/runtime/dependencies.js
-async function answerCall(name, api, e) {
-  const method = Object.hasOwn(api, e.method) ? api[e.method] : undefined;
-  if (method === undefined)
-    return { deny: `${name} has no method ${e.method}.` };
-  try {
-    return { value: await method(e.input) };
-  } catch (error) {
-    return { deny: `${name}: ${messageOf(error)}` };
-  }
-}
-function dependencyCalls(claude, within) {
-  const methodsOf = (to) => new Proxy({}, { get: (_methods, method) => typeof method === "string" && method !== "then" ? (input) => within(`mod.dependencies.${to}.${method}`, claude.cmod.call({ to, method, input })) : undefined });
-  return new Proxy({}, { get: (_dependencies, to) => typeof to === "string" && to !== "then" ? methodsOf(to) : undefined });
-}
-function notInstalled(name) {
-  return `${name} is not installed. Run cmod install ${name}.`;
-}
-
 // node_modules/@cmodjs/core/runtime/tool-calls.js
 var reservedKeys = ["tool", "tool_use_id", "consent", "agentId"];
 function toolInputOf(envelope) {
@@ -267,6 +273,12 @@ function toolCalls(claude, router) {
     return next(e);
   });
   router.add("tool.call", async (e, next) => {
+    cwds.set(e.tool_use_id, await claude.session.cwd());
+    for (const oldest of cwds.keys()) {
+      if (cwds.size <= keptCalls)
+        break;
+      cwds.delete(oldest);
+    }
     if (e.agentId === undefined)
       return next(e);
     agentIds.set(e.tool_use_id, e.agentId);
@@ -275,15 +287,6 @@ function toolCalls(claude, router) {
     } finally {
       agentIds.delete(e.tool_use_id);
     }
-  });
-  router.add("classic.PreToolUse", async (e, next) => {
-    cwds.set(e.tool_use_id, await claude.session.cwd());
-    for (const oldest of cwds.keys()) {
-      if (cwds.size <= keptCalls)
-        break;
-      cwds.delete(oldest);
-    }
-    return next(e);
   });
   for (const event of ["classic.PostToolUse", "classic.PostToolUseFailure"]) {
     router.add(event, async (e, next) => {
@@ -482,9 +485,7 @@ var require_utils = __commonJS((exports) => {
       const platform = navigator.platform.toLowerCase();
       return platform === "win32" || platform === "windows";
     }
-    if (typeof process !== "undefined" && process.platform) {
-      return process.platform === "win32";
-    }
+    if (false) {}
     return false;
   };
   exports.removeBackslashes = (str) => {
@@ -2148,7 +2149,7 @@ var require_parse2 = __commonJS((exports, module) => {
     var kind = escape.charAt(0);
     if (kind === "c") {
       var ctrl = escape.charAt(1);
-      return ctrl === "?" ? "" : String.fromCharCode(ctrl.charCodeAt(0) & 31);
+      return ctrl === "?" ? "\u007f" : String.fromCharCode(ctrl.charCodeAt(0) & 31);
     }
     if (kind === "x" || kind === "u" || kind === "U") {
       var cp = parseInt(escape.slice(1), 16);
@@ -3584,6 +3585,7 @@ function optionalTextField(use, name) {
 }
 
 // node_modules/@cmodjs/core/runtime/hooks.js
+var permissionEvents = ["tool.check", "classic.PreToolUse", "classic.PermissionRequest"];
 var flags = ["suppressOriginalPrompt", "reloadSkills", "retry"];
 var readFields = {
   SessionStart: ["additionalContext", "initialUserMessage", "sessionTitle", "watchPaths", "reloadSkills"],
@@ -3755,6 +3757,7 @@ function createRouter() {
       chain.push(hook);
       hooks.set(event, chain);
     },
+    has: (event) => hooks.has(event),
     dispatch(event, e, next) {
       const chain = hooks.get(event);
       const call = async (index, current) => {
@@ -4410,7 +4413,7 @@ async function cmodVersion(claude) {
     throw new Error(`cmod --version ${formatExit(result.exitCode, lastLineOf(result.stderr) ?? "")}`);
   return result.stdout.trim().split(/\s+/).at(-1);
 }
-function createLifecycle(definition) {
+function createLifecycle(definition, checksPermissions = () => true) {
   let router = createRouter();
   let phase = "starting";
   let runtime;
@@ -4428,7 +4431,7 @@ function createLifecycle(definition) {
   const startSettled = new Promise((resolve) => settleStart = resolve);
   const claude = () => {
     if (runtime === undefined)
-      throw new Error(`${definition.name}: the lifecycle has not started. connect(on, mod) starts it at session.start.`);
+      throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod) starts it at session.start.`);
     return runtime.claude;
   };
   const showLine = () => {
@@ -4467,7 +4470,7 @@ function createLifecycle(definition) {
     if (runtime === undefined || plugin === undefined)
       return;
     const activeRouter = createRouter();
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name) }).catch((error) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), checksPermissions }).catch((error) => {
       fail(messageOf(error), "Fix it, then run /reload-plugins.");
       throw error;
     });
@@ -4756,6 +4759,10 @@ async function createMod(definition, runtime) {
   };
   await failsAs("its state did not load", () => modState.load());
   await failsAs("its setup function threw", () => definition.setup(mod));
+  const permissionHooks = permissionEvents.filter((event) => router.has(event));
+  if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
+    throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`);
+  }
   await failsAs("its open panes did not load", () => area.restorePanes());
   if (hookEvents.length > 0)
     added.push(`${hookEvents.length === 1 ? "a hook" : "hooks"} on ${listed(hookEvents)}`);
@@ -4794,8 +4801,9 @@ function lastLineOf(text) {
 `) + 1).trim();
 }
 
-// node_modules/@cmodjs/core/connect.js
+// node_modules/@cmodjs/core/register.js
 var lifecycle;
+var checksPermissions = false;
 async function startMod($, eventInput, passOn) {
   const claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
@@ -4859,46 +4867,37 @@ async function startMod($, eventInput, passOn) {
 function routeToMod(_$, eventInput, passOn) {
   return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed));
 }
-function connect(on, definition) {
-  lifecycle = createLifecycle(definition);
-  on("session.start", startMod);
-  on("classic.SessionStart", routeToMod);
-  on("classic.SessionEnd", routeToMod);
-  on("classic.UserPromptSubmit", routeToMod);
-  on("classic.InstructionsLoaded", routeToMod);
-  on("classic.PreToolUse", routeToMod);
-  on("classic.PermissionRequest", routeToMod);
-  on("classic.PermissionDenied", routeToMod);
-  on("classic.PostToolUse", routeToMod);
-  on("classic.PostToolUseFailure", routeToMod);
-  on("classic.PostToolBatch", routeToMod);
-  on("classic.SubagentStart", routeToMod);
-  on("classic.SubagentStop", routeToMod);
-  on("classic.Notification", routeToMod);
-  on("classic.PreCompact", routeToMod);
-  on("classic.Stop", routeToMod);
-  on("classic.StopFailure", routeToMod);
-  on("tool.check", routeToMod);
-  on("tool.call", routeToMod);
-  on("prompt.submit", routeToMod);
-  on("prompt.context", routeToMod);
-  on("command.run", routeToMod);
-  on("session.measure", routeToMod);
-  on("skill.prompt", routeToMod);
-  on("ui.render", routeToMod);
-  on("ui.press", routeToMod);
-  on("ui.close", routeToMod);
-  on("cmod.call", routeToMod);
+function registerMod(addHook, definition) {
+  checksPermissions = false;
+  lifecycle = createLifecycle(definition, () => checksPermissions);
+  addHook("session.start", startMod);
+  addHook("classic.SessionStart", routeToMod);
+  addHook("classic.SessionEnd", routeToMod);
+  addHook("classic.UserPromptSubmit", routeToMod);
+  addHook("classic.InstructionsLoaded", routeToMod);
+  addHook("classic.PermissionDenied", routeToMod);
+  addHook("classic.PostToolUse", routeToMod);
+  addHook("classic.PostToolUseFailure", routeToMod);
+  addHook("classic.PostToolBatch", routeToMod);
+  addHook("classic.SubagentStart", routeToMod);
+  addHook("classic.SubagentStop", routeToMod);
+  addHook("classic.Notification", routeToMod);
+  addHook("classic.PreCompact", routeToMod);
+  addHook("classic.Stop", routeToMod);
+  addHook("classic.StopFailure", routeToMod);
+  addHook("tool.call", routeToMod);
+  addHook("prompt.submit", routeToMod);
+  addHook("prompt.context", routeToMod);
+  addHook("command.run", routeToMod);
+  addHook("session.measure", routeToMod);
+  addHook("skill.prompt", routeToMod);
+  addHook("ui.render", routeToMod);
+  addHook("ui.press", routeToMod);
+  addHook("ui.close", routeToMod);
+  addHook("cmod.call", routeToMod);
 }
 
-// node_modules/@cmodjs/core/mod.js
-function defineMod(definition) {
-  if (definition.name.trim() === "")
-    throw new Error("defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.");
-  return definition;
-}
-
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-HYw87y/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-1qpoAB/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -4941,9 +4940,9 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-HYw87y/release/hooks/register.ts
-function register(on) {
-  on("engine.create", async (_$, eventInput, passOn) => {
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-1qpoAB/release/hooks/register.ts
+function register(addHook) {
+  addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
     const cmod = {
       async call(input) {
@@ -4952,7 +4951,7 @@ function register(on) {
     };
     return { ...built, cmod };
   });
-  connect(on, cmodPlugin);
+  registerMod(addHook, cmodPlugin);
 }
 export {
   register
