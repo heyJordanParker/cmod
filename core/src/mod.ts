@@ -111,7 +111,7 @@ export type Mod<State extends object = Record<never, never>> = {
   readonly state: Readonly<State>
   readonly dataFolder: string
   on<E extends ModEvent>(event: E, hook: ModHook<E>): void
-  use<Handle>(part: Part<Handle, State>): Handle
+  use<Handle>(job: Job<Handle, State>): Handle
   readonly ui: {
     pane(pane: Pane<State>): PaneHandle
     render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
@@ -157,7 +157,7 @@ export type ModDefinition<State extends StateGroups = Record<never, never>, Name
   setup(mod: Mod<State>): void | Promise<void>
 }
 
-export type PartContext<State extends object = Record<never, never>> = {
+export type JobContext<State extends object = Record<never, never>> = {
   readonly mod: Mod<State>
   readonly claude: Claude
   on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
@@ -166,7 +166,7 @@ export type PartContext<State extends object = Record<never, never>> = {
   readonly toolCalls: ToolCalls
 }
 
-export type Part<Handle, State extends object = Record<never, never>> = (context: PartContext<State>) => Handle
+export type Job<Handle, State extends object = Record<never, never>> = (context: JobContext<State>) => Handle
 
 export function defineMod<State extends StateGroups = Record<never, never>, Name extends string = string>(definition: ModDefinition<State, Name>): ModDefinition<State, Name> {
   if (definition.name.trim() === '') throw new Error('defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.')

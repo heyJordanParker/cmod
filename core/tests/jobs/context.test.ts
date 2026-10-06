@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { EventResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { modOf, targetWords } from '../../src/jobs/part-context.js'
+import { modOf, targetWords } from '../../src/jobs/context.js'
 import { findProjectScope, type Workspace } from '../../src/jobs/permissions/find-project-scope.js'
 import { prompt } from '../../src/jobs/prompt.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { tool } from '../../src/jobs/tool.js'
-import { defineMod, type Claude, type PartContext, type RoutedEvent, type RoutedHook, type ToolCalls } from '../../src/mod.js'
+import { defineMod, type Claude, type JobContext, type RoutedEvent, type RoutedHook, type ToolCalls } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
 
@@ -20,8 +20,8 @@ const files = {
 }
 const fs = fakeFiles(files)
 
-async function partFor() {
-  let used: PartContext | undefined
+async function jobContextFor() {
+  let used: JobContext | undefined
   const tested = testMod(defineMod({ name: 'dent', setup: (mod) => mod.use((context) => void (used = context)) }), { projectRoot: root })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   await tested.start()
@@ -30,7 +30,7 @@ async function partFor() {
 }
 
 test("in a project-scope plugin, a callback's mod.process.run runs in the work tree that holds the call's path", async () => {
-  const { fake, context } = await partFor()
+  const { fake, context } = await jobContextFor()
   const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
 
   await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
@@ -47,7 +47,7 @@ test("in a project-scope plugin, a callback's mod.process.run runs in the work t
 })
 
 test("in any other plugin, a callback's mod.process.run runs in the session's folder", async () => {
-  const { fake, context } = await partFor()
+  const { fake, context } = await jobContextFor()
   const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: undefined }
 
   await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])

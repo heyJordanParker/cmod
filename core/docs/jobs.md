@@ -1,16 +1,16 @@
 # Jobs
 
-A job is a ready-made part of a mod: a slash command, a tool, permission rules, a check, a prompt, a status line, or a background program. Add each in `setup` with `mod.use`.
+A job is a ready-made feature of a mod: a slash command, a tool, permission rules, a check, a prompt, a status line, or a background program. Add each in `setup` with `mod.use`.
 
 ```ts
-mod.use<Handle>(part: Part<Handle, State>): Handle
+mod.use<Handle>(job: Job<Handle, State>): Handle
 
-type Part<Handle, State> = (context: PartContext<State>) => Handle
+type Job<Handle, State> = (context: JobContext<State>) => Handle
 ```
 
-Each job function, such as `slashCommand(options)`, returns a `Part`. `mod.use` runs the part and returns its handle. A job that has nothing to hand back returns `void`.
+Each job function, such as `slashCommand(options)`, returns a `Job`. `mod.use` runs the job and returns its handle. A job that has nothing to hand back returns `void`.
 
-A job's bad options throw at one of two times. `check`, `permissions`, and `prompt` check their options when the job function is called. `slashCommand`, `tool`, `statusLine`, and `program` check theirs inside the part, at `mod.use`, so the error surfaces as `its setup function threw: …`.
+A job's bad options throw at one of two times. `check`, `permissions`, and `prompt` check their options when the job function is called. `slashCommand`, `tool`, `statusLine`, and `program` check theirs when the job runs, at `mod.use`, so the error surfaces as `its setup function threw: …`.
 
 | Job | Import | Adds |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ slashCommand<State>(options: {
   readonly argumentHint?: string
   readonly immediate?: true
   readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => Reply | void | Promise<Reply | void>
-}): Part<void, State>
+}): Job<void, State>
 
 type Reply = string | { text?: string; context?: string } | undefined
 ```
@@ -94,7 +94,7 @@ tool<Schema, State>(options: {
   readonly description: string
   readonly inputSchema?: Schema
   readonly execute: (input: FromSchema<Schema>, mod: Mod<State>) => unknown
-}): Part<{ readonly name: string }, State>
+}): Job<{ readonly name: string }, State>
 ```
 
 - `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name.
@@ -160,7 +160,7 @@ A `command` pattern is not a glob. CMod splits it into words the way it splits a
 ## permissions
 
 ```ts
-permissions<State>(rules: { deny?: Rule<State>[]; ask?: Rule<State>[] }): Part<void, State>
+permissions<State>(rules: { deny?: Rule<State>[]; ask?: Rule<State>[] }): Job<void, State>
 
 type Rule<State> = Target & {
   when?: (call: <the call of the target's key>, mod: Mod<State>) => boolean | Promise<boolean>
@@ -211,7 +211,7 @@ export const guard = defineMod({
 ## check
 
 ```ts
-check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Part<void, State>
+check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State>
 ```
 
 - After each call that matches `after` and succeeds, CMod runs `run`. A call that was denied or failed runs nothing.
@@ -241,7 +241,7 @@ prompt<State>(options: {
   prompt: string | ((input: { userPrompt?: string; call?: ToolCall }, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
   when?: RegExp | ((userPrompt: string) => boolean)
   after?: Target | Target[]
-}): Part<void, State>
+}): Job<void, State>
 ```
 
 `prompt` adds text that Claude reads. `when` and `after` pick when:
@@ -277,7 +277,7 @@ export const conventions = defineMod({
 statusLine<State>(options: {
   readonly text: (usage: Usage, mod: Mod<State>) => string | undefined | Promise<string | undefined>
   readonly interval?: number
-}): Part<void, State>
+}): Job<void, State>
 
 type Usage = { model: string; context: { tokens?: number; window: number; percent?: number }; cost?: { usd: number } }
 ```
@@ -303,7 +303,7 @@ export const usage = defineMod({
 ## program
 
 ```ts
-program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Part<Program>
+program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program>
 
 type Program = {
   readonly state: 'stopped' | 'starting' | 'running' | 'backoff' | 'fatal'
@@ -345,10 +345,10 @@ export const preview = defineMod({
 
 ## Write a job of your own
 
-A `Part` is a function. `mod.use` calls it with a `PartContext` and returns what it returns:
+A `Job` is a function. `mod.use` calls it with a `JobContext` and returns what it returns:
 
 ```ts
-type PartContext<State> = {
+type JobContext<State> = {
   readonly mod: Mod<State>
   readonly claude: Claude
   on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
@@ -367,9 +367,9 @@ type PartContext<State> = {
 - `toolCalls.cwdOf(toolUseId)` returns the working folder at the call's `PreToolUse`, or `undefined` once its `PostToolUse` or `PostToolUseFailure` has run. CMod keeps the folders of the last 100 calls.
 
 ```ts
-import { defineMod, type Part } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, type Job } from '../node_modules/@cmodjs/core/mod.js'
 
-const clock: Part<{ now(): Promise<number> }> = ({ claude, announce }) => {
+const clock: Job<{ now(): Promise<number> }> = ({ claude, announce }) => {
   announce('a clock')
   return { now: () => claude.clock.now() }
 }
@@ -436,10 +436,10 @@ The built-in jobs are written from these building blocks, which a job of your ow
 
 | Import | Export | What it does |
 | --- | --- | --- |
-| `jobs/part-context.js` | `afterCall(part, contextAfter, failed)` | Runs `contextAfter` after each call that succeeds, and adds the lines it returns to the call's result. |
-| `jobs/part-context.js` | `modWithin(part, deadline, workTree?)` | A `mod` whose calls fail at `deadline`, `{ ms, job?, longestMs? }`. |
-| `jobs/part-context.js` | `modOf(part, { call?, folder }, workspace, deadline)` | `modWithin`, with `mod.process` calls run in the call's work tree. |
-| `jobs/part-context.js` | `workspaceReader(part)` | A function that reads the session's `projectRoot`, `cwd`, `home`, file access, and project scope. |
+| `jobs/context.js` | `afterCall(job, contextAfter, failed)` | Runs `contextAfter` after each call that succeeds, and adds the lines it returns to the call's result. |
+| `jobs/context.js` | `modWithin(job, deadline, workTree?)` | A `mod` whose calls fail at `deadline`, `{ ms, job?, longestMs? }`. |
+| `jobs/context.js` | `modOf(job, { call?, folder }, workspace, deadline)` | `modWithin`, with `mod.process` calls run in the call's work tree. |
+| `jobs/context.js` | `workspaceReader(job)` | A function that reads the session's `projectRoot`, `cwd`, `home`, file access, and project scope. |
 | `jobs/permissions/decide-permission.js` | `decidePermission`, `stricterVerdict`, and the types `Rule`, `PermissionRules`, `Decision`, `Verdict` | Decides a call against permission rules. |
 | `jobs/permissions/find-project-scope.js` | `findProjectScope`, and the types `ProjectScope`, `Workspace` | Finds the repository a project plugin belongs to. |
 

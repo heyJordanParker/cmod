@@ -1,4 +1,4 @@
-import type { Part } from '../mod.js'
+import type { Job } from '../mod.js'
 import { messageOf } from '../utils/text.js'
 
 export type Program = {
@@ -10,7 +10,7 @@ type Address = Awaited<ReturnType<Program['ready']>>
 
 const backoffSeconds = [1, 2, 4, 8, 16] as const
 
-export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Part<Program> {
+export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program> {
   const { command, environment } = options
   return ({ mod, claude, announce }) => {
     const [executable] = command

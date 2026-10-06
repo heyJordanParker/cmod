@@ -1,19 +1,19 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { prompt } from '../../src/jobs/prompt.js'
-import { defineMod, type Part } from '../../src/mod.js'
+import { defineMod, type Job } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 const answered = { result: { stdout: '', stderr: '', interrupted: false }, text: '' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 const bash = (command: string, toolUseId: string) => ({ tool: 'Bash', command, tool_use_id: toolUseId }) as never
 const currentDate = { name: 'currentDate', text: "Today's date is 2026-10-05." }
 
-function withPrompt(...parts: Part<void>[]) {
+function withPrompt(...jobs: Job<void>[]) {
   return testMod(
     defineMod({
       name: 'notes',
       setup(mod) {
-        for (const part of parts) mod.use(part)
+        for (const job of jobs) mod.use(job)
       },
     }),
   )
@@ -64,8 +64,9 @@ test("a prompt callback after a call gets the mod's own typed state, so it count
 })
 
 test('a prompt after a write gets the path from the folder the shell was in before the call', async () => {
-  const bashMovesFolder: Part<void> = ({ claude, on }) => {
-    on('tool.call', async (e, next) => {
+  const bashMovesFolder: Job<void> = (job) => {
+    const { claude } = job
+    job.on('tool.call', async (e, next) => {
       claude.session.cwd = async () => '/test/plugins/notes/app'
       return next(e)
     })

@@ -70,7 +70,7 @@ A mod imports from the files below, and every other file in this package is inte
 
 | Import | Exports | Docs |
 | --- | --- | --- |
-| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `PartContext`, `Part`, `ProgressStep`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [ui.md](ui.md) |
+| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `ProgressStep`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [ui.md](ui.md) |
 | `mod.js` | `Claude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
 | `mod.js` | `ModEvent`, `ModHook`, `HookAnswer` | [hooks.md](hooks.md) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
@@ -87,7 +87,7 @@ A mod imports from the files below, and every other file in this package is inte
 | `jobs/prompt.js` | `prompt` | [jobs.md](jobs.md) |
 | `jobs/status-line.js` | `statusLine`, `Usage` | [jobs.md](jobs.md) |
 | `jobs/program.js` | `program`, `Program` | [jobs.md](jobs.md) |
-| `jobs/part-context.js` | `afterCall`, `modWithin`, `modOf`, `workspaceReader` | [jobs.md](jobs.md) |
+| `jobs/context.js` | `afterCall`, `modWithin`, `modOf`, `workspaceReader` | [jobs.md](jobs.md) |
 | `jobs/permissions/decide-permission.js` | `decidePermission`, `stricterVerdict`, `Rule`, `PermissionRules`, `Decision`, `Verdict` | [jobs.md](jobs.md) |
 | `jobs/permissions/find-project-scope.js` | `findProjectScope`, `ProjectScope`, `Workspace` | [jobs.md](jobs.md) |
 

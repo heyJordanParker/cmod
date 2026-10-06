@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { check } from '../../src/jobs/check.js'
-import { defineMod, type Part } from '../../src/mod.js'
+import { defineMod, type Job } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 const root = '/test/plugins/typed'
@@ -9,12 +9,12 @@ const answered = { result: { filePath: `${root}/a.ts` }, text: 'The file was upd
 const editOf = (path: string, toolUseId: string) => ({ tool: 'Edit', file_path: path, old_string: 'let a = 1', new_string: "let a = 'one'", tool_use_id: toolUseId }) as never
 const typeError = "a.ts(1,5): error TS2322: Type 'string' is not assignable to type 'number'."
 
-function typed(...parts: Part<void>[]) {
+function typed(...jobs: Job<void>[]) {
   const tested = testMod(
     defineMod({
       name: 'typed',
       setup(mod) {
-        for (const part of parts) mod.use(part)
+        for (const job of jobs) mod.use(job)
       },
     }),
   )
@@ -74,8 +74,9 @@ test('a check that passes its deadline tells Claude the check and the deadline',
 })
 
 test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () => {
-  const bashMovesFolder: Part<void> = ({ claude, on }) => {
-    on('tool.call', async (e, next) => {
+  const bashMovesFolder: Job<void> = (job) => {
+    const { claude } = job
+    job.on('tool.call', async (e, next) => {
       claude.session.cwd = async () => `${root}/app`
       return next(e)
     })

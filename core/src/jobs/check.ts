@@ -1,15 +1,15 @@
-import type { Part } from '../mod.js'
+import type { Job } from '../mod.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
 import { callEffects, type ToolUse } from '../utils/call-effects.js'
 import { parentOf } from '../utils/paths.js'
 import { listed, messageOf } from '../utils/text.js'
-import { afterCall, modOf, targetWords } from './part-context.js'
+import { afterCall, modOf, targetWords } from './context.js'
 import type { Workspace } from './permissions/find-project-scope.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
 
 const defaultMs = 60_000
 
-export function check<State extends object = Record<never, never>>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Part<void, State> {
+export function check<State extends object = Record<never, never>>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State> {
   const { after, run, timeoutMs = defaultMs } = options
   const targets = Array.isArray(after) ? after : [after]
   if (targets.length === 0) throw new Error("check: give after a target, such as { write: '**/*.ts' }.")
@@ -19,15 +19,15 @@ export function check<State extends object = Record<never, never>>(options: { re
   if (!(timeoutMs > 0 && timeoutMs <= longestMs)) throw new Error(`check: the ${named} has timeoutMs ${timeoutMs}. Set it above 0 and at most ${longestMs} (${longestMs / 60_000} minutes).`)
   const deadline: Deadline = { ms: timeoutMs, job: 'check' }
 
-  return (context) => {
+  return (job) => {
     afterCall(
-      context,
+      job,
       async (use, workspace) => {
         const triggered = await triggeredRun(targets, run, use, workspace)
         if (triggered === undefined) return []
         try {
           const { command, folder } = triggered
-          const { exitCode, stdout, stderr } = await modOf(context, { folder }, workspace, deadline).process.run(command)
+          const { exitCode, stdout, stderr } = await modOf(job, { folder }, workspace, deadline).process.run(command)
           return exitCode === 0 ? [] : [`${command.join(' ')} exited with ${exitCode}:\n${`${stdout}${stderr}`.trim()}`]
         } catch (error) {
           return [`The ${named} failed: ${messageOf(error)}`]
@@ -35,7 +35,7 @@ export function check<State extends object = Record<never, never>>(options: { re
       },
       (error) => [`The check job failed, so the ${named} did not run: ${messageOf(error)}`],
     )
-    context.announce(`a ${named}`)
+    job.announce(`a ${named}`)
   }
 }
 

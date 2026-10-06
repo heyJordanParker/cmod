@@ -1,9 +1,9 @@
 import type { CommandRunResult } from 'claude-code'
-import type { Mod, Part } from '../mod.js'
+import type { Job, Mod } from '../mod.js'
 import { parse } from '../vendor.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
 import { messageOf } from '../utils/text.js'
-import { modWithin } from './part-context.js'
+import { modWithin } from './context.js'
 
 export type Reply = string | { text?: string; context?: string } | undefined
 
@@ -17,10 +17,10 @@ export function slashCommand<State extends object = Record<never, never>>(option
   readonly argumentHint?: string
   readonly immediate?: true
   readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => Reply | void | Promise<Reply | void>
-}): Part<void, State> {
+}): Job<void, State> {
   const { name, description, argumentHint, immediate, reply } = options
-  return (part) => {
-    const { mod, claude, on, announce, reserveName } = part
+  return (job) => {
+    const { mod, claude, announce, reserveName } = job
     if (!commandName.test(name)) throw new Error(`${mod.name}: "${name}" is not a slash command name. Use 1 to 64 letters, digits, "_", or "-", without the slash.`)
     reserveName('slashCommand', name, `${mod.name}: the slash command /${name} is already added. Give each slashCommand its own name.`)
 
@@ -35,8 +35,8 @@ export function slashCommand<State extends object = Record<never, never>>(option
     )
     announce(`/${name}`)
 
-    const replyMod = modWithin(part, deadline)
-    on('command.run', async (e, next) => {
+    const replyMod = modWithin(job, deadline)
+    job.on('command.run', async (e, next) => {
       if (e.command !== registered) return next(e)
       try {
         return answerOf(await reply({ args: e.args, positionals: splitWords(e.args) }, replyMod))

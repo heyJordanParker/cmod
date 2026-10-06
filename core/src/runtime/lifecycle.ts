@@ -1,5 +1,5 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
+import type { Mod, ModDefinition, ModEvent, ModHook } from '../mod.js'
 import { dataFolder, isAtLeast, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
@@ -355,7 +355,6 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   const announce = (feature: string) => {
     added.push(feature)
   }
-  const on: PartContext<State>['on'] = (event, hook) => router.add(event, hook)
   const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()])
   let cwd = startCwd
   let loadedCwd = startCwd
@@ -370,7 +369,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       if (!hookEvents.includes(event)) hookEvents.push(event)
       router.add(`classic.${event}`, classicHook(definition.name, event, hook, claude, agents))
     },
-    use: (part) => part({ mod, claude, on, announce, reserveName, toolCalls: agents }),
+    use: (job) => job({ mod, claude, on: (event, hook) => router.add(event, hook), announce, reserveName, toolCalls: agents }),
     ui: area.ui,
     process: {
       run: (argv, init) => claude.process.run(argv, init),
@@ -414,32 +413,32 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       claude.ui.log(`${definition.name} keeps the state of ${modState.root} until the next prompt or folder move: ${messageOf(error)}`)
     }
   }
-  on('classic.SessionStart', async (e, next) => {
+  router.add('classic.SessionStart', async (e, next) => {
     await modState.switchSession(e.session_id, e.source).catch((error: unknown) => {
       claude.ui.log(`${definition.name} kept its session values from before the ${e.source}: ${messageOf(error)}`)
     })
     return next(e)
   })
-  on('classic.UserPromptSubmit', async (e, next) => {
+  router.add('classic.UserPromptSubmit', async (e, next) => {
     staleCwd = undefined
     await followSession()
     return next(e)
   })
   for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
-    on(event, async (e, next) => {
+    router.add(event, async (e, next) => {
       if (shellTools.includes(e.tool_name)) await followSession()
       return next(e)
     })
   }
-  on('command.run', async (e, next) => {
+  router.add('command.run', async (e, next) => {
     const answer = await next(e)
     if (e.command === 'cd') await followSession(true)
     return answer
   })
-  on('skill.prompt', userSkillHook(claude))
+  router.add('skill.prompt', userSkillHook(claude))
   const api = Object.fromEntries(Object.entries(definition.api ?? {}).map(([method, run]) => [method, (input: never) => run(input, mod)]))
-  on('cmod.call', (e, next) => (e.to === definition.name ? answerCall(definition.name, api, e) : next(e)))
-  const agents = toolCalls({ claude, on })
+  router.add('cmod.call', (e, next) => (e.to === definition.name ? answerCall(definition.name, api, e) : next(e)))
+  const agents = toolCalls(claude, router)
   const names = new Set<string>()
   const reserveName = (kind: string, name: string, taken: string) => {
     const key = `${kind}:${name}`

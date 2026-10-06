@@ -2,7 +2,7 @@ import { expect, expectTypeOf, test } from 'bun:test'
 import type { AgentInfo, Args, ClassicHookInputs, EventResult, Frozen, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod, type Mod, type PaneHandle, type Part } from '../src/mod.js'
+import { defineMod, type Job, type Mod, type PaneHandle } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
 import { testMod, type TestedMod } from '../src/testing.js'
@@ -347,11 +347,11 @@ test('mod.ui.progress draws a bar line above the prompt while its task runs', as
   expect(await tested.fire('ui.render', abovePrompt as never, prompt)).toBe(prompt)
 })
 
-const noForcePush: Part<{ readonly denied: string[] }> = ({ on, claude, announce }) => {
+const noForcePush: Job<{ readonly denied: string[] }> = (job) => {
   const denied: string[] = []
-  void claude.command.register({ name: 'pushes', description: 'List refused pushes' })
-  announce('the /pushes command')
-  on('tool.check', async (e, next) => {
+  void job.claude.command.register({ name: 'pushes', description: 'List refused pushes' })
+  job.announce('the /pushes command')
+  job.on('tool.check', async (e, next) => {
     const command = (e.input as { command?: string }).command ?? ''
     if (e.tool !== 'Bash' || !command.includes('push --force')) return next(e)
     denied.push(command)
@@ -360,7 +360,7 @@ const noForcePush: Part<{ readonly denied: string[] }> = ({ on, claude, announce
   return { denied }
 }
 
-test('a part added with mod.use answers tool.check, reaches Claude Code calls, and returns its handle', async () => {
+test('a job added with mod.use answers tool.check, reaches Claude Code calls, and returns its handle', async () => {
   let handle: { readonly denied: string[] } | undefined
   const tested = testMod(
     defineMod({

@@ -75,7 +75,7 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(sums).toBe(`${expected.join('\n')}\n`)
 })
 
-async function committedHooksMod(home: string): Promise<string> {
+async function committedHooksMod(home: string, files: Record<string, string> = {}): Promise<string> {
   const root = join(home, 'greeter')
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.2.0' }),
@@ -85,6 +85,7 @@ async function committedHooksMod(home: string): Promise<string> {
     'src/greet.ts': "export async function greet($, e, next) {\n  await $.ui.toast('hello')\n  return next(e)\n}\n",
     '.github/workflows/release.yml': 'name: Release\n',
     '.claude/skills/repack/SKILL.md': '# Repack\n',
+    ...files,
   })
   const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
   await git('init', '-q')
@@ -117,6 +118,35 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   const tree = join(dirname(archive), 'release')
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(`plugin validate ${tree} --strict\n`)
   expect(result.stdout).toContain(`and ${tree} to its release branch. Nothing was pushed:`)
+})
+
+test('a "files" list in package.json limits the release to its paths, .claude-plugin/, package.json, the README, and the license', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, {
+    'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'src'] }),
+    'README.md': '# Greeter\n',
+    LICENSE: 'MIT\n',
+    'docs/notes.md': '# Notes\n',
+    'tests/greet.test.ts': "test('greets', () => {})\n",
+  })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
+  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
+})
+
+test('publish refuses a "files" path that matches no committed file', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, { 'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'skills'] }) })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe('cmod publish: package.json "files" lists skills, which matches no committed file. Commit it or remove it from "files", then run cmod publish again.\n')
 })
 
 test('publish stops when claude plugin validate refuses the release', async () => {

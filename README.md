@@ -34,6 +34,10 @@ The CMod plugin runs two programs, and sends no data anywhere:
 - **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/bin/cmod` to it. That download is its only network request.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
 
+It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its link at `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
+
+Every mod built with CMod, the CMod plugin included, adds one hook on each Claude Code event a mod can use. So the CMod plugin hooks permission checks (`tool.check`, `PreToolUse` and `PermissionRequest`), tool calls, prompts, and what Claude Code draws. On a permission check or a tool call, the CMod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
+
 ## Change a mod
 
 Your changes to a mod live in its config folders, outside the mod's code. Each mod has two:

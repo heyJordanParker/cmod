@@ -86,7 +86,7 @@ type Mod<State> = {
   readonly projectRoot: string
   readonly cwd: string
   on(event, hook): void
-  use(part): Handle
+  use(job): Handle
   readonly ui: { pane, render, toast, progress, ask }
   readonly process: { run, spawn }
   readonly fs: { read, write, list }

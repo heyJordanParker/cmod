@@ -69,7 +69,7 @@ type TestedMod<State> = {
 
 ### start
 
-Starts the mod: loads its state, runs `setup`, and adds its parts. `fire`, `lines`, `type`, `callTool`, `press`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
+Starts the mod: loads its state, runs `setup`, and adds its hooks, panes, and jobs. `fire`, `lines`, `type`, `callTool`, `press`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
 
 ### fire
 

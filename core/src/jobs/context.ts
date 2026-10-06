@@ -1,5 +1,5 @@
 import type { Args, Frozen, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import type { Mod, PartContext } from '../mod.js'
+import type { JobContext, Mod } from '../mod.js'
 import type { Claude } from '../runtime/claude.js'
 import { beforeDeadline, type Deadline } from '../runtime/deadline.js'
 import { dependencyCalls } from '../runtime/dependencies.js'
@@ -14,7 +14,7 @@ type Session = Omit<Workspace, 'projectRoot' | 'cwd'>
 
 type Stream = HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 
-export function workspaceReader({ claude }: PartContext): () => Promise<Workspace> {
+export function workspaceReader({ claude }: JobContext): () => Promise<Workspace> {
   let session: Promise<Session> | undefined
   return async () => {
     session ??= readSession(claude)
@@ -35,13 +35,13 @@ async function readSession(claude: Claude): Promise<Session> {
 }
 
 export function afterCall<State extends object>(
-  part: PartContext<State>,
+  job: JobContext<State>,
   contextAfter: (use: ToolUse, workspace: Workspace) => Promise<readonly string[]>,
   failed: (error: unknown) => readonly string[],
 ): void {
-  const readWorkspace = workspaceReader(part)
-  part.on('tool.call', async (e, next) => {
-    const before = Promise.all([useOf(part, e), readWorkspace()])
+  const readWorkspace = workspaceReader(job)
+  job.on('tool.call', async (e, next) => {
+    const before = Promise.all([useOf(job, e), readWorkspace()])
     await before.catch(() => undefined)
     const result = await next(e)
     if (result.deny !== undefined || result.isError === true) return result
@@ -50,15 +50,15 @@ export function afterCall<State extends object>(
   })
 }
 
-async function useOf({ toolCalls }: PartContext, e: Frozen<Args<'tool.call'>>): Promise<ToolUse> {
+async function useOf({ toolCalls }: JobContext, e: Frozen<Args<'tool.call'>>): Promise<ToolUse> {
   return { tool: e.tool, input: toolInputOf(e), ...(await toolCalls.agentOf(e.tool_use_id)) }
 }
 
-export function modOf<State extends object>(context: PartContext<State>, { call, folder }: { readonly call?: ToolCall; readonly folder: string }, workspace: Workspace, deadline: Deadline): Mod<State> {
-  return modWithin(context, deadline, async () => workspace.scope?.workTreeOf(call !== undefined && 'path' in call ? call.path : folder))
+export function modOf<State extends object>(job: JobContext<State>, { call, folder }: { readonly call?: ToolCall; readonly folder: string }, workspace: Workspace, deadline: Deadline): Mod<State> {
+  return modWithin(job, deadline, async () => workspace.scope?.workTreeOf(call !== undefined && 'path' in call ? call.path : folder))
 }
 
-export function modWithin<State extends object>({ mod, claude }: PartContext<State>, deadline: Deadline, workTree: () => Promise<string | undefined> = async () => undefined): Mod<State> {
+export function modWithin<State extends object>({ mod, claude }: JobContext<State>, deadline: Deadline, workTree: () => Promise<string | undefined> = async () => undefined): Mod<State> {
   const within = <Value>(call: string, task: Promise<Value>) => beforeDeadline(claude, deadline, call, task)
   const folderOf = async (cwd: string | undefined) => {
     const folder = cwd ?? (await workTree())

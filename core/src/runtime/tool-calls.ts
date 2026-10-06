@@ -1,4 +1,5 @@
-import type { PartContext } from '../mod.js'
+import type { Claude } from './claude.js'
+import type { Router } from './router.js'
 
 export type Agent = { agentId?: string; agentType?: string }
 
@@ -17,22 +18,22 @@ type AgentFields = { readonly agent_id?: string; readonly agent_type?: string }
 
 const keptCalls = 100
 
-export function toolCalls({ claude, on }: Pick<PartContext, 'claude' | 'on'>): ToolCalls {
+export function toolCalls(claude: Claude, router: Router): ToolCalls {
   let mainAgentType: string | undefined
   const agentIds = new Map<string, string>()
   const cwds = new Map<string, string>()
   const noteAgent = (e: AgentFields) => {
     if (e.agent_id === undefined) mainAgentType = e.agent_type
   }
-  on('classic.SessionStart', (e, next) => {
+  router.add('classic.SessionStart', (e, next) => {
     noteAgent(e)
     return next(e)
   })
-  on('classic.UserPromptSubmit', (e, next) => {
+  router.add('classic.UserPromptSubmit', (e, next) => {
     noteAgent(e)
     return next(e)
   })
-  on('tool.call', async (e, next) => {
+  router.add('tool.call', async (e, next) => {
     if (e.agentId === undefined) return next(e)
     agentIds.set(e.tool_use_id, e.agentId)
     try {
@@ -41,7 +42,7 @@ export function toolCalls({ claude, on }: Pick<PartContext, 'claude' | 'on'>): T
       agentIds.delete(e.tool_use_id)
     }
   })
-  on('classic.PreToolUse', async (e, next) => {
+  router.add('classic.PreToolUse', async (e, next) => {
     cwds.set(e.tool_use_id, await claude.session.cwd())
     for (const oldest of cwds.keys()) {
       if (cwds.size <= keptCalls) break
@@ -50,7 +51,7 @@ export function toolCalls({ claude, on }: Pick<PartContext, 'claude' | 'on'>): T
     return next(e)
   })
   for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
-    on(event, async (e, next) => {
+    router.add(event, async (e, next) => {
       try {
         return await next(e)
       } finally {

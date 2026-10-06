@@ -6,17 +6,8 @@ import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle
 
 let lifecycle: Lifecycle<object>
 
-async function startMod($: EngineInterface, e: Frozen<Args<'session.start'>>, next: Next<'session.start'>): Promise<EventResult<'session.start'>> {
-  await lifecycle.start(claudeOf($), readPlugin)
-  return next(e)
-}
-
-function routeToMod<N extends RoutedEvent>(_$: EngineInterface, e: Frozen<Args<N>>, next: Next<N>): Promise<EventResult<N>> {
-  return lifecycle.route(next.event, e, (passed: unknown) => next(passed as Args<N>) as Promise<EventResult<N>>)
-}
-
-function claudeOf($: EngineInterface): Claude {
-  return {
+async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.start'>>, passOn: Next<'session.start'>): Promise<EventResult<'session.start'>> {
+  const claude: Claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
     ui: {
       toast: (text, options) => $.ui.toast(text, options),
@@ -72,6 +63,12 @@ function claudeOf($: EngineInterface): Claude {
     },
     cmod: { call: (input) => $.cmod.call(input) },
   }
+  await lifecycle.start(claude, readPlugin)
+  return passOn(eventInput)
+}
+
+function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: Next<N>): Promise<EventResult<N>> {
+  return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>)
 }
 
 export function connect<State extends object>(on: On, definition: ModDefinition<State>): void {

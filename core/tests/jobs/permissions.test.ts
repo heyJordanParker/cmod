@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { permissions, type PermissionRules } from '../../src/jobs/permissions.js'
-import { defineMod, type Part } from '../../src/mod.js'
+import { defineMod, type Job } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 const bashCheck = (command: string, toolUseId: string) => ({ tool: 'Bash', input: { command }, tool_use_id: toolUseId })
@@ -29,8 +29,8 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
   let finishCall: () => void = () => undefined
   const reachedBelow = new Promise<void>((resolve) => (reachBelow = resolve))
   const callFinished = new Promise<void>((resolve) => (finishCall = resolve))
-  const coreBeneath: Part<void> = ({ on }) => {
-    on('tool.call', async (e, next) => {
+  const coreBeneath: Job<void> = (job) => {
+    job.on('tool.call', async (e, next) => {
       reachBelow()
       await callFinished
       return next(e)

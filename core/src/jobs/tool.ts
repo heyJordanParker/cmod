@@ -1,10 +1,10 @@
 import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
-import type { Mod, Part } from '../mod.js'
+import type { Job, Mod } from '../mod.js'
 import { Validator } from '../vendor.js'
 import { toolDeadline } from '../runtime/deadline.js'
 import { reservedKeys, toolInputOf } from '../runtime/tool-calls.js'
 import { messageOf } from '../utils/text.js'
-import { modWithin } from './part-context.js'
+import { modWithin } from './context.js'
 
 const toolName = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -13,10 +13,10 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
   readonly description: string
   readonly inputSchema?: Schema
   readonly execute: (input: Schema extends JSONSchema ? FromSchema<Schema> : never, mod: Mod<State>) => unknown
-}): Part<{ readonly name: string }, State> {
+}): Job<{ readonly name: string }, State> {
   const { name, description, inputSchema, execute } = options
-  return (part) => {
-    const { mod, claude, on, announce, reserveName } = part
+  return (job) => {
+    const { mod, claude, announce, reserveName } = job
     if (!toolName.test(name)) throw new Error(`${mod.name}: "${name}" is not a tool name. Use 1 to 64 letters, digits, "_", or "-".`)
     const properties = (inputSchema as { properties?: object } | undefined)?.properties ?? {}
     const reserved = reservedKeys.filter((key) => Object.hasOwn(properties, key))
@@ -35,8 +35,8 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
     )
     announce(`the ${name} tool`)
 
-    const executeMod = modWithin(part, toolDeadline)
-    on('tool.call', async (e, next) => {
+    const executeMod = modWithin(job, toolDeadline)
+    job.on('tool.call', async (e, next) => {
       if (e.tool !== registered) return next(e)
       const input = toolInputOf(e)
       const { valid, errors } = validator.validate(input)
