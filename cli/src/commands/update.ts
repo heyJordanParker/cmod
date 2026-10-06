@@ -3,7 +3,7 @@ import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { changePlugin, listPlugins, type InstalledPlugin } from '../claude.js'
 import { usesCmod } from '../plugin.js'
 import { startProgress } from '../progress.js'
-import { installMods } from './install.js'
+import { installCmodPlugin, installMod } from './install.js'
 
 export const summary = 'Update any plugin through Claude Code, and rerun changed install steps.'
 
@@ -54,5 +54,7 @@ export async function run(argv: string[]): Promise<number> {
     if (plugin === undefined) throw new Error(`Claude Code updated ${id} but claude plugin list no longer shows it.`)
     if (await usesCmod(plugin.installPath, plugin.name)) mods.push(plugin)
   }
-  return Math.max(exitCode, await installMods(mods, values.yes, progress))
+  if (mods.length > 0) await installCmodPlugin(progress)
+  for (const plugin of mods) exitCode = Math.max(exitCode, await installMod(plugin, values.yes, progress))
+  return exitCode
 }
