@@ -15,13 +15,13 @@ Claude Code installs the CMod plugin with the mod. CMod then fetches the cmod pr
 
 When you remove a mod with `/plugin uninstall`, CMod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
 
-In a terminal, one command does the same:
+In a terminal, one command does the same, for a mod or any other Claude Code plugin:
 
 ```sh
 cmod install <owner>/<repo>
 ```
 
-The CMod plugin puts `cmod` in `~/.local/bin` the first time it runs. `cmod list` shows every mod and whether it is set up.
+A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The CMod plugin puts `cmod` in `~/.local/bin` the first time it runs. `cmod list` shows every plugin Claude Code has, and whether CMod set up each mod.
 
 ## Change a mod
 

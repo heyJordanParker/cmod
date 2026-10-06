@@ -2,9 +2,9 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { isObject, readSteps, type Steps } from 'cmod-sdk/src/records.js'
+import { isObject, readRecord, readSteps, storeFolder, type Steps } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
-import { readJson } from './files.js'
+import { readJson, readText } from './files.js'
 import { bunArgv, run } from './process.js'
 
 export type Plugin = {
@@ -27,21 +27,22 @@ export async function readPlugin(path: string): Promise<Plugin> {
   if (typeof manifest['version'] !== 'string') throw new Error(`${manifestPath} has no "version". Add one, such as "version": "0.1.0".`)
 
   const packageJson = await readJson(`${root}/package.json`)
-  let steps: Steps
-  try {
-    steps = readSteps(packageJson) ?? {}
-  } catch (error) {
-    throw new Error(`${root}: ${messageOf(error)}`)
-  }
-
   return {
     root,
     name: manifest['name'],
     version: manifest['version'],
     description: typeof manifest['description'] === 'string' ? manifest['description'] : undefined,
     repository: typeof manifest['repository'] === 'string' ? manifest['repository'] : undefined,
-    steps,
+    steps: stepsIn(root, packageJson),
     packageJson: packageJson as Record<string, unknown> | undefined,
+  }
+}
+
+function stepsIn(root: string, packageJson: unknown): Steps {
+  try {
+    return readSteps(packageJson) ?? {}
+  } catch (error) {
+    throw new Error(`${root}: ${messageOf(error)}`)
   }
 }
 
@@ -51,11 +52,9 @@ export function sourceOf(text: string): { kind: 'path' | 'github'; text: string 
   return { kind: 'path', text: realpathSync(text) }
 }
 
-export async function isModFolder(root: string): Promise<boolean> {
-  const packageJson = await readJson(`${root}/package.json`)
-  if (!isObject(packageJson)) return false
-  const dependencies = packageJson['dependencies']
-  return 'cmod' in packageJson || (isObject(dependencies) && 'cmod-sdk' in dependencies)
+export async function usesCmod(root: string, name: string): Promise<boolean> {
+  const steps = stepsIn(root, await readJson(`${root}/package.json`))
+  return Object.keys(steps).length > 0 || (await readRecord(readText, storeFolder(process.env), name)) !== undefined
 }
 
 export async function preparePackages(plugin: Plugin): Promise<boolean> {

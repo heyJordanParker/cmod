@@ -2,26 +2,30 @@ import { existsSync, realpathSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { isObject } from 'cmod-sdk/src/records.js'
 import { messageOf } from 'cmod-sdk/src/utils/text.js'
-import { addMarketplace, changePlugin, listMarketplaces, listPlugins } from '../claude.js'
+import { addMarketplace, changePlugin, listMarketplaces, listPlugins, type InstalledPlugin } from '../claude.js'
 import { readJson, tilde } from '../files.js'
-import { readPlugin, sourceOf } from '../plugin.js'
+import { readPlugin, sourceOf, usesCmod } from '../plugin.js'
 import { startProgress, type Progress } from '../progress.js'
 import { noteNextStep, setupInTerminal } from './setup.js'
 
-export const summary = 'Install a mod through Claude Code and run its install step.'
+export const summary = "Install any plugin through Claude Code, and run a mod's install step."
 
 export const help = `Usage: cmod install <owner/repo | path> [name] [--yes]
        cmod install <name | name@marketplace> [--yes]
 
 ${summary}
 
-Adds the mod's marketplace to Claude Code, installs the mod through Claude Code,
-installs the CMod plugin when Claude Code lacks it, and runs the mod's install
-step. When the marketplace lists several mods, name the one to install after
-it. Given name@marketplace of a marketplace Claude Code has added, installs
-that plugin. Given the name of a plugin Claude Code already holds, such as
-four-step or four-step@market, runs its install step again. A path holds a
-"/", such as ./my-mod.
+Adds the plugin's marketplace to Claude Code and installs the plugin through
+Claude Code. A mod, a plugin whose package.json "cmod" key names an install,
+uninstall, or program step, also gets the CMod plugin when Claude Code lacks
+it, and its install step runs. Any other plugin installs through Claude Code
+alone, and CMod keeps no record of it. When the marketplace lists several
+plugins, name the one to install after it. Given name@marketplace of a
+marketplace Claude Code has added, installs that plugin. Given the name of a
+plugin Claude Code already holds, such as four-step or four-step@market, runs
+a mod's install step again, and installs any other plugin through Claude Code
+again. A linked plugin that is not a mod is skipped, because saving its files
+updates it. A path holds a "/", such as ./my-mod.
 
 Options:
   --yes  Approve the mod's install and uninstall commands without asking`
@@ -52,17 +56,16 @@ export async function run(argv: string[]): Promise<number> {
 async function installByName(argument: string, yes: boolean, progress: Progress): Promise<number> {
   const installed = (await listPlugins()).find((plugin) => plugin.name === argument || plugin.id === argument)
   if (installed !== undefined) {
-    await installCmodPlugin(progress)
-    const plugin = await readPlugin(installed.installPath)
-    const code = await setupInTerminal(plugin, { yes }, progress)
-    if (code === 0) noteNextStep(plugin, progress)
-    return code
+    if (await usesCmod(installed.installPath, installed.name)) return installMod(installed, yes, progress)
+    if (installed.scope !== 'session') return installPlugin(installed.id, yes, progress)
+    progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it. Run /reload-plugins in a session that is running.`)
+    return 0
   }
   const at = argument.lastIndexOf('@')
   const marketplaceName = at > 0 ? argument.slice(at + 1) : undefined
   if (marketplaceName !== undefined && (await listMarketplaces()).some((marketplace) => marketplace.name === marketplaceName)) return installPlugin(argument, yes, progress)
   const name = at > 0 ? argument.slice(0, at) : argument
-  throw new Error(`Claude Code holds no plugin named ${argument}. Install one from <owner/repo>, a path such as ./${name}, or ${name}@<marketplace> of a marketplace Claude Code has added. cmod list shows the installed mods.`)
+  throw new Error(`Claude Code holds no plugin named ${argument}. Install one from <owner/repo>, a path such as ./${name}, or ${name}@<marketplace> of a marketplace Claude Code has added. cmod list shows every plugin.`)
 }
 
 async function installPlugin(id: string, yes: boolean, progress: Progress): Promise<number> {
@@ -71,6 +74,10 @@ async function installPlugin(id: string, yes: boolean, progress: Progress): Prom
   const installed = (await listPlugins()).find((plugin) => plugin.id === id)
   if (installed === undefined) throw new Error(`Claude Code installed ${id} but claude plugin list does not show it.`)
   progress.succeed(`Installed ${id} into Claude Code`)
+  return (await usesCmod(installed.installPath, installed.name)) ? installMod(installed, yes, progress) : 0
+}
+
+export async function installMod(installed: InstalledPlugin, yes: boolean, progress: Progress): Promise<number> {
   await installCmodPlugin(progress)
   const plugin = await readPlugin(installed.installPath)
   const code = await setupInTerminal(plugin, { yes }, progress)
@@ -102,6 +109,9 @@ async function modIn(manifestPath: string, chosen: string | undefined, source: s
   const mods = plugins.filter((name) => name !== 'cmod')
   const candidates = mods.length > 0 ? mods : plugins
   if (candidates.length === 0) throw new Error(`${manifestPath} lists no plugin, so there is nothing to install.`)
-  if (candidates.length > 1) throw new Error(`${source} lists several mods: ${candidates.join(', ')}. Name the one to install after it, such as cmod install ${source} ${candidates[0]}.`)
+  if (candidates.length > 1) {
+    const shown = candidates.length > 10 ? [...candidates.slice(0, 10), `and ${candidates.length - 10} more`] : candidates
+    throw new Error(`${source} lists several plugins: ${shown.join(', ')}. Name the one to install after it, such as cmod install ${source} ${candidates[0]}.`)
+  }
   return candidates[0] as string
 }

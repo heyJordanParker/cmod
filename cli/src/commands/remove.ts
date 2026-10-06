@@ -5,14 +5,14 @@ import { readText } from '../files.js'
 import { startProgress } from '../progress.js'
 import { teardownInTerminal } from './teardown.js'
 
-export const summary = 'Uninstall a mod through Claude Code and run its uninstall step.'
+export const summary = "Uninstall any plugin through Claude Code, and run a mod's uninstall step."
 
 export const help = `Usage: cmod remove <name>
 
 ${summary}
 
-Uninstalls the mod through Claude Code, then runs the uninstall step CMod saved
-when it set the mod up.`
+Uninstalls the plugin through Claude Code. When CMod set the plugin up as a
+mod, then runs the uninstall step CMod saved and removes what CMod set up.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
@@ -21,7 +21,7 @@ export async function run(argv: string[]): Promise<number> {
   const installed = (await listPlugins()).find((plugin) => plugin.name === name || plugin.id === name)
   const pluginName = installed?.name ?? name
   const record = await readRecord(readText, storeFolder(process.env), pluginName)
-  if (installed === undefined && record === undefined) throw new Error(`${name} is neither installed nor set up. cmod list shows the mods.`)
+  if (installed === undefined && record === undefined) throw new Error(`${name} is neither installed nor set up. cmod list shows every plugin.`)
 
   const progress = startProgress()
   if (installed !== undefined) {

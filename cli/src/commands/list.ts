@@ -1,20 +1,21 @@
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { readRecord, storeFolder } from 'cmod-sdk/src/records.js'
 import { listPlugins } from '../claude.js'
 import { readText } from '../files.js'
-import { isModFolder, readPlugin, type Plugin } from '../plugin.js'
+import { readPlugin, usesCmod, type Plugin } from '../plugin.js'
 import { linkedFolders } from '../settings.js'
 import { recordNames } from '../store.js'
 
-export const summary = 'List the mods Claude Code has, and what CMod set up.'
+export const summary = 'List every plugin Claude Code has, and what CMod set up.'
 
 export const help = `Usage: cmod list
 
 ${summary}
 
-Lists every mod Claude Code has installed or linked, with its version and
-whether CMod set it up, and every mod Claude Code removed whose uninstall step
+Lists every plugin Claude Code has installed or linked, with its version. A
+mod shows whether CMod set it up, and any other plugin shows whether Claude
+Code enabled it. Also lists every mod Claude Code removed whose uninstall step
 has not run yet.`
 
 type Row = { name: string; version: string; state: string }
@@ -30,13 +31,13 @@ export async function run(argv: string[]): Promise<number> {
       rows.push({ name: installed.id, version: installed.version, state: `${installed.installPath} is missing: run claude plugin update ${installed.id}` })
       continue
     }
-    if (!(await isModFolder(installed.installPath))) continue
-    const plugin = await readPlugin(installed.installPath)
-    shown.add(plugin.name)
-    loadedRoots.add(plugin.root)
-    const origin = installed.scope === 'session' ? `linked from ${plugin.root}, ` : ''
-    const disabled = `disabled${installed.errors.length > 0 ? `: ${installed.errors.join('; ')}` : ''}`
-    rows.push({ name: installed.id, version: plugin.version, state: installed.enabled ? `${origin}${await setupState(plugin)}` : `${origin}${disabled}` })
+    const root = realpathSync(installed.installPath)
+    loadedRoots.add(root)
+    const mod = (await usesCmod(root, installed.name)) ? await readPlugin(root) : undefined
+    if (mod !== undefined) shown.add(mod.name)
+    const origin = installed.scope === 'session' ? `linked from ${root}, ` : ''
+    const state = !installed.enabled ? `disabled${installed.errors.length > 0 ? `: ${installed.errors.join('; ')}` : ''}` : mod === undefined ? 'enabled' : await setupState(mod)
+    rows.push({ name: installed.id, version: mod?.version ?? installed.version, state: `${origin}${state}` })
   }
   for (const folder of await linkedFolders()) {
     if (!existsSync(`${folder}/.claude-plugin/plugin.json`)) {
@@ -55,7 +56,7 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   if (rows.length === 0) {
-    process.stdout.write('No mods. cmod install <owner/repo> installs one, and cmod new <name> starts one.\n')
+    process.stdout.write('No plugins. cmod install <owner/repo> installs one, and cmod new <name> starts a mod.\n')
     return 0
   }
   const nameWidth = Math.max(4, ...rows.map((row) => row.name.length))
