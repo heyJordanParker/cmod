@@ -318,3 +318,25 @@ test('cmod list shows a plugin with no cmod steps as Claude Code holds it', asyn
   )
   expect(existsSync(storeOf(home))).toBe(false)
 })
+
+test('cmod list shows the CMod plugin ready when the cmod program is its version, with no record', async () => {
+  const home = await marketplaceHome({})
+  const cmodVersion = JSON.parse(await readFile(join(import.meta.dir, '..', 'package.json'), 'utf8')).version
+  const cmodPluginAt = (version: string) => ({
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version }),
+    'package.json': JSON.stringify({ name: 'cmod', private: true, cmod: { program: 'cmod' } }),
+  })
+  await writeFiles(join(home, 'plugins/cmod'), cmodPluginAt(cmodVersion))
+  await writeFiles(home, { 'installed/cmod@cmod': JSON.stringify({ id: 'cmod@cmod', version: cmodVersion, scope: 'user', enabled: true, installPath: join(home, 'plugins/cmod') }) })
+
+  const current = await cmod(home, 'list')
+
+  expect(current.stdout).toBe(`NAME       VERSION  STATE\ncmod@cmod  ${cmodVersion.padEnd(7)}  ready\n`)
+
+  await writeFiles(join(home, 'plugins/cmod'), cmodPluginAt('9.9.9'))
+
+  const behind = await cmod(home, 'list')
+
+  expect(behind.stdout).toBe(`NAME       VERSION  STATE\ncmod@cmod  9.9.9    the cmod program is ${cmodVersion}: start a Claude Code session to fetch 9.9.9\n`)
+  expect(existsSync(storeOf(home))).toBe(false)
+})

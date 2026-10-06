@@ -326,6 +326,10 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     },
     async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>> {
       if (event === 'classic.SessionStart') missedSessionStart = undefined
+      if (event === 'classic.SessionStart' && runtime === undefined) {
+        missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
+        return next(e)
+      }
       if (shouldRecord && event === 'classic.UserPromptSubmit') record()
       await (event === 'classic.SessionStart' ? holdSessionStart() : whenActive())
       if (event === 'classic.SessionStart' && phase !== 'active') missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>

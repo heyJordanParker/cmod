@@ -1218,6 +1218,21 @@ test('a mod whose install finished before SessionStart runs its SessionStart hoo
   expect(sources).toEqual(['startup'])
 })
 
+test('a SessionStart before session.start, as claude -p sends it, passes on at once and replays once the mod starts', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const { sources, definition } = sessionStartMod()
+  const lifecycle = createLifecycle(definition)
+
+  expect(await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})).toEqual({})
+  expect(sources).toEqual([])
+
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect(sources).toEqual(['startup'])
+  expect(fake.shown.debug).toEqual([unreadSessionStart])
+})
+
 test('a SessionStart held past the limit passes on and replays once the mod starts', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []

@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { readRecord, storeFolder } from 'cmod-sdk/src/records.js'
+import { version as cmodVersion } from '../../package.json'
 import { listPlugins } from '../claude.js'
 import { readText } from '../files.js'
 import { readPlugin, usesCmod, type Plugin } from '../plugin.js'
@@ -67,6 +68,7 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function setupState(plugin: Plugin): Promise<string> {
+  if (plugin.name === 'cmod') return plugin.version === cmodVersion ? 'ready' : `the cmod program is ${cmodVersion}: start a Claude Code session to fetch ${plugin.version}`
   const record = await readRecord(readText, storeFolder(process.env), plugin.name)
   if (record === undefined) return `not set up: run cmod setup ${plugin.root}`
   if (record.version !== plugin.version) return `set up at ${record.version}: run cmod setup ${plugin.root}`
