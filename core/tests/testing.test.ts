@@ -211,6 +211,19 @@ test("tested.lines shows an Image's alt text", async () => {
   expect(await tested.lines('diagram')).toEqual(['Login flow', 'A login flow diagram'])
 })
 
+test("lines draws a pane with the scroll and view Claude Code passes, the main conversation's at the top", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'scroller',
+      setup(mod) {
+        void mod.ui.pane({ id: 'rows', title: 'Rows', render: (_mod, { scroll, view }) => Text({ children: `${scroll.offset} of ${scroll.bodyRows} rows, ${view.agentId ?? 'main'}` }) }).open()
+      },
+    }),
+  )
+
+  expect(await tested.lines('rows')).toEqual(['0 of 24 rows, main'])
+})
+
 test('lines refuses a pane that is not open', async () => {
   const tested = testMod(notes)
   const refusal = `The pane "notes" of notes is not open, and a user sees a pane only while it is open. Open it first with tested.type('/notes'), or with pane.open() in the mod.`

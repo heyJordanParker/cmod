@@ -36,6 +36,7 @@ export type PaneHandle = {
   readonly isOpen: boolean
 }
 
+export type { Claude, RoutedEvent, RoutedHook, ToolCalls }
 export { longestMs } from './runtime/deadline.js'
 export { notInstalled } from './runtime/dependencies.js'
 export { messageOf } from './utils/text.js'

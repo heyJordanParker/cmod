@@ -255,7 +255,7 @@ prompt<State>(options: {
 - With `when` or `after`, the text goes to Claude under the heading `# <name>`.
 - A `prompt` function that returns `undefined` or `''` adds nothing. One that throws adds nothing, and the error goes to Claude Code's debug log.
 - `name` cannot be blank. `when` and `after` together throw: add a second `prompt` for the other trigger. Two prompts with one name in a mod throw.
-- A `when` prompt runs on `prompt.submit` and adds its text to the event it passes down, so a test reads it with a spy part. [testing.md](testing.md#test-a-prompt-with-when) shows how.
+- A `when` prompt runs on `prompt.submit` and adds its text to the event it passes down. In a test, `fire('prompt.submit', …)` returns that text in the answer's `context`. [testing.md](testing.md#test-a-prompt-with-when) shows how.
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -387,7 +387,7 @@ export const timer = defineMod({
 
 ### The claude members
 
-`mod.js` does not export the types `Claude`, `RoutedEvent`, `RoutedHook`, or `ToolCalls`. A job of your own types `claude` through `PartContext`, such as `PartContext['claude']`, or lets `Part` infer it.
+`mod.js` exports the types `Claude`, `RoutedEvent`, `RoutedHook`, and `ToolCalls`, so a job of your own names them in its own helpers, such as `(claude: Claude, calls: ToolCalls): RoutedHook<'command.run'> => …`.
 
 Each member calls the member of the same name in Claude Code's hooks API, `$`, with the same arguments. The `env` members read `$.env.get` instead.
 
@@ -440,13 +440,11 @@ The built-in jobs are written from these building blocks, which a job of your ow
 | `jobs/part-context.js` | `modWithin(part, deadline, workTree?)` | A `mod` whose calls fail at `deadline`, `{ ms, job?, longestMs? }`. |
 | `jobs/part-context.js` | `modOf(part, { call?, folder }, workspace, deadline)` | `modWithin`, with `mod.process` calls run in the call's work tree. |
 | `jobs/part-context.js` | `workspaceReader(part)` | A function that reads the session's `projectRoot`, `cwd`, `home`, file access, and project scope. |
-| `jobs/part-context.js` | `targetWords(target)` | A target in words, such as `edits to src/**`. |
-| `jobs/permissions/match-target.js` | `targetOf`, `matchTarget`, `folderInScope`, and the types `Target`, `TargetKey`, `TargetOf`, `TargetCalls`, `MatchedCall` | Checks a target and matches it against a call. |
 | `jobs/permissions/decide-permission.js` | `decidePermission`, `stricterVerdict`, and the types `Rule`, `PermissionRules`, `Decision`, `Verdict` | Decides a call against permission rules. |
 | `jobs/permissions/find-project-scope.js` | `findProjectScope`, and the types `ProjectScope`, `Workspace` | Finds the repository a project plugin belongs to. |
 
-`matchTarget` and `folderInScope` take a `CallEffects`, the files, URLs, and commands of one call. Only the internal `utils/call-effects.js` makes one, and no export does. So a job of your own reaches permission matching through the `permissions` and `check` jobs, not through `matchTarget`.
+A job of your own matches calls against targets through the `permissions`, `check`, and `prompt` jobs. A `prompt` with `after` runs any code after a matching call, and may add no text: `prompt({ name: 'commits', after: { command: 'git commit' }, prompt: (_input, mod) => { mod.state.project.commits += 1; return undefined } })`.
 
 ## Test a job
 
-`tested.type('/todo milk')` runs a slash command. `tested.callTool('open_ticket', { title: 'Crash' })` runs the permission rules, then the tool. `tested.fire('tool.check', …)` asks the permission rules about any call. `tested.fire('prompt.submit', …)` with a spy part tests a `when` prompt. [testing.md](testing.md) covers each.
+`tested.type('/todo milk')` runs a slash command. `tested.callTool('open_ticket', { title: 'Crash' })` runs the permission rules, then the tool. `tested.fire('tool.check', …)` asks the permission rules about any call. `tested.fire('prompt.submit', …)` returns the context a `when` prompt added. [testing.md](testing.md) covers each.

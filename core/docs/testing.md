@@ -80,7 +80,8 @@ fire<N extends RoutedEvent>(event: N, input: Args<N>, below?): Promise<EventResu
 
 - `fire('UserPromptSubmit', { prompt: 'hello' })` runs the mod's hooks on a `ModEvent`. `TestInput<E>` is the event's input without the fields `fire` fills: `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and a new `tool_use_id` for each tool event.
 - For a tool event, `files` is worked out from the call and the test's `files`, as in Claude Code.
-- `below` is what the hooks beneath the mod answered, `{}` by default. Pass it to test how the mod's answer combines with another, such as a `deny` beneath. When nothing in the mod answers, `fire` returns `below` as it is.
+- `below` is what the hooks beneath the mod answered. Pass it to test how the mod's answer combines with another, such as a `deny` beneath. When nothing in the mod answers, `fire` returns `below` as it is.
+- Left out, `below` is `{}`, except on `prompt.submit`, where it is what Claude Code answers: the prompt that entered, `{ text, context, origin }`, with the `context` the mod's hooks added.
 - It returns the combined answer in Claude Code's own field names: `additionalContext` is a list, a `PreToolUse` decision is `allow: true`, or the key `ask` or `deny` with the reason as its value, and `decision: 'block'` is `block`.
 - `fire('tool.check', { tool: 'Edit', input: { … }, tool_use_id: 'toolu_1' }, { decision: 'allow' })` asks the mod's permission rules about any call. A name with a dot fires that Claude Code hook-module event as it is.
 
@@ -100,10 +101,10 @@ test('a force push is denied with the reason', async () => {
 
 ### Test a prompt with when
 
-A `prompt` with `when` runs on the hook-module event `prompt.submit`, not on `UserPromptSubmit`, so `fire('UserPromptSubmit', …)` never reaches it. It adds its text to the `context` field of the event it passes down, and `fire` returns `below`, so the answer does not show the text either. Read it with a spy part used after the prompt, which sees the event the prompt passes down:
+A `prompt` with `when` runs on the hook-module event `prompt.submit`, not on `UserPromptSubmit`, so `fire('UserPromptSubmit', …)` never reaches it. `fire('prompt.submit', …)` returns the prompt that entered, with the text the prompt added in its `context`:
 
 - The `prompt.submit` input is `{ text, wait, origin }`. A prompt the person typed has `wait: false` and `origin: { kind: 'composer' }`.
-- `context` is a list of strings, each `# <name>\n<text>`. It is `undefined` when no prompt added anything.
+- `context` is a list of strings, each `# <name>\n<text>`. The answer has no `context` when no prompt added anything.
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -119,35 +120,18 @@ export const release = defineMod({
 
 ```ts
 import { expect, test } from 'bun:test'
-import { defineMod, type Part } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { release } from '../src/mod.js'
 
-function contextBelow(passedOn: unknown[]): Part<void> {
-  return ({ on }) => {
-    on('prompt.submit', async (e, next) => {
-      passedOn.push(e.context)
-      return next(e)
-    })
-  }
-}
-
 test('a prompt about a release gets the release steps, and another prompt gets nothing', async () => {
-  const passedOn: unknown[] = []
-  const tested = testMod(
-    defineMod({
-      ...release,
-      setup(mod) {
-        release.setup(mod)
-        mod.use(contextBelow(passedOn))
-      },
-    }),
-  )
+  const tested = testMod(release)
+  const typed = { wait: false, origin: { kind: 'composer' } } as const
 
-  await tested.fire('prompt.submit', { text: 'Cut a release', wait: false, origin: { kind: 'composer' } }, { text: '' })
-  await tested.fire('prompt.submit', { text: 'Fix the bug', wait: false, origin: { kind: 'composer' } }, { text: '' })
+  const aboutRelease = await tested.fire('prompt.submit', { text: 'Cut a release', ...typed })
+  const aboutBug = await tested.fire('prompt.submit', { text: 'Fix the bug', ...typed })
 
-  expect(passedOn).toEqual([['# release-steps\nRun bun run release, then push the tag.'], undefined])
+  expect(aboutRelease).toEqual({ text: 'Cut a release', context: ['# release-steps\nRun bun run release, then push the tag.'], origin: typed.origin })
+  expect(aboutBug).toEqual({ text: 'Fix the bug', origin: typed.origin })
 })
 ```
 
@@ -157,7 +141,7 @@ Waits until the work a hook started without awaiting it has run, such as a `void
 
 ### lines
 
-- `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused`, `bodyColumns`, and `placement: 'dock'`, and no `scroll` or `view`, so a render that reads those two gets `undefined` in a test.
+- `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused: false`, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`, the main conversation's view.
 - `lines(slot, props, requestId?)` draws a slot render with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the render changed. Draw `slots.AssistantMessage` with a reply's `text` to test a markdown slot render. Draws that pass one `requestId` grow one streamed reply.
 
 ```ts

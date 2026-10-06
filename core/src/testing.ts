@@ -1,4 +1,4 @@
-import type { Args, ClassicHookInputs, CmodDependencies, CommandPresentation, CommandRunResult, EventResult, Frozen, PaneOpenArgs, RenderChildren, RenderComponent, RenderElement } from 'claude-code'
+import type { Args, ClassicHookInputs, CmodDependencies, CommandPresentation, CommandRunResult, EventResult, Frozen, PaneOpenArgs, RenderChildren, RenderComponent, RenderElement, RenderPropsOf } from 'claude-code'
 import type { Reply } from './jobs/slash-command.js'
 import type { ModDefinition, ModEvent } from './mod.js'
 import { storeFolder } from './records.js'
@@ -45,6 +45,8 @@ export type TestedMod<State extends object> = {
 
 const defaultColumns = 80
 
+const defaultRows = 24
+
 const presentation: CommandPresentation = { isFullscreen: false, columns: defaultColumns }
 
 const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] satisfies readonly ModEvent[]
@@ -87,7 +89,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
 
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {
     await start()
-    return lifecycle.route(event, input as Frozen<Args<N>>, async () => below as EventResult<N>)
+    return lifecycle.route(event, input as Frozen<Args<N>>, async (e) => (below ?? claudeCodeAnswer(event, e)) as EventResult<N>)
   }
 
   const drawPane = async (paneId: string) => {
@@ -98,7 +100,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
     }
     const opened = fake.calls.findLast((call) => call.call === 'ui.open' && (call.args[0] as PaneOpenArgs).id === paneId)?.args[0] as PaneOpenArgs | undefined
     const columns = opened?.columns ?? defaultColumns
-    const props = { title: opened?.title ?? paneId, isFocused: false, bodyColumns: columns, placement: 'dock' }
+    const props: RenderPropsOf['Pane'] = { title: opened?.title ?? paneId, isFocused: false, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: defaultRows }, view: {} }
     const drawing = await route('ui.render', { surface: 'terminal', component: 'Pane', requestId: paneId, props }, elements.Box({}))
     return { drawing, columns }
   }
@@ -110,7 +112,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
     return { drawing, columns: defaultColumns }
   }
 
-  const fire = ((event: string, input: object, below: unknown = {}) => {
+  const fire = ((event: string, input: object, below?: unknown) => {
     if (event.includes('.')) return route(event as RoutedEvent, input, below)
     if (event === 'SessionStart') sessionId = (input as { session_id?: string }).session_id ?? sessionId
     if (event === 'UserPromptSubmit') {
@@ -190,6 +192,12 @@ function fakeDependencies(dependencies: NonNullable<TestOptions<object>['depende
     if (answer.deny !== undefined) throw new Error(answer.deny)
     return answer.value
   }
+}
+
+function claudeCodeAnswer(event: RoutedEvent, e: unknown): unknown {
+  if (event !== 'prompt.submit') return {}
+  const { text, context, origin } = e as Args<'prompt.submit'>
+  return { text, ...(context === undefined ? {} : { context }), origin }
 }
 
 function plainOutput({ component, props }: Args<'ui.render'>): RenderElement {

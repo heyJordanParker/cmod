@@ -119,29 +119,22 @@ test('a block with the same name below adds nothing and writes one debug line', 
   expect(tested.shown.logs).toEqual(['notes added the currentDate prompt.'])
 })
 
-const submitted = (text: string) => ({ text, wait: false, origin: { kind: 'user' } }) as never
-const entered = { text: '' } as never
-
-function contextBelow(passedOn: unknown[]): Part<void> {
-  return (part) => {
-    part.on('prompt.submit', async (e, next) => {
-      passedOn.push(e.context)
-      return next(e)
-    })
-  }
-}
+const typed = { wait: false, origin: { kind: 'composer' } } as const
 
 test('a prompt with when adds its text beside each user prompt that when accepts', async () => {
-  const passedOn: unknown[] = []
-  const byPattern = withPrompt(prompt({ name: 'release', prompt: ({ userPrompt }) => `Release steps for: ${userPrompt}`, when: /\brelease\b/i }), contextBelow(passedOn))
-  const byFunction = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: (userPrompt) => userPrompt.startsWith('ship') }), contextBelow(passedOn))
+  const byPattern = withPrompt(prompt({ name: 'release', prompt: ({ userPrompt }) => `Release steps for: ${userPrompt}`, when: /\brelease\b/i }))
+  const byFunction = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: (userPrompt) => userPrompt.startsWith('ship') }))
 
-  await byPattern.fire('prompt.submit', submitted('Cut a Release'), entered)
-  await byPattern.fire('prompt.submit', submitted('Fix the bug'), entered)
-  await byFunction.fire('prompt.submit', submitted('ship it'), entered)
-
-  expect(passedOn).toEqual([['# release\nRelease steps for: Cut a Release'], undefined, ['# release\nRun bun run release.']])
+  expect(await byPattern.fire('prompt.submit', { text: 'Cut a Release', ...typed })).toEqual({ text: 'Cut a Release', context: ['# release\nRelease steps for: Cut a Release'], origin: typed.origin })
+  expect(await byPattern.fire('prompt.submit', { text: 'Fix the bug', ...typed })).toEqual({ text: 'Fix the bug', origin: typed.origin })
+  expect(await byFunction.fire('prompt.submit', { text: 'ship it', ...typed })).toEqual({ text: 'ship it', context: ['# release\nRun bun run release.'], origin: typed.origin })
   expect(byPattern.shown.logs).toEqual(['notes added the release prompt after matching user prompts.'])
+})
+
+test('fire answers prompt.submit with the below it is given, as the hooks beneath the mod would', async () => {
+  const tested = withPrompt(prompt({ name: 'release', prompt: 'Run bun run release.', when: /release/ }))
+
+  expect(await tested.fire('prompt.submit', { text: 'release', ...typed }, { drop: 'another hook dropped it' })).toEqual({ drop: 'another hook dropped it' })
 })
 
 test('a callback that throws adds nothing and writes one debug line', async () => {

@@ -5,7 +5,7 @@ import { findProjectScope, type Workspace } from '../../src/jobs/permissions/fin
 import { prompt } from '../../src/jobs/prompt.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { tool } from '../../src/jobs/tool.js'
-import { defineMod, type PartContext } from '../../src/mod.js'
+import { defineMod, type Claude, type PartContext, type RoutedEvent, type RoutedHook, type ToolCalls } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
 
@@ -53,6 +53,24 @@ test("in any other plugin, a callback's mod.process.run runs in the session's fo
   await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
 
   expect(fake.calls.find((call) => call.call === 'process.run')?.args[1]).toEqual({ timeoutMs: 2000 })
+})
+
+test('a job of your own names the Claude, RoutedEvent, RoutedHook, and ToolCalls types that mod.js exports', async () => {
+  const event = 'command.run' satisfies RoutedEvent
+  const answerWhere =
+    (claude: Claude, calls: ToolCalls): RoutedHook<typeof event> =>
+    async (e, next) =>
+      e.command === 'where' ? { text: `${claude.plugin.name} ${calls.cwdOf('toolu_1') ?? 'before any call'}` } : next(e)
+  const tested = testMod(
+    defineMod({
+      name: 'where',
+      setup(mod) {
+        mod.use(({ on, claude, toolCalls }) => on(event, answerWhere(claude, toolCalls)))
+      },
+    }),
+  )
+
+  expect(await tested.type('/where')).toEqual({ text: 'where before any call' })
 })
 
 test('targetWords names each target in words a user reads', () => {
