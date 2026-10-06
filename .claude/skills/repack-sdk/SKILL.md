@@ -7,8 +7,8 @@ description: Get a cmod-sdk change into the code that runs it, because every mod
 
 A consumer runs what was packed, never what is in `sdk/src/`. Prove the package, not the tree.
 
-- The consumers are the CMod plugin at the repository root and the sample mods. Each depends on `sdk/cmod-sdk-<version>.tgz`.
-- A mod reaches cmod-sdk only as real files in its own `node_modules`, because Claude Code refuses a symbolic link there. A `file:` folder dependency installs one link per file, so every mod depends on the tarball.
+- The consumers are the CMod plugin at the repository root and the sample mods. Each depends on cmod-sdk from npm, so `bun install` gives them the published version, never this change.
+- A mod reaches cmod-sdk only as real files in its own `node_modules`, because Claude Code refuses a symbolic link there.
 - The cmod program is the exception: `cli/` depends on the `sdk/` folder through those per-file links, so it reads `sdk/src/` edits with no repack.
 
 ## 1. Register a new source folder
@@ -30,15 +30,18 @@ Run `env -C sdk bun pm pack`. It writes `sdk/cmod-sdk-<version>.tgz`.
 ### Check the tarball's file list against the change
 `tar -tzf sdk/cmod-sdk-<version>.tgz` lists each module the change added under `package/`, and no module it renamed or deleted.
 
-## 4. Reinstall every consumer from an empty cache
+## 4. Unpack the tarball into every consumer
 
-The consumers, from the repository root, are `.`, `../file-tree`, and `../architecture-diagrams`. Bun caches a `file:` tarball by name and version, so `bun install --force` alone installs the stale copy again.
+The consumers, from the repository root, are `.`, `../file-tree`, and `../architecture-diagrams`. Unpacking replaces the installed cmod-sdk and leaves `package.json` and `bun.lock` on the npm version. `bun add` of the tarball fails with a dependency loop.
 Template:
-    bun install --cwd <consumer> --force --cache-dir <a new empty folder under /private/tmp>
+    tar -xzf sdk/cmod-sdk-<version>.tgz -C <consumer>/node_modules/cmod-sdk --strip-components=1
 
 IF the change edits `dependencies` in `sdk/package.json`:
-### Delete each consumer's `bun.lock` before the reinstall, and commit the root's regenerated `bun.lock`
-A consumer's `bun.lock` saves the tarball's dependency list, and `bun install --force` and `bun update cmod-sdk` keep that list, so a new dependency never reaches the consumer.
+### Run `bun add --cwd <consumer> --no-save <dependency>@<range>` for each new dependency
+Unpacking copies files only, so a dependency the published version lacks is missing until the next npm release.
+
+IF the work is done with the change:
+### Run `bun install --cwd <consumer> --force` to put the npm version back
 
 ### Check each consumer holds the new build
 `diff -rq sdk/runtime <consumer>/node_modules/cmod-sdk/runtime` prints nothing.
