@@ -395,6 +395,19 @@ test("the CMod plugin runs its bootstrap from its root, and its mod.dataFolder n
   expect(folder).toBe('/home/.local/share/cmod/data/cmod')
 })
 
+test('the CMod plugin counts as installed when the cmod program is its version or newer', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "cmod", "version": "0.1.10" }' }))
+  const installedWith = async (program: string) => {
+    fake.fakes.process.run = async () => ({ exitCode: 0, stdout: `${program}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+    return (await readPlugin(fake.claude)).isInstalled
+  }
+
+  expect(await installedWith('0.1.10')).toBe(true)
+  expect(await installedWith('0.2.0')).toBe(true)
+  expect(await installedWith('0.1.9')).toBe(false)
+})
+
 test('readPlugin reads the install step, the version, and whether the record matches the scripts', async () => {
   const files: Record<string, string> = {
     [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',

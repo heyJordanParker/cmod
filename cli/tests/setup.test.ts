@@ -2,8 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { parseEvent, readRecord, recordPath } from 'cmod-sdk/src/records.js'
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
+import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listFiles, readText } from '../src/files.js'
 import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
 
@@ -67,7 +67,7 @@ async function createProgramMod(home: string, repository: string): Promise<strin
   return root
 }
 
-const sdkLifecycle = join(import.meta.dir, '..', '..', 'sdk', 'src', 'runtime', 'lifecycle.ts')
+const coreLifecycle = join(import.meta.dir, '..', '..', 'core', 'src', 'runtime', 'lifecycle.ts')
 
 const claudeOnDisk = (home: string, plugin: { name: string; root: string }) => ({
   plugin,
@@ -199,7 +199,7 @@ test('the CLI and the SDK hash a mod with a nested setup/lib and a symbolic link
   const asked = parseEvent((await cmod(home, 'setup', root, '--events')).stdout.trim())
   if (asked.kind !== 'needs-consent') throw new Error(`cmod setup printed ${asked.kind}, not needs-consent`)
   expect((await cmod(home, 'setup', root, '--events', '--consent', asked.sha256)).exitCode).toBe(0)
-  const { readPlugin } = await import(sdkLifecycle)
+  const { readPlugin } = await import(coreLifecycle)
 
   const plugin = await readPlugin(claudeOnDisk(home, { name: 'demo', root }))
 
@@ -247,7 +247,7 @@ test('a step that runs make -C setup is refused at setup', async () => {
     'setup/Makefile': 'all:\n\techo installed\n',
   })
   const refusal = 'package.json "cmod.install" runs "make -C setup", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/install.sh.'
-  const { readPlugin } = await import(sdkLifecycle)
+  const { readPlugin } = await import(coreLifecycle)
 
   const result = await cmod(home, 'setup', root, '--yes')
 
@@ -263,7 +263,7 @@ test('a link to a folder in a step folder is refused', async () => {
   await writeFiles(root, { 'shared/lib.sh': 'echo shared\n' })
   await symlink('../shared', join(root, 'setup/shared'))
   const refusal = './setup/shared links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.'
-  const { readPlugin } = await import(sdkLifecycle)
+  const { readPlugin } = await import(coreLifecycle)
 
   const result = await cmod(home, 'setup', root, '--yes')
 
@@ -278,7 +278,7 @@ test('a link to nothing in a step folder is refused', async () => {
   const root = await createMod(home)
   await symlink('../missing.sh', join(root, 'setup/missing.sh'))
   const refusal = './setup/missing.sh links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.'
-  const { readPlugin } = await import(sdkLifecycle)
+  const { readPlugin } = await import(coreLifecycle)
 
   const result = await cmod(home, 'setup', root, '--yes')
 

@@ -1,15 +1,15 @@
 .DS_Store
 node_modules/
 .claude-plugin/types/
-sdk/*.js
-sdk/*.d.ts
-sdk/*.d.ts.map
-sdk/runtime/
-sdk/jobs/
-sdk/testing/
-sdk/ui/
-sdk/utils/
-sdk/*.tgz
+core/*.js
+core/*.d.ts
+core/*.d.ts.map
+core/runtime/
+core/jobs/
+core/testing/
+core/ui/
+core/utils/
+*.tgz
 cli/dist/
 
 # agent Evidence directories and Plans: session work product, never committed

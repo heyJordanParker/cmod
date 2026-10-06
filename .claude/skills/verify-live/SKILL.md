@@ -5,7 +5,7 @@ description: Prove a CMod behavior in a real Claude Code session, because the te
 
 # Verify Live
 
-The test kit's fake Claude Code (`sdk/src/testing/fake-claude.ts`, driven by `testMod`) is a model of Claude Code, and the session is the truth. A behavior only a session shows is proven only in a session.
+The test kit's fake Claude Code (`core/src/testing/fake-claude.ts`, driven by `testMod`) is a model of Claude Code, and the session is the truth. A behavior only a session shows is proven only in a session.
 
 ## 1. Name each claim only a session proves
 
@@ -14,9 +14,9 @@ List each claim of the change that depends on Claude Code itself: which events f
 These Facts were observed in Claude Code 2.1.289. Under a newer `claude --version`, the run proves each one it relies on again.
 
 - `/cd` fires the engine event `command.run` with `command: 'cd'`, and no classic hook. When its `next(e)` resolves, `$.session.root()` returns the new project, and `$.session.cwd()` still returns the old folder until the next prompt.
-- `classic.CwdChanged` fires only after a Bash command changes the shell's folder, and only when a settings or `hooks.json` hook for `CwdChanged` or `FileChanged` exists, which a cmod mod never has. The SDK fires `CwdChanged` to a mod's own hooks from `followSession` in `sdk/src/runtime/lifecycle.ts`.
+- `classic.CwdChanged` fires only after a Bash command changes the shell's folder, and only when a settings or `hooks.json` hook for `CwdChanged` or `FileChanged` exists, which a cmod mod never has. The SDK fires `CwdChanged` to a mod's own hooks from `followSession` in `core/src/runtime/lifecycle.ts`.
 - A Bash `cd` moves the cwd, never `$.session.root()`.
-- Claude Code fires `classic.SessionStart` before every mod's `setup` has finished, and gives each hook 10 seconds. The SDK holds it at most 9 seconds for a mod to start (`sessionStartHoldMs` in `sdk/src/runtime/lifecycle.ts`). A mod that starts later runs its SessionStart hooks then, and Claude Code never reads their answer.
+- Claude Code fires `classic.SessionStart` before every mod's `setup` has finished, and gives each hook 10 seconds. The SDK holds it at most 9 seconds for a mod to start (`sessionStartHoldMs` in `core/src/runtime/lifecycle.ts`). A mod that starts later runs its SessionStart hooks then, and Claude Code never reads their answer.
 - Elements built by Claude Code's `Box` are opaque: a render reads no `props` or `children` from them.
 - The condensed `ToolGroup` row and the permission dialog draw from data no render changes.
 - A hook cannot read `addMargin`.
@@ -36,7 +36,7 @@ Template:
     env -i HOME=<scratch>/home CLAUDE_CONFIG_DIR=<scratch>/home/.claude ANTHROPIC_BASE_URL=http://127.0.0.1:8317 ANTHROPIC_API_KEY=isolated-probe-placeholder CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CMOD_DIST_SERVER=file://<scratch>/releases PATH=<scratch>/home/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin TERM=xterm-256color LANG=en_US.UTF-8 tmux -S <scratch>/tmux.sock new-session -d -s <session> -x 200 -y 50 -c <project> '<absolute path of claude> --debug-file <scratch>/logs/debug-1.log'
 
 ### Install the mods from a local directory marketplace
-Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-sdk, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The CMod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases.
+Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-core, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The CMod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases.
 
 ## 3. Write the run book
 

@@ -1,6 +1,6 @@
 import { mkdir, readdir, rename } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 
 export async function readText(path: string): Promise<string | undefined> {
   return Bun.file(path)

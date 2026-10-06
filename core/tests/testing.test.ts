@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { ProcessRunResult } from 'claude-code'
-import type { Fakes, TestCall } from 'cmod-sdk/testing.js'
+import type { Fakes, TestCall } from '@cmodjs/core/testing.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { statusLine } from '../src/jobs/status-line.js'
@@ -428,7 +428,7 @@ test('after moveTo another project, Claude Code reports the new root at once and
   expect(await reported()).toEqual(['/work/b', '/work/b'])
 })
 
-test('a test helper names the Fakes and TestCall types that cmod-sdk/testing.js exports', async () => {
+test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing.js exports', async () => {
   const onMain = (fakes: Fakes) => {
     fakes.process.run = async () => ({ exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   }

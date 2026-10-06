@@ -204,7 +204,7 @@ function replyOf({ text, context }: CommandRunResult): Reply {
 function installJsx(): void {
   const scope = globalThis as unknown as Record<string, unknown>
   scope['h'] ??= (tag: unknown, props: Record<string, unknown> | null, ...children: unknown[]) => {
-    if (typeof tag !== 'function') throw new Error(`JSX tag "${String(tag)}" is not an element. Import elements such as Box from node_modules/cmod-sdk/ui/elements.js.`)
+    if (typeof tag !== 'function') throw new Error(`JSX tag "${String(tag)}" is not an element. Import elements such as Box from node_modules/@cmodjs/core/ui/elements.js.`)
     return tag({ ...props, children })
   }
   scope['Fragment'] ??= (props: { children?: RenderChildren }) => elements.Box({ flexDirection: 'column', children: props.children })

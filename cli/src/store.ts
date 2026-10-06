@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { isObject, recordPath, storeFolder } from 'cmod-sdk/src/records.js'
+import { isObject, recordPath, storeFolder } from '@cmodjs/core/src/records.js'
 import { readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
 import { interruptProgress } from './progress.js'

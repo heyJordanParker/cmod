@@ -1,5 +1,5 @@
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
 import { version } from '../package.json'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import * as check from './commands/check.js'
 import * as download from './commands/download.js'
 import * as install from './commands/install.js'

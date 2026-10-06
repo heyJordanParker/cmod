@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { changePlugin, listPlugins } from '../claude.js'
 import { usesCmod } from '../plugin.js'
 import { startProgress } from '../progress.js'

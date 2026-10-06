@@ -189,6 +189,16 @@ export function parseEvent(line: string): RunnerEvent {
   return { kind: 'log', text: line.replace(/^log /, '') }
 }
 
+export function isAtLeast(version: string, minimum: string): boolean {
+  const parts = version.split('.').map(Number)
+  const least = minimum.split('.').map(Number)
+  for (let index = 0; index < Math.max(parts.length, least.length); index += 1) {
+    const difference = (parts[index] ?? 0) - (least[index] ?? 0)
+    if (difference !== 0) return difference > 0
+  }
+  return true
+}
+
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

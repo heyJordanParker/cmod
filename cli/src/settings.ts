@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { isObject } from 'cmod-sdk/src/records.js'
+import { isObject } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse } from 'jsonc-parser'
 import { home, readText, tilde, writeAtomically } from './files.js'
 

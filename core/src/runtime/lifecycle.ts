@@ -1,6 +1,6 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Mod, ModDefinition, ModEvent, ModHook, PartContext } from '../mod.js'
-import { dataFolder, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
+import { dataFolder, isAtLeast, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -45,7 +45,7 @@ type ActiveMod<State extends object> = {
 
 const cmodPluginName = 'cmod'
 
-const announcedKey = 'cmod-sdk:announced'
+const announcedKey = 'cmod:announced'
 
 const cmodCheckMs = 1000
 
@@ -74,7 +74,10 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   const version = typeof manifest?.version === 'string' ? manifest.version : undefined
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
   const plugin = { name, root, version, store }
-  if (name === cmodPluginName) return { ...plugin, isInstalled: version !== undefined && (await cmodVersion(claude)) === version, shouldRecord: false }
+  if (name === cmodPluginName) {
+    const installed = await cmodVersion(claude)
+    return { ...plugin, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false }
+  }
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {}
   const record = await readRecord(read, store, name)
   if (Object.keys(steps).length === 0) return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version }

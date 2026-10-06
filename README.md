@@ -1,6 +1,6 @@
 # CMod
 
-CMod is the Claude Mod Manager. A mod is a Claude Code plugin built with cmod-sdk. It can add hooks, panes, commands, and tools, and it can run its own install step. CMod installs mods, runs their install and uninstall steps, and helps you build and publish your own.
+CMod is the Claude Mod Manager. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, commands, and tools, and it can run its own install step. CMod installs mods, runs their install and uninstall steps, and helps you build and publish your own.
 
 ## Install a mod
 
@@ -56,23 +56,24 @@ To work on CMod itself, run it from a clone of this repository. In the clone's f
 
 ```sh
 bun install --cwd cli
-bun install --cwd sdk
+bun install --cwd core
 bun cli/src/main.ts link .
 ```
 
-`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code. To build a mod against cmod-sdk changes that are not on npm yet, run `bun run --cwd sdk build`, then `env -C sdk bun pm pack`, and set `CMOD_SDK=file:<clone>/sdk/cmod-sdk-<version>.tgz` before `cmod new`. The build reads `.claude-plugin/types/`, which Claude Code writes the first time a session loads the linked checkout.
+`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code. To build a mod against library changes that are not on npm yet, run `bun run --cwd core build`, then `env -C core bun pm pack`, and set `CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz` before `cmod new`. The build reads `.claude-plugin/types/`, which Claude Code writes the first time a session loads the linked checkout.
 
 Then move out of the clone, such as with `cd ..`, before `cmod new`, so the new mod is not created inside the CMod checkout.
 
 ## Make a mod in 30 seconds
 
 ```sh
+npm i -g @cmodjs/cli
 cmod new my-mod
 cd my-mod
 cmod link
 ```
 
-`cmod new` writes the mod and installs its packages. `cmod link` loads it in every new Claude Code session. The mod lives in `src/`:
+`npm i -g @cmodjs/cli` puts `cmod` on PATH, and `bun add -g @cmodjs/cli` does the same. `bunx @cmodjs/cli new my-mod` runs it once without installing. `cmod new` writes the mod and installs its packages. `cmod link` loads it in every new Claude Code session. The mod lives in `src/`:
 
 ```text
 src/
@@ -87,9 +88,9 @@ src/
 `src/mod.tsx` attaches each part to Claude Code with one line:
 
 ```tsx
-import { defineMod } from '../node_modules/cmod-sdk/mod.js'
-import { Box } from '../node_modules/cmod-sdk/ui/elements.js'
-import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
+import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { slots } from '../node_modules/@cmodjs/core/ui/slots.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
 import { initialState } from './state.js'
@@ -218,8 +219,8 @@ A call runs inside the deadline of the slash command, tool, or other job that ma
 ## What is in this repository
 
 - The root is the CMod plugin. It fetches the cmod program, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.
-- [sdk/](sdk/) is cmod-sdk, the library every mod is built with.
-- [cli/](cli/) is the cmod program.
+- [core/](core/) is `@cmodjs/core` on npm, the library every mod imports.
+- [cli/](cli/) is `@cmodjs/cli` on npm, the `cmod` command, which runs the newest cmod program. It also holds the source of the cmod program, which each GitHub release carries for macOS and Linux.
 
 ## License
 

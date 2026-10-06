@@ -2,8 +2,8 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { version as sdkVersion } from 'cmod-sdk/package.json'
-import { isObject } from 'cmod-sdk/src/records.js'
+import { version as coreVersion } from '@cmodjs/core/package.json'
+import { isObject } from '@cmodjs/core/src/records.js'
 import { version as cmodVersion } from '../../package.json'
 import { tilde, writeAtomically } from '../files.js'
 import { readPlugin } from '../plugin.js'
@@ -47,7 +47,7 @@ export async function run(argv: string[]): Promise<number> {
     .flatMap((dependencies) => Object.entries(isObject(dependencies) ? dependencies : {}))
     .filter(([, spec]) => typeof spec === 'string' && /^(file|link):/.test(spec))
   if (local.length > 0) {
-    throw new Error(`${tilde(plugin.root)}/package.json depends on ${local.map(([name, spec]) => `${name} at ${spec}`).join(', ')}, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "cmod-sdk": "^${sdkVersion}", then run cmod publish again.`)
+    throw new Error(`${tilde(plugin.root)}/package.json depends on ${local.map(([name, spec]) => `${name} at ${spec}`).join(', ')}, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.`)
   }
   const git = (...args: string[]) => runCommand(['git', '-C', plugin.root, ...args])
   if ((await git('rev-parse', '--show-toplevel').catch(() => '')).trim() !== plugin.root) throw new Error(`${plugin.root} is not the root of a git repository. Run git init there and commit the mod.`)

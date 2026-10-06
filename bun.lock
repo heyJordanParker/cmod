@@ -4,18 +4,21 @@
     "": {
       "name": "cmod",
       "dependencies": {
-        "cmod-sdk": "^0.1.0",
+        "@cmodjs/cli": "^0.1.1",
+        "@cmodjs/core": "^0.1.1",
       },
     },
   },
   "packages": {
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
+    "@cmodjs/cli": ["@cmodjs/cli@0.1.1", "", { "bin": { "cmod": "bin/cmod" } }, "sha512-D2/2sS3s0FYoccEi1od7IaPL0rYBfWg+4QWDGOSiiN1Js6fPKTPUf8TId7QXr6Em8xAkndzqhU7VjGcz6bWqVQ=="],
+
+    "@cmodjs/core": ["@cmodjs/core@0.1.1", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-iSmB1C10gxhBGfzeTYA1hufXs7tAlwT3R3LO+1+YL6SvASY+gLyJreWBHP8Wy+B5vf0JDqDhKPrmG17wTkB8ug=="],
+
     "@types/node": ["@types/node@26.6.4", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg=="],
 
     "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "cmod-sdk": ["cmod-sdk@0.1.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-n0RrFS+trE96vW8T6BbW3Pna+Z5DuZo9UtEtKTHDH2qjIAtiaUcHBeWNbV5hL/L47WHKrzjvyIssWvhQFp+7sw=="],
 
     "json-schema-to-ts": ["json-schema-to-ts@3.1.1", "", { "dependencies": { "@babel/runtime": "^7.18.3", "ts-algebra": "^2.0.0" } }, "sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g=="],
 

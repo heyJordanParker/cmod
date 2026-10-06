@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { EngineCreateResult, On } from 'claude-code'
-import { testMod } from '../node_modules/cmod-sdk/testing.js'
+import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
 import { cmodPlugin } from '../src/mod.js'
 import type { Cmod } from '../types/index.js'

@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { pluginName } from 'cmod-sdk/src/records.js'
+import { pluginName } from '@cmodjs/core/src/records.js'
 import { run as runCommand } from '../process.js'
 import { download, machine } from '../program.js'
 import { printEvent } from './setup.js'

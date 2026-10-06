@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { readSteps, scriptsSha256 } from 'cmod-sdk/src/records.js'
+import { readSteps, scriptsSha256 } from '@cmodjs/core/src/records.js'
 import { listFiles, readText } from '../src/files.js'
 
 const main = join(import.meta.dir, '..', 'src', 'main.ts')
@@ -93,7 +93,7 @@ function environment(home: string): Record<string, string | undefined> {
     XDG_CONFIG_HOME: '',
     CLAUDE_CONFIG_DIR: '',
     PATH: `${join(home, 'bin')}:${process.env['PATH']}`,
-    CMOD_SDK: `file:${join(import.meta.dir, '..', '..', 'sdk')}`,
+    CMOD_CORE: `file:${join(import.meta.dir, '..', '..', 'core')}`,
   }
 }
 

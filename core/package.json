@@ -1,5 +1,5 @@
 {
-  "name": "cmod-sdk",
+  "name": "@cmodjs/core",
   "version": "0.1.1",
   "description": "Build Claude Code mods: hooks, panes, permissions, checks, and an install that just works.",
   "license": "MIT",
@@ -7,7 +7,10 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/heyJordanParker/cmod.git",
-    "directory": "sdk"
+    "directory": "core"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "*.js",

@@ -1,4 +1,4 @@
-import { parseEvent, type RunnerEvent } from 'cmod-sdk/src/records.js'
+import { parseEvent, type RunnerEvent } from '@cmodjs/core/src/records.js'
 
 type Line = { stream: 'stdout' | 'stderr'; text: string }
 

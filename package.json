@@ -4,6 +4,7 @@
   "type": "module",
   "cmod": { "program": "cmod" },
   "dependencies": {
-    "cmod-sdk": "^0.1.0"
+    "@cmodjs/cli": "^0.1.1",
+    "@cmodjs/core": "^0.1.1"
   }
 }

@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { readRecord, storeFolder } from 'cmod-sdk/src/records.js'
+import { readRecord, storeFolder } from '@cmodjs/core/src/records.js'
 import { readText, tilde } from '../files.js'
 import { readPlugin } from '../plugin.js'
 import { readProgram, removeProgram } from '../program.js'

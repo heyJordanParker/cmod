@@ -1,6 +1,6 @@
 ---
 name: guard-user-machine
-description: Change code that acts on the User's machine (consent, a mod's install and uninstall steps, the program link, `cmod try`, teardown, and permission rules), where two parts of CMod that disagree open a hole the User never agreed to. TRIGGER when editing `sdk/src/records.ts`, `cli/src/store.ts`, `cli/src/files.ts`, `cli/src/program.ts`, `cli/src/commands/setup.ts`, `teardown.ts`, or `try.ts`, the CMod plugin's `src/mod.ts`, `readPlugin` in `sdk/src/runtime/lifecycle.ts`, or `sdk/src/jobs/permissions/`. DO NOT TRIGGER for what a mod author writes against; use /change-public-api.
+description: Change code that acts on the User's machine (consent, a mod's install and uninstall steps, the program link, `cmod try`, teardown, and permission rules), where two parts of CMod that disagree open a hole the User never agreed to. TRIGGER when editing `core/src/records.ts`, `cli/src/store.ts`, `cli/src/files.ts`, `cli/src/program.ts`, `cli/src/commands/setup.ts`, `teardown.ts`, or `try.ts`, the CMod plugin's `src/mod.ts`, `readPlugin` in `core/src/runtime/lifecycle.ts`, or `core/src/jobs/permissions/`. DO NOT TRIGGER for what a mod author writes against; use /change-public-api.
 ---
 
 # Guard User Machine
@@ -9,8 +9,8 @@ A mod runs its steps on the User's machine with the User's consent, and CMod cle
 
 ## 1. Change the one function that decides
 
-- `scriptsSha256` in `sdk/src/records.ts` decides consent, for the cmod program (`cli/src/commands/setup.ts`, `cli/src/commands/check.ts`) and the SDK (`readPlugin` in `sdk/src/runtime/lifecycle.ts`) alike.
-- `readSteps` in `sdk/src/records.ts` is the one parser of the `package.json` `cmod` key.
+- `scriptsSha256` in `core/src/records.ts` decides consent, for the cmod program (`cli/src/commands/setup.ts`, `cli/src/commands/check.ts`) and the SDK (`readPlugin` in `core/src/runtime/lifecycle.ts`) alike.
+- `readSteps` in `core/src/records.ts` is the one parser of the `package.json` `cmod` key.
 - `restoreProgram` in `cli/src/program.ts` decides which program version `~/.local/bin/<program>` points at.
 - `takeLock` in `cli/src/store.ts` decides which cmod command changes a mod. Setup and teardown take one lock per mod, `records/<name>.json.lock/<pid>` in the CMod store (`modLock` in `cli/src/store.ts`), and approvals change under `consent.json.lock/<pid>`. A lock whose holder's process is gone, or whose process ID now belongs to another process (its start time differs), is taken over at once.
 
@@ -19,7 +19,7 @@ A second check beside it disagrees with it on the first input nobody listed.
 
 ## 2. Make every reader and lister agree on what a file is
 
-`listFiles` in `cli/src/files.ts`, `filesBelow` in `sdk/src/runtime/lifecycle.ts`, and the test kit's `fakeFiles` in `sdk/src/testing/fake-files.ts` each list a symbolic link. `scriptsSha256` hashes what `read` returns through the link, and `saveUninstall` copies through it.
+`listFiles` in `cli/src/files.ts`, `filesBelow` in `core/src/runtime/lifecycle.ts`, and the test kit's `fakeFiles` in `core/src/testing/fake-files.ts` each list a symbolic link. `scriptsSha256` hashes what `read` returns through the link, and `saveUninstall` copies through it.
 
 ### Change every lister and reader in the same change
 Example: when the listers skipped links and `read` followed them, a changed file behind a link ran without consent.

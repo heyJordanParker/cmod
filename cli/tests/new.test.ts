@@ -2,7 +2,7 @@ import { afterEach, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { version as sdkVersion } from 'cmod-sdk/package.json'
+import { version as coreVersion } from '@cmodjs/core/package.json'
 import { listFiles } from '../src/files.js'
 import { capture } from '../src/process.js'
 import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
@@ -17,7 +17,7 @@ test('new writes the repository layout with a defineMod that has one hook and on
   const result = await cmod(home, 'new', 'my-mod')
 
   expect(result.exitCode).toBe(0)
-  for (const path of ['.claude-plugin/plugin.json', '.claude/CLAUDE.md', '.gitignore', '.oxlintrc.json', 'hooks/hooks.json', 'hooks/register.ts', 'skills/my-mod/SKILL.md', 'src/mod.tsx', 'tests/mod.test.ts', 'package.json', 'tsconfig.json', 'bun.lock', 'node_modules/cmod-sdk/package.json']) {
+  for (const path of ['.claude-plugin/plugin.json', '.claude/CLAUDE.md', '.gitignore', '.oxlintrc.json', 'hooks/hooks.json', 'hooks/register.ts', 'skills/my-mod/SKILL.md', 'src/mod.tsx', 'tests/mod.test.ts', 'package.json', 'tsconfig.json', 'bun.lock', 'node_modules/@cmodjs/core/package.json']) {
     expect(existsSync(join(root, path))).toBe(true)
   }
   expect(existsSync(join(root, '.gitattributes'))).toBe(false)
@@ -50,7 +50,7 @@ test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {
   expect(mod).toContain("import { promptsPane } from './panes/prompts.js'")
   expect(mod).toContain("import { PromptCount } from './components/prompt-count.js'")
   expect(mod).toContain('mod.ui.pane(promptsPane)')
-  expect(mod).toContain("import { Box } from '../node_modules/cmod-sdk/ui/elements.js'")
+  expect(mod).toContain("import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'")
   expect(mod).toContain('hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)')
   const tests = await read('tests/mod.test.ts')
   expect(tests).toContain("test('the band shows the prompt count on its last line'")
@@ -116,13 +116,13 @@ test("a new mod's type check fails on a test that misuses expect", async () => {
   expect(result.exitCode).toBe(1)
 })
 
-test('cmod new with CMOD_SDK set names its value when the install fails', async () => {
+test('cmod new with CMOD_CORE set names its value when the install fails', async () => {
   const home = await temporaryHome()
   const main = join(import.meta.dir, '..', 'src', 'main.ts')
-  const tarball = join(home, 'cmod-sdk-0.1.0.tgz')
+  const tarball = join(home, 'cmodjs-core-0.1.1.tgz')
   const created = Bun.spawn([process.execPath, main, 'new', 'my-mod'], {
     cwd: home,
-    env: { ...process.env, HOME: home, CMOD_SDK: `file:${tarball}` },
+    env: { ...process.env, HOME: home, CMOD_CORE: `file:${tarball}` },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -130,8 +130,8 @@ test('cmod new with CMOD_SDK set names its value when the install fails', async 
 
   expect(exitCode).toBe(1)
   expect(existsSync(join(home, 'my-mod'))).toBe(false)
-  expect(stderr).toContain(`CMOD_SDK is file:${tarball}, and bun could not install it. Point CMOD_SDK at a cmod-sdk tarball, such as CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz, then run cmod new again.`)
-  expect(stderr).not.toContain('set CMOD_SDK')
+  expect(stderr).toContain(`CMOD_CORE is file:${tarball}, and bun could not install it. Point CMOD_CORE at a @cmodjs/core tarball, such as CMOD_CORE=file:<cmod checkout>/core/cmodjs-core-${coreVersion}.tgz, then run cmod new again.`)
+  expect(stderr).not.toContain('set CMOD_CORE')
 })
 
 test("a new mod's survey test fails when the band's survey render throws", async () => {
@@ -172,7 +172,7 @@ test('new --project writes the plugin into .claude/skills/<name>/ of the reposit
 
   expect(result.exitCode).toBe(0)
   const root = join(home, '.claude/skills/rules')
-  for (const path of ['.claude-plugin/plugin.json', '.gitignore', 'hooks/register.ts', 'src/mod.tsx', 'package.json', 'node_modules/cmod-sdk/package.json']) {
+  for (const path of ['.claude-plugin/plugin.json', '.gitignore', 'hooks/register.ts', 'src/mod.tsx', 'package.json', 'node_modules/@cmodjs/core/package.json']) {
     expect(existsSync(join(root, path))).toBe(true)
   }
   expect(existsSync(join(root, '.gitattributes'))).toBe(false)

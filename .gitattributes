@@ -1,3 +1,4 @@
-sdk/ export-ignore
+core/ export-ignore
 .claude/ export-ignore
 CLAUDE.md export-ignore
+.github/ export-ignore

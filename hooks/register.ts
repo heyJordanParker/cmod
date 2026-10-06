@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
-import { connect } from '../node_modules/cmod-sdk/connect.js'
-import { notInstalled } from '../node_modules/cmod-sdk/mod.js'
+import { connect } from '../node_modules/@cmodjs/core/connect.js'
+import { notInstalled } from '../node_modules/@cmodjs/core/mod.js'
 import { cmodPlugin } from '../src/mod.js'
 import type { Cmod } from '../types/index.js'
 

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { version as cmodVersion } from '../package.json'
 import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
@@ -10,13 +11,13 @@ const claudeCodeLine = 'Plugin is already installed (scope: user) — marked as 
 
 const modFiles = (name: string): Record<string, string> => ({
   '.claude-plugin/plugin.json': JSON.stringify({ name, version: '0.1.0' }),
-  'package.json': JSON.stringify({ name, private: true, cmod: { install: './setup/install.sh' }, dependencies: { 'cmod-sdk': '^0.1.0' } }),
+  'package.json': JSON.stringify({ name, private: true, cmod: { install: './setup/install.sh' }, dependencies: { '@cmodjs/core': '^0.1.1' } }),
   'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
 })
 
 const stepFreeFiles = (name: string): Record<string, string> => ({
   '.claude-plugin/plugin.json': JSON.stringify({ name, version: '0.1.0' }),
-  'package.json': JSON.stringify({ name, private: true, dependencies: { 'cmod-sdk': '^0.1.0' } }),
+  'package.json': JSON.stringify({ name, private: true, dependencies: { '@cmodjs/core': '^0.1.1' } }),
 })
 
 const plainFiles = (name: string): Record<string, string> => ({ '.claude-plugin/plugin.json': JSON.stringify({ name }) })
@@ -319,9 +320,8 @@ test('cmod list shows a plugin with no cmod steps as Claude Code holds it', asyn
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
-test('cmod list shows the CMod plugin ready when the cmod program is its version, with no record', async () => {
+test('cmod list shows the CMod plugin ready when the cmod program is its version or newer, with no record', async () => {
   const home = await marketplaceHome({})
-  const cmodVersion = JSON.parse(await readFile(join(import.meta.dir, '..', 'package.json'), 'utf8')).version
   const cmodPluginAt = (version: string) => ({
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version }),
     'package.json': JSON.stringify({ name: 'cmod', private: true, cmod: { program: 'cmod' } }),
@@ -332,6 +332,12 @@ test('cmod list shows the CMod plugin ready when the cmod program is its version
   const current = await cmod(home, 'list')
 
   expect(current.stdout).toBe(`NAME       VERSION  STATE\ncmod@cmod  ${cmodVersion.padEnd(7)}  ready\n`)
+
+  await writeFiles(join(home, 'plugins/cmod'), cmodPluginAt('0.0.1'))
+
+  const ahead = await cmod(home, 'list')
+
+  expect(ahead.stdout).toBe(`NAME       VERSION  STATE\ncmod@cmod  0.0.1    ready\n`)
 
   await writeFiles(join(home, 'plugins/cmod'), cmodPluginAt('9.9.9'))
 

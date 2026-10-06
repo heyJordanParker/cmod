@@ -1,5 +1,5 @@
-import { defineMod, longestMs, messageOf } from '../node_modules/cmod-sdk/mod.js'
-import { parseEvent } from '../node_modules/cmod-sdk/records.js'
+import { defineMod, longestMs, messageOf } from '../node_modules/@cmodjs/core/mod.js'
+import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
 
 export type CmodPluginState = { installedPlugins: readonly string[] | null }
 

@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { readRecord, storeFolder } from 'cmod-sdk/src/records.js'
+import { readRecord, storeFolder } from '@cmodjs/core/src/records.js'
 import { changePlugin, listPlugins } from '../claude.js'
 import { readText } from '../files.js'
 import { startProgress } from '../progress.js'

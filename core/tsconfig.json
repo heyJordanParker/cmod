@@ -20,7 +20,7 @@
     "skipLibCheck": true,
     "typeRoots": ["../.claude-plugin/types"],
     "types": ["claude-code", "claude-code-tools"],
-    "paths": { "cmod-sdk/*": ["./src/*"] }
+    "paths": { "@cmodjs/core/*": ["./src/*"] }
   },
   "include": ["src", "tests", "../types", "node_modules/bun-types/test.d.ts"]
 }

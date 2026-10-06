@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
-import { version as sdkVersion } from 'cmod-sdk/package.json'
-import { messageOf } from 'cmod-sdk/src/utils/text.js'
+import { version as coreVersion } from '@cmodjs/core/package.json'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { writeAtomically } from '../files.js'
 import { preparePackages, readPlugin } from '../plugin.js'
 import { capture } from '../process.js'
@@ -24,8 +24,8 @@ Options:
              trusts the repository
 
 Environment:
-  CMOD_SDK   The cmod-sdk dependency to write, such as
-             file:/path/to/cmod-sdk-0.1.0.tgz (default: ^${sdkVersion})`
+  CMOD_CORE  The @cmodjs/core dependency to write, such as
+             file:/path/to/cmodjs-core-0.1.1.tgz (default: ^${coreVersion})`
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { project: { type: 'boolean', default: false } } })
@@ -46,11 +46,11 @@ export async function run(argv: string[]): Promise<number> {
     await preparePackages(await readPlugin(root))
   } catch (error) {
     await rm(root, { recursive: true, force: true })
-    const tarball = `CMOD_SDK=file:<cmod checkout>/sdk/cmod-sdk-${sdkVersion}.tgz`
-    const sdk = process.env['CMOD_SDK']
-    const fix = sdk
-      ? `CMOD_SDK is ${sdk}, and bun could not install it. Point CMOD_SDK at a cmod-sdk tarball, such as ${tarball}, then run cmod new again.`
-      : `To install cmod-sdk from a file, set CMOD_SDK to a cmod-sdk tarball, such as ${tarball}, then run cmod new again.`
+    const tarball = `CMOD_CORE=file:<cmod checkout>/core/cmodjs-core-${coreVersion}.tgz`
+    const core = process.env['CMOD_CORE']
+    const fix = core
+      ? `CMOD_CORE is ${core}, and bun could not install it. Point CMOD_CORE at a @cmodjs/core tarball, such as ${tarball}, then run cmod new again.`
+      : `To install @cmodjs/core from a file, set CMOD_CORE to a @cmodjs/core tarball, such as ${tarball}, then run cmod new again.`
     throw new Error(`Installing packages for ${name} failed, so cmod new deleted ${relative(process.cwd(), root)}: ${messageOf(error)}\n${fix}`)
   }
   progress.succeed(`Installed packages for ${name}`)
@@ -78,16 +78,16 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
     'hooks/register.ts': `import type { Register } from 'claude-code'
-import { connect } from '../node_modules/cmod-sdk/connect.js'
+import { connect } from '../node_modules/@cmodjs/core/connect.js'
 import { ${definition} } from '../src/mod.js'
 
 export const register: Register = (on) => {
   connect(on, ${definition})
 }
 `,
-    'src/mod.tsx': `import { defineMod } from '../node_modules/cmod-sdk/mod.js'
-import { Box } from '../node_modules/cmod-sdk/ui/elements.js'
-import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
+    'src/mod.tsx': `import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { slots } from '../node_modules/@cmodjs/core/ui/slots.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
 import { initialState } from './state.js'
@@ -111,7 +111,7 @@ export const ${definition} = defineMod({
 
 export const initialState: ${state} = { session: { prompts: 0 } }
 `,
-    'src/panes/prompts.tsx': `import { definePane } from '../../node_modules/cmod-sdk/ui/define-pane.js'
+    'src/panes/prompts.tsx': `import { definePane } from '../../node_modules/@cmodjs/core/ui/define-pane.js'
 import { PromptCount } from '../components/prompt-count.js'
 import type { ${state} } from '../state.js'
 
@@ -122,7 +122,7 @@ export const promptsPane = definePane<${state}>({
 })
 `,
     'src/components/prompt-count.tsx': `import type { RenderElement } from 'claude-code'
-import { Text } from '../../node_modules/cmod-sdk/ui/elements.js'
+import { Text } from '../../node_modules/@cmodjs/core/ui/elements.js'
 
 export function PromptCount({ count }: { readonly count: number }): RenderElement {
   return <Text>{\`Prompts this session: \${count}\`}</Text>
@@ -130,8 +130,8 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 `,
     'tests/mod.test.ts': `import { expect, test } from 'bun:test'
 import type { RenderPropsOf } from 'claude-code'
-import { testMod } from '../node_modules/cmod-sdk/testing.js'
-import { slots } from '../node_modules/cmod-sdk/ui/slots.js'
+import { testMod } from '../node_modules/@cmodjs/core/testing.js'
+import { slots } from '../node_modules/@cmodjs/core/ui/slots.js'
 import { ${definition} } from '../src/mod.js'
 
 const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
@@ -163,7 +163,7 @@ description: Explains what the ${name} mod does. Use when the user asks about th
 
 The ${name} mod counts the prompts of this session and shows the count in its pane and above the prompt.
 `,
-    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, dependencies: { 'cmod-sdk': process.env['CMOD_SDK'] || `^${sdkVersion}` } }),
+    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
     'tsconfig.json': json({
       extends: './.claude-plugin/types/tsconfig.json',
       compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },

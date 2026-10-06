@@ -1,6 +1,6 @@
 {
-  "name": "cmod",
-  "version": "0.1.0",
+  "name": "@cmodjs/cli",
+  "version": "0.1.1",
   "description": "Claude Mod Manager: install, try, build, check, and publish Claude Code mods.",
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,15 @@
     "url": "git+https://github.com/heyJordanParker/cmod.git",
     "directory": "cli"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "cmod": "bin/cmod"
+  },
+  "files": [
+    "bin/"
+  ],
   "scripts": {
     "build": "bun build --compile --minify --target=bun-darwin-arm64 src/main.ts --outfile dist/cmod-darwin-arm64 && bun build --compile --minify --target=bun-darwin-x64 src/main.ts --outfile dist/cmod-darwin-x64 && bun build --compile --minify --target=bun-linux-x64 src/main.ts --outfile dist/cmod-linux-x64 && bun build --compile --minify --target=bun-linux-arm64 src/main.ts --outfile dist/cmod-linux-arm64",
     "check": "tsc --noEmit",
@@ -18,12 +27,10 @@
     "build": "bun run build",
     "output": "dist"
   },
-  "dependencies": {
-    "cmod-sdk": "file:../sdk",
-    "jsonc-parser": "^3.3.1"
-  },
   "devDependencies": {
+    "@cmodjs/core": "file:../core",
     "@types/bun": "^1.4.2",
+    "jsonc-parser": "^3.3.1",
     "typescript": "^7.0.2"
   }
 }

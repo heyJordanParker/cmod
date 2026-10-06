@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { version as coreVersion } from '@cmodjs/core/package.json'
 import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
@@ -45,13 +46,13 @@ test('cmod publish refuses a file: dependency', async () => {
   const root = join(home, 'hello-mod')
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0' }),
-    'package.json': JSON.stringify({ name: 'hello-mod', dependencies: { 'cmod-sdk': 'file:../cmod/sdk/cmod-sdk-0.1.0.tgz', shared: 'link:shared' } }),
+    'package.json': JSON.stringify({ name: 'hello-mod', dependencies: { '@cmodjs/core': 'file:../cmod/core/cmodjs-core-0.1.1.tgz', shared: 'link:shared' } }),
   })
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.stderr).toBe(
-    'cmod publish: ~/hello-mod/package.json depends on cmod-sdk at file:../cmod/sdk/cmod-sdk-0.1.0.tgz, shared at link:shared, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "cmod-sdk": "^0.1.0", then run cmod publish again.\n',
+    `cmod publish: ~/hello-mod/package.json depends on @cmodjs/core at file:../cmod/core/cmodjs-core-0.1.1.tgz, shared at link:shared, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.\n`,
   )
   expect(result.exitCode).toBe(1)
 })

@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+
+fail() {
+  echo "cmod: $1" >&2
+  exit 1
+}
+
+store="${XDG_DATA_HOME:-$HOME/.local/share}/cmod/bin/cmod"
+package=$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)
+
+if [ -f "$package/package.json" ]; then
+  version=$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$package/package.json")
+  [ -n "$version" ] || fail "$package/package.json names no version"
+  if [ ! -x "$store/$version/cmod" ]; then
+    case "$(uname -s)" in
+      Darwin) os=darwin ;;
+      Linux) os=linux ;;
+      *) fail "cmod has no build for $(uname -s). Build it from https://github.com/heyJordanParker/cmod/tree/main/cli" ;;
+    esac
+    case "$(uname -m)" in
+      arm64 | aarch64) arch=arm64 ;;
+      x86_64 | amd64) arch=x64 ;;
+      *) fail "cmod has no build for $(uname -m). Build it from https://github.com/heyJordanParker/cmod/tree/main/cli" ;;
+    esac
+    release="${CMOD_DIST_SERVER:-https://github.com/heyJordanParker/cmod/releases/download}/v$version"
+    build="cmod-$os-$arch"
+    folder="$store/$version"
+    partial="$folder/.cmod.$$"
+    sums="$folder/.SHA256SUMS.$$"
+    trap 'rm -f "$partial" "$sums"' EXIT
+    trap 'exit 1' HUP INT TERM
+    echo "Downloading cmod $version" >&2
+    mkdir -p "$folder"
+    curl -fsL -o "$sums" "$release/SHA256SUMS" || fail "could not fetch $release/SHA256SUMS (curl exit $?)"
+    curl -fsL -o "$partial" "$release/$build" || fail "could not fetch $release/$build (curl exit $?)"
+    expected=$(sed -n "s/^\([0-9a-f]\{64\}\) [ *]$build\$/\1/p" "$sums")
+    [ -n "$expected" ] || fail "$release/SHA256SUMS lists no $build, so the download cannot be checked"
+    actual=$( (sha256sum "$partial" 2>/dev/null || shasum -a 256 "$partial") | cut -d ' ' -f 1)
+    [ "$actual" = "$expected" ] || fail "$release/$build has SHA-256 $actual, but SHA256SUMS lists $expected, so nothing was installed"
+    chmod +x "$partial"
+    reported=$("$partial" --version) || fail "$release/$build downloaded, but running it with --version failed"
+    [ "$reported" = "$version" ] || fail "$release/$build reports version $reported, not $version"
+    mv -f "$partial" "$folder/cmod"
+    rm -f "$sums"
+    trap - EXIT HUP INT TERM
+  fi
+fi
+
+newest=$(for folder in "$store"/*/; do [ -x "${folder}cmod" ] && basename "$folder"; done | sort -V | tail -n 1)
+[ -n "$newest" ] || fail "no cmod is installed in $store. Run npm i -g @cmodjs/cli, or install the CMod plugin in Claude Code."
+exec "$store/$newest/cmod" "$@"

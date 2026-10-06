@@ -75,7 +75,7 @@ const demo = defineMod({
 
 const files = {
   '/plugins/demo/.claude-plugin/plugin.json': '{ "name": "demo", "version": "1.0.0" }',
-  '/plugins/demo/package.json': '{ "dependencies": { "cmod-sdk": "^0.1.0" } }',
+  '/plugins/demo/package.json': '{ "dependencies": { "@cmodjs/core": "^0.1.1" } }',
   '/home/test/.local/share/cmod/records/demo.json': JSON.stringify({
     name: 'demo',
     version: '1.0.0',
