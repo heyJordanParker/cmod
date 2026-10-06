@@ -39,7 +39,7 @@ export const safeDelete = defineMod({
 | `SessionEnd` | none |
 | `UserPromptSubmit` | none |
 | `InstructionsLoaded` | none |
-| `PreToolUse` | Claude Mod Manager (CMod) builds the input: `session_id`, `cwd`, `hook_event_name`, `tool_name`, `tool_input`, `tool_use_id`, `agent_id` inside a subagent, `agent_type` inside a subagent or when the session started as an agent, and `files`. It has no `transcript_path` and no `permission_mode`. |
+| `PreToolUse` | Claude Mod Manager (cmod) builds the input: `session_id`, `cwd`, `hook_event_name`, `tool_name`, `tool_input`, `tool_use_id`, `agent_id` inside a subagent, `agent_type` inside a subagent or when the session started as an agent, and `files`. It has no `transcript_path` and no `permission_mode`. |
 | `PermissionRequest` | none |
 | `PermissionDenied` | none |
 | `PostToolUse` | adds `files` |
@@ -53,17 +53,17 @@ export const safeDelete = defineMod({
 | `StopFailure` | none |
 | `CwdChanged` | no `transcript_path` |
 
-CMod raises `CwdChanged` itself, never Claude Code. It raises it when the working folder changes: after `/cd`, after a Bash or PowerShell call, and at a prompt. `mod.cwd` and `mod.projectRoot` already hold the new folder when the hook runs.
+cmod raises `CwdChanged` itself, never Claude Code. It raises it when the working folder changes: after `/cd`, after a Bash or PowerShell call, and at a prompt. `mod.cwd` and `mod.projectRoot` already hold the new folder when the hook runs.
 
 ## files: what a tool call reads and changes
 
-The input of `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` has `files: { read: string[]; changed: string[] }`, absolute paths that CMod works out from the call:
+The input of `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` has `files: { read: string[]; changed: string[] }`, absolute paths that cmod works out from the call:
 
 - `Read` reads its `file_path`. `Edit`, `Write`, and `NotebookEdit` change their path.
 - `Grep` counts its `path`, or the working folder when it names none, and `Glob` counts its `pattern` joined to its `path`. Since `read` lists only files, a `Grep` of a folder and every `Glob` usually leave `read` empty.
 - A `Bash` command reads and changes the files its commands name, such as `cat a.ts > b.ts`. A path that holds a shell expansion, such as `$HOME`, is left out.
 - `read` lists only paths that are files now. `changed` lists every path the call writes, whether it exists or not.
-- When CMod cannot work the files out, both lists are empty, and the reason goes to Claude Code's debug log.
+- When cmod cannot work the files out, both lists are empty, and the reason goes to Claude Code's debug log.
 
 ## HookAnswer: what a hook can answer
 
@@ -99,7 +99,7 @@ type HookAnswer = {
 - `continue: false` stops the session after the event, and `stopReason` is the text Claude Code shows. `PreToolUse` takes neither.
 - `decision: 'block'` with a `reason` blocks the event. On `PreToolUse` it denies the call with the reason. On `Stop` it keeps Claude going with the reason.
 - `systemMessage` shows the text to the person as a log line.
-- CMod ignores `suppressOutput`.
+- cmod ignores `suppressOutput`.
 - `hookSpecificOutput.hookEventName` is optional. When set, it must be the event's own name.
 
 Each event reads only some `hookSpecificOutput` fields:
@@ -147,11 +147,11 @@ A hook that throws, rejects, or answers a field its event does not read fails:
 
 - On `PreToolUse` the call is denied with `<mod>: the PreToolUse hook failed: <error>`.
 - On `PermissionRequest` the request is denied with `<mod>: the PermissionRequest hook failed: <error>`.
-- On every other event CMod logs `<mod>: the <event> hook failed: <error>`, and the event goes on as if the hook answered nothing.
+- On every other event cmod logs `<mod>: the <event> hook failed: <error>`, and the event goes on as if the hook answered nothing.
 
 ## The first SessionStart
 
-A mod that is still installing when the session starts misses Claude Code's `SessionStart`. CMod holds `SessionStart` up to 9 seconds for the mod to start. When the mod starts later, CMod runs its `SessionStart` hooks then, and Claude Code no longer reads their answer.
+A mod that is still installing when the session starts misses Claude Code's `SessionStart`. cmod holds `SessionStart` up to 9 seconds for the mod to start. When the mod starts later, cmod runs its `SessionStart` hooks then, and Claude Code no longer reads their answer.
 
 ## Test a hook
 

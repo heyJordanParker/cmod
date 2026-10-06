@@ -52,9 +52,9 @@ export async function teardownInTerminal(name: string, progress: Progress): Prom
   const code = await tearDown(name, (event) => {
     if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
     if (event.kind === 'log') progress.log(event.text)
-    if (event.kind === 'missing') progress.skip(`${name} has no install record, so there is nothing to tear down. cmod list shows the mods CMod set up.`)
+    if (event.kind === 'missing') progress.skip(`${name} has no install record, so there is nothing to tear down. cmod list shows the mods cmod set up.`)
     if (event.kind === 'failed') progress.fail(event.message)
-    if (event.kind === 'done') progress.succeed(record?.uninstall ? `Ran the uninstall step of ${name} and removed what CMod set up for it` : `Removed what CMod set up for ${name}`)
+    if (event.kind === 'done') progress.succeed(record?.uninstall ? `Ran the uninstall step of ${name} and removed what cmod set up for it` : `Removed what cmod set up for ${name}`)
     isAnswered ||= event.kind === 'missing' || event.kind === 'failed' || event.kind === 'done'
   })
   if (!isAnswered) progress.fail(`Cancelled uninstalling ${name} on ${hold.signal}, before its uninstall step started. Run cmod teardown ${name} to finish.`)

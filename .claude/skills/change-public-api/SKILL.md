@@ -5,7 +5,7 @@ description: Change what a mod author writes against, so the `@cmodjs/core` libr
 
 # Change Public API
 
-A mod author learns Claude Mod Manager (CMod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
+A mod author learns Claude Mod Manager (cmod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
 
 - The Public API is `core/src/mod.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.

@@ -22,7 +22,7 @@ A job's bad options throw at one of two times. `check`, `permissions`, and `prom
 | `statusLine` | `jobs/status-line.js` | A status line |
 | `program` | `jobs/program.js` | A background program the mod talks to over HTTP |
 
-Each job announces itself. The first time a version starts, Claude Mod Manager (CMod) logs what the mod added, such as `tasks added /tasks, the open_ticket tool and 2 permission rules.`
+Each job announces itself. The first time a version starts, Claude Mod Manager (cmod) logs what the mod added, such as `tasks added /tasks, the open_ticket tool and 2 permission rules.`
 
 ## Deadlines
 
@@ -57,11 +57,11 @@ type Reply = string | { text?: string; context?: string } | undefined
 - `description` is the line the typeahead and `/help` show.
 - `argumentHint` is drawn dim after the name, such as `[path]`.
 - `immediate: true` runs the command at once while Claude is still working. Without it, the command waits for the turn to end.
-- `reply` gets `args` and `positionals`. `args` is everything after the name as Claude Code passes it, and `''` for a bare `/<name>`. CMod hands it on unchanged. `positionals` is that text split into words the way a shell splits them, so extra spaces never reach it. `tested.type('/todo  milk')` drops the spaces after the name.
+- `reply` gets `args` and `positionals`. `args` is everything after the name as Claude Code passes it, and `''` for a bare `/<name>`. cmod hands it on unchanged. `positionals` is that text split into words the way a shell splits them, so extra spaces never reach it. `tested.type('/todo  milk')` drops the spaces after the name.
 - A `string` reply, or `text`, shows as the command's output. `context` is text Claude reads after the output, and the person never sees. `undefined` shows nothing.
 - A `reply` that throws shows `/<name> failed: <error>`.
 - Two commands with one name in a mod throw `<mod>: the slash command /<name> is already added. Give each slashCommand its own name.`
-- When Claude Code refuses to add the command, CMod logs `<mod>: /<name> is not added: <error>`.
+- When Claude Code refuses to add the command, cmod logs `<mod>: /<name> is not added: <error>`.
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -99,7 +99,7 @@ tool<Schema, State>(options: {
 
 - `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name.
 - `description` tells Claude what the tool does.
-- `inputSchema` is a JSON Schema with `type: 'object'`. It types `execute`'s `input`, so write it inline. CMod checks each call's input against it, draft 2020-12, and denies an input that does not fit with the list of its errors. Its properties cannot be named `tool`, `tool_use_id`, `consent`, or `agentId`, which Claude Code keeps for itself.
+- `inputSchema` is a JSON Schema with `type: 'object'`. It types `execute`'s `input`, so write it inline. cmod checks each call's input against it, draft 2020-12, and denies an input that does not fit with the list of its errors. Its properties cannot be named `tool`, `tool_use_id`, `consent`, or `agentId`, which Claude Code keeps for itself.
 - `execute` returns the result Claude reads. A `string` and an array of content blocks go to Claude as they are. Any other value goes as JSON. `undefined` returns nothing.
 - An input that does not fit the schema is denied with one line per error under a heading, such as `The open_ticket tool input is not valid:` followed by `- #: Instance does not have required property "title".` The text after `- ` is the location in the input, `#` for its root, and the validator's message.
 - An `execute` that throws denies the call with `The <name> tool failed: <error>`.
@@ -147,13 +147,13 @@ export const tickets = defineMod({
 
 ### Command patterns
 
-A `command` pattern is not a glob. CMod splits it into words the way it splits a Bash command, and matches each command of the call:
+A `command` pattern is not a glob. cmod splits it into words the way it splits a Bash command, and matches each command of the call:
 
 - `'*'` alone matches every shell command. A `*` inside a pattern is a plain character.
 - The first word is the program, matched by its name, so `/bin/rm` counts as `rm`.
 - Every other word that does not start with `-` must appear in the command in the pattern's order, and other words may sit between them: `git push` matches `git push origin main`.
 - Every flag, a word that starts with `-`, must appear somewhere in the command, in any order. `--force` also matches `--force=yes`.
-- CMod splits a cluster of short flags into single flags, in the pattern and in the command alike, so `rm -rf` matches `rm -rf`, `rm -fr`, and `rm -r -f`. A letter that takes a value keeps the rest of the cluster as its value. These programs keep their flags as written: `find`, `java`, `javac`, `go`, `gcc`, `g++`, `clang`, `clang++`, `swift`, `swiftc`, `xcodebuild`, `xcrun`, `ffmpeg`, `ffprobe`, `openssl`, `plutil`, `defaults`, `security`, and `codesign`.
+- cmod splits a cluster of short flags into single flags, in the pattern and in the command alike, so `rm -rf` matches `rm -rf`, `rm -fr`, and `rm -r -f`. A letter that takes a value keeps the rest of the cluster as its value. These programs keep their flags as written: `find`, `java`, `javac`, `go`, `gcc`, `g++`, `clang`, `clang++`, `swift`, `swiftc`, `xcodebuild`, `xcrun`, `ffmpeg`, `ffprobe`, `openssl`, `plutil`, `defaults`, `security`, and `codesign`.
 - Words and flags match exactly, letter case included.
 - Each command of a pipeline or a `&&` chain counts, and so does the command a wrapper runs: `sudo rm -rf /` holds the commands `sudo` and `rm -rf /`. The wrappers are `sudo`, `env`, `doas`, `timeout`, `flock`, `stdbuf`, `watch`, `nohup`, `nice`, `time`, `exec`, `command`, and `xargs`.
 
@@ -168,11 +168,11 @@ type Rule<State> = Target & {
 }
 ```
 
-- Before each call, CMod tries every `deny` rule, then every `ask` rule. The first rule that matches decides, and its `reason` goes with the decision. No match leaves the call to Claude Code.
+- Before each call, cmod tries every `deny` rule, then every `ask` rule. The first rule that matches decides, and its `reason` goes with the decision. No match leaves the call to Claude Code.
 - The strictest answer wins: a mod's `ask` or `deny` beats Claude Code's `allow`, and Claude Code's `deny` beats a mod's `ask`.
 - `when` narrows a rule. The rule matches only when `when` resolves true. A `when` that throws makes the rule match, and the reason adds `Its when check failed: <error>`.
-- When CMod cannot read the call or the session, it denies the call with the reason.
-- For a PowerShell command, or a Bash command CMod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one.
+- When cmod cannot read the call or the session, it denies the call with the reason.
+- For a PowerShell command, or a Bash command cmod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one.
 - `permissions({})` throws `permissions: give it a deny or an ask rule, or remove it from setup.`
 - A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it the mod does not start.
 
@@ -215,8 +215,8 @@ export const guard = defineMod({
 check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State>
 ```
 
-- After each call that matches `after` and succeeds, CMod runs `run`. A call that was denied or failed runs nothing.
-- For a `read` or `write` target, CMod adds the matched files that still exist to the end of `run`, as absolute paths. For any other target it runs `run` as it is.
+- After each call that matches `after` and succeeds, cmod runs `run`. A call that was denied or failed runs nothing.
+- For a `read` or `write` target, cmod adds the matched files that still exist to the end of `run`, as absolute paths. For any other target it runs `run` as it is.
 - A mod installed for the person passes no folder, so Claude Code runs the command in the session's working folder. A project plugin runs it at the root of the work tree that holds the last matched file, or the matched command's folder.
 - A command that exits with another code than 0 adds `<command> exited with <code>:` and its output to the call's result, so Claude reads the failure right after its own call.
 - `timeoutMs` is 60 seconds by default and 10 minutes at most.
@@ -284,7 +284,7 @@ type Usage = { model: string; context: { tokens?: number; window: number; percen
 ```
 
 - `text` returns the status line's text, or `undefined` to clear it.
-- CMod calls `text` when the mod starts, every `interval` milliseconds (10000 by default), and whenever Claude Code measures the session. It sends the text only when it changed.
+- cmod calls `text` when the mod starts, every `interval` milliseconds (10000 by default), and whenever Claude Code measures the session. It sends the text only when it changed.
 - A `text` that throws keeps the last text, and the error goes to Claude Code's debug log.
 - A mod has one status line. A second `statusLine` throws: join the texts in one.
 - An `interval` below 1 throws.
@@ -317,7 +317,7 @@ type Program = {
 - `command` is the program on `PATH` and its arguments. `environment` sets variables for it. An empty `command` throws.
 - The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `mod.http.fetch`.
 - In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()`.
-- When the program exits, CMod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and CMod logs `<mod>: the <program> program stopped: <reason>`.
+- When the program exits, cmod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and cmod logs `<mod>: the <program> program stopped: <reason>`.
 - A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` is not on `PATH`, so `command` names it by its full path, `${mod.dataFolder}/bin/<program>`.
 
 ```ts
@@ -360,12 +360,12 @@ type JobContext<State> = {
 ```
 
 - `claude` reaches Claude Code itself. [The claude members](#the-claude-members) lists each one.
-- `claude.store` is where CMod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind CMod's back.
+- `claude.store` is where cmod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind cmod's back.
 - `on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. A job with a handler on `tool.check`, `classic.PreToolUse`, or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
-- `announce` adds a phrase to the list CMod logs when the mod first starts.
+- `announce` adds a phrase to the list cmod logs when the mod first starts.
 - `reserveName` throws `taken` when the mod already reserved that `kind` and `name`. A job calls it to refuse a duplicate.
 - `toolCalls.agentOf(toolUseId)` resolves `{ agentId?, agentType? }`, the subagent behind a call.
-- `toolCalls.cwdOf(toolUseId)` returns the working folder when the call ran, or `undefined` once its `PostToolUse` or `PostToolUseFailure` has run. CMod keeps the folders of the last 100 calls.
+- `toolCalls.cwdOf(toolUseId)` returns the working folder when the call ran, or `undefined` once its `PostToolUse` or `PostToolUseFailure` has run. cmod keeps the folders of the last 100 calls.
 
 ```ts
 import { defineMod, type Job } from '../node_modules/@cmodjs/core/mod.js'
@@ -413,7 +413,7 @@ Each member calls the member of the same name in Claude Code's hooks API, `$`, w
 | `fs.stat(path, options?)` | Resolves `{ kind, size, mtimeMs, isLink }`, and `realPath` with `{ resolve: true }`. It rejects for a missing path. |
 | `http.fetch(url, init?)` | What `mod.http.fetch` calls. |
 | `settings.read(args?)` | What `mod.settings.read` calls. |
-| `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where CMod also keeps `mod.state`. |
+| `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where cmod also keeps `mod.state`. |
 | `clock.now()` | Resolves milliseconds since the epoch. |
 | `clock.after(ms, fn)` | Calls `fn` once after `ms` milliseconds, and returns `{ cancel() }`. |
 | `clock.every(ms, fn)` | Calls `fn` every `ms` milliseconds, at least 1, and returns `{ cancel() }`. |

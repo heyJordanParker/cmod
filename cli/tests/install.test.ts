@@ -200,7 +200,7 @@ test('cmod remove of a plain plugin uninstalls it through Claude Code', async ()
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
-test('cmod remove of a name Claude Code does not hold and CMod never set up points at cmod list', async () => {
+test('cmod remove of a name Claude Code does not hold and cmod never set up points at cmod list', async () => {
   const home = await marketplaceHome({})
 
   const result = await cmod(home, 'remove', 'ghost')
@@ -239,7 +239,7 @@ test('cmod update updates every plugin Claude Code holds, and reruns the install
   expect(existsSync(join(storeOf(home), 'records/plain.json'))).toBe(false)
 })
 
-test('cmod update of two mods installs the CMod plugin once', async () => {
+test('cmod update of two mods installs the cmod plugin once', async () => {
   const home = await marketplaceHome({ 'file-tree': modFiles('file-tree'), diagrams: modFiles('diagrams') })
   expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
   expect((await cmod(home, 'install', 'diagrams@market', '--yes')).exitCode).toBe(0)
@@ -273,7 +273,7 @@ test('cmod update with no name updates the mods after a plugin whose update fail
   )
 })
 
-test('cmod update of a plugin whose new version adds steps installs the CMod plugin and sets it up', async () => {
+test('cmod update of a plugin whose new version adds steps installs the cmod plugin and sets it up', async () => {
   const home = await marketplaceHome({ demo: plainFiles('demo') })
   expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
   await rm(join(home, 'installed/cmod@cmod'))
@@ -336,7 +336,7 @@ test('cmod list shows a plugin with no cmod steps as Claude Code holds it', asyn
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
-test('cmod list shows the CMod plugin ready when the cmod program is its version or newer, with no record', async () => {
+test('cmod list shows the cmod plugin ready when the cmod program is its version or newer, with no record', async () => {
   const home = await marketplaceHome({})
   const cmodPluginAt = (version: string) => ({
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version }),

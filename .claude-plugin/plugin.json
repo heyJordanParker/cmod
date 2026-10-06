@@ -1,12 +1,16 @@
 {
   "name": "cmod",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Claude Mod Manager: fetches the cmod program for every mod, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.",
   "author": {
     "name": "Jordan Parker"
   },
-  "homepage": "https://github.com/heyJordanParker/cmod",
+  "homepage": "https://claudemodmanager.com",
   "repository": "https://github.com/heyJordanParker/cmod",
+  "documentationUrl": "https://claudemodmanager.com/docs/",
+  "supportUrl": "https://github.com/heyJordanParker/cmod/issues",
+  "privacyPolicyUrl": "https://claudemodmanager.com/privacy",
+  "termsOfServiceUrl": "https://claudemodmanager.com/terms",
   "license": "MIT",
   "types": "./types/index.d.ts"
 }

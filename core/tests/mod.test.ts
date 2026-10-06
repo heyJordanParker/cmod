@@ -738,7 +738,7 @@ test('a clock.after with no fake answer fires on a real timer', async () => {
   expect(tested.calls.filter((call) => call.call === 'clock.after').map((call) => call.args[0])).toEqual([1])
 })
 
-test('mod.dataFolder is the CMod store folder of the plugin, the one a step gets as CMOD_DATA', async () => {
+test('mod.dataFolder is the cmod store folder of the plugin, the one a step gets as CMOD_DATA', async () => {
   let folder: string | undefined
   const tested = testMod(
     defineMod({

@@ -137,6 +137,6 @@ async function changeConsent(change: (consent: Record<string, string[]>) => bool
 async function readConsent(): Promise<Record<string, string[]>> {
   const path = storePath('consent.json')
   const value = await readJson(path)
-  if (value !== undefined && !isObject(value)) throw new Error(`${path} is not a map of plugin names to approved hashes. Delete it, and CMod asks again.`)
+  if (value !== undefined && !isObject(value)) throw new Error(`${path} is not a map of plugin names to approved hashes. Delete it, and cmod asks again.`)
   return Object.assign(Object.create(null), value)
 }

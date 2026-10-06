@@ -1,6 +1,6 @@
 # State
 
-`mod.state` holds the mod's values. Claude Mod Manager (CMod) saves them, redraws the mod's panes and slot renders when one changes, and lets a person change the starting values without touching the mod's code.
+`mod.state` holds the mod's values. Claude Mod Manager (cmod) saves them, redraws the mod's panes and slot renders when one changes, and lets a person change the starting values without touching the mod's code.
 
 ## Declare the state
 
@@ -13,7 +13,7 @@
 | `project` | This project, in every conversation. | Yes |
 | `global` | Every project. | Yes |
 
-CMod keeps each `session` value for the 20 sessions that wrote it last, and each `project` value for the 20 projects that wrote it last. A session or project past those 20 starts that value over from its starting value.
+cmod keeps each `session` value for the 20 sessions that wrote it last, and each `project` value for the 20 projects that wrote it last. A session or project past those 20 starts that value over from its starting value.
 
 Put values the mod works out again on every prompt, such as a git status, in `memory`.
 
@@ -56,7 +56,7 @@ A group other than `memory`, `session`, `project`, and `global` throws `<mod>: s
 
 ## Change a value
 
-Assign to a key. CMod saves the new value and redraws the mod.
+Assign to a key. cmod saves the new value and redraws the mod.
 
 - A key the state does not declare throws `<mod>: mod.state.<group>.<key> is not declared. Add it to state.<group> in defineMod with its starting value.`
 - An object or an array in the state is frozen. Changing it in place throws `<mod>: mod.state.<path> cannot change in place.` Assign a new value instead:
@@ -75,8 +75,8 @@ export const reads = defineMod({
 })
 ```
 
-- Keep only JSON data in a saved group. A value CMod cannot save logs `<mod> could not keep state.<group>.<key>: <error>. Keep only JSON data in mod.state.`
-- CMod saves values one at a time in the order they were assigned.
+- Keep only JSON data in a saved group. A value cmod cannot save logs `<mod> could not keep state.<group>.<key>: <error>. Keep only JSON data in mod.state.`
+- cmod saves values one at a time in the order they were assigned.
 
 ## Where the values come from
 
@@ -87,7 +87,7 @@ When the mod starts, each value is, in order of precedence:
 3. The value in the person's own `state.json`.
 4. The starting value in `defineMod`.
 
-After a `/cd` to another project, CMod loads that project's `project` values and reads its `state.json` again.
+After a `/cd` to another project, cmod loads that project's `project` values and reads its `state.json` again.
 
 ## Let a person change the starting values
 
@@ -111,7 +111,7 @@ A `state.json` in either folder lists only the values to change:
 - A project `state.json` cannot set `global` values, because one repository cannot change a value for every project.
 - A file cannot set `memory` values.
 
-CMod ignores each entry it cannot use and logs one line naming the file, the entry, and the fix:
+cmod ignores each entry it cannot use and logs one line naming the file, the entry, and the fix:
 
 - a file that is not JSON, or not a JSON object
 - a group the mod does not declare
@@ -131,7 +131,7 @@ A person replaces the text of a Skill the mod ships by putting a file at the sam
 
 - Claude reads that file in place of the mod's from the next time the Skill loads, and updates of the mod keep it.
 - The project file wins over the person's file.
-- CMod drops the file's frontmatter, so the mod's own name and description stay.
+- cmod drops the file's frontmatter, so the mod's own name and description stay.
 - Only a Skill the mod ships in `skills/<skill>/` is replaced, and only when it loads as `<mod>:<skill>`.
 - Deleting the file brings the mod's text back.
 

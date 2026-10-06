@@ -50,7 +50,7 @@ async function run(argv: string[], home: string, origin: string, path = '/usr/bi
 
 const storeOf = (home: string) => join(home, '.local/share/cmod/bin/cmod')
 
-test('the CMod plugin, @cmodjs/cli, and @cmodjs/core share one version, which the bootstrap installs', async () => {
+test('the cmod plugin, @cmodjs/cli, and @cmodjs/core share one version, which the bootstrap installs', async () => {
   const versionOf = async (path: string) => JSON.parse(await Bun.file(join(checkout, path)).text()).version
   const plugin = await versionOf('.claude-plugin/plugin.json')
 
@@ -95,7 +95,7 @@ test('the cmod launcher installs nothing when the download does not match SHA256
   expect(existsSync(join(storeOf(home), '0.1.1/cmod'))).toBe(false)
 })
 
-test("the CMod plugin's bootstrap installs the plugin's cmod and links ~/.local/bin/cmod to the store, beside a cmod npm put on PATH", async () => {
+test("the cmod plugin's bootstrap installs the plugin's cmod and links ~/.local/bin/cmod to the store, beside a cmod npm put on PATH", async () => {
   const home = await temporaryHome()
   using release = serveRelease('0.1.1')
   const plugin = join(home, 'plugins/cmod')

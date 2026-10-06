@@ -40,7 +40,7 @@ test('a removal noticed at session start toasts that a session still running it 
   expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. A session that still runs it stops after /reload-plugins.'])
 })
 
-test('the CMod plugin tears down only keys removed from user settings', async () => {
+test('the cmod plugin tears down only keys removed from user settings', async () => {
   const user = { 'cmod@fixtures': true, 'four-step@fixtures': true }
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], user, {}, { 'cmod@fixtures': true, 'project-mod@team': true })
   await tested.fire('SessionStart', { source: 'startup' })

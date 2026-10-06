@@ -17,7 +17,7 @@ type ModDefinition<State, Name> = {
 }
 ```
 
-- `name` is the mod's name. Use the `name` in `.claude-plugin/plugin.json`. Claude Mod Manager (CMod) keys the saved state and the `state.json` files by this name, and the data folder and the Skill overrides by the plugin's name, so the two must match. `defineMod` throws `defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.` for a blank name.
+- `name` is the mod's name. Use the `name` in `.claude-plugin/plugin.json`. Claude Mod Manager (cmod) keys the saved state and the `state.json` files by this name, and the data folder and the Skill overrides by the plugin's name, so the two must match. `defineMod` throws `defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.` for a blank name.
 - `state` holds the starting values, grouped by how long they last. [state.md](state.md) explains the groups.
 - `api` holds the methods other mods call. [dependencies.md](dependencies.md) explains it.
 - `setup` runs once when the mod starts. It adds hooks, panes, slot renders, and jobs. It may be `async`.
@@ -41,9 +41,9 @@ export const greeter = defineMod({
 
 ## When setup runs
 
-Claude Code loads the mod at the start of each session. CMod then checks that the mod is set up. A mod with an install step that has not run waits for the person's consent and the install first ([install-steps.md](install-steps.md)). Then CMod loads the saved state, runs `setup`, and marks as open each of the mod's panes that Claude Code already shows.
+Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod with an install step that has not run waits for the person's consent and the install first ([install-steps.md](install-steps.md)). Then cmod loads the saved state, runs `setup`, and marks as open each of the mod's panes that Claude Code already shows.
 
-The first time a version starts, CMod shows the toast `<name> is ready` and logs `<name> added <what setup added>`, such as `the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit`.
+The first time a version starts, cmod shows the toast `<name> is ready` and logs `<name> added <what setup added>`, such as `the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit`.
 
 When a step fails, the mod does not start. Its progress line above the prompt names the failure and the fix:
 
@@ -115,7 +115,7 @@ type Mod<State> = {
 | --- | --- | --- |
 | `name` | The mod's name from `defineMod`. | |
 | `state` | The mod's values. Assign to a key to change it. | [state.md](state.md) |
-| `dataFolder` | The mod's own folder in the CMod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. CMod deletes it when the mod is removed. | [install-steps.md](install-steps.md) |
+| `dataFolder` | The mod's own folder in the cmod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. cmod deletes it when the mod is removed. | [install-steps.md](install-steps.md) |
 | `projectRoot` | The project the session works in. It follows `/cd`. | |
 | `cwd` | The session's working folder. It follows a `cd` in a Bash or PowerShell call, and `/cd`. | |
 | `on` | Adds a hook on a Claude Code event. | [hooks.md](hooks.md) |
@@ -145,7 +145,7 @@ Both run a program without a shell. `argv[0]` is the program and the rest are it
 - `spawn` streams `{ stream: 'stdout' | 'stderr', text }` pieces as the program writes them. Its `result` resolves `{ code, signal }` once the stream is read to its end. Its first pull rejects when the program cannot start.
 - The `for await` loop over a `spawn` is the program's life. Leaving the loop, or calling `return()` on the stream, kills the program, and so does unloading the mod. Returning from the hook does not.
 
-Inside a job, CMod adds the job's deadline to each call ([jobs.md](jobs.md)).
+Inside a job, cmod adds the job's deadline to each call ([jobs.md](jobs.md)).
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'

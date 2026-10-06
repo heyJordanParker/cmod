@@ -1,6 +1,6 @@
 # cmod commands
 
-The `cmod` command of Claude Mod Manager (CMod) builds, checks, and publishes mods, and installs them. `npm i -g @cmodjs/cli` puts it on `PATH`. `cmod <command> --help` prints a command's arguments, and `cmod --version` prints the version.
+The `cmod` command of Claude Mod Manager (cmod) builds, checks, and publishes mods, and installs them. `npm i -g @cmodjs/cli` puts it on `PATH`. `cmod <command> --help` prints a command's arguments, and `cmod --version` prints the version.
 
 Each command below restates what `cmod <command> --help` prints, for a mod author. The help text is the full word.
 
@@ -25,7 +25,7 @@ Creates a mod in `./<name>`: a `defineMod` with one hook, one pane, and one rend
 cmod link [path] [--yes]
 ```
 
-Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the CMod plugin when Claude Code lacks it, unless the checkout is CMod itself. Then installs the checkout's packages, builds the program `cli/` declares into `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
+Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares into `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
 
 - `--yes` approves the mod's install and uninstall commands without asking.
 
@@ -57,7 +57,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 10. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
 11. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
 
-`cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the CMod store the first time. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
+`cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the cmod store the first time. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
 
 ### cmod try
 
@@ -65,7 +65,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 cmod try <owner/repo | path> [--yes] [-- claude arguments]
 ```
 
-Starts one throwaway Claude Code session with a mod set up. Installs the mod's packages, installs the CMod plugin when Claude Code lacks it, and runs the mod's install step after asking consent. Then starts one Claude Code session with the mod loaded through `--plugin-dir`.
+Starts one throwaway Claude Code session with a mod set up. Installs the mod's packages, installs the cmod plugin when Claude Code lacks it, and runs the mod's install step after asking consent. Then starts one Claude Code session with the mod loaded through `--plugin-dir`.
 
 - Unlike `cmod link`, it builds no program from `cli/`. A mod whose `package.json` `cmod.program` names a program downloads it from the GitHub release of the mod's version, so it fails until `cmod publish` has released that version.
 
@@ -87,7 +87,7 @@ Releases the mod at `path` (default: the current folder) at the version in its `
 3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
-6. Writes `.claude-plugin/marketplace.json`, listing the archive and the CMod plugin.
+6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin.
 7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release.
 8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
 
@@ -103,7 +103,7 @@ It needs, and refuses to start without:
 - a `package.json` with no dependency on a `file:` or `link:` path, which no user has
 - a `"files"` list, when `package.json` has one, whose every path matches a committed file
 - a `"program"` in the `cmod` key of `package.json` that names the program `cli/` declares, when `cli/` declares one
-- the network, to hash the CMod plugin release it lists, unless the mod is CMod itself
+- the network, to hash the cmod plugin release it lists, unless the mod is cmod itself
 - for a real publish, a working tree with no uncommitted changes, a `v<version>` tag that does not exist yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
 `--dry-run` builds and writes everything, and pushes nothing. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
@@ -117,7 +117,7 @@ cmod install <owner/repo | path> [name] [--yes]
 cmod install <name | name@marketplace> [--yes]
 ```
 
-Adds the plugin's marketplace to Claude Code and installs the plugin through Claude Code. A mod also gets the CMod plugin when Claude Code lacks it, and its install step runs. Any other plugin installs through Claude Code alone, and CMod keeps no record of it.
+Adds the plugin's marketplace to Claude Code and installs the plugin through Claude Code. A mod also gets the cmod plugin when Claude Code lacks it, and its install step runs. Any other plugin installs through Claude Code alone, and cmod keeps no record of it.
 
 - When the marketplace lists several plugins, name the one to install after it.
 - Given `name@marketplace` of a marketplace Claude Code has added, it installs that plugin.
@@ -141,7 +141,7 @@ Updates the named plugin, or every plugin Claude Code has installed, through Cla
 cmod remove <name>
 ```
 
-Uninstalls the plugin through Claude Code. When CMod set the plugin up as a mod, it then runs the uninstall step CMod saved and removes what CMod set up.
+Uninstalls the plugin through Claude Code. When cmod set the plugin up as a mod, it then runs the uninstall step cmod saved and removes what cmod set up.
 
 ### cmod list
 
@@ -149,9 +149,9 @@ Uninstalls the plugin through Claude Code. When CMod set the plugin up as a mod,
 cmod list
 ```
 
-Lists every plugin Claude Code has installed or linked, with its version. A mod shows whether CMod set it up, and any other plugin shows whether Claude Code enabled it. It also lists every mod Claude Code removed whose uninstall step has not run yet.
+Lists every plugin Claude Code has installed or linked, with its version. A mod shows whether cmod set it up, and any other plugin shows whether Claude Code enabled it. It also lists every mod Claude Code removed whose uninstall step has not run yet.
 
-- The `cmod` commands count a plugin as a mod only when its `package.json` has a `cmod` step key or CMod holds an install record for it. A mod made with `cmod new` has neither until its first Claude Code session sets it up, so until then `cmod list` shows it as `enabled`, like any other plugin.
+- The `cmod` commands count a plugin as a mod only when its `package.json` has a `cmod` step key or cmod holds an install record for it. A mod made with `cmod new` has neither until its first Claude Code session sets it up, so until then `cmod list` shows it as `enabled`, like any other plugin.
 
 ## Run in an install script
 
@@ -163,9 +163,9 @@ cmod download <program> <machine> <url> <sha256> [<machine> <url> <sha256> …]
 
 Downloads a program for an install script: fetches the download for this machine, checks its SHA-256, unpacks it, and moves `<program>` to `$CMOD_DATA/bin/<program>`. [install-steps.md](install-steps.md) explains it.
 
-## Run by CMod
+## Run by cmod
 
-CMod runs these two itself. A person runs them to see a step's whole log or to finish a step.
+cmod runs these two itself. A person runs them to see a step's whole log or to finish a step.
 
 ### cmod setup
 

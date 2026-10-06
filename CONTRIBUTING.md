@@ -1,8 +1,8 @@
 # Contributing to Claude Mod Manager
 
-This guide runs Claude Mod Manager (CMod) from a checkout, runs the gate every change passes, and releases a new version.
+This guide runs Claude Mod Manager (cmod) from a checkout, runs the gate every change passes, and releases a new version.
 
-## Run CMod from a checkout
+## Run cmod from a checkout
 
 In the clone's folder:
 
@@ -12,9 +12,9 @@ bun install --cwd core
 bun cli/src/main.ts link .
 ```
 
-`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code.
+`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the cmod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link cmod before any mod, because `cmod link` of a mod first looks for the cmod plugin in Claude Code.
 
-`cmod link .` refuses when `PATH` already finds another `cmod` first, such as one `npm i -g @cmodjs/cli` installed: `PATH already finds cmod at <path>, so the cmod program CMod installs would never run.` It also refuses a `~/.local/bin/cmod` that CMod did not make. Uninstall that `cmod`, such as with `npm uninstall -g @cmodjs/cli`, or run the link with its folder left out of `PATH`, then run `bun cli/src/main.ts link .` again.
+`cmod link .` refuses when `PATH` already finds another `cmod` first, such as one `npm i -g @cmodjs/cli` installed: `PATH already finds cmod at <path>, so the cmod program cmod installs would never run.` It also refuses a `~/.local/bin/cmod` that cmod did not make. Uninstall that `cmod`, such as with `npm uninstall -g @cmodjs/cli`, or run the link with its folder left out of `PATH`, then run `bun cli/src/main.ts link .` again.
 
 The build and the tests read Claude Code's types from `.claude-plugin/types/`, which git ignores. Claude Code writes the folder the first time a session loads the checkout. In a checkout without it, such as a new worktree, run this from the repository root first:
 
@@ -22,7 +22,7 @@ The build and the tests read Claude Code's types from `.claude-plugin/types/`, w
 claude --plugin-dir . -p ok
 ```
 
-To build a mod against library changes that are not on npm yet, run `bun run --cwd core build`, then `env -C core bun pm pack`, and set `CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz` before `cmod new`. Only a `.tgz` works: a folder installs as links into that folder, and `claude plugin validate --strict` refuses the mod. Then move out of the clone, such as with `cd ..`, before `cmod new`, so the new mod is not created inside the CMod checkout.
+To build a mod against library changes that are not on npm yet, run `bun run --cwd core build`, then `env -C core bun pm pack`, and set `CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz` before `cmod new`. Only a `.tgz` works: a folder installs as links into that folder, and `claude plugin validate --strict` refuses the mod. Then move out of the clone, such as with `cd ..`, before `cmod new`, so the new mod is not created inside the cmod checkout.
 
 ## Run the gate
 
@@ -45,7 +45,7 @@ env -C <sample> bun x tsc --noEmit
 env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 ```
 
-- `cmod check` fetches `tsc` and `oxlint` into the CMod store under `HOME`, so it runs with a scratch `HOME`.
+- `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
 - `cmod check` runs `claude plugin validate --strict`, which nothing else in the gate runs.
 - A sample runs the packed `@cmodjs/core`, never `core/src/`. Repack and unpack the library into each sample before its gate, as the `/repack-core` Skill in `.claude/skills/` does.
 
@@ -54,7 +54,7 @@ env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 `.claude-plugin/plugin.json`, `core/package.json`, and `cli/package.json` share one version, which is the version of the cmod program too. To release:
 
 1. Raise the version in all three files to the same new version.
-2. Raise the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges to `^<new version>`, so the CMod plugin installs the release.
+2. Raise the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges to `^<new version>`, so the cmod plugin installs the release.
 3. Push to `main`.
 
 The [release workflow](.github/workflows/release.yml) then runs on GitHub:
@@ -62,7 +62,7 @@ The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 1. It fails when the three versions differ.
 2. It installs Claude Code to write `.claude-plugin/types/`, then checks and tests `@cmodjs/core` and `@cmodjs/cli`, and builds `@cmodjs/core`.
 3. It publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.
-4. It releases the CMod plugin on GitHub with `cmod publish`, which builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
+4. It releases the cmod plugin on GitHub with `cmod publish`, which builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
 
 Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway.
 

@@ -53,19 +53,19 @@ test('try prints each step for a mod with no steps, and passes the arguments aft
     [
       'Installing packages for demo…',
       '✔ demo has no packages to install',
-      'Installing the CMod plugin into Claude Code…',
+      'Installing the cmod plugin into Claude Code…',
       '✔ Installed cmod@cmod into Claude Code',
       'Installing demo…',
       '✔ demo 0.1.0 is ready',
       `claude --plugin-dir ${root} -p hello`,
       'Uninstalling demo…',
-      '✔ Removed what CMod set up for demo',
+      '✔ Removed what cmod set up for demo',
       '',
     ].join('\n'),
   )
 })
 
-test('cmod try loads a fresh cmod new mod in a home without the CMod plugin', async () => {
+test('cmod try loads a fresh cmod new mod in a home without the cmod plugin', async () => {
   const home = await temporaryHome()
   const root = join(home, 'my-mod')
   await writeFiles(home, { 'bin/claude': claudeAnswering([], 'true') })
@@ -79,7 +79,7 @@ test('cmod try loads a fresh cmod new mod in a home without the CMod plugin', as
   )
 }, 15_000)
 
-test('cmod try before CMod is linked names the fix', async () => {
+test('cmod try before cmod is linked names the fix', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
   await writeFiles(home, {
@@ -91,7 +91,7 @@ test('cmod try before CMod is linked names the fix', async () => {
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toContain('plugin marketplace add heyJordanParker/cmod')
-  expect(result.stderr).toEndWith('Link the CMod checkout first: cmod link <checkout>\n')
+  expect(result.stderr).toEndWith('Link the cmod checkout first: cmod link <checkout>\n')
 })
 
 test('cmod try sets the mod up itself, and leaves no record, data, approval or program link after the session', async () => {

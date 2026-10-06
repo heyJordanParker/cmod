@@ -172,7 +172,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
 
   const record = () => {
     recording ??= recordThroughCmod()
-      .catch((error: unknown) => claude().ui.log(`${definition.name} has no CMod record yet: ${messageOf(error)}`, { to: 'debug' }))
+      .catch((error: unknown) => claude().ui.log(`${definition.name} has no cmod record yet: ${messageOf(error)}`, { to: 'debug' }))
       .finally(() => {
         recording = undefined
       })
@@ -227,7 +227,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     if (plugin === undefined) return
     if (plugin.name === cmodPluginName) return bootstrap(plugin.root)
     phase = 'installing'
-    if ((await cmodVersion(claude())) === undefined) return waitForCMod()
+    if ((await cmodVersion(claude())) === undefined) return waitForcmod()
     endLine()
     const progress = showLine()
     let outcome: RunnerEvent | undefined
@@ -243,9 +243,9 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`)
   }
 
-  const waitForCMod = () => {
+  const waitForcmod = () => {
     phase = 'waiting'
-    showLine().wait('Waiting for CMod')
+    showLine().wait('Waiting for cmod')
     let check: Promise<void> | undefined
     const stop = () => {
       timer.cancel()
@@ -264,7 +264,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
           report(error)
         })
     })
-    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for CMod to download cmod. See CMod's own line."))
+    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for cmod to download cmod. See cmod's own line."))
   }
 
   const bootstrap = async (root: string) => {

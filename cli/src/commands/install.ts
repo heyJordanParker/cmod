@@ -17,9 +17,9 @@ ${summary}
 
 Adds the plugin's marketplace to Claude Code and installs the plugin through
 Claude Code. A mod, a plugin whose package.json "cmod" key names an install,
-uninstall, or program step, also gets the CMod plugin when Claude Code lacks
+uninstall, or program step, also gets the cmod plugin when Claude Code lacks
 it, and its install step runs. Any other plugin installs through Claude Code
-alone, and CMod keeps no record of it. When the marketplace lists several
+alone, and cmod keeps no record of it. When the marketplace lists several
 plugins, name the one to install after it. Given name@marketplace of a
 marketplace Claude Code has added, installs that plugin. Given the name of a
 plugin Claude Code already holds, such as four-step or four-step@market, runs
@@ -93,10 +93,10 @@ export async function installCmodPlugin(progress: Progress): Promise<void> {
   const cmod = (await listPlugins()).find((plugin) => plugin.name === 'cmod')
   if (cmod?.scope === 'session') return
   const id = cmod?.id ?? 'cmod@cmod'
-  progress.step('Installing the CMod plugin into Claude Code')
+  progress.step('Installing the cmod plugin into Claude Code')
   if (cmod === undefined && !(await listMarketplaces()).some((marketplace) => marketplace.name === 'cmod')) {
     await addMarketplace('heyJordanParker/cmod').catch((error: unknown) => {
-      throw new Error(`${messageOf(error)}\nLink the CMod checkout first: cmod link <checkout>`)
+      throw new Error(`${messageOf(error)}\nLink the cmod checkout first: cmod link <checkout>`)
     })
   }
   await changePlugin('install', id)

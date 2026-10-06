@@ -8,14 +8,14 @@ import { readPlugin, usesCmod, type Plugin } from '../plugin.js'
 import { linkedFolders } from '../settings.js'
 import { recordNames } from '../store.js'
 
-export const summary = 'List every plugin Claude Code has, and what CMod set up.'
+export const summary = 'List every plugin Claude Code has, and what cmod set up.'
 
 export const help = `Usage: cmod list
 
 ${summary}
 
 Lists every plugin Claude Code has installed or linked, with its version. A
-mod shows whether CMod set it up, and any other plugin shows whether Claude
+mod shows whether cmod set it up, and any other plugin shows whether Claude
 Code enabled it. Also lists every mod Claude Code removed whose uninstall step
 has not run yet.`
 

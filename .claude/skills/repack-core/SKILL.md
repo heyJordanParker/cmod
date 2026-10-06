@@ -7,7 +7,7 @@ description: Get a change to the `@cmodjs/core` package in `core/` into the code
 
 A consumer runs what was packed, never what is in `core/src/`. Prove the package, not the tree.
 
-- The consumers are the Claude Mod Manager (CMod) plugin at the repository root and the sample mods. Each depends on `@cmodjs/core` from npm, so `bun install` gives them the published version, never this change.
+- The consumers are the Claude Mod Manager (cmod) plugin at the repository root and the sample mods. Each depends on `@cmodjs/core` from npm, so `bun install` gives them the published version, never this change.
 - A mod reaches `@cmodjs/core` only as real files in its own `node_modules`, because Claude Code refuses a symbolic link there.
 - The cmod program is the exception: `cli/` depends on the `core/` folder through those per-file links, so it reads `core/src/` edits with no repack.
 
@@ -20,7 +20,7 @@ IF the change adds a folder under `core/src/`:
 ## 2. Delete the build output, then build
 
 `tsc` never deletes the output of a module that was renamed, moved, or deleted, and the pack takes whatever lies in `core/`. The build output is every path `core/package.json` `files` names except `src/` and `docs/`, plus `core/*.tgz`.
-The build reads Claude Code's types from `.claude-plugin/types/`, which git ignores and Claude Code writes when it first loads the checkout. In a checkout without it, such as a new worktree, run `claude --plugin-dir . -p ok` from the repository root first, as CONTRIBUTING.md's "Run CMod from a checkout" does.
+The build reads Claude Code's types from `.claude-plugin/types/`, which git ignores and Claude Code writes when it first loads the checkout. In a checkout without it, such as a new worktree, run `claude --plugin-dir . -p ok` from the repository root first, as CONTRIBUTING.md's "Run cmod from a checkout" does.
 Example: from the repository root, `rm -rf core/jobs core/runtime core/testing core/ui core/utils core/*.js core/*.d.ts core/*.d.ts.map core/*.tgz`, then `bun run --cwd core build`.
 
 ## 3. Pack, then read the tarball
@@ -48,7 +48,7 @@ IF the work is done with the change:
 
 ## 5. Run the end gate
 
-The shell's `bun` is a function that turns `bun test` into `bun run test`, and the repository root and the samples have no `test` script. `env -C <folder> bun …` runs Bun itself. `cmod check` fetches `tsc` and `oxlint` into the CMod store under `HOME`, so it runs with a scratch `HOME`.
+The shell's `bun` is a function that turns `bun test` into `bun run test`, and the repository root and the samples have no `test` script. `env -C <folder> bun …` runs Bun itself. `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
 
 From the repository root, every command passes:
     env -C core bun test

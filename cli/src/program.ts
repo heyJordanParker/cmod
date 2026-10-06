@@ -76,17 +76,17 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
   await refuseTakenCommand(name)
   const target = storePath('bin', name, plugin.version, name)
   if (!existsSync(target)) {
-    if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so CMod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
+    if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so cmod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
     const release = `${releaseDownloads(plugin.repository)}/v${plugin.version}`
     const url = `${release}/${name}-${machine}`
     const attach = (file: string) => `Attach ${file} to the v${plugin.version} release, as cmod publish does.`
     emit({ kind: 'progress', done: 0, total: programSteps, label: `Downloading ${name} ${plugin.version}` })
     const sums = new TextDecoder().decode(await download(`${release}/SHA256SUMS`, attach('SHA256SUMS')))
     const expected = sums.split('\n').map((line) => /^([0-9a-f]{64}) [ *](.+)$/.exec(line.trim())).find((match) => match?.[2] === basename(url))?.[1]
-    if (expected === undefined) throw new Error(`${release}/SHA256SUMS lists no ${basename(url)}, so CMod cannot check the download. Publish the release with cmod publish, which lists every build.`)
+    if (expected === undefined) throw new Error(`${release}/SHA256SUMS lists no ${basename(url)}, so cmod cannot check the download. Publish the release with cmod publish, which lists every build.`)
     const build = await download(url, attach(basename(url)))
     const actual = new Bun.CryptoHasher('sha256').update(build).digest('hex')
-    if (actual !== expected) throw new Error(`${url} has SHA-256 ${actual}, but SHA256SUMS lists ${expected}, so CMod installed nothing. Publish the release again with cmod publish.`)
+    if (actual !== expected) throw new Error(`${url} has SHA-256 ${actual}, but SHA256SUMS lists ${expected}, so cmod installed nothing. Publish the release again with cmod publish.`)
     const partial = `${target}.${process.pid}.tmp`
     await mkdir(dirname(target), { recursive: true })
     try {
@@ -124,11 +124,11 @@ export async function restoreProgram(name: string, record: InstallRecord | undef
 async function refuseTakenCommand(name: string): Promise<void> {
   const entry = commandEntry(name)
   if ((await lstat(entry).catch(() => undefined)) !== undefined && !(await isLinkedFromStore(entry, name))) {
-    throw new Error(`${tilde(entry)} exists and CMod did not make it, so CMod will not replace it with the ${name} program. Move it out of ~/.local/bin, then run the command again.`)
+    throw new Error(`${tilde(entry)} exists and cmod did not make it, so cmod will not replace it with the ${name} program. Move it out of ~/.local/bin, then run the command again.`)
   }
   const found = Bun.which(name)
   if (found !== null && resolve(dirname(found)) !== dirname(entry)) {
-    throw new Error(`PATH already finds ${name} at ${tilde(found)}, so the ${name} program CMod installs would never run. Remove that ${name} from PATH, then run the command again.`)
+    throw new Error(`PATH already finds ${name} at ${tilde(found)}, so the ${name} program cmod installs would never run. Remove that ${name} from PATH, then run the command again.`)
   }
 }
 

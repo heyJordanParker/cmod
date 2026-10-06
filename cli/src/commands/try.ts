@@ -17,7 +17,7 @@ export const help = `Usage: cmod try <owner/repo | path> [--yes] [-- claude argu
 
 ${summary}
 
-Installs the CMod plugin into Claude Code when it lacks it and runs the mod's
+Installs the cmod plugin into Claude Code when it lacks it and runs the mod's
 install step after asking consent for its install and uninstall commands, then
 starts one Claude Code session with the mod loaded through --plugin-dir. Unlike
 cmod link, it builds no program from cli/, so the program comes from the mod's
@@ -27,7 +27,7 @@ program, so the mod stays uninstalled. Ctrl+C or Ctrl+D at the consent
 question deletes the clone and changes nothing else. Ctrl+C, a closed terminal,
 or SIGTERM installs nothing more and skips a session that has not started, and
 the uninstall step runs to its end.
-The CMod plugin stays installed, as the cmod program does. A GitHub mod is
+The cmod plugin stays installed, as the cmod program does. A GitHub mod is
 cloned into a temporary folder that is deleted too. A mod another folder has
 set up is refused, so cmod try never replaces an installed copy. A checkout
 already set up from the same folder keeps its setup. Arguments after -- go to

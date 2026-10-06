@@ -30,7 +30,7 @@ export async function readJson(path: string): Promise<unknown> {
 
 export function home(): string {
   const value = process.env['HOME']
-  if (!value) throw new Error('HOME is not set, so CMod cannot find Claude Code settings or ~/.local/bin. Set HOME.')
+  if (!value) throw new Error('HOME is not set, so cmod cannot find Claude Code settings or ~/.local/bin. Set HOME.')
   return value
 }
 

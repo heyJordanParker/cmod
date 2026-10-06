@@ -24,7 +24,7 @@ export const tracer = defineMod({
 
 ## Type the methods: CmodDependencies
 
-The provider types its `api` in `types/index.d.ts`, and its `.claude-plugin/plugin.json` names that file as `"types": "./types/index.d.ts"`. The file adds the mod to `CmodDependencies`, which the Claude Mod Manager (CMod) plugin declares on the `claude-code` module:
+The provider types its `api` in `types/index.d.ts`, and its `.claude-plugin/plugin.json` names that file as `"types": "./types/index.d.ts"`. The file adds the mod to `CmodDependencies`, which the Claude Mod Manager (cmod) plugin declares on the `claude-code` module:
 
 ```ts
 export type TracerSignature = { name: string; line: number }

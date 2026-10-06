@@ -100,7 +100,7 @@ test('a failed build shows one sentence that ends with one period', async () => 
   expect(result.stdout).toContain(`✘ Building hello with "${build}" exited 2: make: no rule for dist.\n`)
 })
 
-test('link installs the CMod plugin through Claude Code when claude plugin list lacks it', async () => {
+test('link installs the cmod plugin through Claude Code when claude plugin list lacks it', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'bin/claude': claudeAnswering([]), 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
 
@@ -111,7 +111,7 @@ test('link installs the CMod plugin through Claude Code when claude plugin list 
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n')
 })
 
-test('link installs a listed CMod plugin again, so one Claude Code pulled in as a dependency stays installed on its own', async () => {
+test('link installs a listed cmod plugin again, so one Claude Code pulled in as a dependency stays installed on its own', async () => {
   const home = await temporaryHome()
   const dependency = [{ id: 'cmod@hello-market', version: '0.1.0', scope: 'user', enabled: true, installPath: '/cmod' }]
   await writeFiles(home, { 'bin/claude': claudeAnswering(dependency), 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
@@ -122,7 +122,7 @@ test('link installs a listed CMod plugin again, so one Claude Code pulled in as 
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\nplugin install cmod@hello-market --json\n')
 })
 
-test('link installs no CMod plugin when a linked CMod checkout provides it', async () => {
+test('link installs no cmod plugin when a linked cmod checkout provides it', async () => {
   const home = await temporaryHome()
   const checkout = [{ id: 'cmod@inline', version: '0.1.0', scope: 'session', enabled: true, installPath: join(home, 'Developer/cmod') }]
   await writeFiles(home, {
@@ -149,7 +149,7 @@ case "$*" in
 esac
 `
 
-test('cmod link of a mod before CMod is linked writes nothing to settings', async () => {
+test('cmod link of a mod before cmod is linked writes nothing to settings', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'bin/claude': claudeBeforeCmodIsLinked, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
 
@@ -157,11 +157,11 @@ test('cmod link of a mod before CMod is linked writes nothing to settings', asyn
 
   expect(linked.exitCode).toBe(1)
   expect(linked.stderr).toContain('plugin marketplace add heyJordanParker/cmod')
-  expect(linked.stderr).toEndWith('Link the CMod checkout first: cmod link <checkout>\n')
+  expect(linked.stderr).toEndWith('Link the cmod checkout first: cmod link <checkout>\n')
   expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false)
 })
 
-test('cmod link of the CMod checkout still links it', async () => {
+test('cmod link of the cmod checkout still links it', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'bin/claude': claudeBeforeCmodIsLinked, 'Developer/cmod/.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.1.0' }) })
 

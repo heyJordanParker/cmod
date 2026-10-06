@@ -11,8 +11,8 @@ export const help = `Usage: cmod remove <name>
 
 ${summary}
 
-Uninstalls the plugin through Claude Code. When CMod set the plugin up as a
-mod, then runs the uninstall step CMod saved and removes what CMod set up.`
+Uninstalls the plugin through Claude Code. When cmod set the plugin up as a
+mod, then runs the uninstall step cmod saved and removes what cmod set up.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })

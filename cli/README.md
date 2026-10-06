@@ -4,7 +4,7 @@
 
 # @cmodjs/cli
 
-The `cmod` command of Claude Mod Manager. Claude Mod Manager (CMod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step that runs with your consent.
+The `cmod` command of Claude Mod Manager. Claude Mod Manager (cmod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step that runs with your consent.
 
 ```sh
 npm i -g @cmodjs/cli
@@ -17,4 +17,4 @@ cmod new my-mod
 
 The mod author docs ship inside `@cmodjs/core`, so a mod's `node_modules/@cmodjs/core/docs/index.md` is their map. [commands.md](https://github.com/heyJordanParker/cmod/blob/main/core/docs/commands.md) covers every `cmod` command.
 
-The CMod plugin and the `cmod` source live at [github.com/heyJordanParker/cmod](https://github.com/heyJordanParker/cmod).
+The cmod plugin and the `cmod` source live at [github.com/heyJordanParker/cmod](https://github.com/heyJordanParker/cmod).

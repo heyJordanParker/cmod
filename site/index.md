@@ -51,7 +51,7 @@ const started = [
 
 # Ask Claude for a mod. Get one people can install.
 
-<p class="hero__lead">CMod is the library, docs, and command line your Claude builds Claude Code mods with. The install, the cleanup, the saved settings, the tests, and the release are already written. Claude writes only the part that is new.</p>
+<p class="hero__lead">cmod is the library, docs, and command line your Claude builds Claude Code mods with. The install, the cleanup, the saved settings, the tests, and the release are already written. Claude writes only the part that is new.</p>
 
 <div class="hero__actions">
 <CopyCommand command="npm i -g @cmodjs/cli" />
@@ -74,14 +74,14 @@ const started = [
 
 <p class="kicker">Why not from scratch</p>
 
-## Every mod needs the same eight parts. CMod has all eight built and tested.
+## Every mod needs the same eight parts. cmod has all eight built and tested.
 
-Claude can write each part on its own. Then each part is more code to review, to try by hand in a live session, and to fix when Claude Code changes. With CMod, each part is one line, and CMod keeps up with Claude Code so the mod does not have to.
+Claude can write each part on its own. Then each part is more code to review, to try by hand in a live session, and to fix when Claude Code changes. With cmod, each part is one line, and cmod keeps up with Claude Code so the mod does not have to.
 
 </div>
 <table class="parts__table">
 <thead>
-<tr><th scope="col">The part</th><th scope="col">From scratch</th><th scope="col">With CMod</th></tr>
+<tr><th scope="col">The part</th><th scope="col">From scratch</th><th scope="col">With cmod</th></tr>
 </thead>
 <tbody>
 <tr class="part">
@@ -145,7 +145,7 @@ Training data falls behind every release. So the docs ship inside `@cmodjs/core`
 <div class="split__visual">
 <figure class="file">
 <figcaption class="file__name">.claude/CLAUDE.md</figcaption>
-<p class="file__text">- <code>node_modules/@cmodjs/core/docs/</code> holds the docs of the installed <code>@cmodjs/core</code>. They match this version, and training data does not. Read the doc for the part you change, starting at <code>index.md</code>, before Claude Mod Manager (CMod) work.</p>
+<p class="file__text">- <code>node_modules/@cmodjs/core/docs/</code> holds the docs of the installed <code>@cmodjs/core</code>. They match this version, and training data does not. Read the doc for the part you change, starting at <code>index.md</code>, before Claude Mod Manager (cmod) work.</p>
 </figure>
 <Terminal title="cmod check" :lines="failed" />
 </div>
@@ -160,7 +160,7 @@ Training data falls behind every release. So the docs ship inside `@cmodjs/core`
 
 ## This mod stops Claude Code from force-pushing
 
-The rule, one line in `hooks/register.ts`, and a test are all Claude writes. CMod reads the whole command line, so a force push inside an `&&` chain or behind `sudo` is denied too, and Claude gets the reason.
+The rule, one line in `hooks/register.ts`, and a test are all Claude writes. cmod reads the whole command line, so a force push inside an `&&` chain or behind `sudo` is denied too, and Claude gets the reason.
 
 The test runs in `bun test`, with no Claude Code session. All five cases pass.
 
@@ -211,7 +211,7 @@ test('a plain push is left to Claude Code', async () => {
 
 ## A mod asks before it changes the machine, and cleans up after itself
 
-Installing a mod takes two commands in Claude Code. Claude Code installs the CMod plugin with it.
+Installing a mod takes two commands in Claude Code. Claude Code installs the cmod plugin with it.
 
 </div>
 <div class="installing__grid">
@@ -231,7 +231,7 @@ Installing a mod takes two commands in Claude Code. Claude Code installs the CMo
 </div>
 <div class="fact">
 <h3 class="fact__title">Nothing leaves the machine</h3>
-<p class="fact__text">The CMod plugin sends no data. Its one download is the <code>cmod</code> program, checked against the release's <code>SHA256SUMS</code>.</p>
+<p class="fact__text">The cmod plugin sends no data. Its one download is the <code>cmod</code> program, checked against the release's <code>SHA256SUMS</code>.</p>
 </div>
 </div>
 </div>
@@ -266,42 +266,42 @@ Installing a mod takes two commands in Claude Code. Claude Code installs the CMo
 ## Questions
 
 <details class="faq__item">
-<summary class="faq__question">Is CMod free?</summary>
+<summary class="faq__question">Is cmod free?</summary>
 
-Yes. The `@cmodjs/core` library, the `cmod` command, and the CMod plugin are open source under the MIT license.
-
-</details>
-
-<details class="faq__item">
-<summary class="faq__question">Can Claude build a mod without CMod?</summary>
-
-Yes. A Claude Code plugin is a hooks file, and Claude writes one well. CMod adds the parts every shared mod needs on top of it: install steps, cleanup, saved settings, tests, and releases. Claude spends the session on what the mod does.
+Yes. The `@cmodjs/core` library, the `cmod` command, and the cmod plugin are open source under the MIT license.
 
 </details>
 
 <details class="faq__item">
-<summary class="faq__question">Do people need to install CMod before my mod?</summary>
+<summary class="faq__question">Can Claude build a mod without cmod?</summary>
 
-No. Each mod lists CMod as a dependency, so Claude Code installs the CMod plugin with the mod. The plugin fetches the `cmod` program the first time it runs.
+Yes. A Claude Code plugin is a hooks file, and Claude writes one well. cmod adds the parts every shared mod needs on top of it: install steps, cleanup, saved settings, tests, and releases. Claude spends the session on what the mod does.
 
 </details>
 
 <details class="faq__item">
-<summary class="faq__question">Which systems does CMod run on?</summary>
+<summary class="faq__question">Do people need to install cmod before my mod?</summary>
+
+No. Each mod lists cmod as a dependency, so Claude Code installs the cmod plugin with the mod. The plugin fetches the `cmod` program the first time it runs.
+
+</details>
+
+<details class="faq__item">
+<summary class="faq__question">Which systems does cmod run on?</summary>
 
 macOS and Linux, on arm64 and x64. Every release carries a `cmod` build for each.
 
 </details>
 
 <details class="faq__item">
-<summary class="faq__question">Can CMod manage plugins that are not mods?</summary>
+<summary class="faq__question">Can cmod manage plugins that are not mods?</summary>
 
 Yes. `cmod install`, `cmod update`, and `cmod remove` work on any Claude Code plugin. A plugin that is not a mod installs with no consent question.
 
 </details>
 
 <details class="faq__item">
-<summary class="faq__question">Is CMod made by Anthropic?</summary>
+<summary class="faq__question">Is cmod made by Anthropic?</summary>
 
 No. Claude Mod Manager is an independent open source project. Claude and Claude Code are Anthropic's.
 

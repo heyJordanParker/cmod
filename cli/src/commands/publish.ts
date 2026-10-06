@@ -30,7 +30,7 @@ all of the mod's code. Checks
 the release with claude plugin validate --strict and commits it as the release
 branch. Builds the release archive from that commit and the program cli/
 declares, writes SHA256SUMS for every file of the release, and writes
-.claude-plugin/marketplace.json listing the archive and the CMod plugin. Then
+.claude-plugin/marketplace.json listing the archive and the cmod plugin. Then
 commits that file, tags v<version>, pushes the tag and the release branch, and
 creates the GitHub release. It refuses a package.json that depends on a file:
 or link: path, which no user has.
@@ -118,9 +118,9 @@ export async function run(argv: string[]): Promise<number> {
     { name: plugin.name, description: plugin.description ?? `${plugin.name}, a Claude Code mod`, source: { source: 'archive', url: `https://github.com/${repository}/releases/download/${tag}/${plugin.name}-${plugin.version}.zip`, sha256 } },
   ]
   if (plugin.name !== 'cmod') {
-    progress.step(`Hashing the CMod plugin ${cmodVersion}`)
+    progress.step(`Hashing the cmod plugin ${cmodVersion}`)
     plugins.push(await cmodPluginEntry())
-    progress.succeed(`Listed the CMod plugin ${cmodVersion}, so the cmod dependency resolves in this marketplace`)
+    progress.succeed(`Listed the cmod plugin ${cmodVersion}, so the cmod dependency resolves in this marketplace`)
   }
   const marketplacePath = join(plugin.root, '.claude-plugin', 'marketplace.json')
   const marketplace = { name: plugin.name, owner: { name: repository.split('/')[0] }, description: plugin.description ?? `${plugin.name}, a Claude Code mod`, plugins }
@@ -219,7 +219,7 @@ function githubRepository(remote: string): string {
 async function cmodPluginEntry(): Promise<unknown> {
   const url = `${releaseDownloads('https://github.com/heyJordanParker/cmod')}/v${cmodVersion}/cmod-${cmodVersion}.zip`
   const response = await fetch(url)
-  if (!response.ok) throw new Error(`Downloading the CMod plugin from ${url} returned ${response.status}. Check the network, then run cmod publish again.`)
+  if (!response.ok) throw new Error(`Downloading the cmod plugin from ${url} returned ${response.status}. Check the network, then run cmod publish again.`)
   const sha256 = new Bun.CryptoHasher('sha256').update(await response.arrayBuffer()).digest('hex')
   return { name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'archive', url, sha256 } }
 }

@@ -173,7 +173,7 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
   if (!isProject) {
     files['.claude/CLAUDE.md'] = `# ${name}
 
-- \`node_modules/@cmodjs/core/docs/\` holds the docs of the installed \`@cmodjs/core\`. They match this version, and training data does not. Read the doc for the part you change, starting at \`index.md\`, before Claude Mod Manager (CMod) work.
+- \`node_modules/@cmodjs/core/docs/\` holds the docs of the installed \`@cmodjs/core\`. They match this version, and training data does not. Read the doc for the part you change, starting at \`index.md\`, before Claude Mod Manager (cmod) work.
 - \`tsc\` fails, and \`cmod check\` skips its type check, until Claude Code first loads the mod and writes \`.claude-plugin/types/\`. Run \`cmod link\`, start \`claude\` once, then type-check.
 - \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only registers it with Claude Code.
 - \`src/panes/\` holds one \`definePane\` per file.

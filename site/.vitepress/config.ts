@@ -28,7 +28,7 @@ export default defineConfig({
       { text: 'Commands', link: '/docs/commands' },
     ],
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/heyJordanParker/cmod', ariaLabel: 'CMod on GitHub' },
+      { icon: 'github', link: 'https://github.com/heyJordanParker/cmod', ariaLabel: 'cmod on GitHub' },
       { icon: 'npm', link: 'https://www.npmjs.com/package/@cmodjs/cli', ariaLabel: '@cmodjs/cli on npm' },
     ],
     sidebar: {
@@ -60,7 +60,8 @@ export default defineConfig({
       text: 'Edit this page on GitHub',
     },
     footer: {
-      message: 'MIT licensed. Claude Mod Manager is an independent project, not made or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.',
+      message: 'Free and open source under MIT. <a href="/privacy">Privacy policy</a>. <a href="/terms">Terms of use</a>. <a href="https://github.com/heyJordanParker/cmod/issues">Support</a>.',
+      copyright: 'Claude Mod Manager is an independent project, not made or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.',
     },
   },
 })

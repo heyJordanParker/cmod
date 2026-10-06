@@ -10,7 +10,7 @@ mod.ui.progress<T>(title: string, task: (report: (step: ProgressStep) => void) =
 mod.ui.ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
 ```
 
-Claude Mod Manager (CMod) draws the mod again whenever a value in `mod.state` changes. A render reads `mod.state` and returns what to show. It never draws by hand.
+Claude Mod Manager (cmod) draws the mod again whenever a value in `mod.state` changes. A render reads `mod.state` and returns what to show. It never draws by hand.
 
 ## Elements
 
@@ -46,7 +46,7 @@ export function Count({ label, count }: { readonly label: string; readonly count
 
 An element called outside a render throws `<Element> was called outside a render. Use it inside a pane's render or a slot's component.` So build elements inside a pane's `render` or a slot's component, never at module load or in a hook.
 
-`drawWith(table, draw, markdown?)` is the function CMod draws a render with. A mod never calls it.
+`drawWith(table, draw, markdown?)` is the function cmod draws a render with. A mod never calls it.
 
 ## Panes
 
@@ -68,7 +68,7 @@ type Pane<State> = {
 
 - `id` is 1 to 64 letters, digits, `_`, or `-`. Another id throws `definePane: "<id>" is not a pane id.`
 - `title` labels the pane's tab while more than one pane is open.
-- `columns` and `rows` ask for a size. A number must be a whole number above 0, or `definePane` throws. A function reads the state and returns the size, or `undefined` for Claude Code's default. When the state changes the size, CMod resizes an open pane. A function that returns a bad size keeps an open pane at its size and logs the pane's title to the debug log. `open`, and `toggle` on a closed pane, reject with that size instead.
+- `columns` and `rows` ask for a size. A number must be a whole number above 0, or `definePane` throws. A function reads the state and returns the size, or `undefined` for Claude Code's default. When the state changes the size, cmod resizes an open pane. A function that returns a bad size keeps an open pane at its size and logs the pane's title to the debug log. `open`, and `toggle` on a closed pane, reject with that size instead.
 - `render` draws the pane's body. `props` holds `title`, `isFocused`, `bodyColumns`, `placement` (`'dock'` or `'inline'`), `scroll`, the body's window over a taller drawing, and `view`, which transcript is on screen beside the pane.
 
 Put each pane in its own file in `src/panes/`.
@@ -106,13 +106,13 @@ type PaneHandle = {
 ```
 
 - `open` asks Claude Code to show the pane. `isOpen` turns true once Claude Code places it. Claude Code may hold a pane back, and then `isOpen` stays false.
-- `mod.ui.pane` only adds the pane. CMod opens it only when the mod calls `open` or `toggle`, and Claude Code shows a pane only once the plugin has opened it. So give the person a way in, such as a slash command whose `reply` calls `pane.toggle()`.
+- `mod.ui.pane` only adds the pane. cmod opens it only when the mod calls `open` or `toggle`, and Claude Code shows a pane only once the plugin has opened it. So give the person a way in, such as a slash command whose `reply` calls `pane.toggle()`.
 - A pane opened from what the person did, such as a slash command they typed or a `Button` they pressed, shows at any terminal width. A pane opened from anything else, such as `setup`, a timer, or `SessionStart`, shows only on a terminal 144 columns wide, or 110 for a pane the person opened before. Below that it waits undrawn until the person opens it or the terminal widens.
 - `close` closes it. The person closes a pane too, and `isOpen` follows.
 - `toggle` closes an open pane and opens a closed one.
 - When the mod starts, `isOpen` is true for each of its panes Claude Code already shows.
 - Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give each pane its own id.`
-- The line CMod logs when the mod first starts names the pane by its `title`, as in `the Notes pane`.
+- The line cmod logs when the mod first starts names the pane by its `title`, as in `the Notes pane`.
 
 ```tsx
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -157,7 +157,7 @@ export const notes = defineMod({
 - `Default` draws what Claude Code, and the renders of other mods, would draw. Pass it props to change what it draws, such as `<Default hint="…" />`. Return `<Default />` to change nothing.
 - A render adds to what it wraps. In `AbovePrompt`, drawing `<Default />` and a line under it keeps the lines of Claude Code and other mods.
 - A render must draw the same for the same props. One that calls `Default` a different number of times on a second draw falls back to Claude Code's drawing.
-- A render that throws falls back to Claude Code's drawing. CMod logs `<mod>: the <Slot> render threw, so Claude Code draws its own: <error>` once.
+- A render that throws falls back to Claude Code's drawing. cmod logs `<mod>: the <Slot> render threw, so Claude Code draws its own: <error>` once.
 - A mod renders each slot once. A second `mod.ui.render` of one slot throws `<mod>: a render of <Slot> is already added. Render each slot once.` For a markdown slot the error names it as `a render of markdown <Kind>`, such as `a render of markdown CodeBlock`.
 - `slots.ToolUse` changes a call's own row. A group of calls shows the `slots.ToolGroup` row, which Claude Code builds from the stored message, so a mod that hides a tool's input also sets `isExpanded` on `slots.ToolGroup` to unfold the group into `ToolUse` rows.
 - No slot covers the permission dialog.

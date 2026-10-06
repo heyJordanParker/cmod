@@ -88,7 +88,7 @@ test('a SHA-256 that differs in an update installs nothing and keeps the program
   const result = await setUp(home, `cmod download hello ${machine} ${server.origin}/hello.tar.gz ${listed}`)
 
   expect(result.stdout.split('\n').at(-2)).toBe(
-    `failed 1\tThe install step of demo exited 1: cmod download: ${server.origin}/hello.tar.gz has SHA-256 ${sha256(tarGz)}, but the install script lists ${listed}, so CMod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`,
+    `failed 1\tThe install step of demo exited 1: cmod download: ${server.origin}/hello.tar.gz has SHA-256 ${sha256(tarGz)}, but the install script lists ${listed}, so cmod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`,
   )
   expect(result.exitCode).toBe(1)
   expect(await readdir(data(home))).toEqual(['bin'])

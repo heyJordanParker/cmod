@@ -48,5 +48,5 @@ if [ -f "$package/package.json" ]; then
 fi
 
 newest=$(for folder in "$store"/*/; do [ -x "${folder}cmod" ] && basename "$folder"; done | sort -V | tail -n 1)
-[ -n "$newest" ] || fail "no cmod is installed in $store. Run npm i -g @cmodjs/cli, or install the CMod plugin in Claude Code."
+[ -n "$newest" ] || fail "no cmod is installed in $store. Run npm i -g @cmodjs/cli, or install the cmod plugin in Claude Code."
 exec "$store/$newest/cmod" "$@"

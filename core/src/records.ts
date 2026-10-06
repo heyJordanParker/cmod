@@ -28,7 +28,7 @@ export function storeFolder(env: Record<string, string | undefined>): string {
   const dataHome = env['XDG_DATA_HOME']
   const home = env['HOME']
   if (dataHome) return `${dataHome}/cmod`
-  if (!home) throw new Error('Neither XDG_DATA_HOME nor HOME is set, so the CMod store has no folder. Set HOME.')
+  if (!home) throw new Error('Neither XDG_DATA_HOME nor HOME is set, so the cmod store has no folder. Set HOME.')
   return `${home}/.local/share/cmod`
 }
 
@@ -81,7 +81,7 @@ function parseRecord(text: string, path: string): InstallRecord {
   } catch (error) {
     throw new Error(`${path} is not JSON (${messageOf(error)}). ${fix}`)
   }
-  if (!isObject(value)) throw new Error(`${path} is not a CMod install record. ${fix}`)
+  if (!isObject(value)) throw new Error(`${path} is not a cmod install record. ${fix}`)
   for (const key of ['name', 'version', 'root', 'installedAt', 'scriptsSha256'] as const) {
     if (typeof value[key] !== 'string') throw new Error(`${path} has no "${key}" text. ${fix}`)
   }
@@ -117,7 +117,7 @@ function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall
   if (typeof command !== 'string' || command.trim() === '') throw new Error(`package.json "cmod.${key}" must be a command, such as "./setup/${key}.sh".`)
   if (/[\n\t]/.test(command)) throw new Error(`package.json "cmod.${key}" holds a line break or a tab. Write one command, such as "./setup/${key}.sh".`)
   const atRoot = scriptPaths(command).find((path) => folderOf(path) === '.')
-  if (atRoot !== undefined) throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: CMod asks consent for the whole folder of each script.`)
+  if (atRoot !== undefined) throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: cmod asks consent for the whole folder of each script.`)
   return { [key]: command }
 }
 

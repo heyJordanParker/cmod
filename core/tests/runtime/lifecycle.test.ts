@@ -279,7 +279,7 @@ test('a waiting mod continues its install once the cmod program appears, with no
   await fake.settle()
 
   expect(spawned).toEqual([])
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for CMod')
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for cmod')
 
   isOnPath = true
   cmodCheck?.fire()
@@ -290,7 +290,7 @@ test('a waiting mod continues its install once the cmod program appears, with no
   expect(runs).toEqual([])
 })
 
-test('a mod keeps waiting for CMod past 60 seconds and starts once CMod is ready', async () => {
+test('a mod keeps waiting for cmod past 60 seconds and starts once cmod is ready', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodMissing
   const spawned: ProcessSpawnRequest[] = []
@@ -314,7 +314,7 @@ test('a mod keeps waiting for CMod past 60 seconds and starts once CMod is ready
   timers.find((made) => made.ms === 60_000)?.fire()
   await fake.settle()
 
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(">\n◌ Installing safe-delete  Still waiting for CMod to download cmod. See CMod's own line.")
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(">\n◌ Installing safe-delete  Still waiting for cmod to download cmod. See cmod's own line.")
 
   fake.fakes.process.run = cmodOnPath
   timers.find((made) => made.ms === 1000)?.fire()
@@ -390,7 +390,7 @@ test('a mod whose open panes cannot be read says its open panes did not load', a
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing broken  its open panes did not load: the pane list is unavailable\n  Fix it, then run /reload-plugins.')
 })
 
-test("the CMod plugin runs its bootstrap from its root, and its mod.dataFolder names its data folder", async () => {
+test("the cmod plugin runs its bootstrap from its root, and its mod.dataFolder names its data folder", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
@@ -415,7 +415,7 @@ test("the CMod plugin runs its bootstrap from its root, and its mod.dataFolder n
   expect(folder).toBe('/home/.local/share/cmod/data/cmod')
 })
 
-test('the CMod plugin counts as installed when the cmod program is its version or newer', async () => {
+test('the cmod plugin counts as installed when the cmod program is its version or newer', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "cmod", "version": "0.1.10" }' }))
   const installedWith = async (program: string) => {
@@ -554,7 +554,7 @@ test('a mod with no steps activates at once and writes its record in the backgro
   expect(await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})).toEqual({ additionalContext: ['safe-delete saw it'] })
 })
 
-test('a mod with no steps writes its record silently, and retries on the next prompt while CMod is missing', async () => {
+test('a mod with no steps writes its record silently, and retries on the next prompt while cmod is missing', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   let isOnPath = false
@@ -660,7 +660,7 @@ test('cmod missing from PATH is waiting, not a failure', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for CMod')
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n◌ Installing safe-delete  Waiting for cmod')
 })
 
 test('a question dialog that fails shows as a failure, not as Not now', async () => {
@@ -712,7 +712,7 @@ test('an empty stderr from cmod setup leaves no bare colon in the session', asyn
   expect((lifecycle.failure as Error).message).toBe('safe-delete: cmod setup exited 1. Fix the cause, then run: cmod install safe-delete')
 })
 
-test('an empty stderr from the CMod bootstrap leaves no bare colon', async () => {
+test('an empty stderr from the cmod bootstrap leaves no bare colon', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   fake.fakes.process.spawn = () => finished([], 1)
   const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))

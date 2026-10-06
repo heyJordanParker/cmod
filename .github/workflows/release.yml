@@ -76,7 +76,7 @@ jobs:
         working-directory: cli
         run: npm publish --provenance
 
-      - name: Release the CMod plugin and the cmod program on GitHub
+      - name: Release the cmod plugin and the cmod program on GitHub
         if: steps.version.outputs.release != 'done'
         run: |
           version=${{ steps.version.outputs.version }}
@@ -89,6 +89,6 @@ jobs:
           bun x tsc --noEmit
           if ! git diff --quiet bun.lock; then
             git add bun.lock
-            git commit -m "chore: the CMod plugin installs @cmodjs/core and @cmodjs/cli $version"
+            git commit -m "chore: the cmod plugin installs @cmodjs/core and @cmodjs/cli $version"
           fi
           bun cli/src/main.ts publish

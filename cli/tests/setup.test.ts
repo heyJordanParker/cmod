@@ -217,7 +217,7 @@ test('a step script at the plugin root is refused', async () => {
 
   const result = await cmod(home, 'setup', root, '--yes')
 
-  expect(result.stderr).toBe(`cmod setup: ${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: CMod asks consent for the whole folder of each script.\n`)
+  expect(result.stderr).toBe(`cmod setup: ${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: cmod asks consent for the whole folder of each script.\n`)
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
 })
@@ -233,7 +233,7 @@ test('cmod setup --events with a refused cmod key prints one failed line', async
 
   const result = await cmod(home, 'setup', root, '--events')
 
-  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: CMod asks consent for the whole folder of each script.\n`)
+  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: cmod asks consent for the whole folder of each script.\n`)
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(1)
 })
@@ -1272,7 +1272,7 @@ test('setup --events prints failed with the fix when the release holds no build 
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
 
-test('setup refuses to replace a file in ~/.local/bin that CMod did not make', async () => {
+test('setup refuses to replace a file in ~/.local/bin that cmod did not make', async () => {
   const home = await temporaryHome()
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
@@ -1280,7 +1280,7 @@ test('setup refuses to replace a file in ~/.local/bin that CMod did not make', a
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('failed 1\t~/.local/bin/hello exists and CMod did not make it, so CMod will not replace it with the hello program. Move it out of ~/.local/bin, then run the command again.\n')
+  expect(result.stdout).toBe('failed 1\t~/.local/bin/hello exists and cmod did not make it, so cmod will not replace it with the hello program. Move it out of ~/.local/bin, then run the command again.\n')
   expect(result.exitCode).toBe(1)
   expect(await readFile(join(home, '.local/bin/hello'), 'utf8')).toBe('#!/bin/sh\necho "my own hello"\n')
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
@@ -1294,13 +1294,13 @@ test('setup refuses a program name PATH already finds elsewhere', async () => {
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('failed 1\tPATH already finds hello at ~/bin/hello, so the hello program CMod installs would never run. Remove that hello from PATH, then run the command again.\n')
+  expect(result.stdout).toBe('failed 1\tPATH already finds hello at ~/bin/hello, so the hello program cmod installs would never run. Remove that hello from PATH, then run the command again.\n')
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/bin/hello'))).toBe(false)
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
 
-test('setup links a program version already in the store, such as one the CMod bootstrap placed, without downloading it', async () => {
+test('setup links a program version already in the store, such as one the cmod bootstrap placed, without downloading it', async () => {
   const home = await temporaryHome()
   using server = serveRelease({})
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)

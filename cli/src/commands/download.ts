@@ -55,7 +55,7 @@ export async function run(argv: string[]): Promise<number> {
   emit(5, `Checking ${program}'s SHA-256`)
   const actual = new Bun.CryptoHasher('sha256').update(bytes).digest('hex')
   if (actual !== chosen.sha256) {
-    throw new Error(`${chosen.url} has SHA-256 ${actual}, but the install script lists ${chosen.sha256}, so CMod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`)
+    throw new Error(`${chosen.url} has SHA-256 ${actual}, but the install script lists ${chosen.sha256}, so cmod installed nothing. Run the install again. If it repeats, the file at that link changed, and the mod needs an update.`)
   }
 
   const bin = join(data, 'bin')
@@ -74,7 +74,7 @@ export async function run(argv: string[]): Promise<number> {
       await runCommand(unpack)
     }
     const found = await findFile(unpacked, program)
-    if (found === undefined) throw new Error(`${name} holds no file named ${program}, so CMod installed nothing. Name the program the archive holds.`)
+    if (found === undefined) throw new Error(`${name} holds no file named ${program}, so cmod installed nothing. Name the program the archive holds.`)
     await chmod(found, 0o755)
     await rename(found, join(bin, program))
   } finally {

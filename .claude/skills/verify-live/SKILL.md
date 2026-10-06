@@ -1,6 +1,6 @@
 ---
 name: verify-live
-description: Prove a CMod behavior in a real Claude Code session, because the test kit's fake Claude Code passes code that real Claude Code breaks. TRIGGER when a change depends on which events Claude Code fires and in what order, what it draws, what its validator accepts, or when it loads mods, and on "live run", "verify live", "run book", "prove it in Claude Code". DO NOT TRIGGER for logic the test kit runs whole, such as parsing, records, or state values; use /write-test.
+description: Prove a cmod behavior in a real Claude Code session, because the test kit's fake Claude Code passes code that real Claude Code breaks. TRIGGER when a change depends on which events Claude Code fires and in what order, what it draws, what its validator accepts, or when it loads mods, and on "live run", "verify live", "run book", "prove it in Claude Code". DO NOT TRIGGER for logic the test kit runs whole, such as parsing, records, or state values; use /write-test.
 ---
 
 # Verify Live
@@ -28,7 +28,7 @@ Every fixture, home, log, and socket lives under a new `/private/tmp/<task-slug>
 - `127.0.0.1:8317` is the local model proxy, so `ANTHROPIC_API_KEY` takes a placeholder.
 - Claude Code fetches its official plugin catalog over the network even with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
 - Each hook event a chain of mods handles logs a `hooks module <plugins> <event> settled in <ms>` line in the `--debug-file` log, and each call a mod makes logs a `$.<noun>.<method> (<mod>)` line.
-- `CMOD_DIST_SERVER=file://<folder>` points the CMod bootstrap at a local release folder holding `v<version>/cmod-<os>-<arch>` and its `SHA256SUMS`.
+- `CMOD_DIST_SERVER=file://<folder>` points the cmod bootstrap at a local release folder holding `v<version>/cmod-<os>-<arch>` and its `SHA256SUMS`.
 
 ### Start every `claude` command and every tmux server under `env -i`, on a socket only the run uses
 tmux ignores `-e PATH`, and a tmux server hands its own environment to every session it starts, so the default tmux server leaks `XDG_CONFIG_HOME` and `NPM_TOKEN` into Claude Code. Start `claude` by its absolute path, so the real `~/.local/bin` stays off PATH and only the `cmod` the run installs answers.
@@ -36,7 +36,7 @@ Template:
     env -i HOME=<scratch>/home CLAUDE_CONFIG_DIR=<scratch>/home/.claude ANTHROPIC_BASE_URL=http://127.0.0.1:8317 ANTHROPIC_API_KEY=isolated-probe-placeholder CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CMOD_DIST_SERVER=file://<scratch>/releases PATH=<scratch>/home/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin TERM=xterm-256color LANG=en_US.UTF-8 tmux -S <scratch>/tmux.sock new-session -d -s <session> -x 200 -y 50 -c <project> '<absolute path of claude> --debug-file <scratch>/logs/debug-1.log'
 
 ### Install the mods from a local directory marketplace
-Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-core, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The CMod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases.
+Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-core, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The cmod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases.
 
 ## 3. Write the run book
 

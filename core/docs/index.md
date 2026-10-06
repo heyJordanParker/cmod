@@ -4,7 +4,7 @@ These are the docs of the `@cmodjs/core` version installed beside them. Read the
 
 ## What a mod is
 
-A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (CMod) installs mods, runs their install and uninstall steps with the person's consent, and builds and publishes new ones. The `cmod` command does that work in a terminal.
+A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmod) installs mods, runs their install and uninstall steps with the person's consent, and builds and publishes new ones. The `cmod` command does that work in a terminal.
 
 `cmod new my-mod` writes this layout:
 
