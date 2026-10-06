@@ -1,0 +1,6 @@
+{
+  "description": "cmod hooks module",
+  "modules": [
+    "./register.js"
+  ]
+}

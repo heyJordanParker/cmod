@@ -1,0 +1,10 @@
+{
+  "name": "cmod",
+  "private": true,
+  "type": "module",
+  "cmod": { "program": "cmod" },
+  "dependencies": {
+    "@cmodjs/cli": "^0.1.5",
+    "@cmodjs/core": "^0.1.5"
+  }
+}
