@@ -18,9 +18,10 @@ export const help = `Usage: cmod try <owner/repo | path> [--yes] [-- claude argu
 ${summary}
 
 Installs the CMod plugin into Claude Code when it lacks it and runs the mod's
-install step after asking consent for its install and uninstall commands, as
-cmod link does, then starts one Claude Code session with the mod loaded through
---plugin-dir. When the session ends, even when its terminal closes, runs the
+install step after asking consent for its install and uninstall commands, then
+starts one Claude Code session with the mod loaded through --plugin-dir. Unlike
+cmod link, it builds no program from cli/, so the program comes from the mod's
+GitHub release. When the session ends, even when its terminal closes, runs the
 mod's uninstall step and deletes its record, data folder, approval, and
 program, so the mod stays uninstalled. Ctrl+C or Ctrl+D at the consent
 question deletes the clone and changes nothing else. Ctrl+C, a closed terminal,

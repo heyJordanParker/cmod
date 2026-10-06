@@ -1,19 +1,19 @@
 ---
 name: change-public-api
-description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `testing.ts`, `connect.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, README.md, or a sample mod, and when moving code between SDK folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
+description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `testing.ts`, `connect.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, README.md, or a sample mod, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
 ---
 
 # Change Public API
 
-A mod author learns CMod from the template, the README, and the samples, then writes against the SDK. All four say each idea with one word and do each job one way, so they change together.
+A mod author learns Claude Mod Manager (CMod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
 
 - The Public API is `core/src/mod.ts`, `core/src/testing.ts`, `core/src/connect.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.
 
 ## 1. Find every place the idea appears
 
-Search the SDK, the template, README.md, and both samples for the word and for every other word that names the same idea.
-Example: `trace grep -i "panel" core/src cli README.md ../file-tree ../architecture-diagrams`.
+Search `core/src/`, the template, `core/docs/`, README.md, and both samples for the word and for every other word that names the same idea.
+Example: `trace grep -i "panel" core/src core/docs cli README.md ../file-tree ../architecture-diagrams`.
 
 ### Give one idea one word everywhere
 Rename every straggler in the same change. A second word for one idea, or one word for two ideas, makes the author guess which is meant.
@@ -27,7 +27,7 @@ Example: `check` runs commands and `prompt` adds text, so neither takes an optio
 
 - `utils/` imports only `utils/` and the vendored libraries.
 - `ui/` imports only `ui/`, the vendored libraries, and types from `mod.ts`.
-- `runtime/` builds on `ui/` and `utils/`.
+- `runtime/` builds on `ui/`, `utils/`, and `records.ts`, and imports only types from `mod.ts`.
 - `jobs/` builds on `runtime/` and `utils/`, never `ui/`.
 - Only `testing.ts` imports `testing/`.
 

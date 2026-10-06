@@ -1,6 +1,6 @@
-# CMod
+# Claude Mod Manager
 
-CMod installs Claude Code mods, runs their install and uninstall steps with the person's consent, and builds and publishes new mods.
+Claude Mod Manager (CMod) installs Claude Code mods, runs their install and uninstall steps with the person's consent, and builds and publishes new mods.
 
 # Facts
 
@@ -10,4 +10,6 @@ CMod installs Claude Code mods, runs their install and uninstall steps with the 
 - The cmod program is the one runner of a mod's steps, and the library never runs them.
 - The cmod program in `cli/` imports the `src/` modules of `@cmodjs/core` as a dev dependency. The library never imports the cmod program.
 - `.claude-plugin/plugin.json`, `core/package.json`, and `cli/package.json` share one version, which is the version of the cmod program too.
+- Raising that version in all three files, with the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges, and pushing to `main` releases both npm packages and the CMod plugin. CONTRIBUTING.md has the release steps.
+- `core/docs/` ships inside `@cmodjs/core` as the mod author docs, so a change to the Public API changes `core/docs/` in the same commit.
 - The sample mods `file-tree` and `architecture-diagrams` are checked out beside this repository.

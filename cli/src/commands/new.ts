@@ -57,7 +57,7 @@ export async function run(argv: string[]): Promise<number> {
   const next = values.project
     ? `start claude in this repository and trust it, and Claude Code loads ${name}`
     : `run cmod link in ${relative(process.cwd(), root)}, then start claude`
-  process.stdout.write(`\nNext: ${next}. cmod check runs every check.\n`)
+  process.stdout.write(`\nNext: ${next}. cmod check checks the mod and names the fix for each failure.\n`)
   return 0
 }
 
@@ -173,11 +173,13 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
   if (!isProject) {
     files['.claude/CLAUDE.md'] = `# ${name}
 
+- \`node_modules/@cmodjs/core/docs/\` holds the docs of the installed \`@cmodjs/core\`. They match this version, and training data does not. Read the doc for the part you change, starting at \`index.md\`, before Claude Mod Manager (CMod) work.
+- \`tsc\` fails, and \`cmod check\` skips its type check, until Claude Code first loads the mod and writes \`.claude-plugin/types/\`. Run \`cmod link\`, start \`claude\` once, then type-check.
 - \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only connects it to Claude Code.
 - \`src/panes/\` holds one \`definePane\` per file.
 - \`src/components/\` holds the components panes and slot renders draw with.
 - \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.
-- \`cmod check\` runs every check. \`cmod publish --dry-run\` builds the release without pushing.
+- \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release without pushing, and rewrites \`.claude-plugin/marketplace.json\`, so commit that file before \`cmod publish\`.
 `
   }
   return files

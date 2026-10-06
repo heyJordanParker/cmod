@@ -63,6 +63,8 @@ test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {
   expect(await read('src/components/prompt-count.tsx')).toContain('export function PromptCount({ count }: { readonly count: number }): RenderElement {')
   expect(existsSync(join(root, 'src/prompts-pane.tsx'))).toBe(false)
   const facts = await read('.claude/CLAUDE.md')
+  expect(facts.split('\n').find((line) => line.startsWith('- '))).toBe('- `node_modules/@cmodjs/core/docs/` holds the docs of the installed `@cmodjs/core`. They match this version, and training data does not. Read the doc for the part you change, starting at `index.md`, before Claude Mod Manager (CMod) work.')
+  expect(facts).toContain('- `tsc` fails, and `cmod check` skips its type check, until Claude Code first loads the mod and writes `.claude-plugin/types/`. Run `cmod link`, start `claude` once, then type-check.\n')
   expect(facts).toContain("- `src/mod.tsx` holds the mod's `defineMod`.")
   expect(facts).toContain('- `src/panes/` holds one `definePane` per file.\n')
   expect(facts).toContain('- `src/components/` holds the components panes and slot renders draw with.\n')

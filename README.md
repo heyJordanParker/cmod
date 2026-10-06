@@ -1,6 +1,6 @@
-# CMod
+# Claude Mod Manager
 
-CMod is the Claude Mod Manager. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, commands, and tools, and it can run its own install step. CMod installs mods, runs their install and uninstall steps, and helps you build and publish your own.
+Claude Mod Manager (CMod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, slash commands, tools, and permission rules, and it can run its own install step. CMod installs mods, runs their install and uninstall steps with your consent, and helps you build and publish your own.
 
 ## Install a mod
 
@@ -49,20 +49,6 @@ To replace the text of a Skill a mod ships, put your own file at the same path i
 ```
 
 Claude reads your text in place of the mod's from the next time the Skill loads, and updates keep it. CMod drops the file's frontmatter, so the mod's own name and description stay. Delete the file to get the mod's text back.
-
-## Run CMod from a checkout
-
-To work on CMod itself, run it from a clone of this repository. In the clone's folder:
-
-```sh
-bun install --cwd cli
-bun install --cwd core
-bun cli/src/main.ts link .
-```
-
-`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the CMod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link CMod before any mod, because `cmod link` of a mod first looks for the CMod plugin in Claude Code. To build a mod against library changes that are not on npm yet, run `bun run --cwd core build`, then `env -C core bun pm pack`, and set `CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz` before `cmod new`. The build reads `.claude-plugin/types/`, which Claude Code writes the first time a session loads the linked checkout.
-
-Then move out of the clone, such as with `cd ..`, before `cmod new`, so the new mod is not created inside the CMod checkout.
 
 ## Make a mod in 30 seconds
 
@@ -119,10 +105,6 @@ export type MyModState = { session: { prompts: number } }
 export const initialState: MyModState = { session: { prompts: 0 } }
 ```
 
-The `AbovePrompt` render draws the prompt count under `<Default />`, which is what Claude Code and the other mods drew in the band above the prompt. A render adds to the band, so other mods' lines stay. While Claude Code shows a survey, the render gives the whole band back to `Default`.
-
-`slots.ToolUse` changes a tool's own row, but a group of calls shows a condensed row (`slots.ToolGroup`) that Claude Code builds from the stored message, so a mod that hides a tool's input also sets `isExpanded` on `slots.ToolGroup` to unfold the group into `ToolUse` rows. No render reaches the permission dialog.
-
 `src/panes/prompts.tsx` is the mod's pane:
 
 ```tsx
@@ -133,7 +115,7 @@ export const promptsPane = definePane<MyModState>({
 })
 ```
 
-`src/components/prompt-count.tsx` is what the pane and the band draw:
+`src/components/prompt-count.tsx` is what the pane and the band above the prompt draw:
 
 ```tsx
 export function PromptCount({ count }: { readonly count: number }): RenderElement {
@@ -141,86 +123,29 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 ```
 
-`state` groups the mod's values by how long they last: `memory` until `/clear`, `--resume`, `/branch`, or a reload of Claude Code or its plugins, `session` for this conversation, `project` for this project, and `global` for every project. CMod saves every value except `memory`. A `session` value comes back on `--resume`, starts over on `/clear`, and is copied by `/branch`. Put values the mod works out again on every prompt, such as a git status, in `memory`.
+Start `claude`, and the mod counts every prompt. `cmod check` checks the layout, the imports, and the lint, validates the mod with Claude Code, and runs its tests. It type-checks the mod once that first session has written `.claude-plugin/types/`, and skips the type check before. `cmod publish` releases the mod on GitHub.
 
-A mod that changes the machine, such as by adding a shell alias, names its install and uninstall steps in the `cmod` key of its `package.json`:
+## Docs
 
-```json
-"cmod": { "install": "./setup/install.sh", "uninstall": "./setup/uninstall.sh" }
-```
+The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@cmodjs/core`. So every mod's `node_modules/@cmodjs/core/docs/` holds the docs of the version it installed. The `.claude/CLAUDE.md` that `cmod new` writes points coding agents there. A project plugin, made with `cmod new --project`, gets no `.claude/CLAUDE.md`.
 
-CMod runs each step with `sh -c` in the mod's folder, so make the scripts executable: `chmod +x setup/*.sh`. `CMOD_DATA` names the mod's data folder. The install step runs again on every new version of the mod and whenever its setup scripts change, so it must work over an existing install. When the first install of a mod fails or is stopped, CMod runs its uninstall step, so the uninstall step must work on a partial install. CMod saves the folder of each script the uninstall step names, and runs the uninstall step from that copy after you remove the mod.
-
-`tests/mod.test.ts` runs the mod against a fake Claude Code with `testMod`, and `await tested.settle()` lets the work a hook starts without awaiting it run before the test looks at the result.
-
-Start `claude`, and the mod runs on every prompt. `cmod check` runs every check. `cmod publish` releases the mod on GitHub.
-
-## Call another mod
-
-A mod offers methods to other mods in `api`. Each method gets the caller's input and the mod, and returns its result. Inputs and results are plain JSON data.
-
-```ts
-export const tracer = defineMod({
-  name: 'tracer',
-  api: {
-    signatures: async ({ path }: { path: string }, mod) =>
-      (await mod.fs.read(path)).split('\n').flatMap((text, index) => {
-        const name = /^export function (\w+)/.exec(text)?.[1]
-        return name === undefined ? [] : [{ name, line: index + 1 }]
-      }),
-  },
-  setup() {},
-})
-```
-
-The mod types its `api` in `types/index.d.ts`, and its `.claude-plugin/plugin.json` names that file as `"types": "./types/index.d.ts"`. The file adds the mod to `CmodDependencies`, which the CMod plugin declares on `claude-code`:
-
-```ts
-export type TracerSignature = { name: string; line: number }
-
-export type Tracer = {
-  signatures(input: { path: string }): Promise<TracerSignature[]>
-}
-
-declare module 'claude-code' {
-  interface CmodDependencies {
-    tracer: Tracer
-  }
-}
-```
-
-`tsc` then checks the mod's own `api` against `Tracer`, so a method that returns another shape fails `cmod check`.
-
-A mod that calls it lists it in its own `.claude-plugin/plugin.json`, and Claude Code installs it with the mod:
-
-```json
-"dependencies": ["cmod", "tracer"]
-```
-
-Then the call is typed from tracer's file:
-
-```ts
-const signatures = await mod.dependencies.tracer.signatures({ path: 'src/app.ts' })
-```
-
-A call that cannot answer fails with one of these messages:
-
-```text
-tracer is not installed. Run cmod install tracer.
-tracer is installing. Try again when it's ready.
-tracer has no method signatures.
-tracer: <the message of the error the method threw>
-```
-
-When tracer is disabled, Claude Code unloads the mod that lists it and reports its own error, `Dependency "tracer" is disabled — enable it or remove the dependency`. "tracer is not installed" covers a dependency whose code did not load.
-
-A call runs inside the deadline of the slash command, tool, or other job that makes it, and 30 seconds anywhere else. In tests, `testMod(myMod, { dependencies: { tracer: { signatures: async () => [] } } })` answers for tracer.
+- [index.md](core/docs/index.md): what a mod is, and which file answers which question
+- [mod.md](core/docs/mod.md): `defineMod`, `setup`, and what `mod` can call
+- [state.md](core/docs/state.md): state groups, `state.json`, and Skill overrides
+- [hooks.md](core/docs/hooks.md): `mod.on`, every event, and what a hook can answer
+- [ui.md](core/docs/ui.md): panes, slots, markdown slots, elements, toasts, progress, and questions
+- [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, status lines, and programs
+- [dependencies.md](core/docs/dependencies.md): calling another mod
+- [install-steps.md](core/docs/install-steps.md): install and uninstall steps, and shipping a program
+- [testing.md](core/docs/testing.md): `testMod`
+- [commands.md](core/docs/commands.md): every `cmod` command
 
 ## What is in this repository
 
 - The root is the CMod plugin. It fetches the cmod program, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.
-- [core/](core/) is `@cmodjs/core` on npm, the library every mod imports.
+- [core/](core/) is `@cmodjs/core` on npm, the library every mod imports, with its docs in [core/docs/](core/docs/index.md).
 - [cli/](cli/) is `@cmodjs/cli` on npm, the `cmod` command, which runs the newest cmod program. It also holds the source of the cmod program, which each GitHub release carries for macOS and Linux.
+- [CONTRIBUTING.md](CONTRIBUTING.md) runs CMod from a checkout, runs the gate, and releases.
 
 ## License
 
