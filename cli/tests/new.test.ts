@@ -1,11 +1,13 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { cp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as sdkVersion } from 'cmod-sdk/package.json'
 import { listFiles } from '../src/files.js'
-import { cmod, deleteTemporaryHomes, temporaryHome } from './cmod.js'
+import { capture } from '../src/process.js'
+import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
+setDefaultTimeout(15_000)
 afterEach(deleteTemporaryHomes)
 
 test('new writes the repository layout with a defineMod that has one hook and one pane, and installs its packages', async () => {
@@ -23,7 +25,7 @@ test('new writes the repository layout with a defineMod that has one hook and on
   expect(JSON.parse(await readFile(join(root, 'tsconfig.json'), 'utf8'))).toEqual({
     extends: './.claude-plugin/types/tsconfig.json',
     compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },
-    include: ['hooks', 'src', 'types'],
+    include: ['hooks', 'src', 'tests', 'types', 'node_modules/bun-types/test.d.ts'],
   })
   const manifest = JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8'))
   expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: ['cmod'] })
@@ -89,6 +91,29 @@ test('a new mod runs its tests through bun run test', async () => {
 
   expect(output).toContain(' 3 pass\n 0 fail\n')
   expect(exitCode).toBe(0)
+})
+
+test("a new mod's tests pass the type check", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'my-mod')
+  await cmod(home, 'new', 'my-mod')
+
+  const result = await typeCheck(root)
+
+  expect(result).toEqual({ output: '', exitCode: 0 })
+})
+
+test("a new mod's type check fails on a test that misuses expect", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'my-mod')
+  await cmod(home, 'new', 'my-mod')
+  await writeFiles(root, { 'tests/count.test.ts': "import { expect, test } from 'bun:test'\n\ntest('a count is a number', () => {\n  expect(1).toBe('one')\n})\n" })
+
+  const result = await typeCheck(root)
+
+  expect(result.output).toContain('tests/count.test.ts(4,18): error TS2769: No overload matches this call.')
+  expect(result.output).toContain("Argument of type 'string' is not assignable to parameter of type 'number'.")
+  expect(result.exitCode).toBe(1)
 })
 
 test('cmod new with CMOD_SDK set names its value when the install fails', async () => {
@@ -162,3 +187,12 @@ test('new --project refuses a folder that is not a repository root', async () =>
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toBe('cmod new: cmod new --project runs in the root of the repository that uses the plugin, and this folder has no .git.\n')
 })
+
+async function typeCheck(root: string): Promise<{ output: string; exitCode: number }> {
+  const checkout = join(import.meta.dir, '..', '..')
+  const types = join(checkout, '.claude-plugin', 'types')
+  if (!existsSync(types)) throw new Error(`${types} is missing. Claude Code writes it when it first loads the checkout: run claude --plugin-dir . -p ok in ${checkout}, then run the tests again.`)
+  await cp(types, join(root, '.claude-plugin', 'types'), { recursive: true })
+  const { stdout, exitCode } = await capture([process.execPath, join(import.meta.dir, '..', 'node_modules', '.bin', 'tsc'), '--noEmit'], { cwd: root })
+  return { output: stdout, exitCode }
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "rules": {
+    "no-unused-vars": ["warn", { "ignoreRestSiblings": true }]
+  },
+  "overrides": [
+    {
+      "files": ["src/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^\\./testing/", "message": "Only testing.ts imports testing/." },
+              { "regex": "^cmod-sdk(/|$)", "message": "Import sdk/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/testing.ts", "src/testing/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^cmod-sdk(/|$)", "message": "Import sdk/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/utils/parse-shell.ts"],
+      "rules": { "no-control-regex": "off" }
+    },
+    {
+      "files": ["src/utils/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(connect|mod|records|testing)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
+              { "regex": "^cmod-sdk(/|$)", "message": "Import sdk/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/ui/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^(\\.\\./)+((jobs|runtime|testing|utils)/|(connect|records|testing)\\.js$)", "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
+              { "regex": "^(\\.\\./)+mod\\.js$", "allowTypeImports": true, "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
+              { "regex": "^cmod-sdk(/|$)", "message": "Import sdk/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/runtime/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^(\\.\\./)+((jobs|testing)/|(connect|testing)\\.js$)", "message": "runtime/ builds on ui/ and utils/." },
+              { "regex": "^cmod-sdk(/|$)", "message": "Import sdk/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/jobs/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^(\\.\\./)+((testing|ui)/|(connect|testing)\\.js$)", "message": "jobs/ builds on runtime/ and utils/." },
+              { "regex": "^cmod-sdk(/|$)", "message": "Import sdk/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

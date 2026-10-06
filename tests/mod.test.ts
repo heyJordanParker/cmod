@@ -5,6 +5,8 @@ import { register } from '../hooks/register.js'
 import { cmodPlugin } from '../src/mod.js'
 import type { Cmod } from '../types/index.js'
 
+declare const Bun: { sleep(ms: number): Promise<void> }
+
 type Answer = { exitCode: number; stdout: string; stderr: string }
 
 function testRemovals(installedPlugins: readonly string[] | null, userPlugins: Record<string, boolean>, answers: Record<string, Answer> = {}, mergedPlugins: Record<string, boolean> = userPlugins) {
@@ -19,7 +21,7 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
   return { tested, teardowns }
 }
 
-const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
+const settled = () => Bun.sleep(0)
 
 test("a removed enabledPlugins key runs cmod teardown --events with that plugin's name, and the uninstall toast tells the user to reload", async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'progress 1 1 Removing the alias\ndone four-step\n', stderr: '' } })

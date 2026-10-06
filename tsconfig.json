@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["hooks", "src"]
+  "include": ["hooks", "src", "tests", "node_modules/bun-types/test.d.ts"]
 }

@@ -9,7 +9,6 @@ A mod author learns CMod from the template, the README, and the samples, then wr
 
 - The Public API is `sdk/src/mod.ts`, `sdk/src/testing.ts`, `sdk/src/connect.ts`, `sdk/src/ui/`, and `sdk/src/jobs/`. Every other file under `sdk/src/` is internal.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.
-- The samples are `file-tree` and `architecture-diagrams`, checked out beside this repository.
 
 ## 1. Find every place the idea appears
 
@@ -29,12 +28,10 @@ Example: `check` runs commands and `prompt` adds text, so neither takes an optio
 - `utils/` imports only `utils/` and the vendored libraries.
 - `ui/` imports only `ui/`, the vendored libraries, and types from `mod.ts`.
 - `runtime/` builds on `ui/` and `utils/`.
-- `jobs/` builds on `runtime/` and `utils/`.
-- `testing/` holds the test kit's fakes, and only `testing.ts` imports it.
+- `jobs/` builds on `runtime/` and `utils/`, never `ui/`.
+- Only `testing.ts` imports `testing/`.
 
-### Put new code in the folder its imports allow
-A move that makes two folders import each other is the wrong move.
-Example: `drawWith` stays in `ui/elements.ts` beside `Box` and `Text`, which share its element table. In `runtime/` it would make `ui/` import `runtime/`.
+`bun run --cwd sdk check` runs the oxlint rules in `sdk/.oxlintrc.json` that enforce each line.
 
 ## 3. Test what the person using the mod sees
 

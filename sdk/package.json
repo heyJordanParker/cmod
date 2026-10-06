@@ -22,15 +22,15 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker",
-    "check": "tsc -p tsconfig.json --noEmit",
+    "check": "tsc -p tsconfig.json --noEmit && oxlint --deny-warnings",
     "test": "bun test"
   },
   "dependencies": {
+    "bun-types": "^1.4.2",
     "json-schema-to-ts": "^3.1.1"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@types/bun": "^1.4.2",
     "@types/mdast": "^4.0.4",
     "@types/picomatch": "^4.0.3",
     "@types/shell-quote": "^1.7.5",
@@ -38,6 +38,7 @@
     "mdast-util-gfm": "^3.1.0",
     "mdast-util-to-string": "^4.0.0",
     "micromark-extension-gfm": "^3.0.0",
+    "oxlint": "1.86.0",
     "picomatch": "^4.0.7",
     "shell-quote": "^1.12.0",
     "typescript": "^7.0.2"
