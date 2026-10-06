@@ -1,6 +1,6 @@
 {
   "name": "cmod-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Build Claude Code mods: hooks, panes, permissions, checks, and an install that just works.",
   "license": "MIT",
   "type": "module",
