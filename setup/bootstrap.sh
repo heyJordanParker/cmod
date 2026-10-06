@@ -18,17 +18,17 @@ link="$bin/.cmod.$$"
 trap 'rm -f "$copy" "$link"' EXIT
 trap 'exit 1' HUP INT TERM
 
-[ -x "$launcher" ] || fail "$launcher is missing, so cmod cannot be installed. Reinstall the CMod plugin, then restart Claude Code."
+[ -x "$launcher" ] || fail "$launcher is missing, so cmod cannot be installed. Reinstall the cmod plugin, then restart Claude Code."
 if [ -e "$bin/cmod" ] || [ -L "$bin/cmod" ]; then
   case "$(readlink "$bin/cmod" || true)" in
     "$store"/*) ;;
-    *) fail "$bin/cmod exists and CMod did not make it, so CMod will not replace it. Move it out of $bin, then restart Claude Code." ;;
+    *) fail "$bin/cmod exists and cmod did not make it, so cmod will not replace it. Move it out of $bin, then restart Claude Code." ;;
   esac
 fi
 
 echo "progress 0 2 Downloading cmod $version"
 "$launcher" --version > /dev/null || fail "$launcher could not install cmod $version"
-[ -x "$store/$version/cmod" ] || fail "$launcher did not install cmod $version, the version of the CMod plugin. Reinstall the CMod plugin, then restart Claude Code."
+[ -x "$store/$version/cmod" ] || fail "$launcher did not install cmod $version, the version of the cmod plugin. Reinstall the cmod plugin, then restart Claude Code."
 
 echo "progress 1 2 Linking $bin/cmod"
 mkdir -p "$bin"

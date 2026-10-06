@@ -62,7 +62,7 @@ function storeFolder(env) {
   if (dataHome)
     return `${dataHome}/cmod`;
   if (!home)
-    throw new Error("Neither XDG_DATA_HOME nor HOME is set, so the CMod store has no folder. Set HOME.");
+    throw new Error("Neither XDG_DATA_HOME nor HOME is set, so the cmod store has no folder. Set HOME.");
   return `${home}/.local/share/cmod`;
 }
 function recordPath(store, name) {
@@ -108,7 +108,7 @@ function parseRecord(text, path) {
     throw new Error(`${path} is not JSON (${messageOf(error)}). ${fix}`);
   }
   if (!isObject(value))
-    throw new Error(`${path} is not a CMod install record. ${fix}`);
+    throw new Error(`${path} is not a cmod install record. ${fix}`);
   for (const key of ["name", "version", "root", "installedAt", "scriptsSha256"]) {
     if (typeof value[key] !== "string")
       throw new Error(`${path} has no "${key}" text. ${fix}`);
@@ -154,7 +154,7 @@ function readCommand(steps, key) {
     throw new Error(`package.json "cmod.${key}" holds a line break or a tab. Write one command, such as "./setup/${key}.sh".`);
   const atRoot = scriptPaths(command).find((path) => folderOf(path) === ".");
   if (atRoot !== undefined)
-    throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: CMod asks consent for the whole folder of each script.`);
+    throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: cmod asks consent for the whole folder of each script.`);
   return { [key]: command };
 }
 function scriptPaths(command) {
@@ -4462,7 +4462,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
       throw new Error(`cmod setup ${formatExit(code, lastError)}`);
   };
   const record = () => {
-    recording ??= recordThroughCmod().catch((error) => claude().ui.log(`${definition.name} has no CMod record yet: ${messageOf(error)}`, { to: "debug" })).finally(() => {
+    recording ??= recordThroughCmod().catch((error) => claude().ui.log(`${definition.name} has no cmod record yet: ${messageOf(error)}`, { to: "debug" })).finally(() => {
       recording = undefined;
     });
   };
@@ -4520,7 +4520,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
       return bootstrap(plugin.root);
     phase = "installing";
     if (await cmodVersion(claude()) === undefined)
-      return waitForCMod();
+      return waitForcmod();
     endLine();
     const progress = showLine();
     let outcome;
@@ -4539,9 +4539,9 @@ function createLifecycle(definition, checksPermissions = () => true) {
     const reason = outcome?.kind === "failed" ? outcome.message : `cmod setup ${formatExit(code, lastError)}`;
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`);
   };
-  const waitForCMod = () => {
+  const waitForcmod = () => {
     phase = "waiting";
-    showLine().wait("Waiting for CMod");
+    showLine().wait("Waiting for cmod");
     let check;
     const stop = () => {
       timer.cancel();
@@ -4559,7 +4559,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
         report(error);
       });
     });
-    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for CMod to download cmod. See CMod's own line."));
+    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for cmod to download cmod. See cmod's own line."));
   };
   const bootstrap = async (root) => {
     const progress = showLine();
@@ -4897,7 +4897,7 @@ function registerMod(addHook, definition) {
   addHook("cmod.call", routeToMod);
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-1qpoAB/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-XAVhft/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -4940,7 +4940,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-1qpoAB/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-XAVhft/release/hooks/register.ts
 function register(addHook) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

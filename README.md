@@ -4,7 +4,7 @@
 
 <h1 align="center">Claude Mod Manager</h1>
 
-Claude Mod Manager (CMod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, slash commands, tools, and permission rules, and it can run its own install step. CMod installs mods, runs their install and uninstall steps with your consent, and helps you build and publish your own.
+Claude Mod Manager (cmod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, slash commands, tools, and permission rules, and it can run its own install step. cmod installs mods, runs their install and uninstall steps with your consent, and helps you build and publish your own.
 
 ## Install a mod
 
@@ -15,9 +15,9 @@ In Claude Code, add the mod's marketplace and install the mod:
 /plugin install <mod>@<marketplace>
 ```
 
-Claude Code installs the CMod plugin with the mod. CMod then fetches the cmod program, and the mod runs its install step. A progress bar shows each step. A notice tells you when the mod is ready.
+Claude Code installs the cmod plugin with the mod. cmod then fetches the cmod program, and the mod runs its install step. A progress bar shows each step. A notice tells you when the mod is ready.
 
-When you remove a mod with `/plugin uninstall`, CMod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
+When you remove a mod with `/plugin uninstall`, cmod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
 
 In a terminal, one command does the same, for a mod or any other Claude Code plugin:
 
@@ -25,18 +25,18 @@ In a terminal, one command does the same, for a mod or any other Claude Code plu
 cmod install <owner>/<repo>
 ```
 
-A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The CMod plugin puts `cmod` in `~/.local/bin` the first time it runs. `cmod list` shows every plugin Claude Code has, and whether CMod set up each mod.
+A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The cmod plugin puts `cmod` in `~/.local/bin` the first time it runs. `cmod list` shows every plugin Claude Code has, and whether cmod set up each mod.
 
-## What the CMod plugin runs
+## What the cmod plugin runs
 
-The CMod plugin runs two programs, and sends no data anywhere:
+The cmod plugin runs two programs, and sends no data anywhere:
 
 - **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/bin/cmod` to it. That download is its only network request.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
 
 It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its link at `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
 
-Every mod built with CMod, the CMod plugin included, adds one hook on each Claude Code event a mod can use, and only a mod that decides permissions hooks Claude Code's permission check. So the CMod plugin hooks tool calls, prompts, and what Claude Code draws, and no permission check. On a tool call, the CMod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
+Every mod built with cmod, the cmod plugin included, adds one hook on each Claude Code event a mod can use, and only a mod that decides permissions hooks Claude Code's permission check. So the cmod plugin hooks tool calls, prompts, and what Claude Code draws, and no permission check. On a tool call, the cmod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
 
 ## Change a mod
 
@@ -55,7 +55,7 @@ To change what a mod's values start as, write a `state.json` that lists only the
 { "global": { "defaultCommitPolicy": "never" } }
 ```
 
-A `session` value is what each conversation starts with, a `project` value is what each project starts with, and a `global` value is the same in every project. A value the mod saved wins over the file. A project `state.json` cannot set `global` values. The mod ignores a key it does not have and a value of the wrong type, and logs one line naming the file, the key, and the fix. CMod reads both files when the mod starts, and the project's file again after a `/cd`.
+A `session` value is what each conversation starts with, a `project` value is what each project starts with, and a `global` value is the same in every project. A value the mod saved wins over the file. A project `state.json` cannot set `global` values. The mod ignores a key it does not have and a value of the wrong type, and logs one line naming the file, the key, and the fix. cmod reads both files when the mod starts, and the project's file again after a `/cd`.
 
 To replace the text of a Skill a mod ships, put your own file at the same path in a config folder:
 
@@ -63,7 +63,7 @@ To replace the text of a Skill a mod ships, put your own file at the same path i
 ~/.claude/cmods/<mod>/skills/<skill>/SKILL.md
 ```
 
-Claude reads your text in place of the mod's from the next time the Skill loads, and updates keep it. CMod drops the file's frontmatter, so the mod's own name and description stay. Delete the file to get the mod's text back.
+Claude reads your text in place of the mod's from the next time the Skill loads, and updates keep it. cmod drops the file's frontmatter, so the mod's own name and description stay. Delete the file to get the mod's text back.
 
 ## Make a mod in 30 seconds
 
@@ -157,10 +157,10 @@ The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@c
 
 ## What is in this repository
 
-- The root is the CMod plugin. It fetches the cmod program, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.
+- The root is the cmod plugin. It fetches the cmod program, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.
 - [core/](core/) is `@cmodjs/core` on npm, the library every mod imports, with its docs in [core/docs/](core/docs/index.md).
 - [cli/](cli/) is `@cmodjs/cli` on npm, the `cmod` command, which runs the newest cmod program. It also holds the source of the cmod program, which each GitHub release carries for macOS and Linux.
-- [CONTRIBUTING.md](CONTRIBUTING.md) runs CMod from a checkout, runs the gate, and releases.
+- [CONTRIBUTING.md](CONTRIBUTING.md) runs cmod from a checkout, runs the gate, and releases.
 
 ## License
 
