@@ -106,6 +106,17 @@ test("Claude Code's permission check and the tool get the input a PreToolUse hoo
   ])
 })
 
+test("mod.ui.toast passes Claude Code's timeoutMs on", async () => {
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  const toasts: unknown[] = []
+  fake.claude.ui.toast = (text, options) => void toasts.push({ text, options })
+  const lifecycle = createLifecycle(defineMod({ name: 'notes', setup: (mod) => mod.ui.toast('Saved 3 notes', { timeoutMs: 8000 }) }))
+
+  await lifecycle.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
+
+  expect(toasts).toContainEqual({ text: 'Saved 3 notes', options: { timeoutMs: 8000 } })
+})
+
 test('a PreToolUse hook that answers additionalContext adds it to the call', async () => {
   const tested = testMod(
     defineMod({

@@ -5,7 +5,7 @@ A mod draws in four places: its own panes, the rows Claude Code draws (slots), t
 ```ts
 mod.ui.pane(pane: Pane<State>): PaneHandle
 mod.ui.render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
-mod.ui.toast(text: string): void
+mod.ui.toast(text: string, options?: { timeoutMs?: number }): void
 mod.ui.progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
 mod.ui.ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
 mod.ui.scroll(args: UiScrollArgs): Promise<UiScrollResult>
@@ -48,6 +48,111 @@ export function Count({ label, count }: { readonly label: string; readonly count
 An element called outside a render throws `<Element> was called outside a render. Use it inside a pane's render or a slot's component.` So build elements inside a pane's `render` or a slot's component, never at module load or in a hook.
 
 `drawWith(table, draw, markdown?)` is the function cmod draws a render with. A mod never calls it.
+
+## Components
+
+`ui/components.js` exports controls built from the elements and Claude Code's theme colors, so they follow the person's theme and look the same in every mod. Each is a component like the ones a mod writes: a function of props, used in a pane's `render` or a slot's component.
+
+```ts
+Tabs(props: { tabs: readonly { key: string; label: string }[]; selected: string; onSelect(key: string): void; children? })
+Split(props: { children: readonly RenderElement[] })
+Panel(props: { title: string; children? })
+Toggle(props: { label: string; checked: boolean; onChange(checked: boolean): void })
+Tooltip(props: { text: string; children? })
+Help(props: { text: string; isOpen: boolean; onOpenChange(isOpen: boolean): void })
+Dialog(props: { title: string; children?; actions })
+Pagination(props: { page: number; pages: number; onPage(page: number): void })
+ProgressBar(props: { done: number; total: number; width?: number })
+```
+
+- `Tabs` draws a row of tabs over `children`. The selected tab's number is in the accent color and its label bold and underlined. Each other tab is a `Button` whose hotkey is its number, so a pane that holds the keyboard switches tabs by number, Tab, or a click. A hotkey is one digit, so only the first nine tabs have a number.
+- `Split` lays its children side by side in equal widths. `Panel` frames one part of a pane in a rounded border with a bold title.
+- `Toggle` draws `[x] label` or `[ ] label` as a `Button`. Enter or a click calls `onChange` with the other value.
+- `Tooltip` shows `text` in an inverted card above its children while the pointer rests on them. The card opens upward, because Claude Code paints a card over the rows drawn before it and under the rows drawn after it. It has no border, so a one-line card needs one free row above its children. The pointer alone opens it, so put nothing only a tooltip says.
+- `Help` draws a `?` that shows `text` the same way. A press of `?` keeps the card open until the next press, so the keyboard reaches it too. Keep `isOpen` in `mod.state`.
+- `Dialog` lays out a dialog's title, body, and `actions`, the buttons in a row. Put the safe action first, as the `primary` Button with `autoFocus`.
+- `Pagination` draws `p: Previous  2 of 5  n: Next`. `p` and `n` are its hotkeys, and an end it cannot pass is dim text.
+- `ProgressBar` fills `width` columns, 24 unless given, in proportion to `done` of `total`, and shows the count. The progress lines `mod.ui.progress` draws use it too.
+- `Tabs`, `Toggle`, `Help`, and `Pagination` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
+
+A pane opened with `focus`, `closeOnEscape`, and `holdToasts` is a dialog. Claude Code shows it as a tab of the dock, beside the mod's other panes, and Escape closes it:
+
+```tsx
+import { definePane } from '../../node_modules/@cmodjs/core/ui/define-pane.js'
+import { Dialog } from '../../node_modules/@cmodjs/core/ui/components.js'
+import { Button, Text } from '../../node_modules/@cmodjs/core/ui/elements.js'
+
+export const confirmPane = definePane<{ session: { deleting: boolean } }>({
+  id: 'delete-branch',
+  title: 'Delete branch',
+  rows: 9,
+  closeOnEscape: true,
+  holdToasts: true,
+  render: (mod) => (
+    <Dialog
+      title="Delete the branch feature/kit?"
+      actions={[
+        <Button variant="primary" autoFocus label="Keep it" onPress={() => void mod.ui.toast('Kept feature/kit')} />,
+        <Button label="Delete" onPress={() => void (mod.state.session.deleting = true)} />,
+      ]}
+    >
+      <Text dimColor wrap="wrap">Its 3 commits are not on main. Deleting it removes them from this machine.</Text>
+    </Dialog>
+  ),
+})
+```
+
+Open it with `mod.ui.pane(confirmPane).open({ focus: true })`. It draws as:
+
+```text
+ Widgets   Delete branch                                        ✕
+ Delete the branch feature/kit?
+
+ Its 3 commits are not on main. Deleting it removes them from
+ this machine.
+
+ [ Keep it ]  [ Delete ]
+```
+
+A pane with `Tabs`, a `Tooltip`, a `ProgressBar`, `Pagination`, and a `Toggle` with `Help` draws as:
+
+```text
+ 1: Controls   2: Split   3: Files
+
+ 3 files read
+
+ ██████████████░░░░░░░░░░  7/12
+
+ p: Previous  2 of 5  n: Next
+
+ [x] Show hidden files ?
+```
+
+With the pointer on `3 files read` and `Help` open, the two cards cover the rows above them:
+
+```text
+ 1: Controls   2: Split   3: Files
+  Files Claude read this session
+ 3 files read
+
+ ██████████████░░░░░░░░░░  7/12
+
+ p: Previous  2 of 5  n Hidden files start with a dot,
+                        such as .env.
+ [x] Show hidden files ?
+```
+
+and its Split tab, two `Panel`s in a `Split`, as:
+
+```text
+ 1: Controls   2: Split   3: Files
+
+ ╭─────────────────────────────────╮ ╭────────────────────────────────╮
+ │ Changed files                   │ │ src/mod.tsx                    │
+ │ src/mod.tsx                     │ │ + mod.ui.pane(widgetsPane)     │
+ │ src/state.ts                    │ │ - mod.ui.pane(oldPane)         │
+ ╰─────────────────────────────────╯ ╰────────────────────────────────╯
+```
 
 ## Panes
 
@@ -250,7 +355,7 @@ markdownBlocks<S>(text: string, slot: S): Omit<SlotProps<S>, 'Default'>[]
 
 ## Toasts
 
-`mod.ui.toast(text)` shows the person a short message.
+`mod.ui.toast(text, options?)` shows the person a short message on Claude Code's stack of plugin toasts, over the transcript's top right corner and under the mod's name. It stays 4 seconds, or `timeoutMs`. A click takes it off, and the pointer resting on it holds it. While a pane opened with `holdToasts` is shown, it waits.
 
 ## Progress lines
 

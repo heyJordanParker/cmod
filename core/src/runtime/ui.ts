@@ -1,5 +1,6 @@
 import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement, Timer } from 'claude-code'
 import type { Mod, PaneHandle, ProgressStep } from '../mod.js'
+import { ProgressBar } from '../ui/components.js'
 import type { Pane } from '../ui/define-pane.js'
 import { Box, drawWith, Text } from '../ui/elements.js'
 import type { MarkdownKind, MarkdownReader } from '../ui/markdown.js'
@@ -109,23 +110,8 @@ function drawLine(line: Line, frame: number, columns: number | undefined): Rende
   const glyph = Text({ color: 'claude', children: spinner[frame % spinner.length] })
   if (line.step === undefined) return Text({ wrap: 'truncate-end', children: [glyph, ' ', title, Text({ dimColor: true, children: '…' })] })
   const { done, total, label = '' } = line.step
-  const count = `${done}/${total}`
-  const width = barWidth(columns, `${line.title}${count}${label}`.length)
-  const filled = total > 0 ? Math.round(Math.min(done / total, 1) * width) : 0
-  return Text({
-    wrap: 'truncate-end',
-    children: [
-      glyph,
-      ' ',
-      title,
-      '  ',
-      Text({ color: 'claude', children: '█'.repeat(filled) }),
-      Text({ color: 'subtle', children: '░'.repeat(width - filled) }),
-      '  ',
-      Text({ dimColor: true, children: count }),
-      ...(label === '' ? [] : ['  ', label]),
-    ],
-  })
+  const width = barWidth(columns, `${line.title}${done}/${total}${label}`.length)
+  return Text({ wrap: 'truncate-end', children: [glyph, ' ', title, '  ', ProgressBar({ done, total, width }), ...(label === '' ? [] : ['  ', label])] })
 }
 
 function barWidth(columns: number | undefined, textLength: number): number {
@@ -402,7 +388,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
           return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
         })
       },
-      toast: (text) => claude.ui.toast(text),
+      toast: (text, options) => claude.ui.toast(text, options),
       async progress(title, task) {
         const line = progress.start(title)
         try {

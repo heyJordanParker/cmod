@@ -20,6 +20,7 @@ import type {
   RenderElement,
   Settings,
   SettingsReadArgs,
+  ToastOptions,
   UiScrollArgs,
   UiScrollResult,
 } from 'claude-code'
@@ -125,7 +126,7 @@ export type Mod<State extends object = Record<never, never>> = {
   readonly ui: {
     pane(pane: Pane<State>): PaneHandle
     render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
-    toast(text: string): void
+    toast(text: string, options?: ToastOptions): void
     progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
     ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
     scroll(args: UiScrollArgs): Promise<UiScrollResult>
