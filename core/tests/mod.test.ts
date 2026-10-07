@@ -368,13 +368,13 @@ const counter = defineMod({
 
 test('a Button press changes mod.state and the pane draws the new state', async () => {
   const tested = testMod(counter)
-  expect(await tested.lines('counter')).toEqual(['Count: 0', 'Add one'])
+  expect(await tested.lines('counter')).toEqual(['Count: 0', '[ Add one ]'])
   expect(tested.shown.openPanes).toEqual(new Set(['counter']))
 
   await tested.press('counter', 'Add one')
 
   expect(tested.state.session.count).toBe(1)
-  expect(await tested.lines('counter')).toEqual(['Count: 1', 'Add one'])
+  expect(await tested.lines('counter')).toEqual(['Count: 1', '[ Add one ]'])
 })
 
 test('mod.ui.progress draws a bar line above the prompt while its task runs', async () => {
@@ -1041,7 +1041,7 @@ test('a pane sized from state opens at the size its state gives', async () => {
   await tested.type('/diagrams')
 
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 120 }])
-  expect(await tested.lines('diagrams')).toEqual(['Diagram 2', 'Next'])
+  expect(await tested.lines('diagrams')).toEqual(['Diagram 2', '[ Next ]'])
 })
 
 test('an open pane resizes when the state changes its size', async () => {
@@ -1062,7 +1062,7 @@ test('a state change that keeps the size does not reopen the pane', async () => 
 
   await tested.press('diagrams', 'Next')
 
-  expect(await tested.lines('diagrams')).toEqual(['Diagram 3', 'Next'])
+  expect(await tested.lines('diagrams')).toEqual(['Diagram 3', '[ Next ]'])
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 120 }])
 })
 

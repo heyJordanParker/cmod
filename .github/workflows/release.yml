@@ -80,11 +80,10 @@ jobs:
         if: steps.version.outputs.release != 'done'
         run: |
           version=${{ steps.version.outputs.version }}
-          until npm view "@cmodjs/core@$version" version > /dev/null 2>&1 && npm view "@cmodjs/cli@$version" version > /dev/null 2>&1; do sleep 5; done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm bun.lock
-          bun install
+          until bun install --no-cache; do sleep 10; done
           bun test
           bun x tsc --noEmit
           if ! git diff --quiet bun.lock; then

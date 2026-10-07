@@ -145,6 +145,7 @@ Waits until the work a hook started without awaiting it has run, such as a `void
 ### lines
 
 - `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`, the main conversation's view.
+- A `Button` draws as Claude Code draws it: `[ Save ]`, or `1: Save` when it is `plain` with a `hotkey`, or `Save` when it is `plain` alone. Borders and colors are not drawn.
 - `lines(slot, props, requestId?)` draws a slot render with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the render changed. Draw `slots.AssistantMessage` with a reply's `text` to test a markdown slot render. Draws that pass one `requestId` grow one streamed reply.
 
 ```ts

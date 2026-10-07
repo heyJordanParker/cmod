@@ -195,7 +195,7 @@ test('lines reads a pane as rows of text', async () => {
   const tested = testMod(notes)
   await tested.type('/notes')
 
-  expect(await tested.lines('notes')).toEqual(['Notes  2 saved', '', '  Buy milk', '  Call the plumber about', '  the sink', '', 'Clear'])
+  expect(await tested.lines('notes')).toEqual(['Notes  2 saved', '', '  Buy milk', '  Call the plumber about', '  the sink', '', '[ Clear ]'])
 })
 
 test("tested.lines shows an Image's alt text", async () => {

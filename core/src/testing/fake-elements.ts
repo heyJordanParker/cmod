@@ -53,7 +53,7 @@ export function textOf(node: RenderNode): string {
   const { type, props, children = [] } = insideOf(node)
   const inner = children.map(textOf).join('')
   if (type === 'Box') return rowsOf(node, Number.POSITIVE_INFINITY).join('\n')
-  if (type === 'Button') return String(props['label'] ?? inner)
+  if (type === 'Button') return buttonText(String(props['label'] ?? inner), props)
   if (type === 'Link') return inner === '' ? String(props['label'] ?? props['href']) : inner
   if (type === 'Code') return String(props['source'])
   if (type === 'Markdown') return String(props['text'])
@@ -65,6 +65,11 @@ export function textOf(node: RenderNode): string {
     return [props['label'], selected?.label ?? selected?.value].filter((part) => part !== undefined).join(' ')
   }
   return inner
+}
+
+function buttonText(label: string, props: Drawn['props']): string {
+  if (props['plain'] !== true) return `[ ${label} ]`
+  return props['hotkey'] === undefined ? label : `${String(props['hotkey'])}: ${label}`
 }
 
 function insideOf(node: RenderElement): Drawn {

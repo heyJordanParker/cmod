@@ -55,12 +55,12 @@ const kit = defineMod({
 
 test('Tabs draws the active tab as text and the others as hotkey buttons that switch to them', async () => {
   const tested = testMod(kit)
-  expect((await tested.lines('kit'))[0]).toBe('1: Controls   Split')
+  expect((await tested.lines('kit'))[0]).toBe('1: Controls   2: Split')
 
   await tested.press('kit', 'Split')
 
   expect(tested.state.session.tab).toBe('split')
-  expect(await tested.lines('kit')).toEqual(['Controls   2: Split', '', ' Changed files  Preview', ' src/mod.tsx    12 lines'])
+  expect(await tested.lines('kit')).toEqual(['1: Controls   2: Split', '', ' Changed files  Preview', ' src/mod.tsx    12 lines'])
 })
 
 test('Tabs numbers only the first nine tabs, because a hotkey is one digit', async () => {
@@ -83,9 +83,10 @@ test('Tabs numbers only the first nine tabs, because a hotkey is one digit', asy
     }),
   )
 
-  expect((await tested.lines('many'))[0]).toBe('a   b   c   d   e   f   g   h   i   j')
-  await tested.press('many', 'i')
-  expect((await tested.lines('many'))[0]).toBe('a   b   c   d   e   f   g   h   9: i   j')
+  expect((await tested.lines('many'))[0]).toBe('1: a   2: b   3: c   4: d   5: e   6: f   7: g   8: h   9: i   j')
+  await tested.press('many', 'a')
+  expect((await tested.lines('many'))[0]).toBe('1: a   2: b   3: c   4: d   5: e   6: f   7: g   8: h   9: i   j')
+  expect(tested.state.session.tab).toBe('t1')
 })
 
 test('Toggle flips its checked state on a press', async () => {
@@ -121,12 +122,12 @@ test('ProgressBar fills its width in proportion and shows the count', async () =
 
 test('Pagination steps forward, and draws an end it cannot pass as text', async () => {
   const tested = testMod(kit)
-  expect(await tested.lines('kit')).toContain('p: Previous  1 of 2  Next')
+  expect(await tested.lines('kit')).toContain('p: Previous  1 of 2  n: Next')
 
   await tested.press('kit', 'Next')
 
   expect(tested.state.session.page).toBe(2)
-  expect(await tested.lines('kit')).toContain('Previous  2 of 2  n: Next')
+  expect(await tested.lines('kit')).toContain('p: Previous  2 of 2  n: Next')
   await expect(tested.press('kit', 'Next')).rejects.toThrow('The pane "kit" of kit draws no Button with the key or label "Next".')
 })
 
@@ -154,7 +155,7 @@ test('Dialog draws its title, body, and actions in order', async () => {
     }),
   )
 
-  expect(await tested.lines('confirm')).toEqual([' Delete feature/kit?', '', ' Its 3 commits are not on main.', '', ' Keep it  Delete'])
+  expect(await tested.lines('confirm')).toEqual([' Delete feature/kit?', '', ' Its 3 commits are not on main.', '', ' [ Keep it ]  [ Delete ]'])
   await tested.press('confirm', 'Keep it')
   expect(tested.state.session.kept).toBe(1)
 })
