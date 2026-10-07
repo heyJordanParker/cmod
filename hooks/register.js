@@ -119,6 +119,9 @@ function parseRecord(text, path) {
   const program = value["program"];
   if (program !== null && typeof program !== "string")
     throw new Error(`${path} has a "program" that is neither a command name nor null. ${fix}`);
+  const keys = value["keys"] ?? {};
+  if (!isObject(keys) || Object.values(keys).some((command) => typeof command !== "string"))
+    throw new Error(`${path} has "keys" that are not key bindings. ${fix}`);
   return {
     name: value["name"],
     version: value["version"],
@@ -126,7 +129,8 @@ function parseRecord(text, path) {
     installedAt: value["installedAt"],
     scriptsSha256: value["scriptsSha256"],
     uninstall,
-    program
+    program,
+    keys
   };
 }
 function readSteps(pkg) {
@@ -142,7 +146,21 @@ function readSteps(pkg) {
   const program = steps["program"];
   if (program !== undefined && (typeof program !== "string" || !pluginName.test(program)))
     throw new Error(`package.json "cmod.program" must be the program's command, such as "hello".`);
-  return { ...readCommand(steps, "install"), ...readCommand(steps, "uninstall"), ...program === undefined ? {} : { program } };
+  return { ...readCommand(steps, "install"), ...readCommand(steps, "uninstall"), ...program === undefined ? {} : { program }, ...readKeys(steps["keys"]) };
+}
+function readKeys(keys) {
+  if (keys === undefined)
+    return {};
+  if (!isObject(keys) || Object.keys(keys).length === 0)
+    throw new Error('package.json "cmod.keys" must bind each key to a command, such as "keys": { "shift+tab": "/mode" }.');
+  const commands = {};
+  for (const [key, value] of Object.entries(keys)) {
+    const command = typeof value === "string" ? /^\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/.exec(value)?.[1] : undefined;
+    if (key.trim() === "" || command === undefined)
+      throw new Error(`package.json "cmod.keys" binds "${key}" to ${JSON.stringify(value)}. Bind each key to one of the mod's commands, such as "shift+tab": "/mode".`);
+    commands[key] = command;
+  }
+  return { keys: commands };
 }
 function readCommand(steps, key) {
   const command = steps[key];
@@ -180,7 +198,7 @@ async function scriptsSha256(steps, files) {
     for (const folder of scriptFolders)
       folders.add(folder);
   }
-  let text = [steps.install ?? "", steps.uninstall ?? "", steps.program ?? ""].join("\x00");
+  let text = [steps.install ?? "", steps.uninstall ?? "", steps.program ?? "", ...steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())]].join("\x00");
   for (const folder of [...folders].sort()) {
     for (const name of (await files.list(folder)).sort()) {
       const path = `${folder}/${name}`;
@@ -197,9 +215,9 @@ function parseEvent(line) {
   const progress = /^progress (\d+) (\d+)(?: (.*))?$/.exec(line);
   if (progress !== null)
     return { kind: "progress", done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? "" };
-  const consent = /^needs-consent (\S+)\t([^\t]*)\t(.*)$/.exec(line);
+  const consent = /^needs-consent (\S+)\t([^\t]*)\t([^\t]*)(?:\t(.*))?$/.exec(line);
   if (consent !== null)
-    return { kind: "needs-consent", sha256: consent[1], install: consent[2], uninstall: consent[3] };
+    return { kind: "needs-consent", sha256: consent[1], install: consent[2], uninstall: consent[3], keys: consent[4] ?? "" };
   const done = /^done (\S+)(?: (\S+))?$/.exec(line);
   if (done !== null)
     return { kind: "done", name: done[1], ...done[2] === undefined ? {} : { version: done[2] } };
@@ -3640,6 +3658,9 @@ function callEffects(use, workspace) {
   }
   return effects;
 }
+function inputOf(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
 async function editedContents(use, path, fs) {
   const previousContent = await previousContentOf(path, fs);
   const oldString = textField(use, "old_string");
@@ -3665,7 +3686,7 @@ function once(load) {
   return () => loaded ??= load();
 }
 function fieldOf(use, name) {
-  return typeof use.input === "object" && use.input !== null ? use.input[name] : undefined;
+  return use.input[name];
 }
 function textField(use, name) {
   const value = fieldOf(use, name);
@@ -3701,15 +3722,15 @@ var readFields = {
   FileChanged: []
 };
 function classicHook(name, event, hook, claude, calls) {
-  const inputOf = async (e) => {
+  const hookInputOf = async (e) => {
     if (event !== "PostToolUse" && event !== "PostToolUseFailure")
       return e;
     const input = e;
     const cwd2 = calls.cwdOf(input.tool_use_id) ?? input.cwd;
-    return { ...input, files: await callFiles(name, claude, { tool: input.tool_name, input: input.tool_input }, cwd2) };
+    return { ...input, files: await callFiles(name, claude, { tool: input.tool_name, input: inputOf(input.tool_input) }, cwd2) };
   };
   const resultOf = async (e) => {
-    const answer = await hook(await inputOf(e));
+    const answer = await hook(await hookInputOf(e));
     if (answer === undefined)
       return;
     if (answer.systemMessage !== undefined)
@@ -3904,7 +3925,13 @@ function createRouter() {
 var lifetimes = ["memory", "session", "project", "global"];
 var savedLifetimes = ["session", "project", "global"];
 var keptPerValue = 20;
-function createState({ name, initial, session, root, claude, changed }) {
+var listeners = new WeakMap;
+function createState({ name, initial, session, root, claude, changed: redraw }) {
+  const changed = () => {
+    redraw();
+    for (const listener of listeners.get(state) ?? [])
+      listener();
+  };
   const declared = declaredGroups(name, initial);
   const current = copied(declared);
   let defaults = declared;
@@ -4513,12 +4540,12 @@ async function readPlugin(claude) {
   const manifest = await readJson(read, `${root}/.claude-plugin/plugin.json`);
   const version = typeof manifest?.version === "string" ? manifest.version : undefined;
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
-  const plugin = { name, root, version, store };
   if (name === cmodPluginName) {
     const installed = await cmodVersion(claude);
-    return { ...plugin, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
+    return { name, root, version, store, keys: {}, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
   }
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {};
+  const plugin = { name, root, version, store, keys: steps.keys ?? {} };
   const record = await readRecord(read, store, name);
   if (Object.keys(steps).length === 0)
     return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version };
@@ -4618,7 +4645,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
     if (runtime === undefined || plugin === undefined)
       return;
     const activeRouter = createRouter();
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), checksPermissions }).catch((error) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), keys: plugin.keys, checksPermissions }).catch((error) => {
       fail(messageOf(error), "Fix it, then run /reload-plugins.");
       throw error;
     });
@@ -4653,8 +4680,12 @@ function createLifecycle(definition, checksPermissions = () => true) {
       return;
     }
     showLine().wait("Waiting for your answer");
-    const removal = event.uninstall === "" ? "" : `, and ${event.uninstall} when you remove it`;
-    const answer = await claude().ui.ask(`${name} runs ${event.install} to install${removal}. Run it now?`, { options: ["Install", "Not now"], header: "Install" });
+    const actions = [
+      ...event.install === "" ? [] : [`runs ${event.install} to install`],
+      ...event.uninstall === "" ? [] : [`runs ${event.uninstall} when you remove it`],
+      ...event.keys === "" ? [] : [`binds ${event.keys}`]
+    ];
+    const answer = await claude().ui.ask(`${name} ${listed(actions)}. Install it now?`, { options: ["Install", "Not now"], header: "Install" });
     if (answer === "Install")
       return install(event.sha256);
     phase = "declined";
@@ -4799,7 +4830,8 @@ function createLifecycle(definition, checksPermissions = () => true) {
   };
 }
 async function createMod(definition, runtime) {
-  const { claude, router, progress } = runtime;
+  const { router, progress } = runtime;
+  const claude = checkingKeys(runtime.claude, definition.name, runtime.keys);
   const added = [];
   const hookEvents = [];
   const announce = (feature) => {
@@ -4816,15 +4848,27 @@ async function createMod(definition, runtime) {
     name: definition.name,
     state: modState.state,
     dataFolder: runtime.dataFolder,
-    on(event, hook) {
+    on(event, hook, options) {
+      const bounded = options?.timeoutMs === undefined ? hook : timedHook(definition.name, event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude);
       if (!hookEvents.includes(event))
         hookEvents.push(event);
       if (event === "PreToolUse")
-        router.add("tool.call", preToolUseHook(definition.name, hook, claude, agents, held));
+        router.add("tool.call", preToolUseHook(definition.name, bounded, claude, agents, held));
       else
-        router.add(`classic.${event}`, classicHook(definition.name, event, hook, claude, agents));
+        router.add(`classic.${event}`, classicHook(definition.name, event, bounded, claude, agents));
     },
     use: (job) => job({ mod, claude, on: (event, hook) => router.add(event, hook), announce, reserveName, toolCalls: agents }),
+    every(ms, hook) {
+      let isRunning = false;
+      return claude.clock.every(checkedMs(definition.name, "mod.every", ms), () => {
+        if (isRunning)
+          return;
+        isRunning = true;
+        Promise.resolve().then(hook).catch((error) => claude.ui.log(`${definition.name}: the every ${ms} ms hook failed: ${messageOf(error)}`)).finally(() => {
+          isRunning = false;
+        });
+      });
+    },
     ui: area.ui,
     process: {
       run: (argv, init) => claude.process.run(argv, init),
@@ -4839,8 +4883,21 @@ async function createMod(definition, runtime) {
     },
     http: { fetch: (url, init) => claude.http.fetch(url, init) },
     settings: { read: (args) => claude.settings.read(args) },
-    session: { messages: claude.session.messages },
+    session: {
+      messages: claude.session.messages,
+      async append(text) {
+        const added2 = await claude.session.append({ message: { type: "user", content: [{ type: "text", text }] } });
+        if (added2.deny !== undefined)
+          throw new Error(`${definition.name}: Claude Code refused the note: ${added2.deny}`);
+      },
+      async submit(text) {
+        const submitted = await claude.prompt.submit({ text });
+        if ("drop" in submitted && typeof submitted.drop === "string")
+          throw new Error(`${definition.name}: Claude Code dropped the prompt: ${submitted.drop}`);
+      }
+    },
     agent: { spawn: (args) => claude.agent.spawn(args) },
+    model: { complete: (request, options) => claude.model.complete(request, options) },
     get projectRoot() {
       return modState.root;
     },
@@ -4926,6 +4983,41 @@ async function createMod(definition, runtime) {
     added.push(`${hookEvents.length === 1 ? "a hook" : "hooks"} on ${listed(hookEvents)}`);
   return { mod, added };
 }
+function checkingKeys(claude, name, keys) {
+  const bound = Object.entries(keys);
+  if (bound.length === 0)
+    return claude;
+  const register = (command) => {
+    for (const [key, commandName] of bound) {
+      if (commandName === command.name && command.immediate !== true) {
+        claude.ui.log(`${name}: ${key} runs /${command.name}, which waits for Claude's turn to end and adds a row to the conversation. Give /${command.name} immediate: true.`);
+      }
+    }
+    return claude.command.register(command);
+  };
+  return { ...claude, command: { ...claude.command, register } };
+}
+var longestTimerMs = 2147483647;
+function checkedMs(name, subject, ms) {
+  if (!Number.isInteger(ms) || ms <= 0 || ms > longestTimerMs)
+    throw new Error(`${name}: ${subject} is ${ms}. Give a whole number of milliseconds above 0 and at most ${longestTimerMs}.`);
+  return ms;
+}
+function timedHook(name, event, hook, ms, claude) {
+  return (input) => new Promise((resolve2, reject) => {
+    const timer = claude.clock.after(ms, () => {
+      claude.ui.log(`${name}: the ${event} hook passed its ${ms / 1000} s timeout`);
+      resolve2(undefined);
+    });
+    Promise.resolve().then(() => hook(input)).then((answer) => {
+      timer.cancel();
+      resolve2(answer);
+    }, (error) => {
+      timer.cancel();
+      reject(error);
+    });
+  });
+}
 async function failsAs(subject, step) {
   try {
     await step();
@@ -5009,8 +5101,11 @@ async function startMod($, eventInput, passOn) {
       model: () => $.session.model(),
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
-      messages: (args) => args === undefined ? $.session.messages() : $.session.messages(args)
+      messages: (args) => args === undefined ? $.session.messages() : $.session.messages(args),
+      append: (args) => $.session.append(args)
     },
+    prompt: { submit: (args) => $.prompt.submit(args) },
+    model: { complete: (request, options) => $.model.complete(request, options) },
     command: { register: (command) => $.command.register(command) },
     tool: { register: (tool) => $.tool.register(tool) },
     agent: {
@@ -5062,7 +5157,7 @@ function registerMod(addHook, definition) {
   addHook("cmod.call", routeToMod);
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-sXu3DG/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-0wtgRK/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -5105,7 +5200,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-sXu3DG/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-0wtgRK/release/hooks/register.ts
 function register(addHook) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

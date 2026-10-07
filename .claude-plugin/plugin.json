@@ -1,6 +1,6 @@
 {
   "name": "cmod",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Claude Mod Manager: fetches the cmod program for every mod, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.",
   "author": {
     "name": "Jordan Parker"
