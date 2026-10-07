@@ -4119,6 +4119,12 @@ var Input = element("Input");
 var Select = element("Select");
 var Image = element("Image");
 
+// node_modules/@cmodjs/core/ui/components.js
+function ProgressBar({ done, total, width = 24 }) {
+  const filled = total > 0 ? Math.round(Math.min(done / total, 1) * width) : 0;
+  return Text({ children: [Text({ color: "claude", children: "█".repeat(filled) }), Text({ color: "subtle", children: "░".repeat(width - filled) }), "  ", Text({ dimColor: true, children: `${done}/${total}` })] });
+}
+
 // node_modules/@cmodjs/core/runtime/ui.js
 var spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 var spinnerMs = 100;
@@ -4197,23 +4203,8 @@ function drawLine(line, frame, columns) {
   if (line.step === undefined)
     return Text({ wrap: "truncate-end", children: [glyph, " ", title, Text({ dimColor: true, children: "…" })] });
   const { done, total, label = "" } = line.step;
-  const count = `${done}/${total}`;
-  const width = barWidth(columns, `${line.title}${count}${label}`.length);
-  const filled = total > 0 ? Math.round(Math.min(done / total, 1) * width) : 0;
-  return Text({
-    wrap: "truncate-end",
-    children: [
-      glyph,
-      " ",
-      title,
-      "  ",
-      Text({ color: "claude", children: "█".repeat(filled) }),
-      Text({ color: "subtle", children: "░".repeat(width - filled) }),
-      "  ",
-      Text({ dimColor: true, children: count }),
-      ...label === "" ? [] : ["  ", label]
-    ]
-  });
+  const width = barWidth(columns, `${line.title}${done}/${total}${label}`.length);
+  return Text({ wrap: "truncate-end", children: [glyph, " ", title, "  ", ProgressBar({ done, total, width }), ...label === "" ? [] : ["  ", label]] });
 }
 function barWidth(columns, textLength) {
   if (columns === undefined)
@@ -4461,7 +4452,7 @@ function createUi({ name, claude, router, progress, announce, mod }) {
           return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? "opensReply" : "inReply"));
         });
       },
-      toast: (text) => claude.ui.toast(text),
+      toast: (text, options) => claude.ui.toast(text, options),
       async progress(title, task) {
         const line = progress.start(title);
         try {
@@ -5071,7 +5062,7 @@ function registerMod(addHook, definition) {
   addHook("cmod.call", routeToMod);
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-pu4qMM/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-KDSF6P/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -5114,7 +5105,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-pu4qMM/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-KDSF6P/release/hooks/register.ts
 function register(addHook) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
