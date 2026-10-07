@@ -208,5 +208,18 @@ test('publish refuses a build that is not named <program>-<os>-<arch>', async ()
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(1)
-  expect(result.stderr).toBe(`cmod publish: The build of hello wrote hello, which no platform downloads. Name each build <program>-<os>-<arch>: ${platforms.map((platform) => `hello-${platform}`).join(', ')}.\n`)
+  expect(result.stderr).toBe(`cmod publish: The build of hello wrote hello, which no machine downloads. Name each build <program>-<os>-<arch>: ${platforms.map((platform) => `hello-${platform}`).join(', ')}.\n`)
+})
+
+test('publish asks the build for every machine in CMOD_MACHINES, and releases no build an earlier run left in the output folder', async () => {
+  const home = await temporaryHome()
+  const root = await committedMod(home, 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in darwin-arm64 linux-x64; do echo hello > dist/hello-$machine; done')
+  await writeFiles(root, { 'cli/dist/hello-linux-arm64': 'built by an earlier run\n' })
+  await Bun.spawn(['touch', '-t', '202001010000', join(root, 'cli/dist/hello-linux-arm64')]).exited
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'machines'), 'utf8')).toBe(`${platforms.join(' ')}\n`)
+  expect(result.stdout).toContain('Built hello: hello-darwin-arm64, hello-linux-x64\n')
 })

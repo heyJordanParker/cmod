@@ -1,13 +1,13 @@
 ---
 name: change-public-api
-description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `testing.ts`, `register.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, README.md, or a sample mod, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
+description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `testing.ts`, `register.ts`, `shell.ts`, `path.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, README.md, or a sample mod, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
 ---
 
 # Change Public API
 
 A mod author learns Claude Mod Manager (cmod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
 
-- The Public API is `core/src/mod.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal.
+- The Public API is `core/src/mod.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/shell.ts`, `core/src/path.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal. `shell.ts` and `path.ts` only re-export, so core's own code imports `utils/parse-shell.ts` and `vendor.ts` instead.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.
 
 ## 1. Find every place the idea appears
@@ -53,7 +53,7 @@ Anthropic's plugin directory reads the bundle `cmod publish` writes and flags:
 
 - A name the bundle declares twice, when it is `$`, `register`'s first parameter, or a hook's third parameter. `mod.on` is a declaration of `on`, so `register`'s first parameter is `addHook`.
 - `addHook` or `$` passed anywhere but as one whole argument to a function declared at the top of the same file.
-- A hook on `tool.check`, `classic.PreToolUse`, or `classic.PermissionRequest` that answers anything but `next(e)` or a fixed `deny` or `ask`. `registerPermissionCheck` holds those three, so only a mod that decides permissions ships them.
+- A hook on `tool.check`, `classic.PreToolUse`, or `classic.PermissionRequest` that answers anything but `next(e)` or a fixed `deny` or `ask`. `registerPermissionCheck` holds `tool.check` and `classic.PermissionRequest`, so only a mod that allows or asks ships them. A mod's `PreToolUse` hooks run on `tool.call`, so no bundle registers `classic.PreToolUse`.
 
 The template's `tsconfig.json` repeats the JSX options, because Bun needs them before Claude Code first loads the mod and writes the `.claude-plugin/types/tsconfig.json` the template extends.
 

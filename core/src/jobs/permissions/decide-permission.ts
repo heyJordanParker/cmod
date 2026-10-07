@@ -3,7 +3,7 @@ import { messageOf } from '../../utils/text.js'
 import { callBaseOf, callEffects, type CallEffects, type ToolCall, type ToolUse } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
 import { folderInScope, matchTarget, targetOf, type MatchedCall, type Target, type TargetCalls, type TargetKey, type TargetOf } from './match-target.js'
-import { resolvePath } from '../../utils/paths.js'
+import { resolve } from '../../vendor.js'
 
 export type Rule<Mod> = {
   [Key in TargetKey]: TargetOf<Key> & {
@@ -71,7 +71,7 @@ async function unparsedMatches(target: Target, use: ToolUse, effects: CallEffect
   const named = patterns.map((pattern) => pattern.slice(pattern.lastIndexOf('/') + 1)).filter((segment) => segment !== '' && !/[*?[\]{}]/.test(segment) && line.includes(segment.toLowerCase()))
   const folder = named.length === 0 ? undefined : await folderInScope(shell, workspace)
   if (folder === undefined) return []
-  return named.map((segment) => ({ call: { ...base, path: resolvePath(segment, folder) }, access: undefined, folder }))
+  return named.map((segment) => ({ call: { ...base, path: resolve(folder, segment) }, access: undefined, folder }))
 }
 
 function containsWord(line: string, word: string): boolean {

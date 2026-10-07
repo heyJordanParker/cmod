@@ -10,7 +10,7 @@ import { version as cmodVersion } from '../../package.json'
 import { tilde, writeAtomically } from '../files.js'
 import { readPlugin } from '../plugin.js'
 import { run as runCommand } from '../process.js'
-import { buildProgram, readProgram, releaseDownloads } from '../program.js'
+import { buildProgram, machines, readProgram, releaseDownloads } from '../program.js'
 import { startProgress } from '../progress.js'
 
 export const summary = 'Build a mod\'s release, tag it, and publish it on GitHub.'
@@ -37,8 +37,6 @@ or link: path, which no user has.
 
 Options:
   --dry-run  Build and write everything, and push nothing`
-
-const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 
 const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
 
@@ -102,10 +100,7 @@ export async function run(argv: string[]): Promise<number> {
 
   let programs: string[] = []
   if (program !== undefined) {
-    programs = await buildProgram(program, progress)
-    const names = platforms.map((platform) => `${program.name}-${platform}`)
-    const misnamed = programs.map((path) => basename(path)).filter((file) => !names.includes(file))
-    if (misnamed.length > 0) throw new Error(`The build of ${program.name} wrote ${misnamed.join(', ')}, which no platform downloads. Name each build <program>-<os>-<arch>: ${names.join(', ')}.`)
+    programs = await buildProgram(program, machines, progress)
   }
 
   const sums = join(output, 'SHA256SUMS')

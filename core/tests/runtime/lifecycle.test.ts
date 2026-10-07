@@ -362,22 +362,42 @@ test('a mod whose state fails to load says its state did not load', async () => 
 
 test('a mod that decides permissions without registerPermissionCheck does not start, and names the line to add', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PreToolUse', () => undefined) }), () => false)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PermissionRequest', () => undefined) }), () => false)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
-    '>\n✗ Installing guard  it decides permissions on classic.PreToolUse, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod\n  Fix it, then run /reload-plugins.',
+    '>\n✗ Installing guard  it decides permissions on classic.PermissionRequest, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod\n  Fix it, then run /reload-plugins.',
   )
 })
 
 test('a mod that decides permissions starts once registerPermissionCheck registered the permission events', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PreToolUse', () => undefined) }), () => true)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PermissionRequest', () => undefined) }), () => true)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
   expect(lifecycle.phase).toBe('active')
+})
+
+test('a mod with a PreToolUse hook starts without registerPermissionCheck', async () => {
+  const fake = fakeClaude({ name: 'docs', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'docs', setup: (mod) => mod.on('PreToolUse', () => undefined) }), () => false)
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'docs', isInstalled: true }))
+
+  expect(lifecycle.phase).toBe('active')
+})
+
+test('a PreToolUse allow without registerPermissionCheck denies the call and names the line to add', async () => {
+  const fake = fakeClaude({ name: 'auto-approve', root })
+  const allows = defineMod({ name: 'auto-approve', setup: (mod) => mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } })) })
+  const lifecycle = createLifecycle(allows, () => false)
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'auto-approve', isInstalled: true }))
+
+  expect(await fire(lifecycle, 'tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'ls' }, { result: '' })).toEqual({
+    deny: 'auto-approve: the PreToolUse hook answered permissionDecision "allow", so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.',
+  })
 })
 
 test('a mod whose open panes cannot be read says its open panes did not load', async () => {

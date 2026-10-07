@@ -187,7 +187,6 @@ test("a cd inside a Bash line resolves the same on PreToolUse and PostToolUse wh
   const edit = call('Bash', { command: 'cd app && sed -i s/a/b/ notes.md' })
 
   await tested.fire('PreToolUse', edit)
-  await tested.fire('tool.call', toolCall(edit))
   await tested.fire('PostToolUse', { ...edit, cwd: '/work/app', tool_response: {} })
 
   const files = { read: [], changed: ['/work/app/notes.md'] }
@@ -213,7 +212,6 @@ test('a PostToolUseFailure resolves against the folder its tool.call recorded, t
   const edit = call('Bash', { command: 'sed -i s/a/b/ notes.md' })
 
   await tested.fire('PreToolUse', edit)
-  await tested.fire('tool.call', toolCall(edit))
   await tested.fire('PostToolUseFailure', { ...edit, cwd: '/work/app', error: 'sed failed' })
   await tested.fire('PostToolUseFailure', { ...edit, cwd: '/work/app', error: 'sed failed' })
 
@@ -222,4 +220,15 @@ test('a PostToolUseFailure resolves against the folder its tool.call recorded, t
     { event: 'PostToolUseFailure', files: { read: [], changed: ['/work/notes.md'] } },
     { event: 'PostToolUseFailure', files: { read: [], changed: ['/work/app/notes.md'] } },
   ])
+})
+
+test("a PreToolUse fired with a subagent's agent_id and agent_type reaches the hook with both, and one without them reaches it as the main session", async () => {
+  const seen: { agent_id?: string | undefined; agent_type?: string | undefined }[] = []
+  const tested = testMod(defineMod({ name: 'agent-watcher', setup: (mod) => mod.on('PreToolUse', ({ agent_id, agent_type }) => void seen.push({ agent_id, agent_type })) }))
+  const read = call('Read', { file_path: '/work/a.ts' })
+
+  await tested.fire('PreToolUse', { ...read, agent_id: 'agent-7', agent_type: 'explorer' })
+  await tested.fire('PreToolUse', { ...read, tool_use_id: 'toolu_2' })
+
+  expect(seen).toEqual([{ agent_id: 'agent-7', agent_type: 'explorer' }, { agent_id: undefined, agent_type: undefined }])
 })

@@ -1,6 +1,9 @@
 import type {
   AgentInfo,
+  AgentSpawnArgs,
+  AgentSpawnResult,
   Args,
+  EngineInterface,
   AskOptions,
   CommandSpec,
   ElementTable,
@@ -29,6 +32,8 @@ import type {
   UiLogOptions,
   UiOpenResult,
   UiPane,
+  UiScrollArgs,
+  UiScrollResult,
 } from 'claude-code'
 
 export type Claude = {
@@ -43,6 +48,7 @@ export type Claude = {
     open(pane: PaneOpenArgs): Promise<UiOpenResult>
     close(pane: PaneCloseArgs): Promise<void>
     panes(): Promise<readonly UiPane[]>
+    scroll(args: UiScrollArgs): Promise<UiScrollResult>
     resolve(e: ResolveInput): ElementTable<RenderSurface>
   }
   readonly process: {
@@ -76,10 +82,14 @@ export type Claude = {
     model(): Promise<string>
     usage(): Promise<SessionUsage>
     surfaces(): Promise<readonly RenderSurface[]>
+    messages: EngineInterface['session']['messages']
   }
   readonly command: { register(command: CommandSpec): Promise<{ command: string }> }
   readonly tool: { register(tool: ToolSpec): Promise<{ tool: string }> }
-  readonly agent: { list(): Promise<AgentInfo[]> }
+  readonly agent: {
+    list(): Promise<AgentInfo[]>
+    spawn(args: AgentSpawnArgs): Promise<AgentSpawnResult>
+  }
   readonly env: {
     home(): Promise<string | undefined>
     dataHome(): Promise<string | undefined>

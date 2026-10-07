@@ -108,6 +108,7 @@ test('registerMod registers each Claude Code event once, and no permission check
     'classic.PreCompact',
     'classic.Stop',
     'classic.StopFailure',
+    'classic.FileChanged',
     'tool.call',
     'prompt.submit',
     'prompt.context',
@@ -116,21 +117,22 @@ test('registerMod registers each Claude Code event once, and no permission check
     'skill.prompt',
     'ui.render',
     'ui.press',
+    'ui.scroll',
     'ui.close',
     'cmod.call',
   ])
 })
 
-test('registerPermissionCheck registers tool.check, PreToolUse, and PermissionRequest once each', () => {
+test('registerPermissionCheck registers tool.check and PermissionRequest once each', () => {
   const fake = fakeOn()
 
   registerMod(fake.on, demo)
   registerPermissionCheck(fake.on)
 
-  expect(fake.registrations.map((registration) => registration.pattern).slice(-3)).toEqual(['tool.check', 'classic.PreToolUse', 'classic.PermissionRequest'])
+  expect(fake.registrations.map((registration) => registration.pattern).slice(-2)).toEqual(['tool.check', 'classic.PermissionRequest'])
 })
 
-test('a permission rule answers tool.check once registerPermissionCheck ran', async () => {
+test('a PreToolUse hook denies through tool.call, with no permission check registered', async () => {
   const fake = fakeOn()
   const { $ } = engine(files)
   const guard = defineMod({
@@ -140,12 +142,12 @@ test('a permission rule answers tool.check once registerPermissionCheck ran', as
     },
   })
   registerMod(fake.on, guard)
-  registerPermissionCheck(fake.on)
   await fake.dispatch('session.start', $, {}, {})
 
-  const answer = await fake.dispatch('classic.PreToolUse', $, { tool: 'Edit', tool_use_id: 't', file_path: 'a.ts' }, {})
+  const answer = await fake.dispatch('tool.call', $, { tool: 'Edit', tool_use_id: 't', file_path: 'a.ts' }, { result: '' })
 
   expect(answer).toEqual({ deny: 'No edits here.' })
+  expect(fake.registrations.map((registration) => registration.pattern)).not.toContain('classic.PreToolUse')
 })
 
 test('session.start through the engine chain reads the plugin, runs setup, and announces the mod once', async () => {

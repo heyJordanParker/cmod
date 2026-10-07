@@ -32,9 +32,9 @@ The template is a working example to replace. It counts the prompts of the sessi
 
 A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Types such as `RenderElement` and `On` come from the `claude-code` module.
 
-## Type-check after the first session
+## Claude Code's types
 
-Claude Code writes `.claude-plugin/types/` the first time a session loads the mod. That folder holds the `tsconfig.json` the mod's own extends, the `claude-code` module, and the `h` JSX global. Until it exists, `tsc` fails, and `cmod check` skips its type check. Run `cmod link`, start `claude` once, then type-check. A project plugin needs no link: start `claude` in its repository and trust it.
+`.claude-plugin/types/` holds the `tsconfig.json` the mod's own extends, the `claude-code` module, and the `h` JSX global. Claude Code writes it when it loads the mod, and git ignores it. `cmod check` has Claude Code write it when it is missing, so a fresh clone and CI type-check too. Until it exists, `tsc` alone fails, so run `cmod check` once first.
 
 ## Where a mod runs
 
@@ -72,9 +72,11 @@ A mod imports from the files below, and every other file in this package is inte
 | --- | --- | --- |
 | `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `ProgressStep`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [ui.md](ui.md) |
 | `mod.js` | `Claude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
-| `mod.js` | `ModEvent`, `ModHook`, `HookAnswer` | [hooks.md](hooks.md) |
+| `mod.js` | `ModEvent`, `ModHook`, `HookInput`, `HookAnswer` | [hooks.md](hooks.md) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
 | `register.js` | `registerMod`, `registerPermissionCheck` | [mod.md](mod.md) |
+| `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [hooks.md](hooks.md) |
+| `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [hooks.md](hooks.md) |
 | `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `TestCall` | [testing.md](testing.md) |
 | `ui/define-pane.js` | `definePane`, `Pane` | [ui.md](ui.md) |
 | `ui/elements.js` | `Box`, `Text`, `Button`, `Link`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `drawWith` | [ui.md](ui.md) |
@@ -98,4 +100,4 @@ A mod imports from the files below, and every other file in this package is inte
 
 ## Check your work
 
-Run `cmod check` in the mod's folder. It installs the packages, checks the layout and the imports, validates the mod with Claude Code, type-checks it once `.claude-plugin/types/` exists, lints it, and runs its tests. Each failure names its fix. [commands.md](commands.md) lists every step.
+Run `cmod check` in the mod's folder. It installs the packages, checks the layout and the imports, validates the mod with Claude Code, type-checks it, lints it, and runs its tests. Each failure names its fix. [commands.md](commands.md) lists every step.

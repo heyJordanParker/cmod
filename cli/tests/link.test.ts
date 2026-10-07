@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, readFile, readlink, symlink } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { claudeAnswering, cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
@@ -83,6 +83,34 @@ test('link builds the program cli/ declares into the store and points ~/.local/b
   expect((await cmod(home, 'unlink', checkout)).exitCode).toBe(0)
   expect(existsSync(entry)).toBe(false)
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
+})
+
+test('link asks the build for this machine alone in CMOD_MACHINES', async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer', 'hello-mod')
+  const build = 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in $CMOD_MACHINES; do printf "#!/bin/sh\\necho hello\\n" > dist/hello-$machine; done'
+  await writeFiles(checkout, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
+    'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
+  })
+
+  expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
+  expect(await readFile(join(home, 'machines'), 'utf8')).toBe(`${process.platform}-${process.arch}\n`)
+  expect(await readdir(join(checkout, 'cli/dist'))).toEqual([`hello-${process.platform}-${process.arch}`])
+})
+
+test('link names a Rust program by its one [[bin]], not by its package', async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer', 'greet-mod')
+  const build = `mkdir -p dist && printf '#!/bin/sh\\necho greeted by cargo\\n' > dist/greet-binary-${process.platform}-${process.arch}`
+  await writeFiles(checkout, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'greet-mod', version: '0.3.0' }),
+    'cli/Cargo.toml': `[package]\nname = "greet-crate"\nversion = "0.3.0"\n\n[package.metadata.cmod]\nbuild = "${build.replaceAll('\\', '\\\\')}"\noutput = "dist"\n\n[[bin]]\nname = "greet-binary"\npath = "src/main.rs"\n`,
+  })
+
+  expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
+  expect(await new Response(Bun.spawn([join(home, '.local/bin/greet-binary')], { stdout: 'pipe' }).stdout).text()).toBe('greeted by cargo\n')
+  expect(existsSync(join(home, '.local/bin/greet-crate'))).toBe(false)
 })
 
 test('a failed build shows one sentence that ends with one period', async () => {

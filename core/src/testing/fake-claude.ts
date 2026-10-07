@@ -12,8 +12,9 @@ export type Fakes = {
   fs: { read?: Claude['fs']['read']; write?: Claude['fs']['write']; list?: Claude['fs']['list']; exists?: Claude['fs']['exists']; stat?: Claude['fs']['stat'] }
   http: { fetch?: Claude['http']['fetch'] }
   settings: { read?: Claude['settings']['read'] }
-  ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open'] }
-  agent: { list?: Claude['agent']['list'] }
+  ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll'] }
+  session: { messages?: Claude['session']['messages'] }
+  agent: { list?: Claude['agent']['list']; spawn?: Claude['agent']['spawn'] }
   clock: { after?: Claude['clock']['after']; every?: Claude['clock']['every'] }
   cmod: { call?: Claude['cmod']['call'] }
 }
@@ -39,9 +40,10 @@ export type FakeClaude = {
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, agent: {}, clock: {}, cmod: {} }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, session: {}, agent: {}, clock: {}, cmod: {} }
   const shown: Shown = { toasts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [] }
   const unplacedPanes = new Set<string>()
+  let focusedPane: string | undefined
   const store = new Map<string, unknown>()
 
   const faked = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Result) | undefined) => {
@@ -81,6 +83,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         if (answer.isPlaced) {
           shown.openPanes.add(pane.id)
           unplacedPanes.delete(pane.id)
+          if (pane.focus === true) focusedPane = pane.id
         } else if (!shown.openPanes.has(pane.id)) {
           unplacedPanes.add(pane.id)
         }
@@ -90,11 +93,13 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         calls.push({ call: 'ui.close', args: [pane] })
         shown.openPanes.delete(pane.id)
         unplacedPanes.delete(pane.id)
+        if (focusedPane === pane.id) focusedPane = undefined
       },
       panes: async () => [
-        ...[...shown.openPanes].map((id) => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })),
+        ...[...shown.openPanes].map((id) => ({ id, title: id, isShown: true, isFocused: id === focusedPane, isPlaced: true })),
         ...[...unplacedPanes].map((id) => ({ id, title: id, isShown: false, isFocused: false, isPlaced: false })),
       ],
+      scroll: rejected('ui.scroll', () => fakes.ui.scroll ?? (async () => ({}))),
       resolve: () => elements,
     },
     process: {
@@ -110,7 +115,10 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     },
     http: { fetch: rejected('http.fetch', () => fakes.http.fetch) },
     settings: { read: rejected('settings.read', () => fakes.settings.read) },
-    agent: { list: rejected('agent.list', () => fakes.agent.list) },
+    agent: {
+      list: rejected('agent.list', () => fakes.agent.list),
+      spawn: rejected('agent.spawn', () => fakes.agent.spawn),
+    },
     store: {
       get: async (key) => store.get(key),
       set: async (key, value) => {
@@ -133,6 +141,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       model: async () => 'test-model',
       usage: async () => ({ context: { window: 200000 }, rateLimits: {}, cost: { usd: 0 } }) as unknown as Awaited<ReturnType<Claude['session']['usage']>>,
       surfaces: async () => ['terminal'],
+      messages: rejected('session.messages', () => fakes.session.messages as ((args?: unknown) => Promise<unknown>) | undefined) as Claude['session']['messages'],
     },
     command: {
       register: async (command) => {

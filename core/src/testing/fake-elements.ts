@@ -2,8 +2,6 @@ import type { ElementTable, RenderElement, RenderNode } from 'claude-code'
 
 type Drawn = { readonly type: string; readonly props: Record<string, unknown>; readonly children?: readonly RenderNode[] }
 
-type Button = { readonly type: 'Button'; readonly props: { readonly key: string; readonly label: string; readonly onPress: () => unknown } }
-
 const boxInsides = new WeakMap<object, Drawn>()
 
 function element(type: string) {
@@ -31,12 +29,12 @@ export const elements = {
   Image: element('Image'),
 } as unknown as ElementTable
 
-export function findButton(node: RenderNode, key: string): Button | undefined {
+export function findElement(node: RenderNode, type: string, key: string): Drawn['props'] | undefined {
   if (typeof node === 'string') return undefined
-  const { type, props, children = [] } = insideOf(node)
-  if (type === 'Button' && (props['key'] === key || props['label'] === key)) return node as unknown as Button
-  for (const child of children) {
-    const found = findButton(child, key)
+  const drawn = insideOf(node)
+  if (drawn.type === type && (drawn.props['key'] === key || (type === 'Button' && drawn.props['label'] === key))) return drawn.props
+  for (const child of drawn.children ?? []) {
+    const found = findElement(child, type, key)
     if (found !== undefined) return found
   }
   return undefined

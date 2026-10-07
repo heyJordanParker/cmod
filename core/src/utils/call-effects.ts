@@ -1,5 +1,6 @@
-import { parseShellCommands, type ShellCommand } from './parse-shell.js'
-import { expandHome, resolvePath, type FileSystem } from './paths.js'
+import { parseShell, type ShellCommand } from './parse-shell.js'
+import { expandHome, type FileSystem } from './paths.js'
+import { resolve } from '../vendor.js'
 
 export type ToolUse = { tool: string; input: unknown; agentId?: string; agentType?: string }
 
@@ -21,13 +22,13 @@ export type CallEffects = {
 
 export function callEffects(use: ToolUse, workspace: { cwd: string; home: string; fs: FileSystem }): CallEffects {
   const { fs } = workspace
-  const resolve = (path: string, folder = workspace.cwd) => resolvePath(expandHome(path, workspace.home), folder)
-  const access = (path: string): FileAccess => ({ path: resolve(path), contents: undefined })
+  const absolute = (path: string, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home))
+  const access = (path: string): FileAccess => ({ path: absolute(path), contents: undefined })
   const effects: CallEffects = { shell: undefined, reads: [], writes: [], urls: [], subagent: undefined }
   if (use.tool === 'Bash') {
     const line = textField(use, 'command')
-    const parsed = parseShellCommands(line)
-    const commands = parsed.commands.map(({ argv, folder }) => ({ argv, folder: resolve(folder) }))
+    const parsed = parseShell(line)
+    const commands = parsed.commands.map(({ argv, folder }) => ({ argv, folder: absolute(folder) }))
     effects.shell = { line, commands, isFullyParsed: parsed.isFullyParsed }
     effects.reads = parsed.reads.map(access)
     effects.writes = parsed.writes.map(access)
@@ -35,22 +36,22 @@ export function callEffects(use: ToolUse, workspace: { cwd: string; home: string
   } else if (use.tool === 'PowerShell') {
     effects.shell = { line: textField(use, 'command'), commands: [], isFullyParsed: false }
   } else if (use.tool === 'Edit') {
-    const path = resolve(textField(use, 'file_path'))
+    const path = absolute(textField(use, 'file_path'))
     effects.writes = [{ path, contents: once(() => editedContents(use, path, fs)) }]
   } else if (use.tool === 'Write') {
-    const path = resolve(textField(use, 'file_path'))
+    const path = absolute(textField(use, 'file_path'))
     const content = textField(use, 'content')
     effects.writes = [{ path, contents: once(async () => contentsOf(content, await previousContentOf(path, fs))) }]
   } else if (use.tool === 'NotebookEdit') {
-    const path = resolve(textField(use, 'notebook_path'))
+    const path = absolute(textField(use, 'notebook_path'))
     effects.writes = [{ path, contents: once(async () => contentsOf(undefined, await previousContentOf(path, fs))) }]
   } else if (use.tool === 'Read') {
     effects.reads = [access(textField(use, 'file_path'))]
   } else if (use.tool === 'Grep') {
     effects.reads = [access(optionalTextField(use, 'path') ?? '')]
   } else if (use.tool === 'Glob') {
-    const folder = resolve(optionalTextField(use, 'path') ?? '')
-    effects.reads = [{ path: resolve(textField(use, 'pattern'), folder), contents: undefined }]
+    const folder = absolute(optionalTextField(use, 'path') ?? '')
+    effects.reads = [{ path: absolute(textField(use, 'pattern'), folder), contents: undefined }]
   } else if (use.tool === 'WebFetch') {
     effects.urls = [textField(use, 'url')]
   } else if (use.tool === 'Agent') {

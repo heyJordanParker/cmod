@@ -361,7 +361,7 @@ type JobContext<State> = {
 
 - `claude` reaches Claude Code itself. [The claude members](#the-claude-members) lists each one.
 - `claude.store` is where cmod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind cmod's back.
-- `on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. A job with a handler on `tool.check`, `classic.PreToolUse`, or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
+- `on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.scroll`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. A job with a handler on `tool.check` or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
 - `announce` adds a phrase to the list cmod logs when the mod first starts.
 - `reserveName` throws `taken` when the mod already reserved that `kind` and `name`. A job calls it to refuse a duplicate.
 - `toolCalls.agentOf(toolUseId)` resolves `{ agentId?, agentType? }`, the subagent behind a call.
@@ -405,12 +405,11 @@ Each member calls the member of the same name in Claude Code's hooks API, `$`, w
 | `ui.open(pane)` | Opens a pane, `{ id, title?, focus?, closeOnEscape?, holdToasts?, rows?, columns? }`, and resolves `{ isPlaced }`. |
 | `ui.close(pane)` | Closes the open pane with that `{ id }`. |
 | `ui.panes()` | The plugin's open panes: each one's id, title, and whether it is shown, holds the keyboard, and is placed. |
+| `ui.scroll(args)` | What `mod.ui.scroll` calls. |
 | `ui.resolve(e)` | The element table of the surface a `ui.render` event draws on. |
 | `process.run(argv, init?)` | Runs a program to its end. `mod.process.run` is built on it. |
 | `process.spawn(request)` | Starts a program and streams its output. `mod.process.spawn` is built on it. |
-| `fs.read`, `fs.write`, `fs.list` | What `mod.fs` calls. A relative path is under the session's working folder. |
-| `fs.exists(path)` | Resolves whether the path exists. |
-| `fs.stat(path, options?)` | Resolves `{ kind, size, mtimeMs, isLink }`, and `realPath` with `{ resolve: true }`. It rejects for a missing path. |
+| `fs.read`, `fs.write`, `fs.list`, `fs.exists`, `fs.stat` | What `mod.fs` calls. A relative path is under the session's working folder. |
 | `http.fetch(url, init?)` | What `mod.http.fetch` calls. |
 | `settings.read(args?)` | What `mod.settings.read` calls. |
 | `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where cmod also keeps `mod.state`. |
@@ -423,9 +422,11 @@ Each member calls the member of the same name in Claude Code's hooks API, `$`, w
 | `session.model()` | The main conversation's model, as `/model` shows it. |
 | `session.usage()` | When the session began, the context window's fill, the rate-limit windows, and the cost, as the status line has them. |
 | `session.surfaces()` | Every surface the session draws on, `terminal` first. Empty in a plain `-p` run. |
+| `session.messages(args?)` | What `mod.session.messages` calls. |
 | `command.register(spec)` | Adds a slash command. `slashCommand` is built on it. |
 | `tool.register(spec)` | Adds a tool. `tool` is built on it. |
 | `agent.list()` | The session's subagents and teammates so far. |
+| `agent.spawn(args)` | What `mod.agent.spawn` calls. |
 | `env.home()` | The `HOME` variable, or `undefined` when it is unset. |
 | `env.dataHome()` | The `XDG_DATA_HOME` variable, or `undefined`. |
 | `env.configHome()` | The `CLAUDE_CONFIG_DIR` variable, or `undefined`. |

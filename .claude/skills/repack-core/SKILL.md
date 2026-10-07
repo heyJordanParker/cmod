@@ -59,7 +59,10 @@ From the repository root, every command passes:
     env -C . bun x tsc --noEmit
     env -C <sample> bun test                                         (each sample)
     env -C <sample> bun x tsc --noEmit                               (each sample)
-    env HOME=<scratch home> bun run cli/src/main.ts check <sample>   (each sample)
+    env HOME=<scratch home> bun run cli/src/main.ts check <mod>      (a mod on the tarball)
 
 ### Count `cmod check` as the gate's only run of Claude Code's validator
 `cmod check` runs `claude plugin validate --strict`, which nothing else in the gate runs. It is also the only way a build-mode Agent reaches the validator, because the Harness refuses `claude` itself in build mode.
+
+### Run `cmod check` on a mod whose `@cmodjs/core` is the tarball
+`cmod check` runs `bun install` first, which puts the npm version back over an unpacked sample. So in a scratch folder outside the clone, run `env CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz bun run <clone>/cli/src/main.ts new <name>`, use the changed API in its `src/mod.tsx`, and check that mod.

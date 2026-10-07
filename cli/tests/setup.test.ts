@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listFiles, readText } from '../src/files.js'
-import { cmod, cmodInTerminal, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, cmodOnPath, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -1294,10 +1294,37 @@ test('setup refuses a program name PATH already finds elsewhere', async () => {
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('failed 1\tPATH already finds hello at ~/bin/hello, so the hello program cmod installs would never run. Remove that hello from PATH, then run the command again.\n')
+  expect(result.stdout).toBe('failed 1\tPATH finds hello at ~/bin/hello ahead of ~/.local/bin, so the hello program cmod installs would never run. Remove that hello, or put ~/.local/bin before ~/bin in PATH, then run the command again.\n')
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/bin/hello'))).toBe(false)
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
+})
+
+test('setup installs a program when ~/.local/bin comes before the other folder PATH finds it in', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
+  const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
+  await writeFiles(home, { 'brew/bin/hello': '#!/bin/sh\necho "another hello"\n' })
+  await chmod(join(home, 'brew/bin/hello'), 0o755)
+
+  const result = await cmodOnPath(home, `${join(home, 'bin')}:${join(home, '.local/bin')}:${join(home, 'brew/bin')}:${process.env['PATH']}`, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.exitCode).toBe(0)
+  expect(existsSync(join(home, '.local/bin/hello'))).toBe(true)
+})
+
+test('setup names a system command PATH finds first, and asks for ~/.local/bin before its folder', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'env-mod')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'env-mod', version: '0.2.0', repository: 'http://127.0.0.1:9/owner/env-mod' }),
+    'package.json': JSON.stringify({ name: 'env-mod', cmod: { program: 'env' } }),
+  })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toMatch(/^failed 1\tPATH finds env at (\/usr)?\/bin\/env ahead of ~\/\.local\/bin, so the env program cmod installs would never run\. (\/usr)?\/bin\/env is part of the system, so put ~\/\.local\/bin before (\/usr)?\/bin in PATH, then run the command again\.\n$/)
+  expect(result.exitCode).toBe(1)
 })
 
 test('setup links a program version already in the store, such as one the cmod bootstrap placed, without downloading it', async () => {

@@ -1,14 +1,16 @@
 import { existsSync } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { isObject, scriptsSha256 } from '@cmodjs/core/src/records.js'
+import { version as cmodVersion } from '../../package.json'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listPlugins } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
 import { preparePackages, readPlugin, type Plugin } from '../plugin.js'
-import { bunArgv, capture, run as runCommand } from '../process.js'
+import { bunArgv, capture, run as runCommand, spawn } from '../process.js'
 import { startProgress } from '../progress.js'
 import { linkedFolders } from '../settings.js'
 import { storePath } from '../store.js'
@@ -31,7 +33,7 @@ type Check = { heading: string; run(plugin: Plugin): Promise<Result> }
 
 const typescript = { name: 'typescript', version: '7.0.2', program: 'tsc' }
 const oxlint = { name: 'oxlint', version: '1.86.0', program: 'oxlint' }
-const skippedFolders = new Set(['node_modules', '.git', 'cli', 'target', '.target'])
+const skippedFolders = new Set(['node_modules', '.git', 'target', '.target'])
 const componentNames = ['skills', 'commands', 'agents', 'hooks', 'monitors', 'output-styles', 'themes', 'workflows', 'bin', 'settings.json', '.mcp.json', '.lsp.json', 'SKILL.md']
 
 const checks: Check[] = [
@@ -119,7 +121,7 @@ async function checkBinaries(plugin: Plugin): Promise<Result> {
     if (['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'cffaedfe', 'cafebabe'].includes(magic)) binaries.push(relative(plugin.root, file))
   }
   if (binaries.length > 0) return { status: 'fail', text: `Prebuilt binaries in the mod: ${binaries.join(', ')}`, fix: 'Delete them. A program lives as source in cli/, and cmod publish builds it and attaches the builds to the release.' }
-  return { status: 'pass', text: 'No prebuilt binaries' }
+  return { status: 'pass', text: 'No prebuilt binaries outside cli/' }
 }
 
 async function checkValidate(plugin: Plugin): Promise<Result> {
@@ -135,15 +137,36 @@ async function checkValidate(plugin: Plugin): Promise<Result> {
 }
 
 async function checkTypes(plugin: Plugin): Promise<Result> {
-  if (!existsSync(join(plugin.root, '.claude-plugin', 'types', 'tsconfig.json'))) {
-    return { status: 'skip', text: `Type check skipped: Claude Code writes .claude-plugin/types/ the first time a session loads ${plugin.name}. Run cmod link, start claude once, then run cmod check again.` }
-  }
   if (!existsSync(join(plugin.root, 'tsconfig.json'))) return { status: 'skip', text: 'Type check skipped: the mod has no tsconfig.json' }
+  try {
+    await writeClaudeTypes(plugin)
+  } catch (error) {
+    return { status: 'skip', text: `Type check skipped: ${messageOf(error)}` }
+  }
   const tool = await fetchTool(typescript)
   if (typeof tool !== 'string') return tool
   const result = await runTool(tool, ['-p', plugin.root, '--noEmit'], plugin.root)
   if (result.exitCode !== 0) return { status: 'fail', text: `tsc ${typescript.version} found type errors:\n${indent(result.output)}`, fix: 'Fix each error, then run cmod check again.' }
   return { status: 'pass', text: `tsc ${typescript.version} found no type errors` }
+}
+
+async function writeClaudeTypes(plugin: Plugin): Promise<void> {
+  const types = join(plugin.root, '.claude-plugin', 'types', 'tsconfig.json')
+  if (existsSync(types)) return
+  const scratch = await mkdtemp(join(tmpdir(), 'cmod-claude-'))
+  try {
+    const cmodPlugin = join(scratch, 'cmod')
+    await writeAtomically(join(cmodPlugin, '.claude-plugin', 'plugin.json'), `${JSON.stringify({ name: 'cmod', version: cmodVersion })}\n`)
+    const pluginDirs = plugin.name === 'cmod' ? [plugin.root] : [cmodPlugin, plugin.root]
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, 'config'), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
+    const claude = spawn(['claude', ...pluginDirs.flatMap((folder) => ['--plugin-dir', folder]), '-p', 'ok'], { cwd: plugin.root, env, stdout: 'ignore', stderr: 'ignore' })
+    const timeout = setTimeout(() => claude.kill(), 60_000)
+    await claude.exited
+    clearTimeout(timeout)
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+  if (!existsSync(types)) throw new Error(`Claude Code wrote no .claude-plugin/types/ when cmod loaded ${plugin.name} with claude --plugin-dir. Run cmod link, start claude once, then run cmod check again.`)
 }
 
 async function checkLint(plugin: Plugin): Promise<Result> {
@@ -212,11 +235,11 @@ async function runTool(program: string, args: string[], cwd: string): Promise<{ 
   return { exitCode: result.exitCode, output: (result.stdout + result.stderr).trim() }
 }
 
-async function walk(folder: string): Promise<string[]> {
+async function walk(folder: string, root = folder): Promise<string[]> {
   const files: string[] = []
   for (const entry of await readdir(folder, { withFileTypes: true })) {
     const path = join(folder, entry.name)
-    if (entry.isDirectory() && !skippedFolders.has(entry.name) && !path.endsWith(join('.claude-plugin', 'types'))) files.push(...(await walk(path)))
+    if (entry.isDirectory() && !skippedFolders.has(entry.name) && path !== join(root, 'cli') && path !== join(root, '.claude-plugin', 'types')) files.push(...(await walk(path, root)))
     if (entry.isFile()) files.push(path)
   }
   return files

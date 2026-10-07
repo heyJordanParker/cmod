@@ -134,9 +134,9 @@ A mod that builds its own command-line program keeps its source in `cli/`, and c
    }
    ```
 
-   The program's name is the one `bin` command, or else `name`. A Rust program declares the same keys under `[package.metadata.cmod]` in `cli/Cargo.toml`.
+   The program's name is the one `bin` command, or else `name`. A Rust program declares the same keys under `[package.metadata.cmod]` in `cli/Cargo.toml`, and its name is the one `[[bin]]` `name`, or else the `[package]` `name`.
 
-2. The build writes one file per machine into `output`, each named `<program>-<os>-<arch>`, such as `hello-darwin-arm64`.
+2. The build writes one file per machine into `output`, each named `<program>-<os>-<arch>`, such as `hello-darwin-arm64`. cmod runs it with `CMOD_MACHINES` set to the machines it needs, separated by spaces: `cmod link` names this machine alone, and `cmod publish` names all four. A build that ignores `CMOD_MACHINES` and builds every machine works too, only slower to link. cmod takes only the files the build wrote in that run, so a build left from an earlier run is never released.
 
 3. The mod's own `package.json` names the program: `"cmod": { "program": "hello" }`. `.claude-plugin/plugin.json` names the GitHub `repository`.
 
@@ -145,7 +145,7 @@ Then:
 - `cmod link` builds the program and links this machine's build to `~/.local/bin/<program>`.
 - `cmod publish` builds every machine's file and attaches each to the GitHub release `v<version>`, with a `SHA256SUMS` file. It refuses a `cli/` program that the `package.json` `program` key does not name.
 - On install, cmod downloads `<repository>/releases/download/v<version>/<program>-<machine>`, checks it against `SHA256SUMS`, runs `<program> --version`, and links it to `~/.local/bin/<program>`.
-- cmod refuses to replace a `~/.local/bin/<program>` it did not make, and a program `PATH` already finds somewhere else.
+- cmod refuses to replace a `~/.local/bin/<program>` it did not make, and a program `PATH` finds in a folder ahead of `~/.local/bin`.
 - `cmod unlink` and the uninstall remove the program.
 
 The cmod repository ships the `cmod` program this way. Its `package.json` holds `"cmod": { "program": "cmod" }`, and its `cli/package.json` holds `"cmod": { "build": "bun run build", "output": "dist" }`.

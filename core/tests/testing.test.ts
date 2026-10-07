@@ -9,7 +9,7 @@ import { defineMod, type Mod } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
-import { Box, Button, Image, Text } from '../src/ui/elements.js'
+import { Box, Button, Image, Input, Markdown, Select, Text } from '../src/ui/elements.js'
 import { markdownSlots } from '../src/ui/markdown.js'
 import { slots } from '../src/ui/slots.js'
 
@@ -222,6 +222,55 @@ test("lines draws a pane with the scroll and view Claude Code passes, the main c
   )
 
   expect(await tested.lines('rows')).toEqual(['0 of 24 rows, main'])
+})
+
+type SearchState = { session: { query: string; draft: string; agent: string; opened: string[]; copiedFrom: string } }
+
+const search = defineMod({
+  name: 'history',
+  state: { session: { query: '', draft: '', agent: 'all', opened: [] as string[], copiedFrom: '' } },
+  setup(mod) {
+    void mod.ui
+      .pane(
+        definePane<SearchState>({
+          id: 'history',
+          title: 'History',
+          render: ({ state: { session } }) =>
+            Box({
+              flexDirection: 'column',
+              children: [
+                Input({ key: 'search', placeholder: 'Search', onInput: (draft) => void (session.draft = draft), onSubmit: (query) => void (session.query = query) }),
+                Select({ key: 'agent', options: [{ value: 'all' }, { value: 'explorer' }], onSelect: (agent) => void (session.agent = agent) }),
+                Markdown({ key: 'messages', text: '[run 42](https://example.com/run/42)', onLinkPress: ({ href }) => void (session.opened = [...session.opened, href]) }),
+                Button({ label: 'Copy', onPress: (e) => void (session.copiedFrom = `${e.surface} ${e.component} ${e.requestId}`) }),
+                Text({ children: `${session.query} by ${session.agent}` }),
+              ],
+            }),
+        }),
+      )
+      .open()
+  },
+})
+
+test('a test types into an Input, picks a Select option, and presses a link, the way the person does', async () => {
+  const tested = testMod(search)
+
+  await tested.input('history', 'search', 'dep', 'change')
+  await tested.input('history', 'search', 'deploy')
+  await tested.select('history', 'agent', 'explorer')
+  await tested.press('history', 'messages', 'https://example.com/run/42')
+  await tested.press('history', 'Copy')
+
+  expect(tested.state.session).toEqual({ query: 'deploy', draft: 'dep', agent: 'explorer', opened: ['https://example.com/run/42'], copiedFrom: 'terminal Pane history' })
+  expect(await tested.lines('history')).toContain('deploy by explorer')
+})
+
+test('input, select, and a link press refuse an element the pane does not draw', async () => {
+  const tested = testMod(search)
+
+  await expect(tested.input('history', 'filter', 'x')).rejects.toThrow('The pane "history" of history draws no Input with the key "filter".')
+  await expect(tested.select('history', 'agent', 'tester')).rejects.toThrow('The Select "agent" in the pane "history" of history has no option "tester". Its options are "all", "explorer".')
+  await expect(tested.press('history', 'log', 'https://example.com')).rejects.toThrow('The pane "history" of history draws no Markdown with the key "log".')
 })
 
 test('lines refuses a pane that is not open', async () => {

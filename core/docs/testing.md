@@ -58,7 +58,9 @@ type TestedMod<State> = {
   lines(slot, props, requestId?): Promise<string[]>
   type(line: string): Promise<Reply>
   callTool(name: string, input: Record<string, unknown>): Promise<EventResult<'tool.call'>>
-  press(paneId: string, key: string): Promise<void>
+  press(paneId: string, key: string, link?: string): Promise<void>
+  input(paneId: string, key: string, text: string, kind?: 'submit' | 'change'): Promise<void>
+  select(paneId: string, key: string, value: string): Promise<void>
   moveTo(projectRoot: string, cwd?: string): Promise<void>
   readonly state: Readonly<State>
   readonly calls: readonly TestCall[]
@@ -69,7 +71,7 @@ type TestedMod<State> = {
 
 ### start
 
-Starts the mod: loads its state, runs `setup`, and adds its hooks, panes, and jobs. `fire`, `lines`, `type`, `callTool`, `press`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
+Starts the mod: loads its state, runs `setup`, and adds its hooks, panes, and jobs. `fire`, `lines`, `type`, `callTool`, `press`, `input`, `select`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
 
 ### fire
 
@@ -80,9 +82,10 @@ fire<N extends RoutedEvent>(event: N, input: Args<N>, below?): Promise<EventResu
 
 - `fire('UserPromptSubmit', { prompt: 'hello' })` runs the mod's hooks on a `ModEvent`. `TestInput<E>` is the event's input without the fields `fire` fills: `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and a new `tool_use_id` for each tool event.
 - For a tool event, `files` is worked out from the call and the test's `files`, as in Claude Code.
-- `below` is what the hooks beneath the mod answered. Pass it to test how the mod's answer combines with another, such as a `deny` beneath. When nothing in the mod answers, `fire` returns `below` as it is.
+- `fire('PreToolUse', …)` runs the call's `tool.call`, and its `tool.check` inside it, as Claude Code does. `testMod` runs a mod as if `register.ts` calls `registerPermissionCheck`, so it returns `allow: true` or `ask` with the reason when the mod's hooks or `permissions` job decided the permission. A `PreToolUse` with `agent_id` and `agent_type`, such as `fire('PreToolUse', { tool_name: 'Read', tool_input: { file_path: 'a.ts' }, agent_id: 'agent-7', agent_type: 'explorer' })`, runs as that subagent's call. It returns `updatedInput` when the hooks rewrote the input, `additionalContext` as a list, and `deny` when a hook or Claude Code refused the call. Its `below` is `{ deny }` to test a call Claude Code refuses, and Claude Code runs the call otherwise.
+- On every other event, `below` is what the hooks beneath the mod answered. Pass it to test how the mod's answer combines with another. When nothing in the mod answers, `fire` returns `below` as it is.
 - Left out, `below` is `{}`, except on `prompt.submit`, where it is what Claude Code answers: the prompt that entered, `{ text, context, origin }`, with the `context` the mod's hooks added.
-- It returns the combined answer in Claude Code's own field names: `additionalContext` is a list, a `PreToolUse` decision is `allow: true`, or the key `ask` or `deny` with the reason as its value, and `decision: 'block'` is `block`.
+- It returns the combined answer in Claude Code's own field names: `additionalContext` is a list, and `decision: 'block'` is `block`.
 - `fire('tool.check', { tool: 'Edit', input: { … }, tool_use_id: 'toolu_1' }, { decision: 'allow' })` asks the mod's permission rules about any call. A name with a dot fires that Claude Code hook-module event as it is.
 
 ```ts
@@ -141,7 +144,7 @@ Waits until the work a hook started without awaiting it has run, such as a `void
 
 ### lines
 
-- `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused: false`, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`, the main conversation's view.
+- `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`, the main conversation's view.
 - `lines(slot, props, requestId?)` draws a slot render with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the render changed. Draw `slots.AssistantMessage` with a reply's `text` to test a markdown slot render. Draws that pass one `requestId` grow one streamed reply.
 
 ```ts
@@ -169,9 +172,20 @@ test('the band shows the prompt count on its last line', async () => {
 
 `callTool(name, input)` runs the mod's permission rules on a call of its own tool, then the tool. `name` is the name given to `tool`, without `mcp__<plugin>__`. It returns `{ result }`, or `{ deny }` when a rule or the input check denies the call. It rejects a call a rule would ask the person about, and a tool the mod does not add.
 
-### press
+### press, input, and select
 
-`press(paneId, key)` presses the `Button` of an open pane whose `key` or `label` is `key`, and awaits its `onPress`.
+`press`, `input`, and `select` act on an element of an open pane as the person does, and await its handler. Each passes the handler the event Claude Code passes, with `component: 'Pane'`, `requestId` the pane's id, and `surface: 'terminal'`. Each rejects when the pane does not draw the element: `The pane "<pane>" of <mod> draws no <Element> with the key "<key>".`
+
+- `press(paneId, key)` presses the `Button` whose `key` or `label` is `key`, and runs its `onPress`.
+- `press(paneId, key, link)` presses the link `link` in the `Markdown` whose `key` is `key`, and runs its `onLinkPress`.
+- `input(paneId, key, text)` types `text` into the `Input` whose `key` is `key` and presses Enter, which runs its `onSubmit`. With `kind` `'change'` it runs `onInput` instead, as one edit does.
+- `select(paneId, key, value)` picks the option `value` of the `Select` whose `key` is `key`, and runs its `onSelect`. It rejects an option the `Select` does not have.
+
+```ts
+await tested.input('history', 'search', 'deploy')
+await tested.select('history', 'agent', 'explorer')
+expect(await tested.lines('history')).toContain('deploy by explorer')
+```
 
 ### moveTo
 
@@ -193,8 +207,9 @@ type Fakes = {
   fs: { read?, write?, list?, exists?, stat? }
   http: { fetch? }
   settings: { read? }
-  ui: { ask?, open? }
-  agent: { list? }
+  ui: { ask?, open?, scroll? }
+  session: { messages? }
+  agent: { list?, spawn? }
   clock: { after?, every? }
   cmod: { call? }
 }
@@ -206,6 +221,7 @@ Set a fake to answer a call:
 - A `program` job is the exception: it catches the `process.spawn` error and retries after 1, 2, 4, 8 and 16 seconds on real timers, so its `ready()` waits past `bun test`'s 5-second timeout. Set `fakes.process.spawn` before a test starts a `program` job.
 - `files` already fills the `fs` fakes: a write is read back, and `list` lists the given files. The fake file system resolves a relative path against `/`, not against `mod.cwd`, so a mod under test reads `${mod.projectRoot}/<file>` rather than a relative path. `fs.list()` with no path rejects.
 - `ui.open` places every pane by default. A fake that answers `{ isPlaced: false }` holds a pane back.
+- `ui.scroll` answers `{}` by default, as when the window moved. A fake that answers `{ deny }` refuses the scroll.
 - `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call.
 
 ```ts

@@ -1,3 +1,5 @@
+import { basename, dirname, resolve } from '../vendor.js'
+
 export type FileSystem = {
   read: (path: string) => Promise<string>
   stat: (path: string) => Promise<{ kind: 'file' | 'dir' | 'other'; realPath?: string }>
@@ -9,23 +11,6 @@ export function expandHome(path: string, home: string): string {
   return prefix === undefined ? path : `${home}${path.slice(prefix.length)}`
 }
 
-export function resolvePath(path: string, folder: string): string {
-  const parts: string[] = []
-  for (const part of (path.startsWith('/') ? path : `${folder}/${path}`).split('/')) {
-    if (part === '..') parts.pop()
-    else if (part !== '' && part !== '.') parts.push(part)
-  }
-  return `/${parts.join('/')}`
-}
-
-export function parentOf(path: string): string {
-  return resolvePath('..', path)
-}
-
-export function nameOf(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
-}
-
 export function relativePath(base: string, path: string): string | undefined {
   if (path === base) return ''
   const prefix = base === '/' ? '/' : `${base}/`
@@ -35,6 +20,6 @@ export function relativePath(base: string, path: string): string | undefined {
 export async function realPathOf(path: string, fs: FileSystem): Promise<string | undefined> {
   const stat = await fs.stat(path).catch(() => undefined)
   if (stat !== undefined || path === '/') return stat?.realPath
-  const folder = await realPathOf(parentOf(path), fs)
-  return folder === undefined ? undefined : resolvePath(nameOf(path), folder)
+  const folder = await realPathOf(dirname(path), fs)
+  return folder === undefined ? undefined : resolve(folder, basename(path))
 }

@@ -2,7 +2,8 @@ import { matchesGlob } from '../../utils/matches-glob.js'
 import { parseShell } from '../../utils/parse-shell.js'
 import { callBaseOf, type CallBase, type CallEffects, type CommandCall, type FetchCall, type FileAccess, type FileCall, type ToolCall, type ToolUse } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
-import { nameOf, realPathOf, relativePath } from '../../utils/paths.js'
+import { realPathOf, relativePath } from '../../utils/paths.js'
+import { basename } from '../../vendor.js'
 
 export type TargetCalls = { command: CommandCall; read: FileCall; write: FileCall; fetch: FetchCall; subagent: CallBase; tool: CallBase }
 export type TargetKey = keyof TargetCalls
@@ -56,11 +57,11 @@ export async function matchTarget(target: Target, use: ToolUse, effects: CallEff
 function commandPattern(pattern: string): [string, ...string[]] {
   const command = parseShell(pattern).commands[0]
   if (command === undefined) throw new Error(`The command pattern '${pattern}' names no program.`)
-  return command
+  return command.argv
 }
 
 function commandMatches(pattern: [string, ...string[]], argv: [string, ...string[]]): boolean {
-  if (nameOf(argv[0]) !== nameOf(pattern[0])) return false
+  if (basename(argv[0]) !== basename(pattern[0])) return false
   const wanted = splitArguments(pattern.slice(1))
   const actual = splitArguments(argv.slice(1))
   let next = 0

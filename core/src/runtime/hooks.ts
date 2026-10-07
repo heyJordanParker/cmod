@@ -1,15 +1,15 @@
-import type { Args, ClassicHookInputs, Frozen } from 'claude-code'
-import type { HookAnswer, ModEvent, ModHook } from '../mod.js'
+import type { Args, ClassicHookInputs, EventResult, Frozen } from 'claude-code'
+import type { HookAnswer, HookInput, ModEvent, ModHook } from '../mod.js'
 import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
 import type { RoutedHook } from './router.js'
-import { toolInputOf, type ToolCalls } from './tool-calls.js'
+import { reservedKeys, toolInputOf, type ToolCalls } from './tool-calls.js'
 import { callEffects, type FileAccess, type ToolUse } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
 import { messageOf } from '../utils/text.js'
 
 export type RoutedEvent =
-  | `classic.${ModEvent}`
+  | `classic.${Exclude<ModEvent, 'PreToolUse'>}`
   | 'tool.check'
   | 'tool.call'
   | 'prompt.submit'
@@ -19,16 +19,15 @@ export type RoutedEvent =
   | 'skill.prompt'
   | 'ui.render'
   | 'ui.press'
+  | 'ui.scroll'
   | 'ui.close'
   | 'cmod.call'
 
-export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.PreToolUse', 'classic.PermissionRequest']
+export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.PermissionRequest']
 
 type ClassicFields = Record<string, unknown>
 
-type PreToolUseInput = Parameters<ModHook<'PreToolUse'>>[0]
-
-type CallFiles = PreToolUseInput['files']
+type CallFiles = HookInput<'PreToolUse'>['files']
 
 const flags: readonly string[] = ['suppressOriginalPrompt', 'reloadSkills', 'retry']
 
@@ -50,18 +49,18 @@ const readFields: Record<ModEvent, readonly string[]> = {
   Stop: ['additionalContext'],
   StopFailure: [],
   CwdChanged: [],
+  FileChanged: [],
 }
 
-export function classicHook<E extends ModEvent>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls): RoutedHook<RoutedEvent> {
+export function classicHook<E extends Exclude<ModEvent, 'PreToolUse'>>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls): RoutedHook<RoutedEvent> {
   const inputOf = async (e: unknown): Promise<unknown> => {
-    if (event === 'PreToolUse') return preToolUseInput(name, e as Frozen<Args<'classic.PreToolUse'>>, claude, calls.agentOf)
     if (event !== 'PostToolUse' && event !== 'PostToolUseFailure') return e
     const input = e as ClassicHookInputs['PostToolUse' | 'PostToolUseFailure']
     const cwd = calls.cwdOf(input.tool_use_id) ?? input.cwd
     return { ...input, files: await callFiles(name, claude, { tool: input.tool_name, input: input.tool_input }, cwd) }
   }
   const resultOf = async (e: unknown): Promise<ClassicFields | undefined> => {
-    const answer = await hook((await inputOf(e)) as Parameters<ModHook<E>>[0])
+    const answer = await hook((await inputOf(e)) as HookInput<E>)
     if (answer === undefined) return undefined
     if (answer.systemMessage !== undefined) claude.ui.log(answer.systemMessage)
     return classicResult(event, answer)
@@ -69,15 +68,63 @@ export function classicHook<E extends ModEvent>(name: string, event: E, hook: Mo
   const routed = async (e: unknown, next: (e: unknown) => Promise<unknown>) => {
     const ours = await resultOf(e).catch((error: unknown): ClassicFields | undefined => {
       const reason = `${name}: the ${event} hook failed: ${messageOf(error)}`
-      if (event === 'PreToolUse') return { deny: reason }
       if (event === 'PermissionRequest') return { decision: { behavior: 'deny', message: reason } }
       claude.ui.log(reason)
       return undefined
     })
     if (ours === undefined) return next(e)
-    return mergeClassic(event, (await next(e)) as ClassicFields, ours)
+    return mergeClassic((await next(e)) as ClassicFields, ours)
   }
   return routed as unknown as RoutedHook<RoutedEvent>
+}
+
+type HeldDecision = { readonly decision: 'allow' | 'ask'; readonly reason?: string }
+
+export type HeldDecisions = Map<string, HeldDecision>
+
+export function preToolUseHook(name: string, hook: ModHook<'PreToolUse'>, claude: Claude, calls: ToolCalls, held: HeldDecisions | undefined): RoutedHook<'tool.call'> {
+  return async (e, next) => {
+    let ours: ClassicFields
+    try {
+      const answer = await hook(await preToolUseInput(name, e, claude, calls.agentOf))
+      if (answer?.systemMessage !== undefined) claude.ui.log(answer.systemMessage)
+      ours = answer === undefined ? {} : classicResult('PreToolUse', answer)
+    } catch (error) {
+      return { deny: `${name}: the PreToolUse hook failed: ${messageOf(error)}` }
+    }
+    if (typeof ours['deny'] === 'string') return { deny: ours['deny'] }
+    const decided = heldDecisionOf(ours)
+    if (decided !== undefined && held === undefined) {
+      return { deny: `${name}: the PreToolUse hook answered permissionDecision "${decided.decision}", so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.` }
+    }
+    const updated = ours['updatedInput'] as Record<string, unknown> | undefined
+    const reserved = Object.fromEntries(Object.entries(e).filter(([key]) => reservedKeys.includes(key)))
+    const earlier = held?.get(e.tool_use_id)
+    if (decided !== undefined) held?.set(e.tool_use_id, earlier !== undefined && strictness.indexOf(earlier.decision) >= strictness.indexOf(decided.decision) ? earlier : decided)
+    let result: EventResult<'tool.call'>
+    try {
+      result = await next(updated === undefined ? e : ({ ...reserved, ...updated } as Frozen<Args<'tool.call'>>))
+    } finally {
+      if (decided !== undefined) held?.delete(e.tool_use_id)
+    }
+    const context = ours['additionalContext'] as string[] | undefined
+    if (context === undefined || result.deny !== undefined) return result
+    return { ...result, context: [...(result.context ?? []), ...context] }
+  }
+}
+
+export function heldDecisionHook(held: HeldDecisions): RoutedHook<'tool.check'> {
+  return async (e, next) => {
+    const below = await next(e)
+    const ours = e.tool_use_id === undefined ? undefined : held.get(e.tool_use_id)
+    return ours === undefined || below.decision === 'deny' ? below : ours
+  }
+}
+
+function heldDecisionOf(ours: ClassicFields): HeldDecision | undefined {
+  if (ours['allow'] !== undefined) return { decision: 'allow' }
+  if (typeof ours['ask'] !== 'string') return undefined
+  return ours['ask'] === '' ? { decision: 'ask' } : { decision: 'ask', reason: ours['ask'] }
 }
 
 const frontmatter = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/
@@ -101,7 +148,7 @@ export function userSkillHook(claude: Claude): RoutedHook<'skill.prompt'> {
   }
 }
 
-async function preToolUseInput(name: string, envelope: Frozen<Args<'classic.PreToolUse'>>, claude: Claude, agentOf: ToolCalls['agentOf']): Promise<PreToolUseInput> {
+async function preToolUseInput(name: string, envelope: Frozen<Args<'tool.call'>>, claude: Claude, agentOf: ToolCalls['agentOf']): Promise<HookInput<'PreToolUse'>> {
   const { tool, tool_use_id } = envelope
   const [session_id, cwd, { agentId, agentType }] = await Promise.all([claude.session.id(), claude.session.cwd(), agentOf(tool_use_id)])
   const tool_input = toolInputOf(envelope)
@@ -161,17 +208,9 @@ function classicResult(event: ModEvent, answer: HookAnswer): ClassicFields {
 
 export const strictness = ['allow', 'ask', 'deny'] as const
 
-function strictnessOf(result: ClassicFields): number {
-  return strictness.findLastIndex((decision) => result[decision] !== undefined)
-}
-
-function mergeClassic(event: ModEvent, below: ClassicFields, ours: ClassicFields): ClassicFields {
+function mergeClassic(below: ClassicFields, ours: ClassicFields): ClassicFields {
   const merged: ClassicFields = { ...below, ...ours }
   const context = [...((below['additionalContext'] as string[] | undefined) ?? []), ...((ours['additionalContext'] as string[] | undefined) ?? [])]
   if (context.length > 0) merged['additionalContext'] = context
-  if (event !== 'PreToolUse') return merged
-  const strictest = strictness[Math.max(strictnessOf(below), strictnessOf(ours))]
-  for (const decision of strictness) delete merged[decision]
-  if (strictest !== undefined) merged[strictest] = ours[strictest] ?? below[strictest]
   return merged
 }

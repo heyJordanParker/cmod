@@ -21,6 +21,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       open: (pane) => $.ui.open(pane),
       close: (pane) => $.ui.close(pane),
       panes: () => $.ui.panes(),
+      scroll: (args) => $.ui.scroll(args),
       resolve: (render) => $.ui.resolve(render),
     },
     process: {
@@ -54,10 +55,14 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       model: () => $.session.model(),
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
+      messages: ((args?: Parameters<Claude['session']['messages']>[0]) => (args === undefined ? $.session.messages() : $.session.messages(args))) as Claude['session']['messages'],
     },
     command: { register: (command) => $.command.register(command) },
     tool: { register: (tool) => $.tool.register(tool) },
-    agent: { list: () => $.agent.list() },
+    agent: {
+      list: () => $.agent.list(),
+      spawn: (args) => $.agent.spawn(args),
+    },
     env: {
       home: () => $.env.get('HOME'),
       dataHome: () => $.env.get('XDG_DATA_HOME'),
@@ -91,6 +96,7 @@ export function registerMod<State extends object>(addHook: On, definition: ModDe
   addHook('classic.PreCompact', routeToMod)
   addHook('classic.Stop', routeToMod)
   addHook('classic.StopFailure', routeToMod)
+  addHook('classic.FileChanged', routeToMod)
   addHook('tool.call', routeToMod)
   addHook('prompt.submit', routeToMod)
   addHook('prompt.context', routeToMod)
@@ -99,6 +105,7 @@ export function registerMod<State extends object>(addHook: On, definition: ModDe
   addHook('skill.prompt', routeToMod)
   addHook('ui.render', routeToMod)
   addHook('ui.press', routeToMod)
+  addHook('ui.scroll', routeToMod)
   addHook('ui.close', routeToMod)
   addHook('cmod.call', routeToMod)
 }
@@ -106,6 +113,5 @@ export function registerMod<State extends object>(addHook: On, definition: ModDe
 export function registerPermissionCheck(addHook: On): void {
   checksPermissions = true
   addHook('tool.check', routeToMod)
-  addHook('classic.PreToolUse', routeToMod)
   addHook('classic.PermissionRequest', routeToMod)
 }

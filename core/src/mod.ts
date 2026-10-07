@@ -1,11 +1,16 @@
 import type {
+  AgentSpawnArgs,
+  AgentSpawnResult,
   AskOptions,
   ClassicHookInputs,
   CmodDependencies,
   FsEntry,
+  FsStat,
+  FsStatOptions,
   HookStream,
   HttpInit,
   HttpResponse,
+  PaneOpenArgs,
   PermissionRequestDecision,
   ProcessRunInit,
   ProcessRunResult,
@@ -15,6 +20,8 @@ import type {
   RenderElement,
   Settings,
   SettingsReadArgs,
+  UiScrollArgs,
+  UiScrollResult,
 } from 'claude-code'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
@@ -30,9 +37,9 @@ export type ProgressStep = {
 }
 
 export type PaneHandle = {
-  open(): Promise<void>
+  open(options?: Readonly<Pick<PaneOpenArgs, 'focus'>>): Promise<void>
   close(): Promise<void>
-  toggle(): Promise<void>
+  toggle(options?: Readonly<Pick<PaneOpenArgs, 'focus'>>): Promise<void>
   readonly isOpen: boolean
 }
 
@@ -59,6 +66,7 @@ export type ModEvent =
   | 'Stop'
   | 'StopFailure'
   | 'CwdChanged'
+  | 'FileChanged'
 
 export type HookAnswer = {
   continue?: boolean
@@ -104,7 +112,9 @@ type HookInputs = Omit<ClassicHookInputs, 'PreToolUse' | 'PostToolUse' | 'PostTo
   CwdChanged: Omit<ClassicHookInputs['CwdChanged'], 'transcript_path'>
 }
 
-export type ModHook<E extends ModEvent> = (input: HookInputs[E]) => HookAnswer | void | Promise<HookAnswer | void>
+export type HookInput<E extends ModEvent> = HookInputs[E]
+
+export type ModHook<E extends ModEvent> = (input: HookInput<E>) => HookAnswer | void | Promise<HookAnswer | void>
 
 export type Mod<State extends object = Record<never, never>> = {
   readonly name: string
@@ -118,6 +128,7 @@ export type Mod<State extends object = Record<never, never>> = {
     toast(text: string): void
     progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
     ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
+    scroll(args: UiScrollArgs): Promise<UiScrollResult>
   }
   readonly process: {
     run(argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult>
@@ -127,12 +138,20 @@ export type Mod<State extends object = Record<never, never>> = {
     read(path: string): Promise<string>
     write(path: string, text: string): Promise<void>
     list(path?: string): Promise<FsEntry[]>
+    exists(path: string): Promise<boolean>
+    stat(path: string, options?: FsStatOptions): Promise<FsStat>
   }
   readonly http: {
     fetch(url: string, init?: HttpInit): Promise<HttpResponse>
   }
   readonly settings: {
     read(args?: SettingsReadArgs): Promise<Settings>
+  }
+  readonly session: {
+    messages: Claude['session']['messages']
+  }
+  readonly agent: {
+    spawn(args: AgentSpawnArgs): Promise<AgentSpawnResult>
   }
   readonly projectRoot: string
   readonly cwd: string

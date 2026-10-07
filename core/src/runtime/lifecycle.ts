@@ -1,12 +1,12 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import type { Mod, ModDefinition, ModEvent, ModHook } from '../mod.js'
+import type { HookInput, Mod, ModDefinition, ModEvent, ModHook } from '../mod.js'
 import { dataFolder, isAtLeast, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
 import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
-import { classicHook, permissionEvents, userSkillHook, type RoutedEvent } from './hooks.js'
+import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
 import { createRouter, type Router, type RouterNext } from './router.js'
 import { createState } from './state.js'
 import { toolCalls } from './tool-calls.js'
@@ -362,13 +362,15 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   let staleCwd: string | undefined
   const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
+  const held: HeldDecisions | undefined = runtime.checksPermissions() ? new Map() : undefined
   const mod: Mod<State> = {
     name: definition.name,
     state: modState.state,
     dataFolder: runtime.dataFolder,
     on(event, hook) {
       if (!hookEvents.includes(event)) hookEvents.push(event)
-      router.add(`classic.${event}`, classicHook(definition.name, event, hook, claude, agents))
+      if (event === 'PreToolUse') router.add('tool.call', preToolUseHook(definition.name, hook as ModHook<'PreToolUse'>, claude, agents, held))
+      else router.add(`classic.${event as Exclude<ModEvent, 'PreToolUse'>}`, classicHook(definition.name, event as Exclude<ModEvent, 'PreToolUse'>, hook as ModHook<Exclude<ModEvent, 'PreToolUse'>>, claude, agents))
     },
     use: (job) => job({ mod, claude, on: (event, hook) => router.add(event, hook), announce, reserveName, toolCalls: agents }),
     ui: area.ui,
@@ -380,9 +382,13 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       read: (path) => claude.fs.read(path),
       write: (path, text) => claude.fs.write(path, text),
       list: (path) => claude.fs.list(path),
+      exists: (path) => claude.fs.exists(path),
+      stat: (path, options) => claude.fs.stat(path, options),
     },
     http: { fetch: (url, init) => claude.http.fetch(url, init) },
     settings: { read: (args) => claude.settings.read(args) },
+    session: { messages: claude.session.messages },
+    agent: { spawn: (args) => claude.agent.spawn(args) },
     get projectRoot() {
       return modState.root
     },
@@ -408,7 +414,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
       loadedCwd = nextCwd
       if (!hasMovedRoot) area.changed()
       if (nextCwd === oldCwd) return
-      const moved: Parameters<ModHook<'CwdChanged'>>[0] = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
+      const moved: HookInput<'CwdChanged'> = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
       await router.dispatch('classic.CwdChanged', moved as Frozen<Args<'classic.CwdChanged'>>, async () => ({}))
     } catch (error) {
       claude.ui.log(`${definition.name} keeps the state of ${modState.root} until the next prompt or folder move: ${messageOf(error)}`)
@@ -452,6 +458,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
     throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`)
   }
+  if (held !== undefined && hookEvents.includes('PreToolUse')) router.add('tool.check', heldDecisionHook(held))
   await failsAs('its open panes did not load', () => area.restorePanes())
   if (hookEvents.length > 0) added.push(`${hookEvents.length === 1 ? 'a hook' : 'hooks'} on ${listed(hookEvents)}`)
   return { mod, added }

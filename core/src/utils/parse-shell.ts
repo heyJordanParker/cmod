@@ -1,17 +1,14 @@
-import { nameOf } from './paths.js'
-import { parse, type GlobPattern, type ParseEntry } from '../vendor.js'
+import { basename, parse, type GlobPattern, type ParseEntry } from '../vendor.js'
+
+export type ShellCommand = { argv: [string, ...string[]]; folder: string }
 
 export type ParsedShell = {
-  commands: [string, ...string[]][]
+  commands: ShellCommand[]
   writes: string[]
   reads: string[]
   fetches: string[]
   isFullyParsed: boolean
 }
-
-export type ShellCommand = { argv: [string, ...string[]]; folder: string }
-
-export type ParsedShellCommands = Omit<ParsedShell, 'commands'> & { commands: ShellCommand[] }
 
 type Word = { text: string; isGlob: boolean; isDynamic: boolean }
 type Marker = { raw: string; code: string[] }
@@ -200,17 +197,12 @@ const inlineCodeFlags = new Map<string, readonly string[]>([
 ])
 
 export function parseShell(line: string): ParsedShell {
-  const parsed = parseShellCommands(line)
-  return { ...parsed, commands: parsed.commands.map((command) => command.argv) }
-}
-
-export function parseShellCommands(line: string): ParsedShellCommands {
-  const result: ParsedShellCommands = { commands: [], writes: [], reads: [], fetches: [], isFullyParsed: true }
+  const result: ParsedShell = { commands: [], writes: [], reads: [], fetches: [], isFullyParsed: true }
   parseLine(line, '', result)
   return result
 }
 
-function parseLine(line: string, folder: string, result: ParsedShellCommands): void {
+function parseLine(line: string, folder: string, result: ParsedShell): void {
   if (line.includes('\u0001')) {
     result.isFullyParsed = false
     return
@@ -475,7 +467,7 @@ function readHeredocBodies(source: string, from: number, heredocs: Heredoc[]): n
   return index
 }
 
-function walk(tokens: ParseEntry[], markers: Marker[], start: string, result: ParsedShellCommands): void {
+function walk(tokens: ParseEntry[], markers: Marker[], start: string, result: ParsedShell): void {
   let folder = start
   const subshells: string[] = []
   let command = newCommand(false)
@@ -533,7 +525,7 @@ function isWordToken(token: ParseEntry): token is string | GlobPattern {
   return typeof token === 'string' || ('op' in token && token.op === 'glob')
 }
 
-function wordOf(token: string | GlobPattern, markers: Marker[], folder: string, result: ParsedShellCommands): Word {
+function wordOf(token: string | GlobPattern, markers: Marker[], folder: string, result: ParsedShell): Word {
   const raw = typeof token === 'string' ? token : token.pattern
   for (const match of raw.matchAll(markerPattern)) {
     for (const code of markers[Number(match[1])]!.code) parseLine(code, folder, result)
@@ -541,11 +533,11 @@ function wordOf(token: string | GlobPattern, markers: Marker[], folder: string, 
   return {
     text: raw.replace(markerPattern, (_, index: string) => markers[Number(index)]!.raw),
     isGlob: typeof token !== 'string',
-    isDynamic: /[$\u0001]/.test(nameOf(raw)),
+    isDynamic: /[$\u0001]/.test(basename(raw)),
   }
 }
 
-function finish(command: Command, operator: string, folder: string, result: ParsedShellCommands): string {
+function finish(command: Command, operator: string, folder: string, result: ParsedShell): string {
   for (const redirect of command.redirects) addRedirect(redirect, folder, result)
   const words = withoutPrefixes(command.words)
   const [first, ...args] = words
@@ -569,14 +561,14 @@ function withoutPrefixes(words: Word[]): Word[] {
   return words.slice(start)
 }
 
-function addRedirect({ operator, target }: Redirect, folder: string, result: ParsedShellCommands): void {
+function addRedirect({ operator, target }: Redirect, folder: string, result: ParsedShell): void {
   if (operator === '<' || operator === '<>') addPath(result, 'reads', target, folder)
   if (writeRedirects.has(operator) || (operator === '>&' && !/^([0-9]+|-)$/.test(target.text))) addPath(result, 'writes', target, folder)
 }
 
-function addCommand(first: Word, args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShellCommands): string | undefined {
+function addCommand(first: Word, args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShell): string | undefined {
   if (first.isDynamic || first.isGlob) result.isFullyParsed = false
-  const program = nameOf(first.text)
+  const program = basename(first.text)
   if (program === 'git') addGit(first, args, folder, result)
   else if (program === 'find') addFind(first, args, folder, result)
   else if (wrappers.has(program)) addWrapper(first, program, args, folder, stdin, result)
@@ -589,7 +581,7 @@ function addCommand(first: Word, args: Word[], folder: string, stdin: Stdin | un
   return undefined
 }
 
-function addGit(first: Word, args: Word[], folder: string, result: ParsedShellCommands): void {
+function addGit(first: Word, args: Word[], folder: string, result: ParsedShell): void {
   let index = 0
   let gitFolder = folder
   for (let text = args[0]?.text; text?.startsWith('-') === true; text = args[index]?.text) {
@@ -600,7 +592,7 @@ function addGit(first: Word, args: Word[], folder: string, result: ParsedShellCo
   result.commands.push({ argv: [first.text, ...expandFlags('git', args.slice(index))], folder: gitFolder })
 }
 
-function addFind(first: Word, args: Word[], folder: string, result: ParsedShellCommands): void {
+function addFind(first: Word, args: Word[], folder: string, result: ParsedShell): void {
   const own: string[] = []
   const actions: Word[][] = []
   for (let index = 0; index < args.length; index += 1) {
@@ -628,7 +620,7 @@ function findStarts(args: Word[]): Word[] {
   return starts.length > 0 ? starts : [literal('.')]
 }
 
-function addWrapper(first: Word, program: string, args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShellCommands): void {
+function addWrapper(first: Word, program: string, args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShell): void {
   const wrapper = wrappers.get(program)!
   if (program === 'xargs' && stdin?.kind !== 'text') result.isFullyParsed = false
   const { options, operands } = readArguments(args, wrapper, true)
@@ -651,7 +643,7 @@ function addWrapper(first: Word, program: string, args: Word[], folder: string, 
   if (innerFirst !== undefined) addCommand(innerFirst, innerArgs, wrappedFolder, stdin, result)
 }
 
-function addEffects(program: string, args: Word[], flags: string[], folder: string, stdin: Stdin | undefined, result: ParsedShellCommands): void {
+function addEffects(program: string, args: Word[], flags: string[], folder: string, stdin: Stdin | undefined, result: ParsedShell): void {
   const fileProgram = fileReaders.get(program)
   const fileWriter = fileWriters.get(program)
   const copyProgram = copyPrograms.get(program)
@@ -675,7 +667,7 @@ function addEffects(program: string, args: Word[], flags: string[], folder: stri
   }
 }
 
-function addShell(args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShellCommands): void {
+function addShell(args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShell): void {
   const { options, operands } = readArguments(args, { valued: 'oO', longValued: ['--rcfile', '--init-file'] }, true)
   const script = operands[0]
   if (options.some((option) => option.name === '-c')) {
@@ -683,35 +675,35 @@ function addShell(args: Word[], folder: string, stdin: Stdin | undefined, result
   } else if (script === undefined || options.some((option) => option.name === '-s')) addStdinCode(stdin, folder, result)
 }
 
-function addSsh(args: Word[], stdin: Stdin | undefined, result: ParsedShellCommands): void {
+function addSsh(args: Word[], stdin: Stdin | undefined, result: ParsedShell): void {
   const { operands } = readArguments(args, { valued: 'BbcDEeFIiJLlmOoPpQRSWw' }, true)
   const remote = operands.slice(1)
   if (remote.length > 0) parseLine(remote.map((word) => word.text).join(' '), '~', result)
   else if (operands.length > 0) addStdinCode(stdin, '~', result)
 }
 
-function addSu(args: Word[], folder: string, result: ParsedShellCommands): void {
+function addSu(args: Word[], folder: string, result: ParsedShell): void {
   const code = readArguments(args, su, false).options.findLast((option) => suCodeOptions.includes(option.name))?.value
   if (code !== undefined) parseLine(code.text, folder, result)
 }
 
-function addFetches(fetcher: OptionSpec, args: Word[], result: ParsedShellCommands): void {
+function addFetches(fetcher: OptionSpec, args: Word[], result: ParsedShell): void {
   const { options, operands } = readArguments(args, fetcher, false)
   const urls = [...options.filter((option) => option.name === '--url').flatMap((option) => (option.value === undefined ? [] : [option.value])), ...operands]
   for (const url of urls) result.fetches.push(/^[a-z][a-z0-9+.-]*:\/\//i.test(url.text) ? url.text : `http://${url.text}`)
 }
 
-function addStdinCode(stdin: Stdin | undefined, folder: string, result: ParsedShellCommands): void {
+function addStdinCode(stdin: Stdin | undefined, folder: string, result: ParsedShell): void {
   if (stdin?.kind === 'text') parseLine(stdin.text, folder, result)
   if (stdin?.kind === 'pipe') result.isFullyParsed = false
 }
 
-function addCopy(program: CopyProgram, args: Word[], folder: string, result: ParsedShellCommands): void {
+function addCopy(program: CopyProgram, args: Word[], folder: string, result: ParsedShell): void {
   const { options, operands } = readArguments(args, program, false)
   const target = options.findLast((option) => program.targetOptions?.includes(option.name) === true)?.value
   const only = operands[0]
   if (program.linksHere === true && target === undefined && operands.length === 1 && only !== undefined) {
-    addPath(result, 'writes', { ...only, text: nameOf(only.text) }, folder)
+    addPath(result, 'writes', { ...only, text: basename(only.text) }, folder)
     return
   }
   const destination = target ?? operands.at(-1)
@@ -720,12 +712,12 @@ function addCopy(program: CopyProgram, args: Word[], folder: string, result: Par
   const isLocal = (word: Word) => program.skipsRemote !== true || !/^[^/]*:/.test(word.text)
   for (const source of sources.filter(isLocal)) {
     if (program.sources !== undefined) addPath(result, program.sources, source, folder)
-    if (isLocal(destination) && !source.isGlob && !destination.isGlob) addPathText(result, 'writes', `${destination.text.replace(/\/+$/, '')}/${nameOf(source.text)}`, folder)
+    if (isLocal(destination) && !source.isGlob && !destination.isGlob) addPathText(result, 'writes', `${destination.text.replace(/\/+$/, '')}/${basename(source.text)}`, folder)
   }
   if (isLocal(destination)) addPath(result, 'writes', destination, folder)
 }
 
-function addFileArguments(program: FileProgram, args: Word[], folder: string, result: ParsedShellCommands): void {
+function addFileArguments(program: FileProgram, args: Word[], folder: string, result: ParsedShell): void {
   const { options, operands } = readArguments(args, program, false)
   const inPlace = options.find((option) => program.inPlaceOptions?.includes(option.name) === true && (program !== awk || option.value?.text === 'inplace'))
   let files = operands
@@ -812,11 +804,11 @@ function changedFolder(args: Word[], folder: string): string {
   return joinFolder(folder, target.text === '-' ? '$OLDPWD' : target.text)
 }
 
-function addPath(result: ParsedShellCommands, access: Access, word: Word | undefined, folder: string): void {
+function addPath(result: ParsedShell, access: Access, word: Word | undefined, folder: string): void {
   if (word !== undefined && !word.isGlob) addPathText(result, access, word.text, folder)
 }
 
-function addPathText(result: ParsedShellCommands, access: Access, path: string, folder: string): void {
+function addPathText(result: ParsedShell, access: Access, path: string, folder: string): void {
   if (path === '' || path.startsWith('/dev/')) return
   const joined = joinFolder(folder, path)
   if (dynamicPattern.test(joined.replace(homePrefix, ''))) result.isFullyParsed = false

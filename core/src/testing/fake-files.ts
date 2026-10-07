@@ -1,10 +1,10 @@
 import type { Claude } from '../runtime/claude.js'
-import { resolvePath } from '../utils/paths.js'
+import { resolve } from '../vendor.js'
 
 export function fakeFiles(files: Readonly<Record<string, string>>, links: Readonly<Record<string, string>> = {}): Claude['fs'] {
-  const contents = new Map(Object.entries(files).map(([path, text]) => [resolvePath(path, '/'), text]))
+  const contents = new Map(Object.entries(files).map(([path, text]) => [resolve('/', path), text]))
   const realPathOf = (path: string): string => {
-    const absolute = resolvePath(path, '/')
+    const absolute = resolve('/', path)
     for (const [link, target] of Object.entries(links)) {
       if (absolute === link || absolute.startsWith(`${link}/`)) return realPathOf(`${target}${absolute.slice(link.length)}`)
     }
@@ -35,7 +35,7 @@ export function fakeFiles(files: Readonly<Record<string, string>>, links: Readon
       if (kindOf(folder) !== 'dir') throw new Error(`ENOENT: no such directory, list '${path}'`)
       const names = new Set(below(folder).map((file) => file.split('/')[0] as string))
       return [...names].map((name) => {
-        const entry = resolvePath(name, folder)
+        const entry = resolve(folder, name)
         if (Object.hasOwn(links, entry)) return { name, kind: 'other', size: 0, mtimeMs: 0, isLink: true }
         return { name, kind: contents.has(entry) ? 'file' : 'dir', size: sizeOf(entry), mtimeMs: 0, isLink: false }
       })
@@ -44,7 +44,7 @@ export function fakeFiles(files: Readonly<Record<string, string>>, links: Readon
     stat: async (path, options) => {
       const realPath = realPathOf(path)
       const kind = kindOf(realPath)
-      const isLink = Object.hasOwn(links, resolvePath(path, '/'))
+      const isLink = Object.hasOwn(links, resolve('/', path))
       if (kind === undefined && isLink) return { kind: 'other', size: 0, mtimeMs: 0, isLink }
       if (kind === undefined) throw new Error(`ENOENT: no such file or directory, stat '${path}'`)
       return { kind, size: sizeOf(realPath), mtimeMs: 0, isLink, ...(options?.resolve === true ? { realPath } : {}) }

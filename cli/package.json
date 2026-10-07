@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/cli",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Claude Mod Manager: install, try, build, check, and publish Claude Code mods.",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,7 @@
     "bin/"
   ],
   "scripts": {
-    "build": "bun build --compile --minify --target=bun-darwin-arm64 src/main.ts --outfile dist/cmod-darwin-arm64 && bun build --compile --minify --target=bun-darwin-x64 src/main.ts --outfile dist/cmod-darwin-x64 && bun build --compile --minify --target=bun-linux-x64 src/main.ts --outfile dist/cmod-linux-x64 && bun build --compile --minify --target=bun-linux-arm64 src/main.ts --outfile dist/cmod-linux-arm64",
+    "build": "for machine in ${CMOD_MACHINES:-darwin-arm64 darwin-x64 linux-arm64 linux-x64}; do bun build --compile --minify --target=bun-$machine src/main.ts --outfile dist/cmod-$machine || exit 1; done",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

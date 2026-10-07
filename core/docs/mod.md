@@ -51,7 +51,7 @@ When a step fails, the mod does not start. Its progress line above the prompt na
 - `its state did not load: <error>` when reading the saved values or a `state.json` fails.
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
-- `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PreToolUse` or `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
+- `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
 
 Each of these says `Fix it, then run /reload-plugins.`
 
@@ -74,9 +74,9 @@ registerMod<State>(addHook: On, definition: ModDefinition<State>): void
 registerPermissionCheck(addHook: On): void
 ```
 
-`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. It leaves out Claude Code's permission check, the events `tool.check`, `PreToolUse`, and `PermissionRequest`.
+`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. A `PreToolUse` hook runs on `tool.call`, which `registerMod` registers ([hooks.md](hooks.md)). It leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
 
-A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers a hook on `PreToolUse` or `PermissionRequest`, the `permissions` job, and a job of your own on `tool.check`:
+A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers a `PreToolUse` hook that answers `permissionDecision: 'allow'` or `'ask'`, a hook on `PermissionRequest`, the `permissions` job, and a job of your own on `tool.check`:
 
 ```ts
 export function register(addHook: On): void {
@@ -102,11 +102,13 @@ type Mod<State> = {
   readonly cwd: string
   on(event, hook): void
   use(job): Handle
-  readonly ui: { pane, render, toast, progress, ask }
+  readonly ui: { pane, render, toast, progress, ask, scroll }
   readonly process: { run, spawn }
-  readonly fs: { read, write, list }
+  readonly fs: { read, write, list, exists, stat }
   readonly http: { fetch }
   readonly settings: { read }
+  readonly session: { messages }
+  readonly agent: { spawn }
   readonly dependencies: CmodDependencies
 }
 ```
@@ -120,11 +122,13 @@ type Mod<State> = {
 | `cwd` | The session's working folder. It follows a `cd` in a Bash or PowerShell call, and `/cd`. | |
 | `on` | Adds a hook on a Claude Code event. | [hooks.md](hooks.md) |
 | `use` | Adds a job, such as a slash command or a tool, and returns its handle. | [jobs.md](jobs.md) |
-| `ui` | Panes, slot renders, toasts, progress lines, and questions. | [ui.md](ui.md) |
+| `ui` | Panes, slot renders, toasts, progress lines, questions, and scrolling. | [ui.md](ui.md) |
 | `process` | Runs a program. | below |
-| `fs` | Reads and writes files. | below |
+| `fs` | Reads, writes, and looks up files. | below |
 | `http` | Fetches a URL. | below |
 | `settings` | Reads Claude Code's settings. | below |
+| `session` | Reads the conversation, or a subagent's. | below |
+| `agent` | Starts a subagent. | below |
 | `dependencies` | Calls the methods of other mods. | [dependencies.md](dependencies.md) |
 
 ### mod.process
@@ -168,12 +172,16 @@ export const branchNote = defineMod({
 mod.fs.read(path: string): Promise<string>
 mod.fs.write(path: string, text: string): Promise<void>
 mod.fs.list(path?: string): Promise<FsEntry[]>
+mod.fs.exists(path: string): Promise<boolean>
+mod.fs.stat(path: string, options?: { resolve: boolean }): Promise<FsStat>
 ```
 
 - A relative path is under the session's working folder. An absolute path is used as given. Text is UTF-8.
 - `read` rejects a missing file and a file over 4 MiB.
 - `write` writes the whole file and creates its folders.
 - `list` lists a folder, the working folder without a path. Each entry is `{ name, kind, size, mtimeMs, isLink }`, and `kind` is `'file'`, `'dir'`, or `'other'`. A symbolic link is `'other'` with `isLink` true.
+- `exists` answers whether the path leads to a file or a folder.
+- `stat` answers `{ kind, size, mtimeMs, isLink }` of what the path leads to, following a symbolic link, and rejects a missing path. With `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
 
 A file the mod ships is under the plugin's folder. `mod` has no member that names that folder, so a job of your own reads it from `claude.plugin.root` ([jobs.md](jobs.md#the-claude-members)). A file the mod keeps for itself belongs in `mod.dataFolder`.
 
@@ -207,6 +215,30 @@ export const pluginCount = defineMod({
   },
 })
 ```
+
+### mod.session
+
+```ts
+mod.session.messages(): Promise<SessionMessage[]>
+mod.session.messages(args: { agentId?: string; as?: 'api' }): Promise<…>
+```
+
+`messages` reads the main conversation, one `{ role, text, toolUses, toolResults }` entry per message. A message has no id of its own, and each tool use carries its `tool_use_id`. `{ agentId }` reads that subagent's conversation instead, the id a `SubagentStart` or `SubagentStop` hook gets as `agent_id`, and answers `{ deny }` when the session cannot read it, so `Array.isArray` tells the two apart. `{ as: 'api' }` reads it in the Messages API form, `{ role, content }` with the content blocks whole.
+
+```ts
+mod.on('SubagentStop', async ({ agent_id }) => {
+  const read = await mod.session.messages({ agentId: agent_id })
+  if (Array.isArray(read)) mod.ui.toast(read.at(-1)?.text ?? '')
+})
+```
+
+### mod.agent
+
+```ts
+mod.agent.spawn(args: { prompt: string; description?; subagentType?; model?; name?; cwd? }): Promise<AgentSpawnResult>
+```
+
+`spawn` starts a subagent in the background, the way the Agent tool starts one, and resolves `{ agentId, model }` once it started, or `{ deny }` when a hook refused it. It does not wait for the subagent to finish. `subagentType` names an agent type, such as `explorer`. `mod.session.messages({ agentId })` reads the subagent's conversation so far.
 
 ## messageOf
 

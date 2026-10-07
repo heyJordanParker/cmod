@@ -43,7 +43,7 @@ export function bunArgv(...args: string[]): { argv: string[]; env: Record<string
   return { argv: [process.execPath, ...args], env: { ...process.env, BUN_BE_BUN: '1' } }
 }
 
-function spawn<Out extends 'pipe' | 'inherit'>(argv: string[], options: RunOptions & { stdout: Out; stderr: Out }) {
+export function spawn<Out extends 'pipe' | 'inherit' | 'ignore'>(argv: string[], options: RunOptions & { stdout: Out; stderr: Out }) {
   try {
     return Bun.spawn(argv, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),

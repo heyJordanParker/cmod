@@ -77,6 +77,8 @@ export function modWithin<State extends object>({ mod, claude }: JobContext<Stat
       read: (path) => within('mod.fs.read', mod.fs.read(path)),
       write: (path, text) => within('mod.fs.write', mod.fs.write(path, text)),
       list: (path) => within('mod.fs.list', mod.fs.list(path)),
+      exists: (path) => within('mod.fs.exists', mod.fs.exists(path)),
+      stat: (path, options) => within('mod.fs.stat', mod.fs.stat(path, options)),
     },
     http: { fetch: (url, init) => within('mod.http.fetch', mod.http.fetch(url, init)) },
     dependencies: dependencyCalls(claude, within),

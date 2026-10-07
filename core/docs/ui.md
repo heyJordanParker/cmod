@@ -8,6 +8,7 @@ mod.ui.render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => Rende
 mod.ui.toast(text: string): void
 mod.ui.progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
 mod.ui.ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
+mod.ui.scroll(args: UiScrollArgs): Promise<UiScrollResult>
 ```
 
 Claude Mod Manager (cmod) draws the mod again whenever a value in `mod.state` changes. A render reads `mod.state` and returns what to show. It never draws by hand.
@@ -62,14 +63,23 @@ type Pane<State> = {
   readonly title: string
   readonly columns?: number | ((state: State) => number | undefined)
   readonly rows?: number | ((state: State) => number | undefined)
+  readonly closeOnEscape?: true
+  readonly holdToasts?: true
   render(mod: Mod<State>, props: Frozen<RenderPropsOf['Pane']>): RenderElement
+  onScroll?(mod: Mod<State>, e: Frozen<UiScrollInput>): void | Promise<void>
+  onClose?(mod: Mod<State>, e: Frozen<PaneCloseInput>): void | Promise<void>
 }
 ```
 
 - `id` is 1 to 64 letters, digits, `_`, or `-`. Another id throws `definePane: "<id>" is not a pane id.`
 - `title` labels the pane's tab while more than one pane is open.
 - `columns` and `rows` ask for a size. A number must be a whole number above 0, or `definePane` throws. A function reads the state and returns the size, or `undefined` for Claude Code's default. When the state changes the size, cmod resizes an open pane. A function that returns a bad size keeps an open pane at its size and logs the pane's title to the debug log. `open`, and `toggle` on a closed pane, reject with that size instead.
+- `closeOnEscape` closes the pane when the person presses Escape while it holds the keyboard, as their own close does. Left out, Escape gives the keyboard back to the prompt and the pane stays.
+- `holdToasts` holds every toast back while the pane is shown, the toasts of other plugins and of Claude Code included. Use it for a pane the person answers and closes, never for one that stays open.
 - `render` draws the pane's body. `props` holds `title`, `isFocused`, `bodyColumns`, `placement` (`'dock'` or `'inline'`), `scroll`, the body's window over a taller drawing, and `view`, which transcript is on screen beside the pane.
+- `onScroll` runs after this pane's window moved, by the person's wheel or keys or by `mod.ui.scroll`. `e` holds the new `offset`, the move's `by`, `bodyRows`, `contentRows`, and `origin`. Another pane's scroll and the band's never reach it, and a scroll Claude Code refused does not either.
+- `onClose` runs after the pane closed, by the person or by `close()`. `e.origin.kind` is `'person'` or `'plugin'`.
+- A handler that throws logs `<mod>: the <title> pane's <handler> threw: <error>`.
 
 Put each pane in its own file in `src/panes/`.
 
@@ -98,20 +108,22 @@ export const notesPane = definePane<NotesState>({
 
 ```ts
 type PaneHandle = {
-  open(): Promise<void>
+  open(options?: { readonly focus?: true }): Promise<void>
   close(): Promise<void>
-  toggle(): Promise<void>
+  toggle(options?: { readonly focus?: true }): Promise<void>
   readonly isOpen: boolean
 }
 ```
 
 - `open` asks Claude Code to show the pane. `isOpen` turns true once Claude Code places it. Claude Code may hold a pane back, and then `isOpen` stays false.
+- `{ focus: true }` asks Claude Code to give the pane the keyboard as it opens. Claude Code gives it only while the prompt is empty and holds the keyboard, so typed text, a dialog, or another pane the person is using keeps it. cmod sends `focus` only on that one open, never when it resizes the pane.
 - `mod.ui.pane` only adds the pane. cmod opens it only when the mod calls `open` or `toggle`, and Claude Code shows a pane only once the plugin has opened it. So give the person a way in, such as a slash command whose `reply` calls `pane.toggle()`.
 - A pane opened from what the person did, such as a slash command they typed or a `Button` they pressed, shows at any terminal width. A pane opened from anything else, such as `setup`, a timer, or `SessionStart`, shows only on a terminal 144 columns wide, or 110 for a pane the person opened before. Below that it waits undrawn until the person opens it or the terminal widens.
 - `close` closes it. The person closes a pane too, and `isOpen` follows.
 - `toggle` closes an open pane and opens a closed one.
 - When the mod starts, `isOpen` is true for each of its panes Claude Code already shows.
 - Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give each pane its own id.`
+- A `render` that throws draws `The <title> pane could not draw: <error>` in the pane, and cmod logs `<mod>: the <title> pane render threw: <error>` once.
 - The line cmod logs when the mod first starts names the pane by its `title`, as in `the Notes pane`.
 
 ```tsx
@@ -126,7 +138,7 @@ export const notes = defineMod({
   state: initialState,
   setup(mod) {
     const pane = mod.ui.pane(notesPane)
-    mod.use(slashCommand({ name: 'notes', description: 'Show or hide the notes', reply: () => pane.toggle() }))
+    mod.use(slashCommand({ name: 'notes', description: 'Show or hide the notes', reply: () => pane.toggle({ focus: true }) }))
   },
 })
 ```
@@ -288,6 +300,18 @@ export const committer = defineMod({
     })
   },
 })
+```
+
+## Scrolling
+
+```ts
+mod.ui.scroll(args: { to: 'start' | 'end' | { key: string } | { requestId: string }; in?: string; block?: 'start' | 'center' | 'end' | 'nearest' }): Promise<UiScrollResult>
+```
+
+`scroll` brings something the mod drew into view. `{ key }` is an element the mod drew with that `key`. `'start'` and `'end'` are the top and bottom of the pane whose id `in` names, and `'end'` keeps up with rows the mod adds until the person scrolls. `{ requestId }` is a row Claude Code drew, such as a message of the transcript, which scrolls only while the mod answers the person's own press or key. `block` places the target in the window, `'nearest'` by default. It resolves `{}` once the window moved, or `{ deny }` with the reason it did not.
+
+```tsx
+<Button label="Latest" onPress={() => mod.ui.scroll({ to: 'end', in: 'log' })} />
 ```
 
 ## Test the UI

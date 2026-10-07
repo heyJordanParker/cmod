@@ -224,6 +224,7 @@ export type UiArea<State extends object> = {
 
 export function createUi<State extends object>({ name, claude, router, progress, announce, mod }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, Pane<State>>()
+  const paneLogs = new Map<string, (failure: string) => void>()
   const openPanes = new Set<string>()
   const requestedSizes = new Map<string, PaneSize>()
   const renders = new Set<string>()
@@ -291,9 +292,10 @@ export function createUi<State extends object>({ name, claude, router, progress,
     })
   }
 
-  const openAt = (pane: Pane<State>, size: PaneSize) => {
+  const openAt = (pane: Pane<State>, size: PaneSize, focus?: true) => {
     requestedSizes.set(pane.id, size)
-    return claude.ui.open({ id: pane.id, title: pane.title, ...size })
+    const { id, title, closeOnEscape, holdToasts } = pane
+    return claude.ui.open({ id, title, ...size, ...(closeOnEscape === true ? { closeOnEscape } : {}), ...(holdToasts === true ? { holdToasts } : {}), ...(focus === true ? { focus } : {}) })
   }
 
   const resize = async (pane: Pane<State>) => {
@@ -315,12 +317,35 @@ export function createUi<State extends object>({ name, claude, router, progress,
       if (pane === undefined || e.component !== 'Pane') return next(e)
       openPanes.add(pane.id)
       const table = claude.ui.resolve(e)
-      return drawWith(table, () => pane.render(mod(), e.props), markdownIn(table))
+      try {
+        return drawWith(table, () => pane.render(mod(), e.props), markdownIn(table))
+      } catch (error) {
+        paneLogs.get(pane.id)?.(`threw: ${messageOf(error)}`)
+        return drawWith(table, () => Text({ color: 'error', children: `The ${pane.title} pane could not draw: ${messageOf(error)}` }))
+      }
     })
-    router.add('ui.close', (e, next) => {
+    router.add('ui.scroll', async (e, next) => {
+      const pane = panes.get(e.requestId)
+      const moved = await next(e)
+      if (pane?.onScroll === undefined || e.component !== 'Pane' || moved.deny !== undefined) return moved
+      await handle(pane, 'onScroll', () => pane.onScroll?.(mod(), e))
+      return moved
+    })
+    router.add('ui.close', async (e, next) => {
       openPanes.delete(e.id)
-      return next(e)
+      const closed = await next(e)
+      const pane = panes.get(e.id)
+      if (pane?.onClose !== undefined) await handle(pane, 'onClose', () => pane.onClose?.(mod(), e))
+      return closed
     })
+  }
+
+  const handle = async (pane: Pane<State>, handler: string, run: () => unknown) => {
+    try {
+      await run()
+    } catch (error) {
+      claude.ui.log(`${name}: the ${pane.title} pane's ${handler} threw: ${messageOf(error)}`)
+    }
   }
 
   return {
@@ -328,21 +353,22 @@ export function createUi<State extends object>({ name, claude, router, progress,
       pane(pane) {
         if (panes.has(pane.id)) throw new Error(`${name}: the pane "${pane.id}" is already added. Give each pane its own id.`)
         panes.set(pane.id, pane)
+        paneLogs.set(pane.id, logOnce(`${pane.title} pane`))
         announce(`the ${pane.title} pane`)
         route()
         const handle: PaneHandle = {
           get isOpen() {
             return openPanes.has(pane.id)
           },
-          async open() {
-            const { isPlaced } = await openAt(pane, paneSize(pane, mod().state))
+          async open(options) {
+            const { isPlaced } = await openAt(pane, paneSize(pane, mod().state), options?.focus)
             if (isPlaced) openPanes.add(pane.id)
           },
           async close() {
             await claude.ui.close({ id: pane.id })
             openPanes.delete(pane.id)
           },
-          toggle: () => (openPanes.has(pane.id) ? handle.close() : handle.open()),
+          toggle: (options) => (openPanes.has(pane.id) ? handle.close() : handle.open(options)),
         }
         return handle
       },
@@ -386,6 +412,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
         }
       },
       ask: (question, options) => claude.ui.ask(question, options),
+      scroll: (args) => claude.ui.scroll(args),
     },
     changed() {
       if (panes.size === 0 && renders.size === 0) return

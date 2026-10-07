@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, symlink } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { isObject, pluginName, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
@@ -15,6 +15,10 @@ export const programSteps = 3
 
 export const machine = `${process.platform}-${process.arch}`
 
+export const machines: readonly string[] = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
+
+const systemFolders: readonly string[] = ['/bin', '/sbin', '/usr/bin', '/usr/sbin']
+
 export function releaseDownloads(repository: string): string {
   return `${repository.replace(/\/$/, '')}/releases/download`
 }
@@ -23,7 +27,8 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
   const folder = join(plugin.root, 'cli')
   const packageJson = await readJson(join(folder, 'package.json'))
   const cargo = await readText(join(folder, 'Cargo.toml'))
-  const manifest = isObject(packageJson) ? packageJson : cargo === undefined ? undefined : (Bun.TOML.parse(cargo) as Record<string, unknown>)['package']
+  const cargoManifest = cargo === undefined ? undefined : (Bun.TOML.parse(cargo) as Record<string, unknown>)
+  const manifest = isObject(packageJson) ? packageJson : cargoManifest?.['package']
   if (!isObject(manifest)) return undefined
   const metadata = manifest['metadata']
   const declared = isObject(packageJson) ? manifest['cmod'] : isObject(metadata) ? metadata['cmod'] : undefined
@@ -31,16 +36,18 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
   if (!isObject(declared) || typeof declared['build'] !== 'string' || typeof declared['output'] !== 'string') {
     throw new Error(`${tilde(folder)} declares a "cmod" build without "build" and "output". Write "cmod": { "build": "<command>", "output": "<folder>" }.`)
   }
-  const commands = isObject(manifest['bin']) ? Object.keys(manifest['bin']) : []
+  const bins = isObject(packageJson) ? manifest['bin'] : cargoManifest?.['bin']
+  const commands = Array.isArray(bins) ? bins.map((bin: unknown) => (isObject(bin) ? bin['name'] : undefined)) : isObject(bins) ? Object.keys(bins) : []
   const name = commands.length === 1 ? commands[0] : manifest['name']
-  if (typeof name !== 'string' || !pluginName.test(name)) throw new Error(`${tilde(folder)} names its program "${String(name)}". The manifest's one "bin" command, or else its "name", is the command, such as "hello".`)
+  if (typeof name !== 'string' || !pluginName.test(name)) throw new Error(`${tilde(folder)} names its program "${String(name)}". The manifest's one "bin" command (one [[bin]] in Cargo.toml), or else its "name", is the command, such as "hello".`)
   return { name, folder, build: declared['build'], output: declared['output'] }
 }
 
-export async function buildProgram(program: Program, progress: Progress): Promise<string[]> {
+export async function buildProgram(program: Program, wanted: readonly string[], progress: Progress): Promise<string[]> {
   const heading = `Building ${program.name}`
   progress.step(heading)
-  const result = await runStep(['sh', '-c', program.build], program.folder, process.env, (event) => {
+  const startedAt = Math.floor(Date.now() / 1000) * 1000
+  const result = await runStep(['sh', '-c', program.build], program.folder, { ...process.env, CMOD_MACHINES: wanted.join(' ') }, (event) => {
     if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
     else progress.log(event.text)
   })
@@ -49,17 +56,22 @@ export async function buildProgram(program: Program, progress: Progress): Promis
     throw new Error(`Fix the build in ${tilde(program.folder)}, then run the command again.`)
   }
   const folder = join(program.folder, program.output)
-  const outputs = existsSync(folder) ? (await readdir(folder)).sort().map((entry) => join(folder, entry)) : []
-  if (outputs.length === 0) throw new Error(`The build of ${program.name} left nothing in ${tilde(folder)}. Point "output" at the folder the build writes.`)
-  progress.succeed(`Built ${program.name}: ${outputs.map((output) => basename(output)).join(', ')}`)
-  return outputs
+  const names = machines.map((each) => `${program.name}-${each}`)
+  const written: string[] = []
+  for (const entry of existsSync(folder) ? (await readdir(folder)).sort() : []) {
+    if ((await stat(join(folder, entry))).mtimeMs >= startedAt) written.push(entry)
+  }
+  const misnamed = written.filter((entry) => !names.includes(entry))
+  if (misnamed.length > 0) throw new Error(`The build of ${program.name} wrote ${misnamed.join(', ')}, which no machine downloads. Name each build <program>-<os>-<arch>: ${names.join(', ')}.`)
+  const builds = written.filter((entry) => wanted.some((each) => entry === `${program.name}-${each}`)).map((entry) => join(folder, entry))
+  if (builds.length === 0) throw new Error(`The build of ${program.name} wrote no ${wanted.map((each) => `${program.name}-${each}`).join(', ')} in ${tilde(folder)}. Point "output" at the folder the build writes, and build each machine CMOD_MACHINES names.`)
+  progress.succeed(`Built ${program.name}: ${builds.map((build) => basename(build)).join(', ')}`)
+  return builds
 }
 
 export async function installProgram(program: Program, version: string, progress: Progress): Promise<void> {
   await refuseTakenCommand(program.name)
-  const platform = `${program.name}-${machine}`
-  const built = (await buildProgram(program, progress)).find((output) => basename(output) === platform)
-  if (built === undefined) throw new Error(`The build of ${program.name} wrote no ${platform} in ${tilde(join(program.folder, program.output))}. Name each build <program>-<os>-<arch>, as release downloads are named.`)
+  const built = (await buildProgram(program, [machine], progress))[0] as string
 
   const target = storePath('bin', program.name, version, program.name)
   await mkdir(dirname(target), { recursive: true })
@@ -126,9 +138,12 @@ async function refuseTakenCommand(name: string): Promise<void> {
   if ((await lstat(entry).catch(() => undefined)) !== undefined && !(await isLinkedFromStore(entry, name))) {
     throw new Error(`${tilde(entry)} exists and cmod did not make it, so cmod will not replace it with the ${name} program. Move it out of ~/.local/bin, then run the command again.`)
   }
-  const found = Bun.which(name)
-  if (found !== null && resolve(dirname(found)) !== dirname(entry)) {
-    throw new Error(`PATH already finds ${name} at ${tilde(found)}, so the ${name} program cmod installs would never run. Remove that ${name} from PATH, then run the command again.`)
+  for (const folder of (process.env['PATH'] ?? '').split(':').filter((folder) => folder !== '')) {
+    if (resolve(folder) === dirname(entry)) return
+    const found = Bun.which(name, { PATH: folder })
+    if (found === null) continue
+    const fix = systemFolders.includes(resolve(folder)) ? `${found} is part of the system, so put ~/.local/bin before ${folder} in PATH` : `Remove that ${name}, or put ~/.local/bin before ${tilde(folder)} in PATH`
+    throw new Error(`PATH finds ${name} at ${tilde(found)} ahead of ~/.local/bin, so the ${name} program cmod installs would never run. ${fix}, then run the command again.`)
   }
 }
 

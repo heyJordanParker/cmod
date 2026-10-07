@@ -1,18 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import { parseShell, parseShellCommands } from '../../src/utils/parse-shell.js'
+import { basename, resolve } from '../../src/path.js'
+import { parseShell as parsePublicShell } from '../../src/shell.js'
+import { parseShell, type ParsedShell } from '../../src/utils/parse-shell.js'
+
+function argvsOf(parsed: ParsedShell): string[][] {
+  return parsed.commands.map(({ argv }) => argv)
+}
 
 describe('parseShell', () => {
   test("git commit -m \"$(cat <<'EOF' … EOF)\" parses fully to the commands git commit and cat", () => {
     const line = `git commit -m "$(cat <<'EOF'\nfix(parser): keep (parens) and 'quotes'\n\nEOF\n)"`
     const parsed = parseShell(line)
     expect(parsed.isFullyParsed).toBe(true)
-    expect(parsed.commands.map(([program, subcommand]) => [program, subcommand])).toEqual([['cat', undefined], ['git', 'commit']])
+    expect(argvsOf(parsed).map(([program, subcommand]) => [program, subcommand])).toEqual([['cat', undefined], ['git', 'commit']])
     expect(parsed.writes).toEqual([])
   })
 
   test("sudo env FOO=1 bash -c 'rm -rf build' yields rm with -r and -f, and a write of build", () => {
     const parsed = parseShell(`sudo env FOO=1 bash -c 'rm -rf build'`)
-    expect(parsed.commands).toContainEqual(['rm', '-r', '-f', 'build'])
+    expect(argvsOf(parsed)).toContainEqual(['rm', '-r', '-f', 'build'])
     expect(parsed.writes).toEqual(['build'])
     expect(parsed.isFullyParsed).toBe(true)
   })
@@ -22,9 +28,16 @@ describe('parseShell', () => {
   })
 
   test('cd app && sed -i s/a/b/ ../Domain.md writes Domain.md through the cd folder', () => {
-    const parsed = parseShellCommands('cd app && sed -i s/a/b/ ../Domain.md')
+    const parsed = parseShell('cd app && sed -i s/a/b/ ../Domain.md')
     expect(parsed.writes).toEqual(['app/../Domain.md'])
     expect(parsed.commands[1]).toEqual({ argv: ['sed', '-i', 's/a/b/', '../Domain.md'], folder: 'app' })
+  })
+
+  test('a mod finds the folder a command runs in with shell.js and path.js', () => {
+    const runs = parsePublicShell('cd src && /usr/local/bin/trace read cart.ts | head').commands
+      .filter(({ argv }) => basename(argv[0]) === 'trace')
+      .map(({ argv, folder }) => resolve(resolve('/work/app', folder), argv[2] as string))
+    expect(runs).toEqual(['/work/app/src/cart.ts'])
   })
 
   test('cat .e* reads no file, because a shell glob names no file', () => {
@@ -67,27 +80,27 @@ describe('wrappers', () => {
     ['stdbuf -oL rm -rf x', ['stdbuf', '-oL']],
   ])('%s finds rm inside the wrapper', (line, wrapper) => {
     const parsed = parseShell(line)
-    expect(parsed.commands).toEqual([wrapper as [string, ...string[]], ['rm', '-r', '-f', 'x']])
+    expect(argvsOf(parsed)).toEqual([wrapper, ['rm', '-r', '-f', 'x']])
     expect(parsed.writes).toEqual(['x'])
   })
 
   test('find -exec runs each action as its own command', () => {
     const parsed = parseShell(`find . -name '*.log' -exec rm -f {} \\; -exec cat {} +`)
-    expect(parsed.commands).toEqual([['find', '.', '-name', '*.log'], ['rm', '-f', '{}'], ['cat', '{}']])
+    expect(argvsOf(parsed)).toEqual([['find', '.', '-name', '*.log'], ['rm', '-f', '{}'], ['cat', '{}']])
   })
 
   test('ssh runs the remote command line from the home folder of the host', () => {
-    const parsed = parseShellCommands(`ssh -p 22 host 'cd app && rm -rf build'`)
+    const parsed = parseShell(`ssh -p 22 host 'cd app && rm -rf build'`)
     expect(parsed.commands.map((command) => command.argv[0])).toEqual(['ssh', 'cd', 'rm'])
     expect(parsed.writes).toEqual(['~/app/build'])
   })
 
   test('command -v names a program without running it', () => {
-    expect(parseShell('command -v node').commands).toEqual([['command', '-v', 'node']])
+    expect(argvsOf(parseShell('command -v node'))).toEqual([['command', '-v', 'node']])
   })
 
   test('env -S splits its string into a command', () => {
-    expect(parseShell(`env -S 'rm -rf x'`).commands).toContainEqual(['rm', '-r', '-f', 'x'])
+    expect(argvsOf(parseShell(`env -S 'rm -rf x'`))).toContainEqual(['rm', '-r', '-f', 'x'])
   })
 
   test('sudo -D and env -C change the folder of the wrapped command', () => {
@@ -113,17 +126,17 @@ describe('compound commands', () => {
   })
 
   test('a for header is data, not a command', () => {
-    expect(parseShell('for rm in a b; do echo "$rm"; done').commands).toEqual([['echo', '$rm']])
+    expect(argvsOf(parseShell('for rm in a b; do echo "$rm"; done'))).toEqual([['echo', '$rm']])
   })
 
   test('newlines, semicolons, pipes, and && separate commands, and comments are dropped', () => {
     const parsed = parseShell('ls # rm a\necho hi; cat x | grep y && curl http://host/#part || rm z &')
-    expect(parsed.commands).toEqual([['ls'], ['echo', 'hi'], ['cat', 'x'], ['grep', 'y'], ['curl', 'http://host/#part'], ['rm', 'z']])
+    expect(argvsOf(parsed)).toEqual([['ls'], ['echo', 'hi'], ['cat', 'x'], ['grep', 'y'], ['curl', 'http://host/#part'], ['rm', 'z']])
   })
 
   test('arithmetic is data', () => {
     const parsed = parseShell('x=$(( 1 + 2 )); (( x++ )); echo $((x + 1))')
-    expect(parsed.commands).toEqual([['echo', '$((x + 1))']])
+    expect(argvsOf(parsed)).toEqual([['echo', '$((x + 1))']])
     expect(parsed.isFullyParsed).toBe(true)
   })
 })
@@ -138,7 +151,7 @@ describe('substitutions', () => {
     ['echo ${x:-$(rm a)}'],
   ])('%s finds the command inside', (line) => {
     const parsed = parseShell(line)
-    expect(parsed.commands).toContainEqual(['rm', 'a'])
+    expect(argvsOf(parsed)).toContainEqual(['rm', 'a'])
     expect(parsed.isFullyParsed).toBe(true)
   })
 
@@ -156,28 +169,28 @@ describe('substitutions', () => {
 describe('heredocs', () => {
   test('a heredoc body is data', () => {
     const parsed = parseShell(`cat <<'EOF' > notes.md\nrm -rf /\nEOF\necho done`)
-    expect(parsed.commands).toEqual([['cat'], ['echo', 'done']])
+    expect(argvsOf(parsed)).toEqual([['cat'], ['echo', 'done']])
     expect(parsed.writes).toEqual(['notes.md'])
   })
 
   test('an unquoted heredoc body runs its substitutions', () => {
-    expect(parseShell('cat <<EOF\n$(rm a)\nEOF').commands).toContainEqual(['rm', 'a'])
+    expect(argvsOf(parseShell('cat <<EOF\n$(rm a)\nEOF'))).toContainEqual(['rm', 'a'])
   })
 
   test('a heredoc that goes to sh, bash, or zsh is code', () => {
     for (const shell of ['sh', 'bash', 'zsh']) {
       const parsed = parseShell(`${shell} <<'EOF'\nrm -rf build\nEOF`)
-      expect(parsed.commands).toContainEqual(['rm', '-r', '-f', 'build'])
+      expect(argvsOf(parsed)).toContainEqual(['rm', '-r', '-f', 'build'])
       expect(parsed.isFullyParsed).toBe(true)
     }
   })
 
   test('a heredoc with <<- strips the tabs of its delimiter line', () => {
-    expect(parseShell('bash <<-EOF\n\trm a\n\tEOF').commands).toContainEqual(['rm', 'a'])
+    expect(argvsOf(parseShell('bash <<-EOF\n\trm a\n\tEOF'))).toContainEqual(['rm', 'a'])
   })
 
   test('a here-string that goes to a shell is code', () => {
-    expect(parseShell(`bash <<< 'rm a'`).commands).toContainEqual(['rm', 'a'])
+    expect(argvsOf(parseShell(`bash <<< 'rm a'`))).toContainEqual(['rm', 'a'])
   })
 
   test('code piped into a shell or an interpreter is not fully parsed', () => {
@@ -195,20 +208,20 @@ describe('heredocs', () => {
 
 describe('flags', () => {
   test('combined short flags expand for getopt programs', () => {
-    expect(parseShell('rm -rf x').commands).toEqual([['rm', '-r', '-f', 'x']])
-    expect(parseShell('tar -czf out.tgz src').commands).toEqual([['tar', '-c', '-z', '-f', 'out.tgz', 'src']])
+    expect(argvsOf(parseShell('rm -rf x'))).toEqual([['rm', '-r', '-f', 'x']])
+    expect(argvsOf(parseShell('tar -czf out.tgz src'))).toEqual([['tar', '-c', '-z', '-f', 'out.tgz', 'src']])
   })
 
   test('a flag that takes a value keeps its value attached', () => {
-    expect(parseShell('head -n5 a').commands).toEqual([['head', '-n5', 'a']])
+    expect(argvsOf(parseShell('head -n5 a'))).toEqual([['head', '-n5', 'a']])
   })
 
   test('single-dash long options of non-getopt programs stay whole', () => {
-    expect(parseShell('find . -name x').commands).toEqual([['find', '.', '-name', 'x']])
+    expect(argvsOf(parseShell('find . -name x'))).toEqual([['find', '.', '-name', 'x']])
   })
 
   test('words after -- are not flags', () => {
-    expect(parseShell('rm -- -rf').commands).toEqual([['rm', '--', '-rf']])
+    expect(argvsOf(parseShell('rm -- -rf'))).toEqual([['rm', '--', '-rf']])
   })
 
   test("a git -c alias.<x>='!…' line runs a shell alias, so it is not fully parsed", () => {
@@ -218,7 +231,7 @@ describe('flags', () => {
   })
 
   test('git global options are dropped, and -C sets the working folder', () => {
-    expect(parseShellCommands('git -C ../repo -c user.name=x --no-pager push --force').commands).toEqual([
+    expect(parseShell('git -C ../repo -c user.name=x --no-pager push --force').commands).toEqual([
       { argv: ['git', 'push', '--force'], folder: '../repo' },
     ])
   })
@@ -290,7 +303,7 @@ describe('reads and writes', () => {
   })
 
   test('each cd moves the folder of the commands after it, and a subshell keeps its own', () => {
-    const parsed = parseShellCommands('cd a && (cd b && rm x) && rm y; cd /tmp; rm z; cd; rm w; cd ~/p && rm v')
+    const parsed = parseShell('cd a && (cd b && rm x) && rm y; cd /tmp; rm z; cd; rm w; cd ~/p && rm v')
     expect(parsed.writes).toEqual(['a/b/x', 'a/y', '/tmp/z', '~/w', '~/p/v'])
   })
 

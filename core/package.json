@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/core",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Build Claude Code mods: hooks, panes, permissions, checks, and an install that just works.",
   "license": "MIT",
   "type": "module",
@@ -43,6 +43,7 @@
     "mdast-util-to-string": "^4.0.0",
     "micromark-extension-gfm": "^3.0.0",
     "oxlint": "1.86.0",
+    "pathe": "^2.0.3",
     "picomatch": "^4.0.7",
     "shell-quote": "^1.12.0",
     "typescript": "^7.0.2"

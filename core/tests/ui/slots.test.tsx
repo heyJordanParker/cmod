@@ -3,7 +3,8 @@ import type { RenderElement, RenderPropsOf } from 'claude-code'
 import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 import { textOf } from '../../src/testing/fake-elements.js'
-import { Box, Text } from '../../src/ui/elements.js'
+import { definePane } from '../../src/ui/define-pane.js'
+import { Box, Button, Text } from '../../src/ui/elements.js'
 import { markdownSlots } from '../../src/ui/markdown.js'
 import { type Slot, slots } from '../../src/ui/slots.js'
 
@@ -70,6 +71,111 @@ test("a component that throws keeps Claude's drawing", async () => {
   expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
   expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
   expect(tested.shown.logs).toEqual(['broken added a render of ToolUse.', 'broken: the ToolUse render threw, so Claude Code draws its own: no git here'])
+})
+
+test('a pane whose render throws shows why, and logs it once', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'broken',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'board', title: 'Board', render: () => { throw new Error('no board file') } })).open()
+      },
+    }),
+  )
+
+  expect(await tested.lines('board')).toEqual(['The Board pane could not draw: no board file'])
+  expect(await tested.lines('board')).toEqual(['The Board pane could not draw: no board file'])
+  expect(tested.shown.logs).toEqual(['broken added the Board pane.', 'broken: the Board pane render threw: no board file'])
+})
+
+test("a pane's onScroll hears its own window move, and never another pane's or the band's", async () => {
+  const seen: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'history',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'log', title: 'Log', render: () => Text({ children: 'rows' }), onScroll: (_mod, { offset, contentRows, bodyRows }) => void seen.push({ offset, contentRows, bodyRows }) })).open()
+        await mod.ui.pane(definePane({ id: 'other', title: 'Other', render: () => Text({ children: 'rows' }) })).open()
+      },
+    }),
+  )
+  const scroll = (requestId: string, component: 'Pane' | 'AbovePrompt', offset: number) => ({ component, requestId, offset, by: 1, bodyRows: 10, contentRows: 40, origin: { kind: 'person' } }) as never
+
+  await tested.fire('ui.scroll', scroll('log', 'Pane', 3), {})
+  await tested.fire('ui.scroll', scroll('other', 'Pane', 5), {})
+  await tested.fire('ui.scroll', scroll('band', 'AbovePrompt', 7), {})
+  await tested.fire('ui.scroll', scroll('log', 'Pane', 9), { deny: 'the window moved meanwhile' })
+
+  expect(seen).toEqual([{ offset: 3, contentRows: 40, bodyRows: 10 }])
+})
+
+test('every open sends closeOnEscape and holdToasts, a resize included, and only an open that asks sends focus', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'history',
+      state: { session: { isWide: false } },
+      async setup(mod) {
+        const pane = mod.ui.pane(
+          definePane<{ session: { isWide: boolean } }>({
+            id: 'log',
+            title: 'Log',
+            columns: (state) => (state.session.isWide ? 60 : 40),
+            closeOnEscape: true,
+            holdToasts: true,
+            render: (pane, { isFocused }) => (
+              <Box flexDirection="column">
+                <Text>{isFocused ? 'has the keyboard' : 'without the keyboard'}</Text>
+                <Button label="Wider" onPress={() => void (pane.state.session.isWide = true)} />
+              </Box>
+            ),
+          }),
+        )
+        await pane.toggle({ focus: true })
+      },
+    }),
+  )
+
+  expect(await tested.lines('log')).toContain('has the keyboard')
+  await tested.press('log', 'Wider')
+  await tested.settle()
+
+  expect(tested.calls.filter(({ call }) => call === 'ui.open').map(({ args }) => args[0])).toEqual([
+    { id: 'log', title: 'Log', columns: 40, closeOnEscape: true, holdToasts: true, focus: true },
+    { id: 'log', title: 'Log', columns: 60, closeOnEscape: true, holdToasts: true },
+  ])
+  expect(await tested.lines('log')).toContain('has the keyboard')
+})
+
+test('a pane opened without focus draws without the keyboard', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'history',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'log', title: 'Log', render: (_mod, { isFocused }) => <Text>{isFocused ? 'has the keyboard' : 'without the keyboard'}</Text> })).open()
+      },
+    }),
+  )
+
+  expect(await tested.lines('log')).toEqual(['without the keyboard'])
+})
+
+test("a pane's onClose hears it close, and a throwing handler is logged", async () => {
+  const closed: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'history',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'log', title: 'Log', render: () => Text({ children: 'rows' }), onClose: (_mod, { origin }) => void closed.push(origin.kind) })).open()
+        await mod.ui.pane(definePane({ id: 'board', title: 'Board', render: () => Text({ children: 'rows' }), onClose: () => { throw new Error('no board file') } })).open()
+      },
+    }),
+  )
+
+  await tested.fire('ui.close', { id: 'log', origin: { kind: 'person' } } as never, undefined)
+  await tested.fire('ui.close', { id: 'board', origin: { kind: 'plugin', name: 'history' } } as never, undefined)
+
+  expect(closed).toEqual(['person'])
+  expect(tested.shown.logs).toContain("history: the Board pane's onClose threw: no board file")
 })
 
 test('onScreen is passed on unchanged and the SDK draws the bullet beside Default pieces it wraps', async () => {

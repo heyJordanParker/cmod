@@ -1,7 +1,7 @@
 import type { Job } from '../mod.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
 import { callEffects, type ToolUse } from '../utils/call-effects.js'
-import { parentOf } from '../utils/paths.js'
+import { dirname } from '../vendor.js'
 import { listed, messageOf } from '../utils/text.js'
 import { afterCall, modOf, targetWords } from './context.js'
 import type { Workspace } from './permissions/find-project-scope.js'
@@ -52,6 +52,6 @@ async function triggeredRun(after: readonly Target[], run: readonly string[], us
   const existing: string[] = []
   for (const path of paths) if (await workspace.fs.exists(path)) existing.push(path)
   const last = existing.at(-1)
-  if (last !== undefined) return { command: [...run, ...existing], folder: parentOf(last) }
+  if (last !== undefined) return { command: [...run, ...existing], folder: dirname(last) }
   return commandFolder === undefined ? undefined : { command: [...run], folder: commandFolder }
 }

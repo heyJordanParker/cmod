@@ -49,9 +49,9 @@ Runs every check this machine can run on the mod at `path` (default: the current
 2. Checks its layout.
 3. Checks that each step runs a script.
 4. Checks its imports.
-5. Looks for prebuilt binaries.
+5. Looks for prebuilt binaries outside `cli/`.
 6. Validates it with Claude Code, `claude plugin validate --strict`.
-7. Type-checks it with `tsc`. It skips this until `.claude-plugin/types/` exists, which Claude Code writes the first time a session loads the mod: run `cmod link`, start `claude` once, then run `cmod check` again.
+7. Type-checks it with `tsc`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
 8. Lints it with `oxlint`.
 9. Runs, with `bun test`, every test file that does not import `claude-code/testing`.
 10. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.

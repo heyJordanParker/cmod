@@ -49,6 +49,11 @@ export function startCmod(home: string, ...args: string[]) {
   return { child, ...watchOutput(child) }
 }
 
+export async function cmodOnPath(home: string, path: string, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: { ...environment(home), PATH: path }, stdout: 'pipe', stderr: 'pipe' })
+  return watchOutput(child).done
+}
+
 export async function cmodInTerminal(home: string, ...args: string[]): Promise<{ exitCode: number; output: string }> {
   const { exitCode, stdout } = await startCmodInTerminal(home, ...args).done
   return { exitCode, output: stdout }

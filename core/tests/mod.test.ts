@@ -2,7 +2,7 @@ import { expect, expectTypeOf, test } from 'bun:test'
 import type { AgentInfo, Args, ClassicHookInputs, EventResult, Frozen, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod, type Job, type Mod, type PaneHandle } from '../src/mod.js'
+import { defineMod, type HookInput, type Job, type Mod, type ModHook, type PaneHandle } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
 import { testMod, type TestedMod } from '../src/testing.js'
@@ -74,7 +74,6 @@ const safeDelete = defineMod({
       return {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
           updatedInput: { command: command.replace(/^rm( -rf?)? /, 'trash ') },
         },
       }
@@ -87,7 +86,55 @@ test('a PreToolUse hook that answers updatedInput rewrites the Bash command Clau
 
   const answer = await tested.fire('PreToolUse', preToolUse('rm -rf build'))
 
-  expect(answer).toEqual({ allow: true, updatedInput: { command: 'trash build' } })
+  expect(answer).toEqual({ updatedInput: { command: 'trash build' } })
+})
+
+test("Claude Code's permission check and the tool get the input a PreToolUse hook rewrote, with tool.call's own keys kept", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root: '/test/plugins/safe-delete' })
+  fake.fakes.agent.list = async () => [{ id: 'agent-2', type: 'explorer' } as AgentInfo]
+  const lifecycle = createLifecycle(safeDelete)
+  await lifecycle.start(fake.claude, async () => ({ name: 'safe-delete', root: '/test/plugins/safe-delete', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
+  const reached: unknown[] = []
+  const core = async (e: unknown) => (reached.push(e), { result: '' }) as EventResult<'tool.call'>
+
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_5', agentId: 'agent-2', command: 'rm -rf build' } as Frozen<Args<'tool.call'>>, core)
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_6', command: 'ls' } as Frozen<Args<'tool.call'>>, core)
+
+  expect(reached).toEqual([
+    { tool: 'Bash', tool_use_id: 'toolu_5', agentId: 'agent-2', command: 'trash build' },
+    { tool: 'Bash', tool_use_id: 'toolu_6', command: 'ls' },
+  ])
+})
+
+test('a PreToolUse hook that answers additionalContext adds it to the call', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'docs',
+      setup(mod) {
+        mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'src/CLAUDE.md says: no default exports.' } }))
+      },
+    }),
+  )
+
+  expect(await tested.fire('PreToolUse', preToolUse('cat src/a.ts'))).toEqual({ additionalContext: ['src/CLAUDE.md says: no default exports.'] })
+  expect(await tested.fire('PreToolUse', preToolUse('cat src/a.ts'), { deny: 'org policy' })).toEqual({ deny: 'org policy' })
+})
+
+const decides = (permissionDecision: 'allow' | 'ask') =>
+  defineMod({
+    name: 'auto-approve',
+    setup(mod) {
+      mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: 'Checked by auto-approve.' } }))
+    },
+  })
+
+test("a PreToolUse allow skips Claude Code's ask, and an ask puts the call to the person", async () => {
+  expect(await testMod(decides('allow')).fire('PreToolUse', preToolUse('ls'))).toEqual({ allow: true })
+  expect(await testMod(decides('ask')).fire('PreToolUse', preToolUse('ls'))).toEqual({ ask: 'Checked by auto-approve.' })
+})
+
+test('a deny beneath a PreToolUse allow stands', async () => {
+  expect(await testMod(decides('allow')).fire('PreToolUse', preToolUse('rm build'), { deny: 'org policy' })).toEqual({ deny: 'org policy' })
 })
 
 test('a PreToolUse hook that returns nothing leaves the call to the hooks beneath it', async () => {
@@ -98,7 +145,7 @@ test('a PreToolUse hook that returns nothing leaves the call to the hooks beneat
   expect(answer).toEqual({})
 })
 
-test('a deny beneath the mod outranks the allow the mod answers', async () => {
+test("Claude Code's deny of a rewritten call stays the call's answer", async () => {
   const tested = testMod(safeDelete)
 
   const answer = await tested.fire('PreToolUse', preToolUse('rm build'), { deny: 'org policy' })
@@ -106,18 +153,17 @@ test('a deny beneath the mod outranks the allow the mod answers', async () => {
   expect(answer).toEqual({ deny: 'org policy', updatedInput: { command: 'trash build' } })
 })
 
-test('a deny from one mod beats an ask from another', async () => {
+test('a block denies the call before Claude Code checks its permission', async () => {
   const tested = testMod(
     defineMod({
       name: 'guard',
       setup(mod) {
-        mod.on('PreToolUse', () => ({ decision: 'block', reason: 'Never deploy from a laptop.', hookSpecificOutput: { permissionDecision: 'allow' } }))
+        mod.on('PreToolUse', () => ({ decision: 'block', reason: 'Never deploy from a laptop.' }))
       },
     }),
   )
 
   expect(await tested.fire('PreToolUse', preToolUse('deploy'))).toEqual({ deny: 'Never deploy from a laptop.' })
-  expect(await tested.fire('PreToolUse', preToolUse('deploy'), { ask: 'another mod asks' })).toEqual({ deny: 'Never deploy from a laptop.' })
 })
 
 test('the PreToolUse hook reads the settings.json input built from the tool call and the session as it is now', async () => {
@@ -162,10 +208,8 @@ test('a PreToolUse hook in a subagent sees agent_id and agent_type', async () =>
     }),
   )
   await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
-  const envelope = { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls' } as Frozen<Args<'classic.PreToolUse'>>
-  const preToolUse = async () => (await lifecycle.route('classic.PreToolUse', envelope, async () => ({}))) as EventResult<'tool.call'>
 
-  await lifecycle.route('tool.call', { ...envelope, agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, preToolUse)
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls', agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, async () => ({ result: '' }) as EventResult<'tool.call'>)
 
   expect(seen).toEqual([
     {
@@ -200,7 +244,7 @@ test('an answer field that the event does not read is logged with the field and 
   )
 })
 
-test("a PreToolUse hook that throws denies the call with the mod's name and the error", async () => {
+test("a PreToolUse hook that throws denies the call with the mod's name and the error, before the hooks after it", async () => {
   const tested = testMod(
     defineMod({
       name: 'guard',
@@ -213,9 +257,9 @@ test("a PreToolUse hook that throws denies the call with the mod's name and the 
     }),
   )
 
-  const answer = await tested.fire('PreToolUse', preToolUse('rm build'), { allow: true })
+  const answer = await tested.fire('PreToolUse', preToolUse('rm build'))
 
-  expect(answer).toEqual({ deny: 'guard: the PreToolUse hook failed: the policy file is missing', additionalContext: ['the second hook ran'] })
+  expect(answer).toEqual({ deny: 'guard: the PreToolUse hook failed: the policy file is missing' })
 })
 
 test('a PermissionRequest hook that throws denies the request', async () => {
@@ -269,7 +313,7 @@ test('a PreToolUse answer with a field PreToolUse does not read denies the call'
     }),
   )
 
-  const answer = await tested.fire('PreToolUse', preToolUse('ls'), { allow: true })
+  const answer = await tested.fire('PreToolUse', preToolUse('ls'))
 
   expect(answer).toEqual({
     deny: 'wrong-field: the PreToolUse hook failed: it answered hookSpecificOutput.sessionTitle, which PreToolUse does not read. Remove it from the answer.',
@@ -717,6 +761,106 @@ test("mod.settings.read({ source: 'user' }) reads one settings source", async ()
   await tested.start()
 
   expect(enabled).toEqual({ 'demo@market': true })
+})
+
+test('mod.fs.exists and mod.fs.stat answer for files and folders', async () => {
+  let answers: unknown
+  const tested = testMod(
+    defineMod({
+      name: 'finder',
+      async setup(mod) {
+        answers = {
+          file: await mod.fs.exists('/work/app/src/cart.ts'),
+          folder: await mod.fs.exists('/work/app/src'),
+          missing: await mod.fs.exists('/work/app/cart.ts'),
+          kind: (await mod.fs.stat('/work/app/src')).kind,
+        }
+      },
+    }),
+    { files: { '/work/app/src/cart.ts': 'x\n' } },
+  )
+
+  await tested.start()
+
+  expect(answers).toEqual({ file: true, folder: true, missing: false, kind: 'dir' })
+})
+
+test("mod.session.messages reads the main conversation, or a subagent's by agentId", async () => {
+  const read: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'history',
+      setup(mod) {
+        mod.on('SubagentStop', async (input) => {
+          read.push(await mod.session.messages(), await mod.session.messages({ agentId: input.agent_id }))
+        })
+      },
+    }),
+  )
+  tested.fakes.session.messages = (async (args?: { agentId?: string }) => [{ role: 'user', text: args?.agentId ?? 'main' }]) as unknown as Claude['session']['messages']
+
+  await tested.fire('SubagentStop', { agent_id: 'agent-3', agent_type: 'explorer', agent_transcript_path: '/t.jsonl', stop_hook_active: false, last_assistant_message: '' } as never)
+
+  expect(read).toEqual([[{ role: 'user', text: 'main' }], [{ role: 'user', text: 'agent-3' }]])
+})
+
+test('mod.agent.spawn starts a subagent and returns its agentId', async () => {
+  let spawned: unknown
+  const tested = testMod(
+    defineMod({
+      name: 'caller',
+      setup(mod) {
+        mod.on('UserPromptSubmit', async () => {
+          spawned = await mod.agent.spawn({ prompt: 'Read README.md.', subagentType: 'explorer' })
+        })
+      },
+    }),
+  )
+  tested.fakes.agent.spawn = async () => ({ agentId: 'agent-7', model: 'test-model' }) as Awaited<ReturnType<Claude['agent']['spawn']>>
+
+  await tested.fire('UserPromptSubmit', { prompt: 'go' } as never)
+
+  expect(spawned).toEqual({ agentId: 'agent-7', model: 'test-model' })
+  expect(tested.calls.filter((call) => call.call === 'agent.spawn').map((call) => call.args)).toEqual([[{ prompt: 'Read README.md.', subagentType: 'explorer' }]])
+})
+
+test('mod.ui.scroll asks Claude Code to bring a row of a pane into view', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'log',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'log', title: 'Log', render: (paneMod) => Button({ label: 'Latest', onPress: () => paneMod.ui.scroll({ to: 'end', in: 'log' }) }) })).open()
+      },
+    }),
+  )
+
+  await tested.press('log', 'Latest')
+
+  expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
+})
+
+test('a FileChanged hook gets the path and what happened to it', async () => {
+  const changes: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'reloader',
+      setup(mod) {
+        mod.on('SessionStart', () => ({ hookSpecificOutput: { hookEventName: 'SessionStart', watchPaths: ['/work/app/history'] } }))
+        mod.on('FileChanged', ({ file_path, event }) => void changes.push({ file_path, event }))
+      },
+    }),
+  )
+
+  const started = await tested.fire('SessionStart', { source: 'startup' } as never)
+  await tested.fire('FileChanged', { file_path: '/work/app/history/a.json', event: 'change' })
+
+  expect(started).toEqual({ watchPaths: ['/work/app/history'] })
+  expect(changes).toEqual([{ file_path: '/work/app/history/a.json', event: 'change' }])
+})
+
+test('HookInput names the input of each hook', () => {
+  expectTypeOf<HookInput<'FileChanged'>['event']>().toEqualTypeOf<'change' | 'add' | 'unlink'>()
+  expectTypeOf<Parameters<ModHook<'PreToolUse'>>[0]>().toEqualTypeOf<HookInput<'PreToolUse'>>()
 })
 
 test('a clock.after with no fake answer fires on a real timer', async () => {
