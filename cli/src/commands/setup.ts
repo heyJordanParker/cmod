@@ -3,13 +3,14 @@ import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, keyWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
+import { bindKeys, keybindingsPath, unbindKeys } from '../settings.js'
 import { approve, isApproved, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
@@ -20,7 +21,9 @@ ${summary}
 
 Downloads the program its package.json "cmod.program" names into
 ~/.local/bin, runs the mod's install step from its package.json "cmod" key,
-saves its uninstall step, and records the mod as set up. An unchanged mod runs
+saves its uninstall step, binds the keys its "cmod.keys" names in Claude
+Code's keybindings.json, and records the mod as set up. A key you already
+bound to something else stays yours, and the setup prints the line to add. An unchanged mod runs
 nothing. While a setup or teardown of the mod runs, another setup waits for it,
 then checks the mod again; a mod whose scripts changed meanwhile asks consent
 again. A setup whose process is gone is taken over at once. Ctrl+C, a closed
@@ -33,7 +36,7 @@ has finished, the setup records the mod, then exits.
 
 Options:
   --events            Print one event per line for a program to read:
-                        needs-consent <sha256>\\t<install>\\t<uninstall>   exit 10
+                        needs-consent <sha256>\\t<install>\\t<uninstall>\\t<keys>   exit 10
                         progress <done> <total> <label>
                         log <text>
                         done <name> <version>                          exit 0
@@ -88,7 +91,7 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
     const { sha256, needsConsent } = await checkSetup(plugin)
     const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, hold.abortSignal))
     if (answer !== true) {
-      progress.fail(answer === false ? `${plugin.name} is not set up: its install step needs your consent. Run the command again with --yes after reading the commands.` : `Cancelled: ${plugin.name} is not set up.`)
+      progress.fail(answer === false ? `${plugin.name} is not set up: it needs your consent. Run the command again with --yes after reading what it does.` : `Cancelled: ${plugin.name} is not set up.`)
       return 10
     }
     progress.step(heading)
@@ -142,11 +145,10 @@ export function uninterruptible(argv: string[]): string[] {
 }
 
 async function checkSetup(plugin: Plugin): Promise<SetupState> {
-  const { install, uninstall, program } = plugin.steps
   const sha256 = await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
   const record = await readRecord(readText, storeFolder(process.env), plugin.name)
   const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256
-  const needsConsent = !isCurrent && (install ?? uninstall ?? program) !== undefined && !(await isApproved(plugin.name, sha256))
+  const needsConsent = !isCurrent && Object.keys(plugin.steps).length > 0 && !(await isApproved(plugin.name, sha256))
   return { sha256, isCurrent, needsConsent }
 }
 
@@ -157,7 +159,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
   const state = await checkSetup(plugin)
   if (state.isCurrent) return 0
   if (state.needsConsent && consent !== state.sha256) {
-    emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '' })
+    emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys) })
     return 10
   }
   const store = storeFolder(process.env)
@@ -184,6 +186,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   const replaced = `${folder}.old`
   let hasUninstall = false
   let isRecorded = false
+  let bound: Record<string, string> = {}
   try {
     if (hold.signal !== undefined) return 1
     if (install !== undefined) {
@@ -210,6 +213,10 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       if (existsSync(folder)) await rename(folder, replaced)
       await rename(staged, folder)
     }
+    await unbindKeys(previous?.keys ?? {})
+    const keys = await bindKeys(plugin.steps.keys ?? {})
+    bound = keys.bound
+    for (const text of keys.kept) emit({ kind: 'log', text })
     await writeRecord(writeAtomically, store, {
       name: plugin.name,
       version: plugin.version,
@@ -218,10 +225,13 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       scriptsSha256: state.sha256,
       uninstall: hasUninstall ? join(folder, 'uninstall.sh') : null,
       program: program ?? null,
+      keys: bound,
     })
     isRecorded = true
   } finally {
     if (!isRecorded) {
+      await unbindKeys(bound)
+      await bindKeys(previous?.keys ?? {})
       if (program !== undefined) await restoreProgram(program, previous)
       if (previous === undefined) await rm(folder, { recursive: true, force: true })
     }
@@ -262,16 +272,21 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
 
 async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean | undefined> {
   const style = paint()
-  const { install, uninstall, program } = plugin.steps
+  const { install, uninstall, program, keys } = plugin.steps
   const lines = [
     '',
     `${style.bold(plugin.name)} ${plugin.version}`,
     ...(plugin.description === undefined ? [] : [`  ${style.dim(plugin.description)}`]),
     '',
-    `  It runs these commands in ${tilde(plugin.root)}:`,
-    `    install    ${install === undefined ? style.dim('none') : style.cyan(install)}`,
-    `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
+    ...(install === undefined && uninstall === undefined
+      ? []
+      : [
+          `  It runs these commands in ${tilde(plugin.root)}:`,
+          `    install    ${install === undefined ? style.dim('none') : style.cyan(install)}`,
+          `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
+        ]),
     ...(program === undefined ? [] : [`  It puts the program ${style.cyan(program)} into ~/.local/bin.`]),
+    ...(keys === undefined ? [] : [`  It binds keys in ${tilde(keybindingsPath())}:`, ...Object.entries(keys).map(([key, command]) => `    ${key.padEnd(10)} ${style.cyan(`/${command}`)}`)]),
     '',
   ]
   process.stdout.write(`${lines.join('\n')}\n`)

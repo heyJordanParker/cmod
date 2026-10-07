@@ -24,6 +24,42 @@ test('a deny rule refuses a Bash call in bypassPermissions mode, and its reason 
   expect(tested.shown.logs).toEqual(['no-force-push added 1 permission rule.'])
 })
 
+test('rules read from state judge each call by the state at that call', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      state: { session: { mode: 'propose' } },
+      setup(mod) {
+        mod.use(permissions((state) => (state.session.mode === 'propose' ? { deny: [{ write: ['**', '!docs/plans/**'], reason: 'Propose mode writes plans only.' }] } : {})))
+      },
+    }),
+    { projectRoot: '/work' },
+  )
+  const write = (path: string, toolUseId: string) => tested.fire('tool.check', { tool: 'Write', input: { file_path: path, content: 'x' }, tool_use_id: toolUseId }, allowedInBypassMode)
+
+  expect(await write('/work/src/a.ts', 'toolu_1')).toEqual({ decision: 'deny', reason: 'Propose mode writes plans only.' })
+  expect(await write('/work/docs/plans/a.md', 'toolu_2')).toEqual(allowedInBypassMode)
+  tested.state.session.mode = 'build'
+  expect(await write('/work/src/a.ts', 'toolu_3')).toEqual(allowedInBypassMode)
+  expect(tested.shown.logs).toEqual(['modes added permission rules from its state.'])
+})
+
+test('rules from state that throw deny the call with the reason', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'broken-rules',
+      setup(mod) {
+        mod.use(permissions(() => ({ deny: [{ write: '!docs/**' }] })))
+      },
+    }),
+  )
+
+  expect(await tested.fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)).toEqual({
+    decision: 'deny',
+    reason: `The permission rules of broken-rules failed, so it denies the call: A write target needs a pattern without "!" for its "!" patterns to leave calls out of, such as ['**', '!docs/**'].`,
+  })
+})
+
 test("a when rule on agentType refuses an explorer subagent's call, joined through tool.call's agentId, and allows the same call on the main loop", async () => {
   let reachBelow: () => void = () => undefined
   let finishCall: () => void = () => undefined

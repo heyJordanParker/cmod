@@ -33,10 +33,11 @@ test("in a project-scope plugin, a callback's mod.process.run runs in the work t
   const { fake, context } = await jobContextFor()
   const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
 
-  await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { call: { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, folder: root }, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { call: { tool: 'Bash', commands: [['git', 'commit']], isFullyParsed: true }, folder: `${root}/worktrees/design/app` }, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { call: { tool: 'Edit', path: `${root}/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'], { cwd: '/tmp', timeoutMs: 9000 })
+  const commit = { tool: 'Bash', input: { command: 'git commit' }, commands: [['git', 'commit']] as [string, ...string[]][], isFullyParsed: true }
+  await modOf(context, { call: { tool: 'Edit', input: {}, path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: commit, folder: root }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: commit, folder: `${root}/worktrees/design/app` }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: { tool: 'Edit', input: {}, path: `${root}/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'], { cwd: '/tmp', timeoutMs: 9000 })
 
   expect(fake.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])).toEqual([
     { cwd: `${root}/worktrees/design`, timeoutMs: 2000 },
@@ -50,7 +51,7 @@ test("in any other plugin, a callback's mod.process.run runs in the session's fo
   const { fake, context } = await jobContextFor()
   const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: undefined }
 
-  await modOf(context, { call: { tool: 'Edit', path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
+  await modOf(context, { call: { tool: 'Edit', input: {}, path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
 
   expect(fake.calls.find((call) => call.call === 'process.run')?.args[1]).toEqual({ timeoutMs: 2000 })
 })

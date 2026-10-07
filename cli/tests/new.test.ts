@@ -25,8 +25,9 @@ test('new writes the repository layout with a defineMod that has one hook and on
   expect(JSON.parse(await readFile(join(root, 'tsconfig.json'), 'utf8'))).toEqual({
     extends: './.claude-plugin/types/tsconfig.json',
     compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },
-    include: ['hooks', 'src', 'tests', 'types', 'node_modules/bun-types/test.d.ts'],
+    include: ['hooks', 'src', 'types'],
   })
+  expect(JSON.parse(await readFile(join(root, 'tests/tsconfig.json'), 'utf8'))).toEqual({ extends: '../tsconfig.json', include: ['.', '../types', '../node_modules/bun-types/index.d.ts'] })
   const manifest = JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8'))
   expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: ['cmod'] })
   const mod = await readFile(join(root, 'src/mod.tsx'), 'utf8')
@@ -118,6 +119,22 @@ test("a new mod's type check fails on a test that misuses expect", async () => {
   expect(result.exitCode).toBe(1)
 })
 
+test("a new mod's tests use Bun and node: modules, and its src cannot", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'my-mod')
+  await cmod(home, 'new', 'my-mod')
+  await writeFiles(root, {
+    'tests/program.test.ts': "import { expect, test } from 'bun:test'\nimport { existsSync } from 'node:fs'\n\ntest('the program runs', async () => {\n  const child = Bun.spawn(['true'])\n  expect(await child.exited).toBe(0)\n  expect(existsSync('/')).toBe(true)\n})\n",
+    'src/clock.ts': 'export const startedAt = Bun.nanoseconds()\n',
+  })
+
+  const result = await typeCheck(root)
+
+  expect(result.output).toContain("src/clock.ts(1,26): error TS2868: Cannot find name 'Bun'.")
+  expect(result.output).not.toContain('tests/program.test.ts')
+  expect(result.exitCode).toBe(1)
+})
+
 test('cmod new with CMOD_CORE set names its value when the install fails', async () => {
   const home = await temporaryHome()
   const main = join(import.meta.dir, '..', 'src', 'main.ts')
@@ -195,6 +212,12 @@ async function typeCheck(root: string): Promise<{ output: string; exitCode: numb
   const types = join(checkout, '.claude-plugin', 'types')
   if (!existsSync(types)) throw new Error(`${types} is missing. Claude Code writes it when it first loads the checkout: run claude --plugin-dir . -p ok in ${checkout}, then run the tests again.`)
   await cp(types, join(root, '.claude-plugin', 'types'), { recursive: true })
-  const { stdout, exitCode } = await capture([process.execPath, join(import.meta.dir, '..', 'node_modules', '.bin', 'tsc'), '--noEmit'], { cwd: root })
-  return { output: stdout, exitCode }
+  let output = ''
+  let exitCode = 0
+  for (const config of ['tsconfig.json', 'tests/tsconfig.json']) {
+    const result = await capture([process.execPath, join(import.meta.dir, '..', 'node_modules', '.bin', 'tsc'), '-p', config, '--noEmit'], { cwd: root })
+    output += result.stdout
+    exitCode = Math.max(exitCode, result.exitCode)
+  }
+  return { output, exitCode }
 }

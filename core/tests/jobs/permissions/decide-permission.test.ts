@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { decidePermission, stricterVerdict, type PermissionRules } from '../../../src/jobs/permissions/decide-permission.js'
 import type { Workspace } from '../../../src/jobs/permissions/find-project-scope.js'
-import type { ToolCall, ToolUse } from '../../../src/utils/call-effects.js'
+import type { ToolCall } from '../../../src/utils/call-effects.js'
 import { fakeFiles } from '../../../src/testing/fake-files.js'
 
 type TestMod = { name: string }
@@ -18,11 +18,11 @@ function workspaceWith(files: Record<string, string> = {}, links: Record<string,
   return { projectRoot: cwd, cwd, home, fs: { ...fs, stat: (path) => fs.stat(path, { resolve: true }) }, scope: undefined }
 }
 
-function bash(command: string): ToolUse {
+function bash(command: string): ToolCall {
   return { tool: 'Bash', input: { command } }
 }
 
-function decide(rules: PermissionRules<TestMod>, use: ToolUse, workspace = workspaceWith()) {
+function decide(rules: PermissionRules<TestMod>, use: ToolCall, workspace = workspaceWith()) {
   return decidePermission(rules, use, workspace, () => mod)
 }
 
@@ -41,7 +41,7 @@ describe('the named behaviors', () => {
   test('cd app && sed -i s/a/b/ ../Domain.md writes <cwd>/Domain.md', async () => {
     const seen = seenCalls()
     await decide({ deny: [{ write: 'Domain.md', when: seen.when }] }, bash('cd app && sed -i s/a/b/ ../Domain.md'))
-    expect(seen.calls).toEqual([{ tool: 'Bash', path: '/work/app/Domain.md' }])
+    expect(seen.calls).toEqual([{ tool: 'Bash', input: { command: 'cd app && sed -i s/a/b/ ../Domain.md' }, path: '/work/app/Domain.md' }])
   })
 
   test("cat .e* does not match read: '**/.env', and cat .env does", async () => {
@@ -61,9 +61,9 @@ describe('the named behaviors', () => {
   test('an Edit with replace_all: true produces the whole new file as content', async () => {
     const seen = seenCalls()
     const workspace = workspaceWith({ '/work/app/a.ts': 'let a = 1\nlet b = a + a\n' })
-    const edit: ToolUse = { tool: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'x', replace_all: true } }
+    const edit: ToolCall = { tool: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'x', replace_all: true } }
     await decide({ deny: [{ write: '**/*.ts', when: seen.when }] }, edit, workspace)
-    expect(seen.calls).toEqual([{ tool: 'Edit', path: '/work/app/a.ts', content: 'let x = 1\nlet b = x + x\n', previousContent: 'let a = 1\nlet b = a + a\n' }])
+    expect(seen.calls).toEqual([{ ...edit, path: '/work/app/a.ts', content: 'let x = 1\nlet b = x + x\n', previousContent: 'let a = 1\nlet b = a + a\n' }])
   })
 
   test('a deny and an ask that both match return deny', async () => {
@@ -119,7 +119,7 @@ describe('command targets', () => {
   test('the call holds every command of the line, so when can judge the pipeline', async () => {
     const seen = seenCalls()
     await decide({ deny: [{ command: 'bun test', when: seen.when }] }, bash('bun test 2>&1 | tail -5'))
-    expect(seen.calls).toEqual([{ tool: 'Bash', commands: [['bun', 'test'], ['tail', '-5']], isFullyParsed: true }])
+    expect(seen.calls).toEqual([{ ...bash('bun test 2>&1 | tail -5'), commands: [['bun', 'test'], ['tail', '-5']], isFullyParsed: true }])
   })
 
   test('a line the job cannot parse matches a command rule when it contains each word of the rule', async () => {
@@ -181,9 +181,9 @@ describe('path targets', () => {
   test('a new file gets the real path of its folder plus its name', async () => {
     const seen = seenCalls()
     const workspace = workspaceWith({ '/vault/secrets/key': 'k' }, { '/work/app/link': '/vault/secrets' })
-    const write: ToolUse = { tool: 'Write', input: { file_path: '/work/app/link/new/file', content: 'x' } }
+    const write: ToolCall = { tool: 'Write', input: { file_path: '/work/app/link/new/file', content: 'x' } }
     await decide({ deny: [{ write: '/vault/**', when: seen.when }] }, write, workspace)
-    expect(seen.calls).toEqual([{ tool: 'Write', path: '/vault/secrets/new/file', content: 'x' }])
+    expect(seen.calls).toEqual([{ ...write, path: '/vault/secrets/new/file', content: 'x' }])
   })
 
   test('when runs once for each path that matched', async () => {
@@ -195,7 +195,7 @@ describe('path targets', () => {
   test('a shell write has no content', async () => {
     const seen = seenCalls()
     await decide({ deny: [{ write: '**/*.test.ts', when: seen.when }] }, bash('sed -i s/a/b/ x.test.ts'))
-    expect(seen.calls).toEqual([{ tool: 'Bash', path: '/work/app/x.test.ts' }])
+    expect(seen.calls).toEqual([{ ...bash('sed -i s/a/b/ x.test.ts'), path: '/work/app/x.test.ts' }])
   })
 
   test('a line the job cannot parse matches a path rule when it holds the last segment of the glob', async () => {
@@ -214,27 +214,31 @@ describe('content of an edit', () => {
     [{ old_string: 'three', new_string: '3' }, { previousContent: 'one two one' }],
   ])('Edit %p gives %p', async (edit, contents) => {
     const seen = seenCalls()
-    await decide({ deny: [{ write: '**', when: seen.when }] }, { tool: 'Edit', input: { file_path: '/work/app/a.ts', ...edit } }, workspaceWith(file))
-    expect(seen.calls).toEqual([{ tool: 'Edit', path: '/work/app/a.ts', ...contents }])
+    const call: ToolCall = { tool: 'Edit', input: { file_path: '/work/app/a.ts', ...edit } }
+    await decide({ deny: [{ write: '**', when: seen.when }] }, call, workspaceWith(file))
+    expect(seen.calls).toEqual([{ ...call, path: '/work/app/a.ts', ...contents }])
   })
 
   test('an Edit with an empty old_string creates a new file', async () => {
     const seen = seenCalls()
-    await decide({ deny: [{ write: '**', when: seen.when }] }, { tool: 'Edit', input: { file_path: '/work/app/new.ts', old_string: '', new_string: 'x' } })
-    expect(seen.calls).toEqual([{ tool: 'Edit', path: '/work/app/new.ts', content: 'x' }])
+    const call: ToolCall = { tool: 'Edit', input: { file_path: '/work/app/new.ts', old_string: '', new_string: 'x' } }
+    await decide({ deny: [{ write: '**', when: seen.when }] }, call)
+    expect(seen.calls).toEqual([{ ...call, path: '/work/app/new.ts', content: 'x' }])
   })
 
   test('a Write gives the content and the previous content', async () => {
     const seen = seenCalls()
-    await decide({ deny: [{ write: '**', when: seen.when }] }, { tool: 'Write', input: { file_path: '/work/app/a.ts', content: 'new' } }, workspaceWith(file))
-    expect(seen.calls).toEqual([{ tool: 'Write', path: '/work/app/a.ts', content: 'new', previousContent: 'one two one' }])
+    const call: ToolCall = { tool: 'Write', input: { file_path: '/work/app/a.ts', content: 'new' } }
+    await decide({ deny: [{ write: '**', when: seen.when }] }, call, workspaceWith(file))
+    expect(seen.calls).toEqual([{ ...call, path: '/work/app/a.ts', content: 'new', previousContent: 'one two one' }])
   })
 
   test('a NotebookEdit gives only the previous content', async () => {
     const seen = seenCalls()
     const notebook = { '/work/app/n.ipynb': '{"cells":[]}' }
-    await decide({ deny: [{ write: '**', when: seen.when }] }, { tool: 'NotebookEdit', input: { notebook_path: '/work/app/n.ipynb', new_source: 'x' } }, workspaceWith(notebook))
-    expect(seen.calls).toEqual([{ tool: 'NotebookEdit', path: '/work/app/n.ipynb', previousContent: '{"cells":[]}' }])
+    const call: ToolCall = { tool: 'NotebookEdit', input: { notebook_path: '/work/app/n.ipynb', new_source: 'x' } }
+    await decide({ deny: [{ write: '**', when: seen.when }] }, call, workspaceWith(notebook))
+    expect(seen.calls).toEqual([{ ...call, path: '/work/app/n.ipynb', previousContent: '{"cells":[]}' }])
   })
 
   test('the file is not read when no rule needs its content', async () => {
@@ -258,8 +262,8 @@ describe('other targets', () => {
     const seen = seenCalls()
     await decide({ deny: [{ fetch: '*://*.internal.example/**', when: (call) => (seen.when(call), false) }] }, bash(line))
     expect(seen.calls).toEqual([
-      { tool: 'Bash', url: 'https://wiki.internal.example/a' },
-      { tool: 'Bash', url: 'http://api.internal.example/b' },
+      { ...bash(line), url: 'https://wiki.internal.example/a' },
+      { ...bash(line), url: 'http://api.internal.example/b' },
     ])
   })
 
@@ -277,11 +281,45 @@ describe('other targets', () => {
   })
 })
 
+describe('patterns that leave calls out', () => {
+  test('a ! pattern leaves its files out of a path rule', async () => {
+    const rules: PermissionRules<TestMod> = { deny: [{ write: ['**', '!docs/plans/**'], reason: 'Plans only.' }] }
+    expect(await decide(rules, { tool: 'Write', input: { file_path: '/work/app/docs/plans/a.md', content: 'x' } })).toBeUndefined()
+    expect(await decide(rules, { tool: 'Write', input: { file_path: '/work/app/src/a.ts', content: 'x' } })).toEqual({ decision: 'deny', reason: 'Plans only.' })
+    expect(await decide({ deny: [{ read: ['**/.env*', '!**/.env.example'] }] }, bash('cat .env.example'))).toBeUndefined()
+    expect(await decide({ deny: [{ read: ['**/.env*', '!**/.env.example'] }] }, bash('cat .env.local'))).toEqual({ decision: 'deny' })
+  })
+
+  test('a ! command pattern leaves its commands out, and a line matches when any other command matches', async () => {
+    const rules: PermissionRules<TestMod> = { ask: [{ command: ['git', '!git status', '!git log'] }] }
+    expect(await decide(rules, bash('git status'))).toBeUndefined()
+    expect(await decide(rules, bash('git log --oneline'))).toBeUndefined()
+    expect(await decide(rules, bash('git status && git push'))).toEqual({ decision: 'ask' })
+    expect(await decide({ ask: [{ command: ['*', '!ls'] }] }, bash('ls'))).toBeUndefined()
+    expect(await decide({ ask: [{ command: ['*', '!ls'] }] }, bash('rm a'))).toEqual({ decision: 'ask' })
+  })
+
+  test('a ! pattern leaves URLs, subagents, and tools out', async () => {
+    expect(await decide({ deny: [{ fetch: ['https://**', '!https://docs.example.com/**'] }] }, { tool: 'WebFetch', input: { url: 'https://docs.example.com/a', prompt: 'x' } })).toBeUndefined()
+    expect(await decide({ deny: [{ subagent: ['*', '!explorer'] }] }, { tool: 'Agent', input: { prompt: 'x', description: 'x', subagent_type: 'explorer' } })).toBeUndefined()
+    expect(await decide({ deny: [{ tool: ['mcp__github__*', '!mcp__github__get_*'] }] }, { tool: 'mcp__github__get_issue', input: {} })).toBeUndefined()
+    expect(await decide({ deny: [{ tool: ['mcp__github__*', '!mcp__github__get_*'] }] }, { tool: 'mcp__github__create_issue', input: {} })).toEqual({ decision: 'deny' })
+  })
+
+  test('a target of ! patterns alone denies the call and names the fix', async () => {
+    expect(await decide({ deny: [{ write: '!docs/**' }] }, bash('rm a'))).toEqual({
+      decision: 'deny',
+      reason: `The permissions job failed, so it denies the call: A write target needs a pattern without "!" for its "!" patterns to leave calls out of, such as ['**', '!docs/**'].`,
+    })
+  })
+})
+
 describe('the decision', () => {
-  test('agentId and agentType reach when', async () => {
+  test('the raw input, agentId, and agentType reach when', async () => {
     const seen = seenCalls()
-    await decide({ deny: [{ tool: 'Read', when: seen.when }] }, { tool: 'Read', input: { file_path: '/a' }, agentId: 'a4aa369514be1f5cc', agentType: 'explorer' })
-    expect(seen.calls).toEqual([{ tool: 'Read', agentId: 'a4aa369514be1f5cc', agentType: 'explorer' }])
+    const call: ToolCall = { tool: 'Read', input: { file_path: '/a' }, agentId: 'a4aa369514be1f5cc', agentType: 'explorer' }
+    await decide({ deny: [{ tool: 'Read', when: seen.when }] }, call)
+    expect(seen.calls).toEqual([call])
   })
 
   test('a when that returns false leaves the decision to the next rule', async () => {

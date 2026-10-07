@@ -9,7 +9,8 @@ A mod that changes the machine, such as by adding a shell alias or downloading a
   "cmod": {
     "install": "./setup/install.sh",
     "uninstall": "./setup/uninstall.sh",
-    "program": "hello"
+    "program": "hello",
+    "keys": { "shift+tab": "/mode" }
   }
 }
 ```
@@ -19,6 +20,7 @@ Each key is optional.
 - `install` is one shell command that sets the mod up.
 - `uninstall` is one shell command that undoes it.
 - `program` is the name of a program cmod downloads from the mod's GitHub release into `~/.local/bin`. [Ship a program](#ship-a-program) explains it.
+- `keys` binds keys in Claude Code to the mod's slash commands. [Key bindings](#key-bindings) explains it.
 
 cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 
@@ -27,18 +29,32 @@ cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 - Each names at least one script file inside the mod, and no script at the mod's root. cmod asks consent for the whole folder of each script, so put the scripts in a folder, such as `setup/`.
 - A symbolic link in a script folder points at a file.
 - `program` is a command name: letters, digits, `.`, `_`, and `-`, starting with a letter or digit.
+- `keys` binds at least one key, and each binds one of the mod's commands as `/<name>`.
 - `.claude-plugin/plugin.json` has a `version`.
 
 ## Consent
 
-Before a step runs for the first time, cmod shows the person the commands and asks to run them. cmod hashes the commands and every file in each script folder, and remembers the hash the person approved. A change to any of those files asks again.
+Before a step runs for the first time, cmod shows the person the commands and the keys, and asks to run them. cmod hashes the commands, the keys, and every file in each script folder, and remembers the hash the person approved. A change to any of those asks again.
 
-- In Claude Code, the mod asks `<mod> runs <install> to install, and <uninstall> when you remove it. Run it now?` with `Install` and `Not now`. A progress line above the prompt shows the install.
+- In Claude Code, the mod asks `<mod> runs <install> to install, runs <uninstall> when you remove it and binds shift+tab to /mode. Install it now?` with `Install` and `Not now`, naming only what the mod has. A progress line above the prompt shows the install.
 - In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.`
 - In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands and ask `Run them? [y/N]`. `--yes` approves without asking.
 - `Not now` leaves the mod off and logs `<mod> is not installed. Run cmod install <mod> to install it.`
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
+
+## Key bindings
+
+A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only from the person's `keybindings.json`. So cmod writes the mod's `keys` there, with consent, as the setup's last step:
+
+```json
+{ "bindings": [{ "context": "Chat", "bindings": { "shift+tab": "command:mode" } }] }
+```
+
+- cmod writes each key into the `Chat` bindings of `~/.claude/keybindings.json`, or of `$CLAUDE_CONFIG_DIR/keybindings.json` when that variable is set. When the file is a symbolic link, cmod writes the file it points to. Claude Code reads the change at once, with no restart.
+- A key the person already bound to something else stays theirs. cmod logs `~/.claude/keybindings.json binds <key> to "<action>", so it stays. To use /<name> on <key>, put "<key>": "command:<name>" in its Chat bindings.`
+- An upgrade that drops a key removes its binding. Removing the mod removes each binding it added that still runs its command, and a `Chat` block that leaves empty, and leaves a binding the person changed.
+- A key's command takes `immediate: true` and a `reply` that returns `undefined`, so it works while Claude works and adds no row to the conversation ([jobs.md](jobs.md#slashcommand)). A key bound to `shift+tab` replaces Claude Code's own mode switch, and Claude Code then drops its `shift+tab` hint.
 
 ## How a step runs
 

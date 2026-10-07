@@ -100,3 +100,11 @@ notInstalled(name: string): string
 ## Test the calls
 
 `testMod(outline, { dependencies: { tracer: { signatures: async () => [] } } })` answers tracer's methods with the functions given. A call to a mod the test does not fake fails with `tracer is not installed. Run cmod install tracer.` [testing.md](testing.md) covers it.
+
+A test of the provider's own `api` fires `cmod.call`, as a caller's `mod.dependencies` does. The answer is `{ value }` with what the method returned, or `{ deny }` with the reason it failed:
+
+```ts
+const tested = testMod(tracer, { files: { '/work/a.ts': 'export function greet() {}\n' } })
+
+expect(await tested.fire('cmod.call', { to: 'tracer', method: 'signatures', input: { path: '/work/a.ts' } })).toEqual({ value: [{ name: 'greet', line: 1 }] })
+```

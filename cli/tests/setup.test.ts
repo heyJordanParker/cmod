@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listFiles, readText } from '../src/files.js'
-import { cmod, cmodInTerminal, cmodOnPath, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, cmodOnPath, cmodWith, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -107,7 +107,7 @@ test('setup --events with an install step that prints four progress lines emits 
   expect(result.exitCode).toBe(0)
   const store = join(home, '.local/share/cmod')
   const record = JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))
-  expect(record).toEqual({ name: 'demo', version: '0.1.0', root, installedAt: expect.any(String), scriptsSha256: sha256, uninstall: join(store, 'uninstall/demo/uninstall.sh'), program: null })
+  expect(record).toEqual({ name: 'demo', version: '0.1.0', root, installedAt: expect.any(String), scriptsSha256: sha256, uninstall: join(store, 'uninstall/demo/uninstall.sh'), program: null, keys: {} })
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 
@@ -121,7 +121,7 @@ test('setup --events on changed scripts prints needs-consent and runs nothing, a
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(asked.exitCode).toBe(10)
   expect(await readFile(runs, 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 
@@ -140,7 +140,7 @@ test('changing only the uninstall script asks for consent again', async () => {
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(asked.exitCode).toBe(10)
 })
 
@@ -153,7 +153,7 @@ test('changing only a sourced sibling script asks for consent again', async () =
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(asked.exitCode).toBe(10)
 })
 
@@ -168,7 +168,7 @@ test('an update that changes only setup/lib asks consent again', async () => {
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(asked.exitCode).toBe(10)
   expect(changed).not.toBe(approved)
 })
@@ -186,7 +186,7 @@ test('a changed script behind a symbolic link asks consent again', async () => {
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(asked.exitCode).toBe(10)
   expect(changed).not.toBe(approved)
 })
@@ -298,7 +298,7 @@ test('setup --events asks consent for a mod that names only a program', async ()
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\n`)
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\t\n`)
   expect(asked.exitCode).toBe(10)
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
@@ -377,7 +377,7 @@ test('teardown forgets the approved scripts, so setting the mod up again asks fo
 
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({})
   const again = await cmod(home, 'setup', root, '--events')
-  expect(again.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(again.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(again.exitCode).toBe(10)
 })
 
@@ -1171,6 +1171,103 @@ test("a holder file with cmod's own process ID is not held", async () => {
   expect(existsSync(lock)).toBe(false)
 }, 10_000)
 
+async function createKeysMod(home: string, keys: Record<string, unknown>): Promise<string> {
+  const root = join(home, 'modes')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'modes', cmod: { keys } }),
+  })
+  return root
+}
+
+const keybindings = (home: string) => join(home, '.claude/keybindings.json')
+
+test('setup binds the mod keys in the Chat bindings, keeps a key the person bound, and teardown removes only the keys that still run its commands', async () => {
+  const home = await temporaryHome()
+  const root = await createKeysMod(home, { 'shift+tab': '/mode', 'alt+m': '/mode', 'ctrl+k': '/mode' })
+  await writeFiles(home, { '.claude/keybindings.json': `{\n  "bindings": [\n    { "context": "Chat", "bindings": { "ctrl+k": "chat:clearInput" } }\n  ]\n}\n` })
+
+  const asked = await cmod(home, 'setup', root, '--events')
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\tshift+tab to /mode, alt+m to /mode and ctrl+k to /mode\n`)
+  expect(result.stdout).toBe('log ~/.claude/keybindings.json binds ctrl+k to "chat:clearInput", so it stays. To use /mode on ctrl+k, put "ctrl+k": "command:mode" in its Chat bindings.\ndone modes 0.1.0\n')
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'shift+tab': 'command:mode', 'alt+m': 'command:mode' } }] })
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'shift+tab': 'mode', 'alt+m': 'mode' })
+
+  const edited = JSON.parse(await readFile(keybindings(home), 'utf8'))
+  edited.bindings[0].bindings['alt+m'] = 'command:review'
+  await writeFiles(home, { '.claude/keybindings.json': JSON.stringify(edited) })
+  expect((await cmod(home, 'teardown', 'modes')).exitCode).toBe(0)
+
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'alt+m': 'command:review' } }] })
+})
+
+test('setup writes keybindings.json under CLAUDE_CONFIG_DIR through its symbolic link, adding a Chat block when none exists', async () => {
+  const home = await temporaryHome()
+  const root = await createKeysMod(home, { 'shift+tab': '/mode' })
+  await writeFiles(home, { 'dotfiles/keybindings.json': '{ "bindings": [{ "context": "Global", "bindings": { "ctrl+t": "app:toggleTodos" } }] }\n' })
+  await writeFiles(home, { 'config/.keep': '' })
+  await symlink(join(home, 'dotfiles/keybindings.json'), join(home, 'config/keybindings.json'))
+
+  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: join(home, 'config') }, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toBe('done modes 0.1.0\n')
+  expect((await lstat(join(home, 'config/keybindings.json'))).isSymbolicLink()).toBe(true)
+  expect(JSON.parse(await readFile(join(home, 'dotfiles/keybindings.json'), 'utf8'))).toEqual({
+    bindings: [
+      { context: 'Global', bindings: { 'ctrl+t': 'app:toggleTodos' } },
+      { context: 'Chat', bindings: { 'shift+tab': 'command:mode' } },
+    ],
+  })
+})
+
+test('an upgrade that drops a key removes its binding, and a changed key asks consent again', async () => {
+  const home = await temporaryHome()
+  const root = await createKeysMod(home, { 'shift+tab': '/mode', 'alt+m': '/mode' })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await createKeysMod(home, { 'shift+tab': '/mode' })
+
+  const asked = await cmod(home, 'setup', root, '--events')
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(asked.exitCode).toBe(10)
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:mode' } }] })
+})
+
+test('teardown removes a Chat block it leaves empty, and keeps the other blocks', async () => {
+  const home = await temporaryHome()
+  const root = await createKeysMod(home, { 'shift+tab': '/mode' })
+  await writeFiles(home, { '.claude/keybindings.json': '{ "bindings": [{ "context": "Global", "bindings": { "ctrl+t": "app:toggleTodos" } }] }\n' })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect((await cmod(home, 'teardown', 'modes')).exitCode).toBe(0)
+
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Global', bindings: { 'ctrl+t': 'app:toggleTodos' } }] })
+})
+
+test('a key bound to anything but one of the mod commands is refused', async () => {
+  const home = await temporaryHome()
+  const root = await createKeysMod(home, { 'shift+tab': 'chat:cycleMode' })
+
+  const result = await cmod(home, 'setup', root, '--events')
+
+  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.keys" binds "shift+tab" to "chat:cycleMode". Bind each key to one of the mod's commands, such as "shift+tab": "/mode".\n`)
+  expect(existsSync(keybindings(home))).toBe(false)
+})
+
+test('the consent question lists the keys it binds', async () => {
+  const home = await temporaryHome()
+  const root = await createKeysMod(home, { 'shift+tab': '/mode' })
+
+  const result = await cmod(home, 'setup', root)
+
+  expect(result.exitCode).toBe(10)
+  expect(result.stdout).toContain('  It binds keys in ~/.claude/keybindings.json:\n    shift+tab  /mode\n')
+  expect(result.stdout).not.toContain('It runs these commands')
+  expect(result.stdout).toContain('modes is not set up: it needs your consent. Run the command again with --yes after reading what it does.')
+})
+
 test('the consent question says it puts the program into ~/.local/bin', async () => {
   const home = await temporaryHome()
   const root = await createProgramMod(home, 'http://127.0.0.1:9/owner/hello-mod')
@@ -1253,7 +1350,7 @@ test('a mod whose scripts change while its setup waits asks consent again', asyn
   const asked = await second.done
 
   expect((await first.done).stdout).toBe('done demo 0.1.0\n')
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\n`)
+  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
   expect(asked.exitCode).toBe(10)
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\n')
 }, 15_000)

@@ -23,8 +23,8 @@ Releases the mod at path (default: the current folder) at the version in its
 plugin.json. Builds the release from the committed files, leaving out cli/,
 .github/, and .claude/. A "files" list in package.json limits the release to
 those paths, plus the folders of the install and uninstall steps,
-.claude-plugin/, package.json, the README, and the license, the way npm
-does. Bundles the hooks module with its packages into one file, writing each
+.claude-plugin/, package.json, tsconfig.json, the README, and the license, the
+way npm does. Bundles the hooks module with its packages into one file, writing each
 control character as a \\u escape, so Anthropic's plugin directory can read
 all of the mod's code. Checks
 the release with claude plugin validate --strict and commits it as the release
@@ -42,7 +42,7 @@ const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependenci
 
 const leftOut = ['cli', '.github', '.claude']
 
-const alwaysReleased = ['.claude-plugin', 'package.json', 'README*', 'LICENSE*']
+const alwaysReleased = ['.claude-plugin', 'package.json', 'tsconfig.json', 'README*', 'LICENSE*']
 
 const releaseBranch = 'release'
 
@@ -164,24 +164,31 @@ async function buildReleaseTree(root: string, output: string, tree: string, rele
 }
 
 async function bundleHooks(root: string, tree: string): Promise<string | undefined> {
+  const bundled = await bundledHooks(root, tree)
+  if (bundled === undefined) return undefined
+  const { hooks, module, code } = bundled
+  const bundle = posix.join(posix.dirname(module), `${posix.basename(module, posix.extname(module))}.js`)
+  await Bun.write(join(tree, 'hooks', bundle), escapeControlCharacters(code))
+  await Bun.write(join(tree, 'hooks', 'hooks.json'), `${JSON.stringify({ ...hooks, modules: [`./${bundle}`] }, null, 2)}\n`)
+  return bundle
+}
+
+export async function bundledHooks(root: string, tree = root): Promise<{ hooks: Record<string, unknown>; module: string; code: string } | undefined> {
   const hooksPath = join(tree, 'hooks', 'hooks.json')
   if (!existsSync(hooksPath)) return undefined
   const hooks = JSON.parse(await readFile(hooksPath, 'utf8')) as Record<string, unknown>
   const [module] = Array.isArray(hooks['modules']) ? hooks['modules'] : []
   if (typeof module !== 'string') return undefined
   const failed = (reason: string) => {
-    const install = existsSync(join(root, 'node_modules')) ? '' : ` ${tilde(root)} has no node_modules, so run bun install there, then cmod publish again.`
+    const install = existsSync(join(root, 'node_modules')) ? '' : ` ${tilde(root)} has no node_modules, so run bun install there, then run the command again.`
     return new Error(`Bundling hooks/${module} failed: ${reason}${install}`)
   }
   const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'] }).catch((error: unknown) => {
-    throw failed(messageOf(error))
+    throw failed(error instanceof AggregateError ? error.errors.map(String).join('\n') : messageOf(error))
   })
   const [bundled] = built.outputs
   if (!built.success || bundled === undefined) throw failed(built.logs.map(String).join('\n'))
-  const bundle = posix.join(posix.dirname(module), `${posix.basename(module, posix.extname(module))}.js`)
-  await Bun.write(join(tree, 'hooks', bundle), escapeControlCharacters(await bundled.text()))
-  await Bun.write(hooksPath, `${JSON.stringify({ ...hooks, modules: [`./${bundle}`] }, null, 2)}\n`)
-  return bundle
+  return { hooks, module, code: await bundled.text() }
 }
 
 function escapeControlCharacters(code: string): string {

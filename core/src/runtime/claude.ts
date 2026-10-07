@@ -83,7 +83,10 @@ export type Claude = {
     usage(): Promise<SessionUsage>
     surfaces(): Promise<readonly RenderSurface[]>
     messages: EngineInterface['session']['messages']
+    append: EngineInterface['session']['append']
   }
+  readonly prompt: { submit: EngineInterface['prompt']['submit'] }
+  readonly model: { complete: EngineInterface['model']['complete'] }
   readonly command: { register(command: CommandSpec): Promise<{ command: string }> }
   readonly tool: { register(tool: ToolSpec): Promise<{ tool: string }> }
   readonly agent: {

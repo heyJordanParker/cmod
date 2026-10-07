@@ -5,7 +5,7 @@ import { beforeDeadline, type Deadline } from '../runtime/deadline.js'
 import { dependencyCalls } from '../runtime/dependencies.js'
 import { toolInputOf } from '../runtime/tool-calls.js'
 import { listed } from '../utils/text.js'
-import type { ToolCall, ToolUse } from '../utils/call-effects.js'
+import type { ToolCall } from '../utils/call-effects.js'
 import { findProjectScope, type Workspace } from './permissions/find-project-scope.js'
 import { targetOf, type Target } from './permissions/match-target.js'
 import type { FileSystem } from '../utils/paths.js'
@@ -36,7 +36,7 @@ async function readSession(claude: Claude): Promise<Session> {
 
 export function afterCall<State extends object>(
   job: JobContext<State>,
-  contextAfter: (use: ToolUse, workspace: Workspace) => Promise<readonly string[]>,
+  contextAfter: (call: ToolCall, workspace: Workspace) => Promise<readonly string[]>,
   failed: (error: unknown) => readonly string[],
 ): void {
   const readWorkspace = workspaceReader(job)
@@ -50,7 +50,7 @@ export function afterCall<State extends object>(
   })
 }
 
-async function useOf({ toolCalls }: JobContext, e: Frozen<Args<'tool.call'>>): Promise<ToolUse> {
+async function useOf({ toolCalls }: JobContext, e: Frozen<Args<'tool.call'>>): Promise<ToolCall> {
   return { tool: e.tool, input: toolInputOf(e), ...(await toolCalls.agentOf(e.tool_use_id)) }
 }
 
@@ -109,8 +109,8 @@ function spawnWithin(claude: Claude, deadline: Deadline, started: Promise<Stream
 }
 
 export function targetWords(target: Target): string {
-  const { key, patterns } = targetOf(target)
-  const named = listed(patterns)
+  const { key, patterns, exclusions } = targetOf(target)
+  const named = exclusions.length === 0 ? listed(patterns) : `${listed(patterns)} except ${listed(exclusions)}`
   if (key === 'command') return patterns.includes('*') ? 'every shell command' : named
   if (key === 'write') return `edits to ${named}`
   if (key === 'read') return `reads of ${named}`

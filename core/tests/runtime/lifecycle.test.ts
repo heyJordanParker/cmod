@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
+import { slashCommand } from '../../src/jobs/slash-command.js'
 import { defineMod, type Mod } from '../../src/mod.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
@@ -10,7 +11,7 @@ import { fakeFiles } from '../../src/testing/fake-files.js'
 import { Text } from '../../src/ui/elements.js'
 
 const root = '/plugins/safe-delete'
-const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false }
+const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false, keys: {} }
 
 const given = (plugin: Plugin) => async () => plugin
 
@@ -170,7 +171,7 @@ test('needs-consent asks in the question dialog, and Install runs the setup agai
   fake.fakes.process.run = cmodOnPath
   fake.fakes.process.spawn = (request) => {
     spawned.push(request)
-    return spawned.length === 1 ? finished(['needs-consent abc123\t./setup/install.sh\t./setup/uninstall.sh'], 10) : finished(['done safe-delete 0.2.0'], 0)
+    return spawned.length === 1 ? finished(['needs-consent abc123\t./setup/install.sh\t./setup/uninstall.sh\tshift+tab to /mode'], 10) : finished(['done safe-delete 0.2.0'], 0)
   }
   fake.fakes.ui.ask = async (question, options) => {
     asked.push([question, options])
@@ -183,7 +184,7 @@ test('needs-consent asks in the question dialog, and Install runs the setup agai
   await fake.settle()
 
   expect(asked).toEqual([
-    ['safe-delete runs ./setup/install.sh to install, and ./setup/uninstall.sh when you remove it. Run it now?', { options: ['Install', 'Not now'], header: 'Install' }],
+    ['safe-delete runs ./setup/install.sh to install, runs ./setup/uninstall.sh when you remove it and binds shift+tab to /mode. Install it now?', { options: ['Install', 'Not now'], header: 'Install' }],
   ])
   expect(spawned.map((request) => request.argv)).toEqual([
     ['cmod', 'setup', root, '--events'],
@@ -191,6 +192,38 @@ test('needs-consent asks in the question dialog, and Install runs the setup agai
   ])
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
   expect(runs).toEqual(['setup', 'PostToolUse'])
+})
+
+test('a mod that only binds keys asks about the keys alone', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const asked: string[] = []
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => finished(['needs-consent abc123\t\t\tshift+tab to /mode and alt+m to /mode'], 10)
+  fake.fakes.ui.ask = async (question) => (asked.push(question), 'Not now')
+
+  await createLifecycle(trackedMod().definition).start(fake.claude, given(pending))
+  await fake.settle()
+
+  expect(asked).toEqual(['safe-delete binds shift+tab to /mode and alt+m to /mode. Install it now?'])
+})
+
+test('a key bound to a command that waits for the turn logs the fix, and an immediate command logs nothing', async () => {
+  const fake = fakeClaude({ name: 'modes', root })
+  const definition = defineMod({
+    name: 'modes',
+    setup(mod) {
+      mod.use(slashCommand({ name: 'mode', description: 'Switch mode', reply: () => undefined }))
+      mod.use(slashCommand({ name: 'review', description: 'Review mode', immediate: true, reply: () => undefined }))
+    },
+  })
+
+  await createLifecycle(definition).start(fake.claude, given({ ...pending, isInstalled: true, keys: { 'shift+tab': 'mode', 'alt+r': 'review' } }))
+  await fake.settle()
+
+  expect(fake.shown.commands).toEqual(['mode', 'review'])
+  expect(fake.shown.logs.filter((line) => line.includes('immediate'))).toEqual([
+    "modes: shift+tab runs /mode, which waits for Claude's turn to end and adds a row to the conversation. Give /mode immediate: true.",
+  ])
 })
 
 test('Not now declines the install with one notice naming cmod install, and setup never runs', async () => {

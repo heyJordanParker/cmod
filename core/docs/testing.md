@@ -87,6 +87,11 @@ fire<N extends RoutedEvent>(event: N, input: Args<N>, below?): Promise<EventResu
 - Left out, `below` is `{}`, except on `prompt.submit`, where it is what Claude Code answers: the prompt that entered, `{ text, context, origin }`, with the `context` the mod's hooks added.
 - It returns the combined answer in Claude Code's own field names: `additionalContext` is a list, and `decision: 'block'` is `block`.
 - `fire('tool.check', { tool: 'Edit', input: { … }, tool_use_id: 'toolu_1' }, { decision: 'allow' })` asks the mod's permission rules about any call. A name with a dot fires that Claude Code hook-module event as it is.
+- `fire('cmod.call', { to, method, input })` calls a method of the mod's `api`, as another mod's `mod.dependencies` does, and returns `{ value }` with what the method returned, or `{ deny }` with the reason it failed.
+
+```ts
+expect(await tested.fire('cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } })).toEqual({ value: { restored: true } })
+```
 
 ```ts
 import { expect, test } from 'bun:test'
@@ -209,7 +214,9 @@ type Fakes = {
   http: { fetch? }
   settings: { read? }
   ui: { ask?, open?, scroll? }
-  session: { messages? }
+  session: { messages?, append? }
+  prompt: { submit? }
+  model: { complete? }
   agent: { list?, spawn? }
   clock: { after?, every? }
   cmod: { call? }
@@ -223,7 +230,9 @@ Set a fake to answer a call:
 - `files` already fills the `fs` fakes: a write is read back, and `list` lists the given files. The fake file system resolves a relative path against `/`, not against `mod.cwd`, so a mod under test reads `${mod.projectRoot}/<file>` rather than a relative path. `fs.list()` with no path rejects.
 - `ui.open` places every pane by default. A fake that answers `{ isPlaced: false }` holds a pane back.
 - `ui.scroll` answers `{}` by default, as when the window moved. A fake that answers `{ deny }` refuses the scroll.
-- `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call.
+- `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
+- `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
+- `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
 
 ```ts
 import { expect, test } from 'bun:test'
@@ -246,6 +255,8 @@ test('a Commit answer commits', async () => {
 ```ts
 type Shown = {
   readonly toasts: string[]
+  readonly notes: string[]
+  readonly prompts: string[]
   readonly logs: string[]
   readonly debug: string[]
   readonly statuses: (string | undefined)[]
@@ -255,7 +266,19 @@ type Shown = {
 }
 ```
 
-What the person would see: the toasts, the log lines, the debug log lines, each status line text, the open panes, and the slash commands and tools the mod added.
+What the person and Claude would see: the toasts, the notes the mod added for Claude with `mod.session.append` or a `prompt` that follows the state, the prompts it sent with `mod.session.submit`, the log lines, the debug log lines, each status line text, the open panes, and the slash commands and tools the mod added.
+
+```ts
+test('the Mode prompt follows the mode', async () => {
+  const tested = testMod(modes)
+  await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })
+
+  tested.state.session.mode = 'build'
+  await tested.settle()
+
+  expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.'])
+})
+```
 
 `testing.js` exports the types `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, and `TestCall`, so a test helper can take them.
 

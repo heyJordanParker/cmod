@@ -5,7 +5,7 @@
   "cmod": { "program": "cmod" },
   "files": ["hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^0.1.11",
-    "@cmodjs/core": "^0.1.11"
+    "@cmodjs/cli": "^0.1.12",
+    "@cmodjs/core": "^0.1.12"
   }
 }

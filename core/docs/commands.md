@@ -50,29 +50,32 @@ Runs every check this machine can run on the mod at `path` (default: the current
 3. Checks that each step runs a script.
 4. Checks its imports.
 5. Looks for prebuilt binaries outside `cli/`.
-6. Validates it with Claude Code, `claude plugin validate --strict`.
-7. Type-checks it with `tsc`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
-8. Lints it with `oxlint`.
-9. Runs, with `bun test`, every test file that does not import `claude-code/testing`.
-10. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
-11. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
+6. Bundles the hooks module as `cmod publish` does, and names each reason a bundle fails.
+7. Validates it with Claude Code, `claude plugin validate --strict`.
+8. Type-checks it with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
+9. Lints it with `oxlint`.
+10. Runs, with `bun test`, every test file that does not import `claude-code/testing`.
+11. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
+12. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
 
 `cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the cmod store the first time. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
 
 ### cmod try
 
 ```text
-cmod try <owner/repo | path> [--yes] [-- claude arguments]
+cmod try <owner/repo | path>... [--yes] [--home <folder>] [-- claude arguments]
 ```
 
-Starts one throwaway Claude Code session with a mod set up. Installs the mod's packages, installs the cmod plugin when Claude Code lacks it, and runs the mod's install step after asking consent. Then starts one Claude Code session with the mod loaded through `--plugin-dir`.
+Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then starts one Claude Code session with every mod loaded through `--plugin-dir`.
 
+- The session runs with a new, empty home folder, so it sees only the mods named here and changes none of your Claude Code settings, mods, key bindings, or history. The folder is deleted when the session ends.
+- The session keeps `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`. Set one of them to skip the login. `claude setup-token` prints a token for `CLAUDE_CODE_OAUTH_TOKEN`.
+- `--home <folder>` runs in that folder and keeps it, so the next `cmod try --home <folder>` starts from it. `--home ~` runs in your own home, with your settings and mods.
 - Unlike `cmod link`, it builds no program from `cli/`. A mod whose `package.json` `cmod.program` names a program downloads it from the GitHub release of the mod's version, so it fails until `cmod publish` has released that version.
-
-- When the session ends, even when its terminal closes, it runs the mod's uninstall step and deletes its record, data folder, approval, and program, so the mod stays uninstalled. A checkout already set up from the same folder keeps its setup.
+- When the session ends, even when its terminal closes, it runs each mod's uninstall step and deletes its record, data folder, approval, key bindings, and program, so the mod stays uninstalled. A checkout already set up from the same folder keeps its setup.
 - A GitHub mod is cloned into a temporary folder, which is deleted too.
-- A mod another folder has set up is refused, so `cmod try` never replaces an installed copy.
-- Arguments after `--` go to `claude`, such as `-- -p "hello"`.
+- A mod another folder has set up in that home is refused, so `cmod try` never replaces an installed copy.
+- Arguments after `--` go to `claude`, such as `-- -p "hello"`. An agent tests a mod with one `cmod try <path> --yes -- -p "<prompt>"` run.
 
 ### cmod publish
 
@@ -82,7 +85,7 @@ cmod publish [path] [--dry-run]
 
 Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`:
 
-1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, the README, and the license, the way `npm publish` reads it. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
+1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, `tsconfig.json`, the README, and the license, the way `npm publish` reads it. `tsconfig.json` holds the JSX settings the bundle in step 2 needs. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
 2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, writes each control character in it as a `\u` escape, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file.
 3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
 4. Commits the release as the `release` branch, and builds the release archive from that commit.

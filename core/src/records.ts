@@ -1,4 +1,4 @@
-import { messageOf } from './utils/text.js'
+import { listed, messageOf } from './utils/text.js'
 
 export type InstallRecord = {
   name: string
@@ -8,16 +8,17 @@ export type InstallRecord = {
   scriptsSha256: string
   uninstall: string | null
   program: string | null
+  keys: Readonly<Record<string, string>>
 }
 
-export type Steps = { install?: string; uninstall?: string; program?: string }
+export type Steps = { install?: string; uninstall?: string; program?: string; keys?: Readonly<Record<string, string>> }
 
 export type ReadFile = (path: string) => Promise<string | undefined>
 
 export type RunnerEvent =
   | { kind: 'progress'; done: number; total: number; label: string }
   | { kind: 'log'; text: string }
-  | { kind: 'needs-consent'; sha256: string; install: string; uninstall: string }
+  | { kind: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string }
   | { kind: 'done'; name: string; version?: string }
   | { kind: 'missing'; name: string }
   | { kind: 'failed'; code: number; message: string }
@@ -89,6 +90,8 @@ function parseRecord(text: string, path: string): InstallRecord {
   if (uninstall !== null && typeof uninstall !== 'string') throw new Error(`${path} has an "uninstall" that is neither a path nor null. ${fix}`)
   const program = value['program']
   if (program !== null && typeof program !== 'string') throw new Error(`${path} has a "program" that is neither a command name nor null. ${fix}`)
+  const keys = value['keys'] ?? {}
+  if (!isObject(keys) || Object.values(keys).some((command) => typeof command !== 'string')) throw new Error(`${path} has "keys" that are not key bindings. ${fix}`)
   return {
     name: value['name'] as string,
     version: value['version'] as string,
@@ -97,6 +100,7 @@ function parseRecord(text: string, path: string): InstallRecord {
     scriptsSha256: value['scriptsSha256'] as string,
     uninstall,
     program,
+    keys: keys as Record<string, string>,
   }
 }
 
@@ -108,7 +112,23 @@ export function readSteps(pkg: unknown): Steps | undefined {
   if (!isObject(steps)) throw new Error('package.json has a "cmod" key that is not an object. Write "cmod": { "install": "./setup/install.sh", "uninstall": "./setup/uninstall.sh" }.')
   const program = steps['program']
   if (program !== undefined && (typeof program !== 'string' || !pluginName.test(program))) throw new Error('package.json "cmod.program" must be the program\'s command, such as "hello".')
-  return { ...readCommand(steps, 'install'), ...readCommand(steps, 'uninstall'), ...(program === undefined ? {} : { program }) }
+  return { ...readCommand(steps, 'install'), ...readCommand(steps, 'uninstall'), ...(program === undefined ? {} : { program }), ...readKeys(steps['keys']) }
+}
+
+function readKeys(keys: unknown): Steps {
+  if (keys === undefined) return {}
+  if (!isObject(keys) || Object.keys(keys).length === 0) throw new Error('package.json "cmod.keys" must bind each key to a command, such as "keys": { "shift+tab": "/mode" }.')
+  const commands: Record<string, string> = {}
+  for (const [key, value] of Object.entries(keys)) {
+    const command = typeof value === 'string' ? /^\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/.exec(value)?.[1] : undefined
+    if (key.trim() === '' || command === undefined) throw new Error(`package.json "cmod.keys" binds "${key}" to ${JSON.stringify(value)}. Bind each key to one of the mod's commands, such as "shift+tab": "/mode".`)
+    commands[key] = command
+  }
+  return { keys: commands }
+}
+
+export function keyWords(keys: Readonly<Record<string, string>> | undefined): string {
+  return listed(Object.entries(keys ?? {}).map(([key, command]) => `${key} to /${command}`))
 }
 
 function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall'): Steps {
@@ -145,7 +165,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
     if (scriptFolders.length === 0) throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/${key}.sh.`)
     for (const folder of scriptFolders) folders.add(folder)
   }
-  let text = [steps.install ?? '', steps.uninstall ?? '', steps.program ?? ''].join('\0')
+  let text = [steps.install ?? '', steps.uninstall ?? '', steps.program ?? '', ...(steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())])].join('\0')
   for (const folder of [...folders].sort()) {
     for (const name of (await files.list(folder)).sort()) {
       const path = `${folder}/${name}`
@@ -165,7 +185,7 @@ export function formatEvent(event: RunnerEvent): string {
     case 'log':
       return `log ${event.text}`
     case 'needs-consent':
-      return `needs-consent ${event.sha256}\t${event.install}\t${event.uninstall}`
+      return `needs-consent ${event.sha256}\t${event.install}\t${event.uninstall}\t${event.keys}`
     case 'done':
       return event.version === undefined ? `done ${event.name}` : `done ${event.name} ${event.version}`
     case 'missing':
@@ -178,8 +198,8 @@ export function formatEvent(event: RunnerEvent): string {
 export function parseEvent(line: string): RunnerEvent {
   const progress = /^progress (\d+) (\d+)(?: (.*))?$/.exec(line)
   if (progress !== null) return { kind: 'progress', done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? '' }
-  const consent = /^needs-consent (\S+)\t([^\t]*)\t(.*)$/.exec(line)
-  if (consent !== null) return { kind: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string }
+  const consent = /^needs-consent (\S+)\t([^\t]*)\t([^\t]*)(?:\t(.*))?$/.exec(line)
+  if (consent !== null) return { kind: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, keys: consent[4] ?? '' }
   const done = /^done (\S+)(?: (\S+))?$/.exec(line)
   if (done !== null) return { kind: 'done', name: done[1] as string, ...(done[2] === undefined ? {} : { version: done[2] }) }
   const missing = /^missing (\S+)$/.exec(line)

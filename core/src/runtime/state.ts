@@ -32,7 +32,19 @@ const savedLifetimes: readonly SavedLifetime[] = ['session', 'project', 'global'
 
 const keptPerValue = 20
 
-export function createState<State extends object>({ name, initial, session, root, claude, changed }: StateOptions): ModState<State> {
+const listeners = new WeakMap<object, Set<() => void>>()
+
+export function onStateChange(state: object, listener: () => void): void {
+  const own = listeners.get(state) ?? new Set()
+  own.add(listener)
+  listeners.set(state, own)
+}
+
+export function createState<State extends object>({ name, initial, session, root, claude, changed: redraw }: StateOptions): ModState<State> {
+  const changed = () => {
+    redraw()
+    for (const listener of listeners.get(state) ?? []) listener()
+  }
   const declared = declaredGroups(name, initial)
   const current = copied(declared)
   let defaults = declared

@@ -55,14 +55,15 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | Question | File |
 | --- | --- |
 | How do I define a mod, and what can `mod` call? | [mod.md](mod.md) |
+| How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every) |
 | How do I keep values across prompts, sessions, and projects? How does a person change them? | [state.md](state.md) |
 | How do I react to a Claude Code event, and what can a hook answer? | [hooks.md](hooks.md) |
 | How do I draw a pane, change a row Claude Code draws, or ask the person something? | [ui.md](ui.md) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a status line, or a background program? | [jobs.md](jobs.md) |
 | How does one mod call another? | [dependencies.md](dependencies.md) |
-| How does a mod change the machine, ship a program, or clean up after itself? | [install-steps.md](install-steps.md) |
+| How does a mod change the machine, bind a key, ship a program, or clean up after itself? | [install-steps.md](install-steps.md) |
 | How do I test a mod without Claude Code? | [testing.md](testing.md) |
-| Which `cmod` command links, checks, tries, or publishes a mod? | [commands.md](commands.md) |
+| Which `cmod` command links, checks, tries in a clean Claude Code, or publishes a mod? | [commands.md](commands.md) |
 
 ## The Public API
 
@@ -72,7 +73,7 @@ A mod imports from the files below, and every other file in this package is inte
 | --- | --- | --- |
 | `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `ProgressStep`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [ui.md](ui.md) |
 | `mod.js` | `Claude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
-| `mod.js` | `ModEvent`, `ModHook`, `HookInput`, `HookAnswer` | [hooks.md](hooks.md) |
+| `mod.js` | `ModEvent`, `ModHook`, `HookOptions`, `HookInput`, `HookAnswer` | [hooks.md](hooks.md) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
 | `register.js` | `registerMod`, `registerPermissionCheck` | [mod.md](mod.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [hooks.md](hooks.md) |

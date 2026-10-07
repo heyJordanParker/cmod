@@ -108,6 +108,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
       store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
       isInstalled: true,
       shouldRecord: false,
+      keys: {},
     }))
     await started
     if (lifecycle.phase !== 'active') throw lifecycle.failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)

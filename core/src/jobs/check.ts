@@ -1,6 +1,6 @@
 import type { Job } from '../mod.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
-import { callEffects, type ToolUse } from '../utils/call-effects.js'
+import { callEffects, type ToolCall } from '../utils/call-effects.js'
 import { dirname } from '../vendor.js'
 import { listed, messageOf } from '../utils/text.js'
 import { afterCall, modOf, targetWords } from './context.js'
@@ -39,7 +39,7 @@ export function check<State extends object = Record<never, never>>(options: { re
   }
 }
 
-async function triggeredRun(after: readonly Target[], run: readonly string[], use: ToolUse, workspace: Workspace): Promise<{ command: string[]; folder: string } | undefined> {
+async function triggeredRun(after: readonly Target[], run: readonly string[], use: ToolCall, workspace: Workspace): Promise<{ command: string[]; folder: string } | undefined> {
   const effects = callEffects(use, workspace)
   const paths = new Set<string>()
   let commandFolder: string | undefined

@@ -4,7 +4,7 @@ import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
 import type { RoutedHook } from './router.js'
 import { reservedKeys, toolInputOf, type ToolCalls } from './tool-calls.js'
-import { callEffects, type FileAccess, type ToolUse } from '../utils/call-effects.js'
+import { callEffects, inputOf, type CallBase, type FileAccess } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
 import { messageOf } from '../utils/text.js'
 
@@ -53,14 +53,14 @@ const readFields: Record<ModEvent, readonly string[]> = {
 }
 
 export function classicHook<E extends Exclude<ModEvent, 'PreToolUse'>>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls): RoutedHook<RoutedEvent> {
-  const inputOf = async (e: unknown): Promise<unknown> => {
+  const hookInputOf = async (e: unknown): Promise<unknown> => {
     if (event !== 'PostToolUse' && event !== 'PostToolUseFailure') return e
     const input = e as ClassicHookInputs['PostToolUse' | 'PostToolUseFailure']
     const cwd = calls.cwdOf(input.tool_use_id) ?? input.cwd
-    return { ...input, files: await callFiles(name, claude, { tool: input.tool_name, input: input.tool_input }, cwd) }
+    return { ...input, files: await callFiles(name, claude, { tool: input.tool_name, input: inputOf(input.tool_input) }, cwd) }
   }
   const resultOf = async (e: unknown): Promise<ClassicFields | undefined> => {
-    const answer = await hook((await inputOf(e)) as HookInput<E>)
+    const answer = await hook((await hookInputOf(e)) as HookInput<E>)
     if (answer === undefined) return undefined
     if (answer.systemMessage !== undefined) claude.ui.log(answer.systemMessage)
     return classicResult(event, answer)
@@ -165,7 +165,7 @@ async function preToolUseInput(name: string, envelope: Frozen<Args<'tool.call'>>
   }
 }
 
-async function callFiles(name: string, claude: Claude, use: ToolUse, cwd: string): Promise<CallFiles> {
+async function callFiles(name: string, claude: Claude, use: CallBase, cwd: string): Promise<CallFiles> {
   try {
     const home = await claude.env.home()
     if (home === undefined) throw new Error('HOME is not set, so ~ in a path has no meaning.')

@@ -100,15 +100,17 @@ type Mod<State> = {
   readonly dataFolder: string
   readonly projectRoot: string
   readonly cwd: string
-  on(event, hook): void
+  on(event, hook, options?): void
   use(job): Handle
+  every(ms, hook): Timer
   readonly ui: { pane, render, toast, progress, ask, scroll }
   readonly process: { run, spawn }
   readonly fs: { read, write, list, exists, stat }
   readonly http: { fetch }
   readonly settings: { read }
-  readonly session: { messages }
+  readonly session: { messages, append, submit }
   readonly agent: { spawn }
+  readonly model: { complete }
   readonly dependencies: CmodDependencies
 }
 ```
@@ -122,14 +124,33 @@ type Mod<State> = {
 | `cwd` | The session's working folder. It follows a `cd` in a Bash or PowerShell call, and `/cd`. | |
 | `on` | Adds a hook on a Claude Code event. | [hooks.md](hooks.md) |
 | `use` | Adds a job, such as a slash command or a tool, and returns its handle. | [jobs.md](jobs.md) |
+| `every` | Runs a function every so many milliseconds while the session runs. | below |
 | `ui` | Panes, slot renders, toasts, progress lines, questions, and scrolling. | [ui.md](ui.md) |
 | `process` | Runs a program. | below |
 | `fs` | Reads, writes, and looks up files. | below |
 | `http` | Fetches a URL. | below |
 | `settings` | Reads Claude Code's settings. | below |
-| `session` | Reads the conversation, or a subagent's. | below |
+| `session` | Reads the conversation or a subagent's, adds a note Claude reads, and asks Claude for a turn. | below |
 | `agent` | Starts a subagent. | below |
+| `model` | Asks a model one question, outside the conversation. | below |
 | `dependencies` | Calls the methods of other mods. | [dependencies.md](dependencies.md) |
+
+### mod.every
+
+```ts
+mod.every(ms: number, hook: () => unknown): Timer
+```
+
+`every` runs `hook` every `ms` milliseconds until the session ends or the mod calls `cancel()` on the `Timer` it returns. A tick that comes while the last run is still going is skipped, so a slow run never stacks up. A run that throws logs `<mod>: the every <ms> ms hook failed: <error>`, and the next tick runs again. `ms` is a whole number above 0 and at most `2147483647`, and any other `ms` stops `setup` with the fix.
+
+A watch that reacts on its own is `every` plus `mod.state` plus a `prompt` with no trigger: `every` checks the outside world, writes what it found to `mod.state`, and the panes and the prompt follow the state ([jobs.md](jobs.md#prompt)).
+
+```ts
+mod.every(60_000, async () => {
+  const { stdout } = await mod.process.run(['gh', 'run', 'list', '--limit', '1', '--json', 'conclusion'])
+  mod.state.session.ci = JSON.parse(stdout)[0]?.conclusion ?? 'running'
+})
+```
 
 ### mod.process
 
@@ -221,6 +242,8 @@ export const pluginCount = defineMod({
 ```ts
 mod.session.messages(): Promise<SessionMessage[]>
 mod.session.messages(args: { agentId?: string; as?: 'api' }): Promise<…>
+mod.session.append(text: string): Promise<void>
+mod.session.submit(text: string): Promise<void>
 ```
 
 `messages` reads the main conversation, one `{ role, text, toolUses, toolResults }` entry per message. A message has no id of its own, and each tool use carries its `tool_use_id`. `{ agentId }` reads that subagent's conversation instead, the id a `SubagentStart` or `SubagentStop` hook gets as `agent_id`, and answers `{ deny }` when the session cannot read it, so `Array.isArray` tells the two apart. `{ as: 'api' }` reads it in the Messages API form, `{ role, content }` with the content blocks whole.
@@ -229,6 +252,19 @@ mod.session.messages(args: { agentId?: string; as?: 'api' }): Promise<…>
 mod.on('SubagentStop', async ({ agent_id }) => {
   const read = await mod.session.messages({ agentId: agent_id })
   if (Array.isArray(read)) mod.ui.toast(read.at(-1)?.text ?? '')
+})
+```
+
+`append` adds `text` to the conversation as a user message the person does not see, so Claude reads it on its next call to the model. It starts no turn. It rejects with `<mod>: Claude Code refused the note: <reason>` when a plugin's `session.append` handler refuses it.
+
+`submit` sends `text` as the person's next prompt, so Claude answers it as a turn of its own. Claude Code holds it until the session is idle, so it never cuts into a turn. It rejects with `<mod>: Claude Code dropped the prompt: <reason>` when a plugin drops it.
+
+```ts
+mod.every(60_000, async () => {
+  const { stdout } = await mod.process.run(['gh', 'run', 'list', '--limit', '1', '--json', 'conclusion'])
+  if (JSON.parse(stdout)[0]?.conclusion !== 'failure') return
+  await mod.session.append('CI failed on the last push.')
+  await mod.session.submit('Find the cause of the CI failure and fix it.')
 })
 ```
 
@@ -256,6 +292,25 @@ mod.on('UserPromptSubmit', async (input) => {
   const summary = await new Promise<string>((resolve) => answers.set(spawned.agentId as string, resolve))
   return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: summary } }
 })
+```
+
+### mod.model
+
+```ts
+mod.model.complete(request: ModelCompleteRequest, options?: { signal?: AbortSignal }): Promise<ModelCompleteResult>
+```
+
+`complete` asks a model one question through Claude Code's own login, outside the conversation, so the answer costs no context and the person sees no turn. The request names the `model`, such as `'haiku'`, and the `prompt`, and takes `system`, `maxTokens`, `effort`, and `timeoutMs`. `timeoutMs` stops a model that is slow or down, so the hook that waits on it still answers in time. `options.signal` stops the call when its `AbortController` aborts.
+
+The call never rejects for what the model did. The result's `isAnswered` is true with the reply's `text`, or false with a `reason`, such as `'api-error'` or `'aborted'`.
+
+Put a limit on the hook too, with `mod.on`'s `timeoutMs` ([hooks.md](hooks.md#mod-on)), which also covers the work around the call:
+
+```ts
+mod.on('Stop', async ({ last_assistant_message }) => {
+  const verdict = await mod.model.complete({ model: 'haiku', prompt: `Does this reply ask the person to do work Claude could do itself? Answer yes or no.\n\n${last_assistant_message}`, timeoutMs: 8000 })
+  if (verdict.isAnswered && verdict.text.trim().toLowerCase().startsWith('yes')) return { decision: 'block', reason: 'Do that work yourself, then reply.' }
+}, { timeoutMs: 9000 })
 ```
 
 ## messageOf

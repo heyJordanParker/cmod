@@ -93,7 +93,7 @@ test("Claude Code's permission check and the tool get the input a PreToolUse hoo
   const fake = fakeClaude({ name: 'safe-delete', root: '/test/plugins/safe-delete' })
   fake.fakes.agent.list = async () => [{ id: 'agent-2', type: 'explorer' } as AgentInfo]
   const lifecycle = createLifecycle(safeDelete)
-  await lifecycle.start(fake.claude, async () => ({ name: 'safe-delete', root: '/test/plugins/safe-delete', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'safe-delete', root: '/test/plugins/safe-delete', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
   const reached: unknown[] = []
   const core = async (e: unknown) => (reached.push(e), { result: '' }) as EventResult<'tool.call'>
 
@@ -106,13 +106,142 @@ test("Claude Code's permission check and the tool get the input a PreToolUse hoo
   ])
 })
 
+test('mod.every runs its hook on each tick, skips a tick while the last run is still going, and logs a failure', async () => {
+  let tick: () => void = () => undefined
+  let finishRun: () => void = () => undefined
+  const runs: number[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'ci-watch',
+      setup(mod) {
+        mod.every(30_000, async () => {
+          runs.push(runs.length + 1)
+          if (runs.length === 1) await new Promise<void>((resolve) => (finishRun = resolve))
+          if (runs.length === 2) throw new Error('CI is down')
+        })
+      },
+    }),
+  )
+  tested.fakes.clock.every = (_ms, fn) => {
+    tick = fn
+    return { cancel: () => undefined }
+  }
+  await tested.start()
+
+  tick()
+  tick()
+  await tested.settle()
+  finishRun()
+  await tested.settle()
+  tick()
+  await tested.settle()
+
+  expect(runs).toEqual([1, 2])
+  expect(tested.calls.filter(({ call }) => call === 'clock.every').map(({ args }) => args[0])).toEqual([30_000])
+  expect(tested.shown.logs).toContain('ci-watch: the every 30000 ms hook failed: CI is down')
+})
+
+test('mod.every refuses a time that is not a whole number of milliseconds', async () => {
+  const lifecycle = createLifecycle(defineMod({ name: 'ticker', setup: (mod) => void mod.every(0.5, () => undefined) }))
+  const fake = fakeClaude({ name: 'ticker', root: '/test/plugins/ticker' })
+
+  await lifecycle.start(fake.claude, async () => ({ name: 'ticker', root: '/test/plugins/ticker', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
+
+  expect(String(lifecycle.failure)).toContain('ticker: mod.every is 0.5. Give a whole number of milliseconds above 0 and at most 2147483647.')
+})
+
+test('mod.session.append adds a note Claude reads, and mod.session.submit asks Claude for a turn', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'ci-watch',
+      setup(mod) {
+        mod.on('SessionStart', async () => {
+          await mod.session.append('CI failed on main.')
+          await mod.session.submit('Find the cause of the CI failure and fix it.')
+        })
+      },
+    }),
+  )
+
+  await tested.fire('SessionStart', { source: 'startup' })
+
+  expect(tested.shown.notes).toEqual(['CI failed on main.'])
+  expect(tested.shown.prompts).toEqual(['Find the cause of the CI failure and fix it.'])
+  expect(tested.calls.find(({ call }) => call === 'session.append')?.args).toEqual([{ message: { type: 'user', content: [{ type: 'text', text: 'CI failed on main.' }] } }])
+})
+
+test('mod.session.append rejects with the reason when a plugin refuses the note', async () => {
+  let failure = ''
+  const tested = testMod(
+    defineMod({
+      name: 'ci-watch',
+      setup: (mod) => mod.on('SessionStart', () => mod.session.append('CI failed.').catch((error: Error) => void (failure = error.message))),
+    }),
+  )
+  tested.fakes.session.append = async () => ({ deny: 'Notes are off in this organization.' })
+
+  await tested.fire('SessionStart', { source: 'startup' })
+
+  expect(failure).toBe('ci-watch: Claude Code refused the note: Notes are off in this organization.')
+})
+
+test("mod.model.complete passes the request and options to Claude Code's model call", async () => {
+  let verdict: unknown
+  const tested = testMod(
+    defineMod({
+      name: 'babysitter',
+      setup: (mod) => mod.on('Stop', async () => void (verdict = await mod.model.complete({ model: 'haiku', prompt: 'Is this reply a waste of time?', timeoutMs: 8000 }))),
+    }),
+  )
+  tested.fakes.model.complete = async () => ({ isAnswered: true, text: 'no' }) as never
+
+  await tested.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Done.' } as never)
+
+  expect(verdict).toEqual({ isAnswered: true, text: 'no' })
+  expect(tested.calls.find(({ call }) => call === 'model.complete')?.args[0]).toEqual({ model: 'haiku', prompt: 'Is this reply a waste of time?', timeoutMs: 8000 })
+})
+
+test('a hook past its timeoutMs answers as if it were absent and logs the timeout', async () => {
+  let passTimeout: () => void = () => undefined
+  const tested = testMod(
+    defineMod({
+      name: 'babysitter',
+      setup(mod) {
+        mod.on('Stop', () => new Promise(() => undefined), { timeoutMs: 8000 })
+      },
+    }),
+  )
+  tested.fakes.clock.after = (ms, fn) => {
+    if (ms === 8000) passTimeout = fn
+    return { cancel: () => undefined }
+  }
+
+  const answer = tested.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Done.' } as never, {})
+  await tested.settle()
+  passTimeout()
+
+  expect(await answer).toEqual({})
+  expect(tested.shown.logs).toContain('babysitter: the Stop hook passed its 8 s timeout')
+})
+
+test('a hook that answers before its timeoutMs keeps its answer', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'babysitter',
+      setup: (mod) => mod.on('Stop', async () => ({ decision: 'block', reason: 'Answer the question directly.' }), { timeoutMs: 8000 }),
+    }),
+  )
+
+  expect(await tested.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Done.' } as never, {})).toEqual({ block: 'Answer the question directly.' })
+})
+
 test("mod.ui.toast passes Claude Code's timeoutMs on", async () => {
   const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
   const toasts: unknown[] = []
   fake.claude.ui.toast = (text, options) => void toasts.push({ text, options })
   const lifecycle = createLifecycle(defineMod({ name: 'notes', setup: (mod) => mod.ui.toast('Saved 3 notes', { timeoutMs: 8000 }) }))
 
-  await lifecycle.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
 
   expect(toasts).toContainEqual({ text: 'Saved 3 notes', options: { timeoutMs: 8000 } })
 })
@@ -218,7 +347,7 @@ test('a PreToolUse hook in a subagent sees agent_id and agent_type', async () =>
       },
     }),
   )
-  await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
 
   await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls', agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, async () => ({ result: '' }) as EventResult<'tool.call'>)
 

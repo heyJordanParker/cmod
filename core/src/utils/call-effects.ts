@@ -2,9 +2,7 @@ import { parseShell, type ShellCommand } from './parse-shell.js'
 import { expandHome, type FileSystem } from './paths.js'
 import { resolve } from '../vendor.js'
 
-export type ToolUse = { tool: string; input: unknown; agentId?: string; agentType?: string }
-
-export type CallBase = { tool: string; agentId?: string; agentType?: string }
+export type CallBase = { tool: string; input: Readonly<Record<string, unknown>>; agentId?: string; agentType?: string }
 export type CommandCall = CallBase & { commands: [string, ...string[]][]; isFullyParsed: boolean }
 export type FileCall = CallBase & { path: string; content?: string; previousContent?: string }
 export type FetchCall = CallBase & { url: string }
@@ -20,7 +18,7 @@ export type CallEffects = {
   subagent: string | undefined
 }
 
-export function callEffects(use: ToolUse, workspace: { cwd: string; home: string; fs: FileSystem }): CallEffects {
+export function callEffects(use: CallBase, workspace: { cwd: string; home: string; fs: FileSystem }): CallEffects {
   const { fs } = workspace
   const absolute = (path: string, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home))
   const access = (path: string): FileAccess => ({ path: absolute(path), contents: undefined })
@@ -60,11 +58,15 @@ export function callEffects(use: ToolUse, workspace: { cwd: string; home: string
   return effects
 }
 
-export function callBaseOf({ tool, agentId, agentType }: ToolUse): CallBase {
-  return { tool, ...(agentId === undefined ? {} : { agentId }), ...(agentType === undefined ? {} : { agentType }) }
+export function inputOf(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
-async function editedContents(use: ToolUse, path: string, fs: FileSystem): Promise<Contents> {
+export function callBaseOf({ tool, input, agentId, agentType }: CallBase): CallBase {
+  return { tool, input, ...(agentId === undefined ? {} : { agentId }), ...(agentType === undefined ? {} : { agentType }) }
+}
+
+async function editedContents(use: CallBase, path: string, fs: FileSystem): Promise<Contents> {
   const previousContent = await previousContentOf(path, fs)
   const oldString = textField(use, 'old_string')
   const newString = textField(use, 'new_string')
@@ -90,16 +92,16 @@ function once<Value>(load: () => Promise<Value>): () => Promise<Value> {
   return () => (loaded ??= load())
 }
 
-function fieldOf(use: ToolUse, name: string): unknown {
-  return typeof use.input === 'object' && use.input !== null ? (use.input as Record<string, unknown>)[name] : undefined
+function fieldOf(use: CallBase, name: string): unknown {
+  return use.input[name]
 }
 
-function textField(use: ToolUse, name: string): string {
+function textField(use: CallBase, name: string): string {
   const value = fieldOf(use, name)
   if (typeof value !== 'string') throw new Error(`The ${use.tool} call has no text field ${name}.`)
   return value
 }
 
-function optionalTextField(use: ToolUse, name: string): string | undefined {
+function optionalTextField(use: CallBase, name: string): string | undefined {
   return fieldOf(use, name) === undefined ? undefined : textField(use, name)
 }

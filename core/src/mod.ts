@@ -10,6 +10,9 @@ import type {
   HookStream,
   HttpInit,
   HttpResponse,
+  ModelCompleteOptions,
+  ModelCompleteRequest,
+  ModelCompleteResult,
   PaneOpenArgs,
   PermissionRequestDecision,
   ProcessRunInit,
@@ -20,6 +23,7 @@ import type {
   RenderElement,
   Settings,
   SettingsReadArgs,
+  Timer,
   ToastOptions,
   UiScrollArgs,
   UiScrollResult,
@@ -117,12 +121,17 @@ export type HookInput<E extends ModEvent> = HookInputs[E]
 
 export type ModHook<E extends ModEvent> = (input: HookInput<E>) => HookAnswer | void | Promise<HookAnswer | void>
 
+export type HookOptions = {
+  readonly timeoutMs?: number
+}
+
 export type Mod<State extends object = Record<never, never>> = {
   readonly name: string
   readonly state: Readonly<State>
   readonly dataFolder: string
-  on<E extends ModEvent>(event: E, hook: ModHook<E>): void
+  on<E extends ModEvent>(event: E, hook: ModHook<E>, options?: HookOptions): void
   use<Handle>(job: Job<Handle, State>): Handle
+  every(ms: number, hook: () => unknown): Timer
   readonly ui: {
     pane(pane: Pane<State>): PaneHandle
     render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
@@ -150,9 +159,14 @@ export type Mod<State extends object = Record<never, never>> = {
   }
   readonly session: {
     messages: Claude['session']['messages']
+    append(text: string): Promise<void>
+    submit(text: string): Promise<void>
   }
   readonly agent: {
     spawn(args: AgentSpawnArgs): Promise<AgentSpawnResult>
+  }
+  readonly model: {
+    complete(request: ModelCompleteRequest, options?: ModelCompleteOptions): Promise<ModelCompleteResult>
   }
   readonly projectRoot: string
   readonly cwd: string

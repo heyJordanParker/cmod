@@ -88,6 +88,48 @@ test('a prompt callback can run past 5 seconds within its deadline', async () =>
   expect(tested.calls.find((call) => call.call === 'process.run')?.args).toEqual([['git', 'log', '-1'], { timeoutMs: 60000 }])
 })
 
+test('a prompt with no trigger gives Claude its new text once each time the state it reads changes it', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      state: { session: { mode: 'propose', presses: 0 } },
+      setup(mod) {
+        mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
+      },
+    }),
+  )
+  await tested.start()
+  tested.state.session.mode = 'review'
+  await tested.settle()
+  expect(tested.shown.notes).toEqual([])
+
+  expect(await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [{ name: 'Mode', text: 'You are in review mode.' }] })
+  tested.state.session.mode = 'build'
+  tested.state.session.presses = 1
+  await tested.settle()
+  tested.state.session.presses = 2
+  await tested.settle()
+
+  expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.'])
+})
+
+test('after a resume, a prompt with no trigger gives Claude its text on the first change', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      state: { session: { mode: 'propose' } },
+      setup(mod) {
+        mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
+      },
+    }),
+  )
+  await tested.fire('SessionStart', { source: 'resume' })
+  tested.state.session.mode = 'build'
+  await tested.settle()
+
+  expect(tested.shown.notes).toEqual(['# Mode\nYou are in build mode.'])
+})
+
 test('a prompt with a name and a text and no trigger adds one prompt.context block', async () => {
   const tested = withPrompt(prompt({ name: 'house-rules', prompt: 'Write tests with bun test.' }))
 

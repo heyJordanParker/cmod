@@ -13,7 +13,9 @@ export type Fakes = {
   http: { fetch?: Claude['http']['fetch'] }
   settings: { read?: Claude['settings']['read'] }
   ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll'] }
-  session: { messages?: Claude['session']['messages'] }
+  session: { messages?: Claude['session']['messages']; append?: Claude['session']['append'] }
+  prompt: { submit?: Claude['prompt']['submit'] }
+  model: { complete?: Claude['model']['complete'] }
   agent: { list?: Claude['agent']['list']; spawn?: Claude['agent']['spawn'] }
   clock: { after?: Claude['clock']['after']; every?: Claude['clock']['every'] }
   cmod: { call?: Claude['cmod']['call'] }
@@ -21,6 +23,8 @@ export type Fakes = {
 
 export type Shown = {
   readonly toasts: string[]
+  readonly notes: string[]
+  readonly prompts: string[]
   readonly logs: string[]
   readonly debug: string[]
   readonly statuses: (string | undefined)[]
@@ -40,8 +44,8 @@ export type FakeClaude = {
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, session: {}, agent: {}, clock: {}, cmod: {} }
-  const shown: Shown = { toasts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [] }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {} }
+  const shown: Shown = { toasts: [], notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
   const store = new Map<string, unknown>()
@@ -59,6 +63,15 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const rejected = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Promise<Result>) | undefined) => {
     const run = faked(call, answer)
     return async (...args: Args): Promise<Result> => run(...args)
+  }
+
+  const appendNote: Claude['session']['append'] = async ({ message }) => {
+    shown.notes.push(message.content.map((block) => (typeof block['text'] === 'string' ? block['text'] : '')).join(''))
+    return { message, uuid: `note-${shown.notes.length}` } as unknown as Awaited<ReturnType<Claude['session']['append']>>
+  }
+  const submitPrompt: Claude['prompt']['submit'] = async ({ text }) => {
+    shown.prompts.push(text)
+    return { text, origin: { kind: 'plugin', name: plugin.name } } as unknown as Awaited<ReturnType<Claude['prompt']['submit']>>
   }
 
   const claude: Claude = {
@@ -142,7 +155,10 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       usage: async () => ({ context: { window: 200000 }, rateLimits: {}, cost: { usd: 0 } }) as unknown as Awaited<ReturnType<Claude['session']['usage']>>,
       surfaces: async () => ['terminal'],
       messages: rejected('session.messages', () => fakes.session.messages as ((args?: unknown) => Promise<unknown>) | undefined) as Claude['session']['messages'],
+      append: rejected('session.append', () => fakes.session.append ?? appendNote),
     },
+    prompt: { submit: rejected('prompt.submit', () => fakes.prompt.submit ?? submitPrompt) },
+    model: { complete: rejected('model.complete', () => fakes.model.complete) },
     command: {
       register: async (command) => {
         shown.commands.push(command.name)

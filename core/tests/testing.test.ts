@@ -510,3 +510,20 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
   expect(await tested.type('/branch')).toEqual({ text: 'main' })
   expectBranchAsked(tested.calls)
 })
+
+test("fire('cmod.call') answers a method of the mod's api with { value }, as dependencies.md shows", async () => {
+  const tracer = defineMod({
+    name: 'tracer',
+    api: {
+      signatures: async ({ path }: { path: string }, mod) =>
+        (await mod.fs.read(path)).split('\n').flatMap((text, index) => {
+          const name = /^export function (\w+)/.exec(text)?.[1]
+          return name === undefined ? [] : [{ name, line: index + 1 }]
+        }),
+    },
+    setup() {},
+  })
+  const tested = testMod(tracer, { files: { '/work/a.ts': 'export function greet() {}\n' } })
+
+  expect(await tested.fire('cmod.call', { to: 'tracer', method: 'signatures', input: { path: '/work/a.ts' } })).toEqual({ value: [{ name: 'greet', line: 1 }] })
+})

@@ -56,7 +56,10 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
       messages: ((args?: Parameters<Claude['session']['messages']>[0]) => (args === undefined ? $.session.messages() : $.session.messages(args))) as Claude['session']['messages'],
+      append: (args) => $.session.append(args),
     },
+    prompt: { submit: (args) => $.prompt.submit(args) },
+    model: { complete: (request, options) => $.model.complete(request, options) },
     command: { register: (command) => $.command.register(command) },
     tool: { register: (tool) => $.tool.register(tool) },
     agent: {

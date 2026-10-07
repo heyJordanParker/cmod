@@ -133,10 +133,11 @@ test('publish writes a control character in the bundle as a \\u escape, so a rea
   expect(bundle).not.toContain('\u007f')
 })
 
-test('a "files" list in package.json limits the release to its paths, .claude-plugin/, package.json, the README, and the license', async () => {
+test('a "files" list in package.json limits the release to its paths, .claude-plugin/, package.json, tsconfig.json, the README, and the license', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, {
     'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'src'] }),
+    'tsconfig.json': JSON.stringify({ compilerOptions: { jsx: 'react', jsxFactory: 'h' } }),
     'README.md': '# Greeter\n',
     LICENSE: 'MIT\n',
     'docs/notes.md': '# Notes\n',
@@ -149,7 +150,7 @@ test('a "files" list in package.json limits the release to its paths, .claude-pl
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
-  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
+  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts', 'tsconfig.json'])
 })
 
 test('a "files" list that leaves out the install step still releases its folder, so the mod installs', async () => {

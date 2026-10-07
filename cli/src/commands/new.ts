@@ -167,7 +167,11 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
     'tsconfig.json': json({
       extends: './.claude-plugin/types/tsconfig.json',
       compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },
-      include: ['hooks', 'src', 'tests', 'types', 'node_modules/bun-types/test.d.ts'],
+      include: ['hooks', 'src', 'types'],
+    }),
+    'tests/tsconfig.json': json({
+      extends: '../tsconfig.json',
+      include: ['.', '../types', '../node_modules/bun-types/index.d.ts'],
     }),
   }
   if (!isProject) {

@@ -5,12 +5,21 @@
 ## mod.on
 
 ```ts
-mod.on<E extends ModEvent>(event: E, hook: ModHook<E>): void
+mod.on<E extends ModEvent>(event: E, hook: ModHook<E>, options?: { timeoutMs?: number }): void
 
 type ModHook<E> = (input: HookInput<E>) => HookAnswer | void | Promise<HookAnswer | void>
 ```
 
 Add hooks in `setup`. Each `mod.on` adds one more hook. Several hooks on one event all run.
+
+A hook that waits on something slow, such as a model call or a server, takes `timeoutMs`. Past it, the event goes on as if the hook were absent, and cmod logs `<mod>: the <event> hook passed its <n> s timeout`. Claude Code also gives a hook's own code 10 seconds, and the time a hook waits on a `mod` call does not count toward those 10 seconds, so `timeoutMs` is the limit on a slow call. `timeoutMs` is a whole number above 0 and at most `2147483647`, and any other value stops `setup` with the fix.
+
+```ts
+mod.on('Stop', async ({ last_assistant_message }) => {
+  const verdict = await mod.model.complete({ model: 'haiku', prompt: `Is this reply complete? Answer yes or no.\n\n${last_assistant_message}` })
+  if (verdict.isAnswered && verdict.text.trim().toLowerCase().startsWith('no')) return { decision: 'block', reason: 'Finish the reply.' }
+}, { timeoutMs: 8000 })
+```
 
 `HookInput<E>`, exported from `mod.js`, is the input a hook on `E` gets, for a hook that lives in a function of its own:
 

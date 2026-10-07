@@ -12,6 +12,7 @@ import { listFiles, readJson, readText, writeAtomically } from '../files.js'
 import { preparePackages, readPlugin, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand, spawn } from '../process.js'
 import { startProgress } from '../progress.js'
+import { bundledHooks } from './publish.js'
 import { linkedFolders } from '../settings.js'
 import { storePath } from '../store.js'
 
@@ -23,9 +24,10 @@ ${summary}
 
 Runs every check this machine can run on the mod at path (default: the current
 folder): installs its packages, checks its layout and that each step runs a
-script, validates it with Claude Code, type-checks it, lints it, runs its tests
-with bun test and with claude plugin test, and checks its name. Each failure
-names its fix.`
+script, bundles its hooks module as cmod publish does, validates it with Claude
+Code, type-checks it with tsconfig.json and, when it exists, tests/tsconfig.json,
+lints it, runs its tests with bun test and with claude plugin test, and checks
+its name. Each failure names its fix.`
 
 type Result = { status: 'pass' | 'fail' | 'skip'; text: string; fix?: string }
 
@@ -42,6 +44,7 @@ const checks: Check[] = [
   { heading: 'Checking the steps', run: checkSteps },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
+  { heading: 'Bundling the hooks', run: checkBundle },
   { heading: 'Validating with Claude Code', run: checkValidate },
   { heading: 'Type-checking', run: checkTypes },
   { heading: 'Linting', run: checkLint },
@@ -124,6 +127,16 @@ async function checkBinaries(plugin: Plugin): Promise<Result> {
   return { status: 'pass', text: 'No prebuilt binaries outside cli/' }
 }
 
+async function checkBundle(plugin: Plugin): Promise<Result> {
+  try {
+    const bundled = await bundledHooks(plugin.root)
+    if (bundled === undefined) return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so nothing to bundle' }
+    return { status: 'pass', text: `hooks/${bundled.module} bundles with its packages, as cmod publish bundles it` }
+  } catch (error) {
+    return { status: 'fail', text: messageOf(error), fix: 'Fix each error, then run cmod check again.' }
+  }
+}
+
 async function checkValidate(plugin: Plugin): Promise<Result> {
   const targets = [join(plugin.root, '.claude-plugin', 'plugin.json')]
   if (existsSync(join(plugin.root, '.claude-plugin', 'marketplace.json'))) targets.push(join(plugin.root, '.claude-plugin', 'marketplace.json'))
@@ -145,9 +158,14 @@ async function checkTypes(plugin: Plugin): Promise<Result> {
   }
   const tool = await fetchTool(typescript)
   if (typeof tool !== 'string') return tool
-  const result = await runTool(tool, ['-p', plugin.root, '--noEmit'], plugin.root)
-  if (result.exitCode !== 0) return { status: 'fail', text: `tsc ${typescript.version} found type errors:\n${indent(result.output)}`, fix: 'Fix each error, then run cmod check again.' }
-  return { status: 'pass', text: `tsc ${typescript.version} found no type errors` }
+  const configs = ['tsconfig.json', 'tests/tsconfig.json'].filter((config) => existsSync(join(plugin.root, config)))
+  const outputs: string[] = []
+  for (const config of configs) {
+    const result = await runTool(tool, ['-p', join(plugin.root, config), '--noEmit'], plugin.root)
+    if (result.exitCode !== 0) outputs.push(`${config}:\n${result.output}`)
+  }
+  if (outputs.length > 0) return { status: 'fail', text: `tsc ${typescript.version} found type errors:\n${indent(outputs.join('\n'))}`, fix: 'Fix each error, then run cmod check again.' }
+  return { status: 'pass', text: `tsc ${typescript.version} found no type errors with ${configs.join(' and ')}` }
 }
 
 async function writeClaudeTypes(plugin: Plugin): Promise<void> {

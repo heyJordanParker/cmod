@@ -1,5 +1,6 @@
 import type { Job, JobContext, Mod } from '../mod.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
+import { onStateChange } from '../runtime/state.js'
 import { listed, messageOf } from '../utils/text.js'
 import { callEffects, type ToolCall } from '../utils/call-effects.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
@@ -48,21 +49,48 @@ export function prompt<State extends object = Record<never, never>>({ name, prom
       addAfterCalls(job, targets, headedText, log)
       job.announce(`the ${name} prompt after ${listed(targets.map(targetWords))}`)
     } else {
-      addOncePerConversation(job, name, () => textFor({}, modWithin(job, deadline)), log)
+      addKeptCurrent(job, name, () => textFor({}, modWithin(job, deadline)), log)
       job.announce(`the ${name} prompt`)
     }
   }
 }
 
-function addOncePerConversation(job: JobContext, name: string, textFor: () => Promise<string | undefined>, log: (reason: string) => void): void {
+function addKeptCurrent<State extends object>(job: JobContext<State>, name: string, textFor: () => Promise<string | undefined>, log: (reason: string) => void): void {
+  let given: string | undefined
+  let hasStarted = false
+  let isQueued = false
+  let updates = Promise.resolve()
+
+  job.on('classic.SessionStart', (e, next) => {
+    hasStarted = e.source === 'resume' || e.source === 'compact'
+    if (!hasStarted) given = undefined
+    return next(e)
+  })
   job.on('prompt.context', async (e, next) => {
     const below = await next(e)
+    hasStarted = true
     if (below.blocks.some((block) => block.name === name)) {
       log(`a block named "${name}" is already in the context`)
       return below
     }
+    given = await textFor()
+    return given === undefined ? below : { ...below, blocks: [...below.blocks, { name, text: given }] }
+  })
+
+  const update = async () => {
+    isQueued = false
+    if (!hasStarted) return
     const value = await textFor()
-    return value === undefined ? below : { ...below, blocks: [...below.blocks, { name, text: value }] }
+    if (value === undefined || value === given) return
+    given = value
+    await job.claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: `# ${name}\n${value}` }] } }).then((added) => {
+      if (added.deny !== undefined) log(`Claude Code refused the new text: ${added.deny}`)
+    })
+  }
+  onStateChange(job.mod.state, () => {
+    if (isQueued) return
+    isQueued = true
+    updates = updates.then(update).catch((error: unknown) => log(messageOf(error)))
   })
 }
 

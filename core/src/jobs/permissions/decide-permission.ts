@@ -1,6 +1,6 @@
 import { strictness } from '../../runtime/hooks.js'
 import { messageOf } from '../../utils/text.js'
-import { callBaseOf, callEffects, type CallEffects, type ToolCall, type ToolUse } from '../../utils/call-effects.js'
+import { callBaseOf, callEffects, type CallEffects, type ToolCall } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
 import { folderInScope, matchTarget, targetOf, type MatchedCall, type Target, type TargetCalls, type TargetKey, type TargetOf } from './match-target.js'
 import { resolve } from '../../vendor.js'
@@ -22,7 +22,7 @@ export function stricterVerdict<Result extends Verdict>(first: Result, second: R
   return strictness.indexOf(second.decision) > strictness.indexOf(first.decision) ? second : first
 }
 
-export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: ToolUse, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<Verdict | undefined> {
+export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: ToolCall, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<Verdict | undefined> {
   try {
     const effects = callEffects(use, workspace)
     for (const decision of ['deny', 'ask'] as const) {
@@ -39,7 +39,7 @@ export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: To
   }
 }
 
-async function ruleOutcome<Mod>(rule: Rule<Mod>, use: ToolUse, effects: CallEffects, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<{ failure: string | undefined } | undefined> {
+async function ruleOutcome<Mod>(rule: Rule<Mod>, use: ToolCall, effects: CallEffects, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<{ failure: string | undefined } | undefined> {
   const matched = await matchTarget(rule, use, effects, workspace)
   const calls = matched.length > 0 ? matched : await unparsedMatches(rule, use, effects, workspace)
   if (calls.length === 0) return undefined
@@ -56,7 +56,7 @@ async function ruleOutcome<Mod>(rule: Rule<Mod>, use: ToolUse, effects: CallEffe
   return undefined
 }
 
-async function unparsedMatches(target: Target, use: ToolUse, effects: CallEffects, workspace: Workspace): Promise<MatchedCall[]> {
+async function unparsedMatches(target: Target, use: ToolCall, effects: CallEffects, workspace: Workspace): Promise<MatchedCall[]> {
   const shell = effects.shell
   if (shell === undefined || shell.isFullyParsed) return []
   const { key, patterns } = targetOf(target)

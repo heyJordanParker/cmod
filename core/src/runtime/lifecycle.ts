@@ -19,6 +19,7 @@ export type Plugin = {
   readonly store: string
   readonly isInstalled: boolean
   readonly shouldRecord: boolean
+  readonly keys: Readonly<Record<string, string>>
 }
 
 export type Phase = 'starting' | 'installing' | 'waiting' | 'declined' | 'failed' | 'ready' | 'active'
@@ -36,6 +37,7 @@ type ModRuntime = {
   readonly router: Router
   readonly progress: Progress
   readonly dataFolder: string
+  readonly keys: Readonly<Record<string, string>>
   readonly checksPermissions: () => boolean
 }
 
@@ -74,12 +76,12 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
   const version = typeof manifest?.version === 'string' ? manifest.version : undefined
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
-  const plugin = { name, root, version, store }
   if (name === cmodPluginName) {
     const installed = await cmodVersion(claude)
-    return { ...plugin, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false }
+    return { name, root, version, store, keys: {}, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false }
   }
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {}
+  const plugin = { name, root, version, store, keys: steps.keys ?? {} }
   const record = await readRecord(read, store, name)
   if (Object.keys(steps).length === 0) return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version }
   const scripts = await scriptsSha256(steps, {
@@ -181,7 +183,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   const activate = async () => {
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), checksPermissions }).catch((error: unknown) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), keys: plugin.keys, checksPermissions }).catch((error: unknown) => {
       fail(messageOf(error), 'Fix it, then run /reload-plugins.')
       throw error
     })
@@ -215,8 +217,12 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
       return
     }
     showLine().wait('Waiting for your answer')
-    const removal = event.uninstall === '' ? '' : `, and ${event.uninstall} when you remove it`
-    const answer = await claude().ui.ask(`${name} runs ${event.install} to install${removal}. Run it now?`, { options: ['Install', 'Not now'], header: 'Install' })
+    const actions = [
+      ...(event.install === '' ? [] : [`runs ${event.install} to install`]),
+      ...(event.uninstall === '' ? [] : [`runs ${event.uninstall} when you remove it`]),
+      ...(event.keys === '' ? [] : [`binds ${event.keys}`]),
+    ]
+    const answer = await claude().ui.ask(`${name} ${listed(actions)}. Install it now?`, { options: ['Install', 'Not now'], header: 'Install' })
     if (answer === 'Install') return install(event.sha256)
     phase = 'declined'
     endLine()
@@ -350,7 +356,8 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
 }
 
 async function createMod<State extends object>(definition: ModDefinition<State>, runtime: ModRuntime): Promise<ActiveMod<State>> {
-  const { claude, router, progress } = runtime
+  const { router, progress } = runtime
+  const claude = checkingKeys(runtime.claude, definition.name, runtime.keys)
   const added: string[] = []
   const hookEvents: ModEvent[] = []
   const announce = (feature: string) => {
@@ -367,12 +374,26 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     name: definition.name,
     state: modState.state,
     dataFolder: runtime.dataFolder,
-    on(event, hook) {
+    on(event, hook, options) {
+      const bounded = options?.timeoutMs === undefined ? hook : timedHook(definition.name, event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude)
       if (!hookEvents.includes(event)) hookEvents.push(event)
-      if (event === 'PreToolUse') router.add('tool.call', preToolUseHook(definition.name, hook as ModHook<'PreToolUse'>, claude, agents, held))
-      else router.add(`classic.${event as Exclude<ModEvent, 'PreToolUse'>}`, classicHook(definition.name, event as Exclude<ModEvent, 'PreToolUse'>, hook as ModHook<Exclude<ModEvent, 'PreToolUse'>>, claude, agents))
+      if (event === 'PreToolUse') router.add('tool.call', preToolUseHook(definition.name, bounded as ModHook<'PreToolUse'>, claude, agents, held))
+      else router.add(`classic.${event as Exclude<ModEvent, 'PreToolUse'>}`, classicHook(definition.name, event as Exclude<ModEvent, 'PreToolUse'>, bounded as ModHook<Exclude<ModEvent, 'PreToolUse'>>, claude, agents))
     },
     use: (job) => job({ mod, claude, on: (event, hook) => router.add(event, hook), announce, reserveName, toolCalls: agents }),
+    every(ms, hook) {
+      let isRunning = false
+      return claude.clock.every(checkedMs(definition.name, 'mod.every', ms), () => {
+        if (isRunning) return
+        isRunning = true
+        void Promise.resolve()
+          .then(hook)
+          .catch((error: unknown) => claude.ui.log(`${definition.name}: the every ${ms} ms hook failed: ${messageOf(error)}`))
+          .finally(() => {
+            isRunning = false
+          })
+      })
+    },
     ui: area.ui,
     process: {
       run: (argv, init) => claude.process.run(argv, init),
@@ -387,8 +408,19 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     },
     http: { fetch: (url, init) => claude.http.fetch(url, init) },
     settings: { read: (args) => claude.settings.read(args) },
-    session: { messages: claude.session.messages },
+    session: {
+      messages: claude.session.messages,
+      async append(text) {
+        const added = await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+        if (added.deny !== undefined) throw new Error(`${definition.name}: Claude Code refused the note: ${added.deny}`)
+      },
+      async submit(text) {
+        const submitted = await claude.prompt.submit({ text })
+        if ('drop' in submitted && typeof submitted.drop === 'string') throw new Error(`${definition.name}: Claude Code dropped the prompt: ${submitted.drop}`)
+      },
+    },
     agent: { spawn: (args) => claude.agent.spawn(args) },
+    model: { complete: (request, options) => claude.model.complete(request, options) },
     get projectRoot() {
       return modState.root
     },
@@ -462,6 +494,49 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   await failsAs('its open panes did not load', () => area.restorePanes())
   if (hookEvents.length > 0) added.push(`${hookEvents.length === 1 ? 'a hook' : 'hooks'} on ${listed(hookEvents)}`)
   return { mod, added }
+}
+
+function checkingKeys(claude: Claude, name: string, keys: Readonly<Record<string, string>>): Claude {
+  const bound = Object.entries(keys)
+  if (bound.length === 0) return claude
+  const register: Claude['command']['register'] = (command) => {
+    for (const [key, commandName] of bound) {
+      if (commandName === command.name && command.immediate !== true) {
+        claude.ui.log(`${name}: ${key} runs /${command.name}, which waits for Claude's turn to end and adds a row to the conversation. Give /${command.name} immediate: true.`)
+      }
+    }
+    return claude.command.register(command)
+  }
+  return { ...claude, command: { ...claude.command, register } }
+}
+
+const longestTimerMs = 2_147_483_647
+
+function checkedMs(name: string, subject: string, ms: number): number {
+  if (!Number.isInteger(ms) || ms <= 0 || ms > longestTimerMs) throw new Error(`${name}: ${subject} is ${ms}. Give a whole number of milliseconds above 0 and at most ${longestTimerMs}.`)
+  return ms
+}
+
+function timedHook<E extends ModEvent>(name: string, event: E, hook: ModHook<E>, ms: number, claude: Claude): ModHook<E> {
+  return (input) =>
+    new Promise((resolve, reject) => {
+      const timer = claude.clock.after(ms, () => {
+        claude.ui.log(`${name}: the ${event} hook passed its ${ms / 1000} s timeout`)
+        resolve(undefined)
+      })
+      Promise.resolve()
+        .then(() => hook(input))
+        .then(
+          (answer) => {
+            timer.cancel()
+            resolve(answer)
+          },
+          (error: unknown) => {
+            timer.cancel()
+            reject(error)
+          },
+        )
+    })
 }
 
 async function failsAs(subject: string, step: () => unknown): Promise<void> {

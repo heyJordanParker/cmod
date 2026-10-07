@@ -18,7 +18,7 @@ A job's bad options throw at one of two times. `check`, `permissions`, and `prom
 | `tool` | `jobs/tool.js` | A tool Claude calls |
 | `permissions` | `jobs/permissions.js` | Rules that deny a call, or ask the person first |
 | `check` | `jobs/check.js` | A command that runs after matching calls, and reports a failure to Claude |
-| `prompt` | `jobs/prompt.js` | Text Claude reads: once, before matching prompts, or after matching calls |
+| `prompt` | `jobs/prompt.js` | Text Claude reads: kept current with the mod's state, before matching prompts, or after matching calls |
 | `statusLine` | `jobs/status-line.js` | A status line |
 | `program` | `jobs/program.js` | A background program the mod talks to over HTTP |
 
@@ -57,6 +57,12 @@ type Reply = string | { text?: string; context?: string } | undefined
 - `description` is the line the typeahead and `/help` show.
 - `argumentHint` is drawn dim after the name, such as `[path]`.
 - `immediate: true` runs the command at once while Claude is still working. Without it, the command waits for the turn to end.
+- A command lasts for the session. Adding a command with a name the session already has replaces it, and Claude Code has no call that removes one, so a command whose source is gone answers that it no longer applies.
+- A key the mod binds in its `package.json` `"cmod": { "keys": { "shift+tab": "/mode" } }` runs the command ([install-steps.md](install-steps.md#key-bindings)). The command of a key takes `immediate: true`, so the key works while Claude works, and a `reply` that returns `undefined`, so a press adds no row to the conversation. It changes `mod.state`, and a pane or band that shows the state is how the person sees the press. cmod logs `<mod>: <key> runs /<name>, which waits for Claude's turn to end and adds a row to the conversation. Give /<name> immediate: true.` for a key whose command lacks it.
+
+```ts
+mod.use(slashCommand({ name: 'mode', description: 'Switch to the next mode', immediate: true, reply: (_input, mod) => void (mod.state.session.mode = next(mod.state.session.mode)) }))
+```
 - `reply` gets `args` and `positionals`. `args` is everything after the name as Claude Code passes it, and `''` for a bare `/<name>`. cmod hands it on unchanged. `positionals` is that text split into words the way a shell splits them, so extra spaces never reach it. `tested.type('/todo  milk')` drops the spaces after the name.
 - A `string` reply, or `text`, shows as the command's output. `context` is text Claude reads after the output, and the person never sees. `undefined` shows nothing.
 - A `reply` that throws shows `/<name> failed: <error>`.
@@ -142,6 +148,7 @@ export const tickets = defineMod({
 | `{ tool: 'mcp__tickets__*' }` | A call of a matching tool name |
 
 - A `read`, `write`, `fetch`, `subagent`, or `tool` pattern is a glob, matched without regard to case.
+- A pattern that starts with `!` leaves out the calls it matches. A call matches the target when it matches a pattern without `!` and no pattern with one: `{ write: ['**', '!docs/plans/**'] }` matches every write except those under `docs/plans/`, and `{ command: ['git', '!git status', '!git log'] }` matches every git command except those two. A line of several commands matches when one of its commands does, so `git status && git push` matches that rule. A target needs a pattern without `!`, or it throws `A <key> target needs a pattern without "!" for its "!" patterns to leave calls out of, such as ['**', ...]`.
 - A `read` or `write` pattern is relative to the project root. A pattern that starts with `~/` is relative to the home folder, and one that starts with `/` is absolute. A pattern that starts with `**` matches an absolute path too. A path that leads through a symbolic link also matches by where it lands.
 - A mod installed for the person matches calls in every folder. A project plugin, made with `cmod new --project`, matches only calls inside its own repository's work trees, linked worktrees included, and its relative patterns start at the root of the work tree the call is in.
 
@@ -160,7 +167,9 @@ A `command` pattern is not a glob. cmod splits it into words the way it splits a
 ## permissions
 
 ```ts
-permissions<State>(rules: { deny?: Rule<State>[]; ask?: Rule<State>[] }): Job<void, State>
+permissions<State>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<void, State>
+
+type PermissionRules<State> = { deny?: Rule<State>[]; ask?: Rule<State>[] }
 
 type Rule<State> = Target & {
   when?: (call: <the call of the target's key>, mod: Mod<State>) => boolean | Promise<boolean>
@@ -169,23 +178,24 @@ type Rule<State> = Target & {
 ```
 
 - Before each call, cmod tries every `deny` rule, then every `ask` rule. The first rule that matches decides, and its `reason` goes with the decision. No match leaves the call to Claude Code.
+- Rules that change with the mod's state come from a function of `mod.state`, which cmod calls before each call. A mode that changes what Claude may write changes `mod.state`, and the next call follows it, as the panes and a `prompt` with no trigger do. A function that throws, or returns a rule that names no target, denies the call with `The permission rules of <mod> failed, so it denies the call: <error>`. A function that returns `{}` leaves every call to Claude Code.
 - The strictest answer wins: a mod's `ask` or `deny` beats Claude Code's `allow`, and Claude Code's `deny` beats a mod's `ask`.
 - `when` narrows a rule. The rule matches only when `when` resolves true. A `when` that throws makes the rule match, and the reason adds `Its when check failed: <error>`.
 - When cmod cannot read the call or the session, it denies the call with the reason.
-- For a PowerShell command, or a Bash command cmod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one.
+- For a PowerShell command, or a Bash command cmod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one. A `!` pattern leaves nothing out of such a line, so the rule errs toward matching.
 - `permissions({})` throws `permissions: give it a deny or an ask rule, or remove it from setup.`
 - A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it the mod does not start.
 
-`when` gets the call, typed by the target's key. `jobs/permissions.js` exports each type:
+`when` gets the call, typed by the target's key. `jobs/permissions.js` exports each type, and `ToolCall` is any of them:
 
-| Key | Call type | Fields beyond `tool`, `agentId`, and `agentType` |
+| Key | Call type | Fields beyond `tool`, `input`, `agentId`, and `agentType` |
 | --- | --- | --- |
 | `command` | `CommandCall` | `commands`, each `[program, ...arguments]`, and `isFullyParsed` |
 | `read`, `write` | `FileCall` | `path`, and for an `Edit` or a `Write`, `content`, the new text, and `previousContent`, the text before |
 | `fetch` | `FetchCall` | `url` |
 | `subagent`, `tool` | `ToolCall` | none |
 
-`agentId` and `agentType` name the subagent that makes the call. In the main conversation `agentId` is absent, and `agentType` is the agent the session started as, when it started as one. `jobs/permissions.js` also exports `Target`, `Rule`, and `PermissionRules`.
+`tool` is the tool's name, such as `Bash`, and `input` is its input as Claude Code sent it, such as `{ command, description }` for `Bash`, so a rule reads any field cmod does not parse. `agentId` and `agentType` name the subagent that makes the call. In the main conversation `agentId` is absent, and `agentType` is the agent the session started as, when it started as one. `jobs/permissions.js` also exports `Target`, `Rule`, and `PermissionRules`.
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -249,11 +259,12 @@ prompt<State>(options: {
 
 | Options | When Claude reads the text |
 | --- | --- |
-| neither | Once per conversation, as a block of context named `name`. A block of that name already in the context wins. |
+| neither | At the start of each conversation, as a block of context named `name`. A block of that name already in the context wins. Then again whenever `mod.state` changes and the text differs from what Claude last got. |
 | `when` | With each prompt the person sends whose text matches the `RegExp`, or for which the function returns true. `input.userPrompt` is the prompt. |
 | `after` | After each call that matches a target and succeeds, with the call's result. `input.call` is the matched call. |
 
 - With `when` or `after`, the text goes to Claude under the heading `# <name>`.
+- With neither, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again, and when the text differs from what Claude last got, it adds `# <name>` and the new text to the conversation as a note Claude reads on its next call to the model, through `mod.session.append`. Several changes in a row give one note with the last text. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
 - A `prompt` function that returns `undefined` or `''` adds nothing. One that throws adds nothing, and the error goes to Claude Code's debug log.
 - `name` cannot be blank. `when` and `after` together throw: add a second `prompt` for the other trigger. Two prompts with one name in a mod throw.
 - A `when` prompt runs on `prompt.submit` and adds its text to the event it passes down. In a test, `fire('prompt.submit', …)` returns that text in the answer's `context`. [testing.md](testing.md#test-a-prompt-with-when) shows how.
@@ -264,8 +275,10 @@ import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'
 
 export const conventions = defineMod({
   name: 'conventions',
+  state: { session: { mode: 'build' } },
   setup(mod) {
     mod.use(prompt({ name: 'Commit messages', prompt: 'Write commit messages in the imperative mood.' }))
+    mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
     mod.use(prompt({ name: 'Migrations', when: /\bmigrat/i, prompt: 'Every migration has a down step.' }))
     mod.use(prompt({ name: 'Schema', after: { write: 'db/schema.sql' }, prompt: async (_input, mod) => `The schema is now:\n${await mod.fs.read(`${mod.projectRoot}/db/schema.sql`)}` }))
   },
@@ -423,6 +436,9 @@ Each member calls the member of the same name in Claude Code's hooks API, `$`, w
 | `session.usage()` | When the session began, the context window's fill, the rate-limit windows, and the cost, as the status line has them. |
 | `session.surfaces()` | Every surface the session draws on, `terminal` first. Empty in a plain `-p` run. |
 | `session.messages(args?)` | What `mod.session.messages` calls. |
+| `session.append({ message, agentId? })` | Adds a message Claude reads to the conversation, or to a subagent's, and resolves `{ message, uuid }` or `{ deny }`. `mod.session.append` is built on it. |
+| `prompt.submit({ text, asUser? })` | Sends a prompt Claude answers as a turn once the session is idle. `mod.session.submit` is built on it. |
+| `model.complete(request, options?)` | What `mod.model.complete` calls. |
 | `command.register(spec)` | Adds a slash command. `slashCommand` is built on it. |
 | `tool.register(spec)` | Adds a tool. `tool` is built on it. |
 | `agent.list()` | The session's subagents and teammates so far. |
