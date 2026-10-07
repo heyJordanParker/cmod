@@ -240,6 +240,24 @@ mod.agent.spawn(args: { prompt: string; description?; subagentType?; model?; nam
 
 `spawn` starts a subagent in the background, the way the Agent tool starts one, and resolves `{ agentId, model }` once it started, or `{ deny }` when a hook refused it. It does not wait for the subagent to finish. `subagentType` names an agent type, such as `explorer`. `mod.session.messages({ agentId })` reads the subagent's conversation so far.
 
+The subagent's answer arrives on the mod's `SubagentStop` hook once it finishes: the input's `agent_id` is the `agentId` that `spawn` resolved, and its `last_assistant_message` is the subagent's final reply. A hook may wait for it, as this one does:
+
+```ts
+const answers = new Map<string, (answer: string) => void>()
+
+mod.on('SubagentStop', (input) => {
+  answers.get(input.agent_id)?.(input.last_assistant_message ?? '')
+})
+
+mod.on('UserPromptSubmit', async (input) => {
+  if (!input.prompt.startsWith('/summarize')) return
+  const spawned = await mod.agent.spawn({ prompt: 'Summarize README.md in one line.', subagentType: 'Explore' })
+  if (spawned.agentId === undefined) return
+  const summary = await new Promise<string>((resolve) => answers.set(spawned.agentId as string, resolve))
+  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: summary } }
+})
+```
+
 ## messageOf
 
 ```ts
