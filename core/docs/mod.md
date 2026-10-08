@@ -294,7 +294,7 @@ mod.settings.page(page: Pane<State>): void
 mod.settings.open(pageId?: string): Promise<void>
 ```
 
-`/mods` shows each mod's description, options, permissions, and keys, and removes a mod. `page` adds a page of the mod's own to its entry there, drawn as any pane is ([ui.md](ui.md)). `open` opens that page, or with no id opens the mod's entry in `/mods`. `open` rejects for an id `page` did not add.
+`/mods` shows each mod's description, options, permissions, and keys, and turns a mod off or removes it. `page` adds a page of the mod's own to its entry there, drawn as any pane is ([ui.md](ui.md)). `open` opens that page, or with no id opens the mod's entry in `/mods`. `open` rejects for an id `page` did not add.
 
 ```tsx
 mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: (current) => <Text>{current.state.session.lastRun}</Text> }))

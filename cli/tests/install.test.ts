@@ -47,6 +47,7 @@ case "$*" in
   "plugin marketplace add "*) ;;
   "plugin install "*" --json") cp "$HOME/available/$3" "$HOME/installed/$3" && echo '{"outcome":"ok","message":"${claudeCodeLine}"}' ;;
   "plugin uninstall "*" --json") rm "$HOME/installed/$3" && echo '{"outcome":"ok"}' ;;
+  "plugin enable "*" --json"|"plugin disable "*" --json") echo '{"command":"'"$2"'","outcome":"ok"}' ;;
   "plugin update "*" --json")
     if cp "$HOME/available/$3" "$HOME/installed/$3" 2>/dev/null; then echo '{"outcome":"ok"}'; else echo '{"outcome":"error","message":"'"$3"' is in no marketplace Claude Code has"}'; exit 1; fi ;;
   *) exit 1 ;;
@@ -207,6 +208,30 @@ test('cmod remove of a name Claude Code does not hold and cmod never set up poin
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toBe('cmod remove: ghost is neither installed nor set up. cmod list shows every plugin.\n')
+})
+
+test('cmod disable and cmod enable turn a mod off and on through Claude Code, and keep its setup', async () => {
+  const home = await marketplaceHome({ demo: modFiles('demo') })
+  expect((await cmod(home, 'install', 'demo@market', '--yes')).exitCode).toBe(0)
+  await claudeCalls(home)
+
+  const off = await cmod(home, 'disable', 'demo')
+  const on = await cmod(home, 'enable', 'demo@market')
+
+  expect(off.exitCode).toBe(0)
+  expect(off.stdout).toContain('✔ Turned demo@market off in Claude Code. A running session follows after /reload-plugins.\n')
+  expect(on.stdout).toContain('✔ Turned demo@market on in Claude Code. A running session follows after /reload-plugins.\n')
+  expect(await claudeCalls(home)).toBe('plugin list --json\nplugin disable demo@market --json\nplugin list --json\nplugin enable demo@market --json\n')
+  expect(existsSync(join(storeOf(home), 'records/demo.json'))).toBe(true)
+})
+
+test('cmod disable of a name Claude Code does not hold points at cmod list', async () => {
+  const home = await marketplaceHome({})
+
+  const result = await cmod(home, 'disable', 'ghost')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe('cmod disable: No installed plugin is named ghost. cmod list shows the installed plugins.\n')
 })
 
 test('cmod update <name> of a plain plugin updates it through Claude Code, nothing more', async () => {

@@ -199,16 +199,32 @@ test('a /mods permission toggle runs cmod permission, and an option saves throug
   expect(ran).toEqual(['cmod permission ci-watch model on'])
 })
 
-test('/mods marks a mod turned off in Claude Code', async () => {
-  const { tested } = testPanel()
+test('/mods marks a mod turned off in Claude Code, and Turn on runs cmod enable', async () => {
+  const { tested, ran } = testPanel()
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': false } })
 
   await tested.type('/mods ci-watch')
   await tested.settle()
   const lines = (await tested.lines('mods')).join('\n')
+  await tested.press('mods', 'turn')
+  await tested.settle()
 
   expect(lines).toContain('ci-watch (off)')
-  expect(lines).toContain('Off: Claude Code does not load it. Turn it on under /plugin.')
+  expect(lines).toContain('Off: Claude Code does not load it.')
+  expect(lines).toContain('Turn on')
+  expect(ran).toEqual(['cmod enable ci-watch'])
+  expect((await tested.lines('mods')).join(' ').replace(/\s+/g, ' ')).toContain('Turned ci-watch on. This session follows after /reload-plugins.')
+})
+
+test('/mods Turn off runs cmod disable on a mod that is on', async () => {
+  const { tested, ran } = testPanel()
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  await tested.press('mods', 'turn')
+  await tested.settle()
+
+  expect(ran).toEqual(['cmod disable ci-watch'])
 })
 
 test('/mods Remove asks first, and Remove again runs cmod remove', async () => {

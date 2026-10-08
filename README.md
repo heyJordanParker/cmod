@@ -17,7 +17,7 @@ In Claude Code, add the mod's marketplace and install the mod:
 
 Claude Code installs the cmod plugin with the mod. cmod then fetches the cmod program and opens the mod's installer pane, and the mod runs its install step once you accept. The pane names each command the mod runs, each key it binds, and each permission it asks for, such as "connect to api.github.com" or "run gh on your computer". It then asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. The mod can reach nothing else through cmod. A progress bar shows each step. A notice tells you when the mod is ready.
 
-`/mods` lists every mod with the one-line description from its `plugin.json`, whether Claude Code has it turned off, its settings, its permissions, its keys, and its own pages. Turn a permission off there and the mod loses it before its next call. `Remove` asks once, then runs `cmod remove <mod>`.
+`/mods` lists every mod with the one-line description from its `plugin.json`, whether Claude Code has it turned off, its settings, its permissions, its keys, and its own pages. Turn a permission off there and the mod loses it before its next call. `Turn off` and `Turn on` run `cmod disable` and `cmod enable`, and `Remove` asks once, then runs `cmod remove <mod>`.
 
 A mod keeps itself up to date. Its setup turns on Claude Code's automatic updates for the marketplace it came from, unless you already chose, and the install question says so. Turn them off under `/plugin` Marketplaces. An update that changes what the mod runs asks you again before it runs.
 
@@ -29,7 +29,7 @@ In a terminal, one command does the same, for a mod or any other Claude Code plu
 cmod install <owner>/<repo>
 ```
 
-A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The cmod plugin puts `cmod` in `~/.local/bin` the first time it runs. A mod that ships a program, such as `trace`, runs it by its name in Claude Code even when your system has a command of the same name, and a mod built only for some machines says so before it runs anything. `cmod list` shows every plugin Claude Code has, and whether cmod set up each mod.
+A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update`, `cmod enable`, `cmod disable`, and `cmod remove` work on any plugin the same way. The cmod plugin puts `cmod` in `~/.local/bin` the first time it runs. A mod that ships a program, such as `trace`, runs it by its name in Claude Code even when your system has a command of the same name, and a mod built only for some machines says so before it runs anything. `cmod list` shows every plugin Claude Code has, and whether cmod set up each mod.
 
 ## What the cmod plugin runs
 
@@ -38,7 +38,7 @@ The cmod plugin runs these programs, and sends no data anywhere:
 - **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod` to it. It leaves a `~/.local/bin/cmod` it did not make in place. That download is its only network request.
 - **`setup/path.sh`**, at each session start. It writes one line to the file Claude Code reads into every Bash command's environment, `export PATH="~/.local/share/cmod/programs:$PATH"`, so Claude runs each program a mod installs by its name.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
-- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`, and **`cmod remove <mod>`**, when you remove a mod there.
+- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`, and **`cmod enable`**, **`cmod disable`**, and **`cmod remove`** with a mod's name, when you turn it on or off or remove it there.
 
 A setting you change in `/mods` goes to Claude Code's `/config`, the same place Claude Code keeps it when you change it there.
 

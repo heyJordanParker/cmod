@@ -105,6 +105,14 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       return `cmod remove ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
     })
 
+  const turn = (name: string, isOn: boolean) =>
+    act(async () => {
+      const action = isOn ? 'enable' : 'disable'
+      const { exitCode, stderr } = await mod.process.run(['cmod', action, name])
+      if (exitCode === 0) return `Turned ${name} ${isOn ? 'on' : 'off'}. This session follows after /reload-plugins.`
+      return `cmod ${action} ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
+    })
+
   const setOption = (row: ConfigRow, text: string) =>
     act(async () => {
       const listed = text.split(',').map((item) => item.trim()).filter((item) => item !== '')
@@ -177,7 +185,15 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
                   ],
                 }),
               ]
-            : [Button({ key: 'remove', label: 'Remove', onPress: () => void (current.state.memory.removing = view.name) })]
+            : [
+                Box({
+                  gap: 2,
+                  children: [
+                    Button({ key: 'turn', label: view.isOn ? 'Turn off' : 'Turn on', onPress: () => turn(view.name, !view.isOn) }),
+                    Button({ key: 'remove', label: 'Remove', onPress: () => void (current.state.memory.removing = view.name) }),
+                  ],
+                }),
+              ]
       const details = Box({
         flexDirection: 'column',
         gap: 1,
@@ -187,7 +203,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
             children: [
               Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
               ...(view.description === undefined ? [] : [Text({ dimColor: true, children: view.description })]),
-              ...(view.isOn ? [] : [Text({ color: 'warning', children: 'Off: Claude Code does not load it. Turn it on under /plugin.' })]),
+              ...(view.isOn ? [] : [Text({ color: 'warning', children: 'Off: Claude Code does not load it.' })]),
             ],
           }),
           ...actions,

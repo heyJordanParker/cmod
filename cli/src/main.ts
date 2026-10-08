@@ -1,7 +1,9 @@
 import { version } from '../package.json'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import * as check from './commands/check.js'
+import * as disable from './commands/disable.js'
 import * as download from './commands/download.js'
+import * as enable from './commands/enable.js'
 import * as install from './commands/install.js'
 import * as link from './commands/link.js'
 import * as list from './commands/list.js'
@@ -23,6 +25,8 @@ const commands: Record<string, Command> = {
   list,
   update,
   remove,
+  enable,
+  disable,
   try: tryMod,
   new: newMod,
   link,

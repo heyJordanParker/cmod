@@ -25,7 +25,7 @@ export async function addMarketplace(source: string): Promise<void> {
   await run(['claude', 'plugin', 'marketplace', 'add', source])
 }
 
-export async function changePlugin(action: 'install' | 'uninstall' | 'update', id: string): Promise<void> {
+export async function changePlugin(action: 'install' | 'uninstall' | 'update' | 'enable' | 'disable', id: string): Promise<void> {
   const result = await capture(['claude', 'plugin', action, id, '--json'])
   const lastLine = result.stdout.trim().split('\n').at(-1) ?? ''
   const outcome = lastLine.startsWith('{') ? parse(lastLine, `claude plugin ${action} --json`) : undefined

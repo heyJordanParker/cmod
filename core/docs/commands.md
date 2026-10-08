@@ -153,6 +153,15 @@ cmod remove <name>
 
 Uninstalls the plugin through Claude Code. When cmod set the plugin up as a mod, it then runs the uninstall step cmod saved and removes what cmod set up.
 
+### cmod enable and cmod disable
+
+```text
+cmod enable <name>
+cmod disable <name>
+```
+
+Turns the plugin on or off through Claude Code, as `/plugin` does. A running session follows after `/reload-plugins`. A mod keeps its setup, its data, and its program while it is off, and runs no install or uninstall step either way. They refuse a plugin linked with `cmod link`, which `cmod unlink` stops loading. The `Turn off` and `Turn on` buttons in `/mods` run them.
+
 ### cmod list
 
 ```text
