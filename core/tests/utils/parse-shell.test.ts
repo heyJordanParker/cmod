@@ -55,6 +55,43 @@ describe('parseShell', () => {
   })
 })
 
+describe('pipes', () => {
+  test('each command names the command whose output it reads through | or |&', () => {
+    expect(parsePublicShell('trace read a.ts | head -5 |& tee log').commands).toEqual([
+      { argv: ['trace', 'read', 'a.ts'], folder: '' },
+      { argv: ['head', '-5'], folder: '', input: 0 },
+      { argv: ['tee', 'log'], folder: '', input: 1 },
+    ])
+  })
+
+  test('a wrapped writer is the command it runs, and a command after ; or && reads no pipe', () => {
+    expect(parseShell('timeout 5 trace grep x | jq . && echo done').commands).toEqual([
+      { argv: ['timeout', '5'], folder: '' },
+      { argv: ['trace', 'grep', 'x'], folder: '' },
+      { argv: ['jq', '.'], folder: '', input: 1 },
+      { argv: ['echo', 'done'], folder: '' },
+    ])
+  })
+
+  test('pipes hold inside bash -c, $(…), and after cd', () => {
+    expect(parseShell(`cd src && bash -c 'trace read a.ts | head'`).commands).toEqual([
+      { argv: ['cd', 'src'], folder: '' },
+      { argv: ['bash', '-c', 'trace read a.ts | head'], folder: 'src' },
+      { argv: ['trace', 'read', 'a.ts'], folder: 'src' },
+      { argv: ['head'], folder: 'src', input: 2 },
+    ])
+    expect(parseShell('echo "$(trace read a.ts | wc -l)"').commands).toEqual([
+      { argv: ['trace', 'read', 'a.ts'], folder: '' },
+      { argv: ['wc', '-l'], folder: '', input: 0 },
+      { argv: ['echo', '$(trace read a.ts | wc -l)'], folder: '' },
+    ])
+  })
+
+  test('a here-string feeds a piped command instead of the pipe', () => {
+    expect(parseShell('trace read a.ts | head <<< text').commands[1]).toEqual({ argv: ['head'], folder: '' })
+  })
+})
+
 describe('wrappers', () => {
   test.each([
     ['sudo -u root rm -rf x', ['sudo', '-u', 'root']],

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { stripVTControlCharacters } from 'node:util'
 import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listFiles, readText } from '../src/files.js'
@@ -1201,7 +1202,7 @@ test('the spinner resumes after the lock-wait notice', async () => {
   await holder.exited
   const { stdout } = await setup.done
 
-  const shown = stdout.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+  const shown = stripVTControlCharacters(stdout)
   expect(shown.slice(shown.indexOf('which process'))).toContain('Installing demo…')
 }, 10_000)
 

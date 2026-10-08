@@ -65,7 +65,7 @@ export type Claude = {
   }
   readonly http: { fetch(url: string, init?: HttpInit): Promise<HttpResponse> }
   readonly settings: { read(args?: SettingsReadArgs): Promise<Settings> }
-  readonly config: { list(): Promise<ConfigRow[]>; set: EngineInterface['config']['set'] }
+  readonly config: { list(): Promise<ConfigRow[]> }
   readonly store: {
     get(key: string): Promise<unknown>
     set(key: string, value: unknown): Promise<void>

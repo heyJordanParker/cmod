@@ -492,14 +492,14 @@ test('a missing secret option asks in the installer to set it in /config, and No
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing ci-watch  it needs GitHub token\n  Set it in /config.')
 })
 
-test('a missing text option saved in the installer through /config starts the mod on Next', async () => {
+test('a missing text option saved in the installer through cmod option starts the mod on Next', async () => {
   const fake = fakeClaude({ name: 'ci-watch', root })
-  const saved: unknown[] = []
+  const saved: (readonly string[])[] = []
   const rows: { key: string; value: string }[] = []
-  fake.fakes.config.set = async (args) => {
-    saved.push(args)
-    rows.push({ key: args.key, value: String(args.value) })
-    return { value: args.value }
+  fake.fakes.process.run = async (argv) => {
+    saved.push(argv)
+    if (argv[1] === 'option') rows.push({ key: `${argv[2]}.${argv[3]}`, value: argv[4] ?? '' })
+    return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
   fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false }) as never)
   let branch: unknown
@@ -514,7 +514,7 @@ test('a missing text option saved in the installer through /config starts the mo
   await pressInInstaller(lifecycle, 'next')
   await fake.settle()
 
-  expect(saved).toEqual([{ key: 'ci-watch.branch', value: 'main' }])
+  expect(saved).toContainEqual(['cmod', 'option', 'ci-watch', 'branch', 'main'])
   expect(lifecycle.phase).toBe('active')
   expect(branch).toBe('main')
 })

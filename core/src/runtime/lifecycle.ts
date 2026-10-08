@@ -209,8 +209,8 @@ export function createLifecycle<State extends object, Declared extends Options =
     const value = option.kind === 'number' ? Number(text) : option.kind === 'toggle' ? text.trim() === 'true' : option.kind === 'list' ? text.split(',').map((item) => item.trim()).filter((item) => item !== '') : text
     const misfit = option.kind === 'toggle' && !['true', 'false'].includes(text.trim()) ? 'takes true or false' : fitsOption(option, value)
     if (misfit !== undefined) return `${option.title} ${misfit}.`
-    const saved = await claude().config.set({ key: `${plugin.name}.${key}`, value })
-    return saved.deny
+    const saved = await claude().process.run(['cmod', 'option', plugin.name, key, Array.isArray(value) ? value.join(',') : String(value)])
+    return saved.exitCode === 0 ? undefined : lastLineOf(saved.stderr) ?? `cmod option exited ${saved.exitCode}.`
   }
 
   const askOptions = async (missing: MissingOptions): Promise<boolean> => {

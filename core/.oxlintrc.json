@@ -1,8 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "rules": {
-    "no-unused-vars": ["warn", { "ignoreRestSiblings": true }]
-  },
+  "extends": ["../.oxlintrc.json"],
   "overrides": [
     {
       "files": ["src/*.ts"],

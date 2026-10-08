@@ -183,10 +183,8 @@ test('/mods lists each set-up mod with its options, permissions, keys, and pages
   expect(pages).toContain('Runs')
 })
 
-test('a /mods permission toggle runs cmod permission, and an option saves through /config', async () => {
+test('a /mods permission toggle runs cmod permission, and an option saves through cmod option', async () => {
   const { tested, ran } = testPanel()
-  const saved: unknown[] = []
-  tested.fakes.config.set = async (args) => (saved.push(args), { value: args.value })
   await tested.type('/mods ci-watch')
   await tested.settle()
 
@@ -195,8 +193,7 @@ test('a /mods permission toggle runs cmod permission, and an option saves throug
   await tested.press('mods', 'permission:model')
   await tested.settle()
 
-  expect(saved).toEqual([{ key: 'ci-watch.branch', value: 'release' }])
-  expect(ran).toEqual(['cmod permission ci-watch model on'])
+  expect(ran).toEqual(['cmod option ci-watch branch release', 'cmod permission ci-watch model on'])
 })
 
 test('/mods marks a mod turned off in Claude Code, and Turn on runs cmod enable', async () => {

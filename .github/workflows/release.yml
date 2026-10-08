@@ -65,6 +65,7 @@ jobs:
           bun run --cwd core build
           bun run --cwd cli check
           (cd cli && bun test)
+          core/node_modules/.bin/oxlint --deny-warnings src hooks tests
 
       - name: Publish @cmodjs/core to npm
         if: steps.version.outputs.core != 'done'

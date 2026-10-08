@@ -448,7 +448,7 @@ export const timer = defineMod({
 
 Each member calls the member of the same name in Claude Code's hooks API, `$`, with the same arguments. The `env` members read `$.env.get` instead. `mod.claude.on` adds a handler, as [Write a job of your own](#write-a-job-of-your-own) shows.
 
-A member that does what a permission covers checks it first and rejects with the fix: `process` needs `run`, `http.fetch` needs `network`, `fs.write` outside the project and the data folder needs `files` or, for Claude Code's own settings files, `config`, `fs.read` of a transcript needs `conversation`, `session.messages` needs `conversation`, `session.append` and `prompt.submit` need `prompt`, `model.complete` needs `model`, `agent.spawn` needs `agents`, `config.set` needs `config`, and `tool.call` needs `tools`, except `CronCreate`, which needs `prompt`, and `CronList` and `CronDelete`, which need nothing ([permissions.md](permissions.md)).
+A member that does what a permission covers checks it first and rejects with the fix: `process` needs `run`, `http.fetch` needs `network`, `fs.write` outside the project and the data folder needs `files` or, for Claude Code's own settings files, `config`, `fs.read` of a transcript needs `conversation`, `session.messages` needs `conversation`, `session.append` and `prompt.submit` need `prompt`, `model.complete` needs `model`, `agent.spawn` needs `agents`, and `tool.call` needs `tools`, except `CronCreate`, which needs `prompt`, and `CronList` and `CronDelete`, which need nothing ([permissions.md](permissions.md)).
 
 | Member | What it does |
 | --- | --- |
@@ -470,7 +470,7 @@ A member that does what a permission covers checks it first and rejects with the
 | `fs.read`, `fs.write`, `fs.list`, `fs.exists`, `fs.stat` | What `mod.fs` calls. A relative path is under the session's working folder. |
 | `http.fetch(url, init?)` | What `mod.http.fetch` calls. |
 | `settings.read(args?)` | Reads Claude Code's own `settings.json` files. Without `{ source }` it answers every source merged. `user`, `project`, `local`, `flag`, and `policy` each answer one. |
-| `config.list()`, `config.set({ key, value })` | Lists the rows `/config` shows, and changes one, such as `<mod>.<option>`. `set` needs `config`. |
+| `config.list()` | Lists the rows `/config` shows, such as `<mod>.<option>`. A mod sets an option through `cmod option <mod> <key> <value>`, as `/mods` does. |
 | `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where cmod also keeps `mod.state`. |
 | `clock.now()` | Resolves milliseconds since the epoch. |
 | `clock.after(ms, fn)` | Calls `fn` once after `ms` milliseconds, and returns `{ cancel() }`. |

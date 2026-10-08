@@ -36,7 +36,7 @@ function terminalProgress(output: NodeJS.WriteStream): Progress {
   const style = paint(output)
   const logs: string[] = []
   let frame = 0
-  let line = (_spinner: string) => ''
+  let line: (spinner: string) => string = () => ''
   let timer: ReturnType<typeof setInterval> | undefined
 
   const draw = () => {

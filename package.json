@@ -2,10 +2,10 @@
   "name": "cmod",
   "private": true,
   "type": "module",
-  "cmod": { "program": "cmod", "permissions": { "run": ["cmod"], "config": true } },
+  "cmod": { "program": "cmod", "permissions": { "run": ["cmod"] } },
   "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^0.2.3",
-    "@cmodjs/core": "^0.2.3"
+    "@cmodjs/cli": "^0.3.0",
+    "@cmodjs/core": "^0.3.0"
   }
 }

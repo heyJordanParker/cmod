@@ -57,6 +57,7 @@ From the repository root, every command passes:
     bun run --cwd cli check
     env -C . bun test
     env -C . bun x tsc --noEmit
+    core/node_modules/.bin/oxlint --deny-warnings src hooks tests
     env -C <sample> bun test                                         (each sample)
     env -C <sample> bun x tsc --noEmit                               (each sample)
     env HOME=<scratch home> bun run cli/src/main.ts check <mod>      (a mod on the tarball)

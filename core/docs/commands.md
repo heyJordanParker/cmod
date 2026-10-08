@@ -209,3 +209,11 @@ cmod permission <mod> <name> [value] on|off
 ```
 
 Turns one permission of a set-up mod on or off, such as `cmod permission ci-watch model off` or `cmod permission ci-watch network api.github.com on`. A toggle in `/mods` runs it. It refuses a permission the mod's `package.json` `cmod.permissions` does not list, and the mod sees the change before its next call, with no reload ([permissions.md](permissions.md)).
+
+### cmod option
+
+```text
+cmod option <name> <key> <value>
+```
+
+Sets one option of an installed plugin through `claude plugin configure`, the way `/config` sets it, such as `cmod option ci-watch branch main`. A list option takes its items separated by commas. It refuses a key the plugin's `plugin.json` `userConfig` does not declare. A field in `/mods` and the option questions a mod asks at its first start run it, and the mod reads the new value at its next start ([options.md](options.md)).

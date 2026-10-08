@@ -48,6 +48,7 @@ case "$*" in
   "plugin install "*" --json") cp "$HOME/available/$3" "$HOME/installed/$3" && echo '{"outcome":"ok","message":"${claudeCodeLine}"}' ;;
   "plugin uninstall "*" --json") rm "$HOME/installed/$3" && echo '{"outcome":"ok"}' ;;
   "plugin enable "*" --json"|"plugin disable "*" --json") echo '{"command":"'"$2"'","outcome":"ok"}' ;;
+  "plugin configure "*" --values-stdin --json") cat > "$HOME/configured-$3" && echo '{"outcome":"ok"}' ;;
   "plugin update "*" --json")
     if cp "$HOME/available/$3" "$HOME/installed/$3" 2>/dev/null; then echo '{"outcome":"ok"}'; else echo '{"outcome":"error","message":"'"$3"' is in no marketplace Claude Code has"}'; exit 1; fi ;;
   *) exit 1 ;;
@@ -223,6 +224,21 @@ test('cmod disable and cmod enable turn a mod off and on through Claude Code, an
   expect(on.stdout).toContain('✔ Turned demo@market on in Claude Code. A running session follows after /reload-plugins.\n')
   expect(await claudeCalls(home)).toBe('plugin list --json\nplugin disable demo@market --json\nplugin list --json\nplugin enable demo@market --json\n')
   expect(existsSync(join(storeOf(home), 'records/demo.json'))).toBe(true)
+})
+
+test('cmod option sets one declared option through claude plugin configure, and refuses an option the plugin lacks', async () => {
+  const files = { ...plainFiles('demo'), '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', userConfig: { branch: { type: 'string', title: 'Branch' } } }) }
+  const home = await marketplaceHome({ demo: files })
+  expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
+  await claudeCalls(home)
+
+  const set = await cmod(home, 'option', 'demo', 'branch', 'release')
+  const missing = await cmod(home, 'option', 'demo', 'colour', 'red')
+
+  expect(set.stdout).toBe('Set branch for demo.\n')
+  expect(JSON.parse(await readFile(join(home, 'configured-demo@market'), 'utf8'))).toEqual({ branch: 'release' })
+  expect(missing.exitCode).toBe(1)
+  expect(missing.stderr).toBe('cmod option: demo has no option colour. Its options are: branch.\n')
 })
 
 test('cmod disable of a name Claude Code does not hold points at cmod list', async () => {

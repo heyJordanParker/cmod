@@ -35,6 +35,7 @@ bun run --cwd cli test
 bun run --cwd cli check
 env -C . bun test
 env -C . bun x tsc --noEmit
+core/node_modules/.bin/oxlint --deny-warnings src hooks tests
 ```
 
 Then, for each sample mod checked out beside this repository, `file-tree` and `architecture-diagrams`:

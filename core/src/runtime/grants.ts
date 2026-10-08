@@ -63,13 +63,6 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
         return claude.http.fetch(url, init)
       },
     },
-    config: {
-      ...claude.config,
-      set: (async (args: Parameters<Claude['config']['set']>[0]) => {
-        await gate('config.set', 'config')
-        return claude.config.set(args)
-      }) as Claude['config']['set'],
-    },
     session: {
       ...claude.session,
       messages: (async (...args: Parameters<Claude['session']['messages']>) => {

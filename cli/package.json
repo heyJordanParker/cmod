@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/cli",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Claude Mod Manager: install, try, build, check, and publish Claude Code mods.",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "build": "for machine in ${CMOD_MACHINES:-darwin-arm64 darwin-x64 linux-arm64 linux-x64}; do bun build --compile --minify --target=bun-$machine src/main.ts --outfile dist/cmod-$machine || exit 1; done",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && oxlint --deny-warnings",
     "test": "bun test"
   },
   "cmod": {
@@ -31,6 +31,7 @@
     "@cmodjs/core": "file:../core",
     "@types/bun": "^1.4.2",
     "jsonc-parser": "^3.3.1",
+    "oxlint": "1.86.0",
     "typescript": "^7.0.2"
   }
 }

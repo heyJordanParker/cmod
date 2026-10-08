@@ -107,7 +107,7 @@ The input of `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` has `files: {
 parseShell(line: string): ParsedShell
 
 type ParsedShell = { commands: ShellCommand[]; reads: string[]; writes: string[]; fetches: string[]; isFullyParsed: boolean }
-type ShellCommand = { argv: [string, ...string[]]; folder: string }
+type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number }
 
 resolve(...paths): string   join(...paths): string   dirname(path): string   basename(path, suffix?): string
 extname(path): string        relative(from, to): string   isAbsolute(path): boolean   normalize(path): string
@@ -115,6 +115,7 @@ extname(path): string        relative(from, to): string   isAbsolute(path): bool
 
 - `commands` lists every command the line runs, those inside `sudo`, `bash -c`, `$(…)`, and heredocs included, with flags such as `-rf` split into `-r` and `-f`.
 - `folder` is where a command runs, as the line wrote it: `''` for the folder the line starts in, `src` after `cd src`, `/tmp` after `cd /tmp`, and `~/p` after `cd ~/p`. `resolve(input.cwd, folder)` makes it absolute.
+- `input` is the index in `commands` of the command whose output this one reads through `|` or `|&`, and is absent for a command that reads no pipe. `trace read a.ts | head -5` gives `head` the `input` `0`. A wrapper such as `timeout 5 trace read a.ts` writes the output of the command it runs, so `input` names `trace`, not `timeout`.
 - `reads`, `writes`, and `fetches` are the paths and URLs the commands name, as written. A path that holds a shell expansion makes `isFullyParsed` false, and so does a line the parser cannot read.
 - `resolve` has no working folder to start from in Claude Code's hooks, so pass an absolute folder first, such as `resolve(mod.cwd, path)`.
 

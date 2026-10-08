@@ -106,13 +106,12 @@ test("reading Claude Code's transcripts needs conversation, and other reads need
   await expect(mod?.fs.read('/test/home/.claude/projects/-work-app/session.jsonl') ?? Promise.resolve()).rejects.toThrow('"permissions": { "conversation": true }')
 })
 
-test('mod.claude checks its calls the same way: tool.call needs tools, and config.set needs config', async () => {
+test('mod.claude checks its calls the same way: tool.call needs tools', async () => {
   let mod: Mod | undefined
   const tested = testMod(defineMod({ name: 'raw', setup: (started) => void (mod = started) }), { permissions: [] })
   await tested.start()
 
   await expect(mod?.claude.tool.call({ tool: 'Read', file_path: '/x' } as never) ?? Promise.resolve()).rejects.toThrow('raw calls tool.call(Read), which needs "permissions": { "tools": true }')
-  await expect(mod?.claude.config.set({ key: 'raw.token', value: 'x' } as never) ?? Promise.resolve()).rejects.toThrow('"permissions": { "config": true }')
 })
 
 test('run:* covers every program', async () => {

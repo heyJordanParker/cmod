@@ -107,7 +107,7 @@ export async function setOptions(id: string, root: string, given: readonly strin
   progress.succeed(`Set ${Object.keys(values).join(', ')} for ${id}`)
 }
 
-async function manifestOptions(root: string): Promise<Record<string, unknown>> {
+export async function manifestOptions(root: string): Promise<Record<string, unknown>> {
   const manifest = await readJson(`${root}/.claude-plugin/plugin.json`)
   return isObject(manifest) && isObject(manifest['userConfig']) ? manifest['userConfig'] : {}
 }

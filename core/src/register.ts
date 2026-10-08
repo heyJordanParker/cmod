@@ -44,7 +44,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     settings: { read: (args) => $.settings.read(args) },
-    config: { list: () => $.config.list(), set: (args) => $.config.set(args) },
+    config: { list: () => $.config.list() },
     store: {
       get: (key) => $.store.get(key),
       set: (key, value) => $.store.set(key, value),

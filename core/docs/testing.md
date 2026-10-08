@@ -241,7 +241,7 @@ Set a fake to answer a call:
 - `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
 - `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
-- `config.list` answers no `/config` rows by default, and `config.set` answers every change with `{ value }`. A `config.list` fake that answers a row with `isLocked: true` locks that option as managed settings do.
+- `config.list` answers no `/config` rows by default. A `config.list` fake that answers a row with `isLocked: true` locks that option as managed settings do.
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 - `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `mod.fs.find` or `mod.metadata.update` follows it as a real file system does.
 - `testMod` runs no installer pane: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.

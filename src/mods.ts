@@ -62,7 +62,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
           description: isObject(plugin) && typeof plugin['description'] === 'string' ? plugin['description'] : undefined,
           isOn: !turnedOff.includes(record.name),
           permissions: declared.map((item) => ({ item, isOn: granted.includes(item) })),
-          keys: Object.entries(record.keys ?? {}).map(([key, command]) => [key, `/${command}`] as const),
+          keys: Object.entries(record.keys).map(([key, command]) => [key, `/${command}`] as const),
           options: rows.filter((row) => row.key.startsWith(`${record.name}.`)),
           pages,
           pendingSteps,
@@ -113,12 +113,12 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       return `cmod ${action} ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
     })
 
-  const setOption = (row: ConfigRow, text: string) =>
+  const setOption = (name: string, row: ConfigRow, text: string) =>
     act(async () => {
-      const listed = text.split(',').map((item) => item.trim()).filter((item) => item !== '')
-      const value = row.kind === 'number' ? Number(text) : row.kind === 'boolean' ? text.trim() === 'true' : Array.isArray(row.value) ? listed : text
-      const saved = await mod.claude.config.set({ key: row.key, value })
-      return saved.deny ?? `Saved ${row.label}.`
+      const value = text.split(',').map((item) => item.trim()).join(',')
+      const { exitCode, stderr } = await mod.process.run(['cmod', 'option', name, row.key.slice(name.length + 1), value])
+      if (exitCode === 0) return `Saved ${row.label}. ${name} reads it at its next start.`
+      return `cmod option ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
     })
 
   const drawTab = (view: ModView, tab: Tab): RenderElement => {
@@ -132,7 +132,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
             flexDirection: 'column',
             children: [
               Text({ children: [Text({ bold: true, children: row.label }), row.isLocked ? Text({ dimColor: true, children: '  set by your organization' }) : ''] }),
-              row.isLocked ? Text({ children: String(row.value) }) : Input({ key: `option:${row.key}`, label: '› ', value: Array.isArray(row.value) ? row.value.join(', ') : String(row.value), submitLabel: 'save', onSubmit: (text: string) => setOption(row, text) }),
+              row.isLocked ? Text({ children: String(row.value) }) : Input({ key: `option:${row.key}`, label: '› ', value: Array.isArray(row.value) ? row.value.join(', ') : String(row.value), submitLabel: 'save', onSubmit: (text: string) => setOption(view.name, row, text) }),
             ],
           }),
         ),

@@ -49,7 +49,7 @@ Each value is, in order of precedence:
 3. The value the person set in `/config`.
 4. The `default` in the declaration.
 
-An option with no default and no value is asked before `setup` runs, on a page of the installer pane: one field per option, each saved to `/config` as the person submits it. A secret is set in `/config` itself, where Claude Code keeps it in the keychain, and the page says so. When the person chooses Not now, or no one can answer, as in `claude -p`, the mod does not start: its progress line says `it needs <title>` and `Set it in /config.`, and Claude Code reloads the mod once the value is set.
+An option with no default and no value is asked before `setup` runs, on a page of the installer pane: one field per option, each saved to `/config` through `cmod option` as the person submits it. A secret is set in `/config` itself, where Claude Code keeps it in the keychain, and the page says so. When the person chooses Not now, or no one can answer, as in `claude -p`, the mod does not start: its progress line says `it needs <title>` and `Set it in /config.`, and Claude Code reloads the mod once the value is set.
 
 `cmod install`, `cmod link`, and `cmod try` set options from the terminal with `--option key=value`, once per option ([commands.md](commands.md)).
 

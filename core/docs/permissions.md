@@ -24,7 +24,7 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 | `"model": true` | Ask a model, which uses your plan | `mod.model.complete` |
 | `"agents": true` | Start agents | `mod.agent.spawn` |
 | `"tools": true` | Use and change Claude's tool calls | `mod.claude.tool.call`, and a hook that changes a tool call's input |
-| `"config": true` | Change your Claude Code settings | `mod.claude.config.set`, and writes to `.claude/settings.json`, `.claude/settings.local.json`, and `.mcp.json` |
+| `"config": true` | Change your Claude Code settings | writes to `.claude/settings.json`, `.claude/settings.local.json`, and `.mcp.json` |
 | `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A deny needs no permission |
 
 Reading files, drawing panes and slot renders, toasts, slash commands, tools of the mod's own, and hooks need no permission.

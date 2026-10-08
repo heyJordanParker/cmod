@@ -1,6 +1,6 @@
 import { basename, parse, type GlobPattern, type ParseEntry } from '../vendor.js'
 
-export type ShellCommand = { argv: [string, ...string[]]; folder: string }
+export type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number }
 
 export type ParsedShell = {
   commands: ShellCommand[]
@@ -16,7 +16,8 @@ type Expansion = Marker & { end: number }
 type Heredoc = { delimiter: string; stripsTabs: boolean; isQuoted: boolean; marker: Marker; end: number }
 type Scan = { text: string; markers: Marker[]; end: number }
 type Redirect = { operator: string; target: Word }
-type Command = { words: Word[]; redirects: Redirect[]; isPipedIn: boolean }
+type Pipe = { writer: number | undefined }
+type Command = { words: Word[]; redirects: Redirect[]; pipe: Pipe | undefined }
 type Stdin = { kind: 'text'; text: string } | { kind: 'pipe' }
 type Access = 'reads' | 'writes'
 type OptionSpec = { valued?: string; optional?: string; longValued?: readonly string[] }
@@ -470,7 +471,7 @@ function readHeredocBodies(source: string, from: number, heredocs: Heredoc[]): n
 function walk(tokens: ParseEntry[], markers: Marker[], start: string, result: ParsedShell): void {
   let folder = start
   const subshells: string[] = []
-  let command = newCommand(false)
+  let command = newCommand(undefined)
   let caseState: 'header' | 'pattern' | undefined
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!
@@ -500,12 +501,14 @@ function walk(tokens: ParseEntry[], markers: Marker[], start: string, result: Pa
     }
     const following = tokens[index + 1]
     if (operator === '(' && command.words.length === 1 && following !== undefined && !isWordToken(following) && 'op' in following && following.op === ')') {
-      command = newCommand(false)
+      command = newCommand(undefined)
       index += 1
       continue
     }
+    const before = result.commands.length
     folder = finish(command, operator, folder, result)
-    command = newCommand(operator === '|' || operator === '|&')
+    const writer = result.commands.length > before ? result.commands.length - 1 : undefined
+    command = newCommand(operator === '|' || operator === '|&' ? { writer } : undefined)
     if (operator === '(') subshells.push(folder)
     else if (operator === ')') {
       const outer = subshells.pop()
@@ -517,8 +520,8 @@ function walk(tokens: ParseEntry[], markers: Marker[], start: string, result: Pa
   finish(command, ';', folder, result)
 }
 
-function newCommand(isPipedIn: boolean): Command {
-  return { words: [], redirects: [], isPipedIn }
+function newCommand(pipe: Pipe | undefined): Command {
+  return { words: [], redirects: [], pipe }
 }
 
 function isWordToken(token: ParseEntry): token is string | GlobPattern {
@@ -543,9 +546,13 @@ function finish(command: Command, operator: string, folder: string, result: Pars
   const [first, ...args] = words
   if (first === undefined || first.text === 'for' || first.text === 'select') return folder
   const here = command.redirects.findLast((redirect) => redirect.operator === '<<<')
-  const stdin: Stdin | undefined = here !== undefined ? { kind: 'text', text: here.target.text } : command.isPipedIn ? { kind: 'pipe' } : undefined
+  const stdin: Stdin | undefined = here !== undefined ? { kind: 'text', text: here.target.text } : command.pipe !== undefined ? { kind: 'pipe' } : undefined
+  const reader = result.commands.length
   const changed = addCommand(first, args, folder, stdin, result)
-  const isPiped = command.isPipedIn || operator === '|' || operator === '|&' || operator === '&'
+  const read = result.commands[reader]
+  const writer = command.pipe?.writer
+  if (read !== undefined && writer !== undefined && here === undefined) result.commands[reader] = { ...read, input: writer }
+  const isPiped = command.pipe !== undefined || operator === '|' || operator === '|&' || operator === '&'
   return changed === undefined || isPiped ? folder : changed
 }
 
