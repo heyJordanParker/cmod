@@ -4345,6 +4345,31 @@ function expanded(path, home) {
   return path.startsWith("~/") && home !== undefined ? `${home}${path.slice(1)}` : path;
 }
 
+// node_modules/@cmodjs/core/runtime/programs.js
+function locatingPrograms(claude) {
+  let folder;
+  let names = new Set;
+  const located = (argv) => {
+    const [name, ...rest] = argv;
+    return folder !== undefined && name !== undefined && names.has(name) ? [`${folder}/${name}`, ...rest] : argv;
+  };
+  return {
+    claude: {
+      ...claude,
+      process: {
+        run: (argv, init) => claude.process.run(located(argv), init),
+        spawn: (request) => claude.process.spawn({ ...request, argv: located(request.argv) })
+      }
+    },
+    async refresh() {
+      const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()]);
+      const programs = `${storeFolder({ HOME: home, XDG_DATA_HOME: dataHome })}/programs`;
+      names = new Set((await claude.fs.list(programs).catch(() => [])).map((entry) => entry.name));
+      folder = programs;
+    }
+  };
+}
+
 // node_modules/@cmodjs/core/utils/metadata.js
 class MetadataError extends Error {
   line;
@@ -5598,6 +5623,7 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
   let router = createRouter();
   let phase = "starting";
   let runtime;
+  let programs;
   let plugin;
   const granted = new Set;
   let line;
@@ -5631,7 +5657,8 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
     failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? "" : "."} ${fix}`);
     showLine().fail(reason, fix);
   };
-  const finish2 = () => {
+  const finish2 = async () => {
+    await programs?.refresh();
     phase = "ready";
     claude().ui.invalidate("ui.render");
   };
@@ -5898,8 +5925,10 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
     async start(claudeCalls, read) {
       if (runtime !== undefined)
         return;
-      runtime = { claude: claudeCalls, progress: createProgress(claudeCalls) };
+      programs = locatingPrograms(claudeCalls);
+      runtime = { claude: programs.claude, progress: createProgress(claudeCalls) };
       try {
+        await programs.refresh();
         const started = await read(claudeCalls).catch((error) => {
           report(error);
           return;
@@ -6486,7 +6515,7 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-7iat9W/release/src/mods.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-mbqyK5/release/src/mods.ts
 var modsMemory = { selected: null, tab: "options", notice: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
@@ -6637,7 +6666,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-7iat9W/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-mbqyK5/release/src/mod.ts
 var panels = new WeakMap;
 var cmodPlugin = defineMod({
   name: "cmod",
@@ -6702,7 +6731,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-7iat9W/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-mbqyK5/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
