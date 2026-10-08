@@ -269,6 +269,19 @@ var settingsPagesMethod = "cmod:settingsPages";
 var openPageMethod = "cmod:openPage";
 var pendingStepsMethod = "cmod:pendingSteps";
 var finishStepsMethod = "cmod:finishSteps";
+function marketplaceOf(root, name) {
+  const installed = /\/cache\/([^/]+)\/([^/]+)\/[^/]+\/?$/.exec(root);
+  return installed?.[2] === name ? installed[1] : undefined;
+}
+function updatesToTurnOn(marketplace, settings, known) {
+  if (marketplace === undefined)
+    return;
+  const declared = isObject(settings) && isObject(settings["extraKnownMarketplaces"]) ? settings["extraKnownMarketplaces"][marketplace] : undefined;
+  const fetched = isObject(known) ? known[marketplace] : undefined;
+  const isDecided = [declared, fetched].some((entry) => isObject(entry) && typeof entry["autoUpdate"] === "boolean");
+  const hasSource = [declared, fetched].some((entry) => isObject(entry) && isObject(entry["source"]));
+  return isDecided || !hasSource ? undefined : marketplace;
+}
 function consentPath(store) {
   return `${store}/consent.json`;
 }
@@ -4809,8 +4822,13 @@ function createInstaller(name, claude) {
       isOpen = false;
       page?.cancel();
     },
-    consent({ install, uninstall, keys, permissions }) {
-      const changes = [...install === "" ? [] : [`Run ${install} now${uninstall === "" ? "" : `, and ${uninstall} when you remove it`}`], ...install === "" && uninstall !== "" ? [`Run ${uninstall} when you remove it`] : [], ...keys === "" ? [] : [`Bind ${keys}`]];
+    consent({ install, uninstall, keys, permissions, updates }) {
+      const changes = [
+        ...install === "" ? [] : [`Run ${install} now${uninstall === "" ? "" : `, and ${uninstall} when you remove it`}`],
+        ...install === "" && uninstall !== "" ? [`Run ${uninstall} when you remove it`] : [],
+        ...keys === "" ? [] : [`Bind ${keys}`],
+        ...updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]
+      ];
       return show((answer) => ({
         draw: () => frame(`${name} wants to:`, [
           ...permissions.length === 0 ? [] : [Box({ flexDirection: "column", children: permissions.map((item) => bullet(permissionWords(item))) })],
@@ -5714,6 +5732,14 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
     if (added.length > 0)
       runtime.claude.ui.log(`${definition.name} added ${listed(added)}.`);
   };
+  const updatesToShow = async () => {
+    const [home, configHome] = await Promise.all([claude().env.home(), claude().env.configHome()]);
+    const configRoot = configHome ?? `${home ?? ""}/.claude`;
+    const known = await claude().fs.read(`${configRoot}/plugins/known_marketplaces.json`).then((text) => JSON.parse(text), () => {
+      return;
+    });
+    return updatesToTurnOn(marketplaceOf(claude().plugin.root, claude().plugin.name), await claude().settings.read({ source: "user" }), known);
+  };
   const askConsent = async (event) => {
     const name = definition.name;
     if ((await claude().session.surfaces()).length === 0) {
@@ -5722,7 +5748,9 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
       return;
     }
     showLine().wait("Waiting for your answer");
-    if (await installer.consent(event))
+    if (await installer.consent({ ...event, updates: await updatesToShow().catch(() => {
+      return;
+    }) }))
       return install(event.sha256);
     await installer.close();
     phase = "declined";
@@ -6458,7 +6486,7 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-hszNlB/release/src/mods.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-7iat9W/release/src/mods.ts
 var modsMemory = { selected: null, tab: "options", notice: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
@@ -6609,7 +6637,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-hszNlB/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-7iat9W/release/src/mod.ts
 var panels = new WeakMap;
 var cmodPlugin = defineMod({
   name: "cmod",
@@ -6674,7 +6702,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-hszNlB/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-7iat9W/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
