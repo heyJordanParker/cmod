@@ -1,14 +1,42 @@
+import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, longestMs, messageOf } from '../node_modules/@cmodjs/core/mod.js'
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
+import { modsMemory, modsPanel, type ModsState } from './mods.js'
 
-export type CmodPluginState = { installedPlugins: readonly string[] | null }
+export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null } } & ModsState
+
+const panels = new WeakMap<object, ReturnType<typeof modsPanel<CmodPluginState>>>()
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
-  state: { global: { installedPlugins: null } as CmodPluginState },
+  state: { global: { installedPlugins: null } as CmodPluginState['global'], memory: modsMemory },
+
+  api: {
+    async openSettings(input: { readonly mod: string; readonly page?: string }, mod) {
+      const panel = panels.get(mod)
+      if (panel === undefined) throw new Error('cmod has not started its /mods panel yet.')
+      await panel.open(input.mod, input.page)
+      return null
+    },
+  },
 
   setup(mod) {
     const triedRemovals = new Set<string>()
+    const mods = modsPanel(mod)
+    panels.set(mod, mods)
+
+    mod.use(
+      slashCommand({
+        name: 'mods',
+        description: 'See and change your mods: options, permissions, keys, and pages',
+        argumentHint: '[mod] [page]',
+        immediate: true,
+        async reply({ positionals }) {
+          const [name, page] = positionals
+          await mods.open(name, page)
+        },
+      }),
+    )
 
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
@@ -21,7 +49,7 @@ export const cmodPlugin = defineMod({
     }
 
     const watchRemovals = async () => {
-      const enabledPlugins = (await mod.settings.read({ source: 'user' }))['enabledPlugins'] as Record<string, unknown> | undefined
+      const enabledPlugins = (await mod.claude.settings.read({ source: 'user' }))['enabledPlugins'] as Record<string, unknown> | undefined
       const current = [...new Set(Object.keys(enabledPlugins ?? {}).map((key) => key.replace(/@[^@]*$/, '')))]
       const previous = mod.state.global.installedPlugins
       const removed = (previous ?? []).filter((name) => !current.includes(name))

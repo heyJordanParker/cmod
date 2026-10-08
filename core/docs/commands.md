@@ -22,12 +22,13 @@ Creates a mod in `./<name>`: a `defineMod` with one hook, one pane, and one rend
 ### cmod link
 
 ```text
-cmod link [path] [--yes]
+cmod link [path] [--yes] [--option key=value]...
 ```
 
 Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares into `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
 
 - `--yes` approves the mod's install and uninstall commands without asking.
+- `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
 
 ### cmod unlink
 
@@ -47,7 +48,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 
 1. Installs its packages.
 2. Checks its layout.
-3. Checks that each step runs a script.
+3. Checks that each step runs a script, and prints the permissions the person grants at install and can grant later, as the person reads them ([permissions.md](permissions.md)). It fails a `hooks/register.ts` that calls `registerPermissionCheck` without `"approve": true`.
 4. Writes the options `defineMod` declares into `.claude-plugin/plugin.json` `userConfig`, keeping the file's own formatting, so Claude Code shows them in `/config` ([options.md](options.md)). It loads `hooks/register.ts` to read them, without starting the mod.
 5. Checks its imports.
 6. Looks for prebuilt binaries outside `cli/`.
@@ -64,11 +65,12 @@ Runs every check this machine can run on the mod at `path` (default: the current
 ### cmod try
 
 ```text
-cmod try <owner/repo | path>... [--yes] [--home <folder>] [-- claude arguments]
+cmod try <owner/repo | path>... [--yes] [--option key=value]... [--home <folder>] [-- claude arguments]
 ```
 
 Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then starts one Claude Code session with every mod loaded through `--plugin-dir`.
 
+- `--option key=value` sets one option of the mod. With several mods, write `--option <mod>.key=value`.
 - The session runs with a new home folder, so it sees only the mods named here and changes none of your Claude Code settings, mods, key bindings, or history. The folder is deleted when the session ends.
 - The session stays logged in as you, with no login screen:
   - On macOS, Claude Code reads your login from the keychain, which `cmod try` links into the new home as `~/Library/Keychains`. Deleting the home removes only the link.
@@ -96,7 +98,7 @@ Releases the mod at `path` (default: the current folder) at the version in its `
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
 6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin.
-7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release.
+7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release. Its notes open with `## Breaking changes`, listing each `BREAKING CHANGE:` footer of a commit since the last `v` tag and the subject of each commit typed with `!`, such as `feat!: mod.claude replaces job.claude`, so the people who use the mod know what to change before they update. `--dry-run` prints that list.
 8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
 
 The release keeps `package.json`, so Claude Code still installs the mod's packages for its install and uninstall steps. It keeps `bun.lock` too, unless a `"files"` list leaves it out. `main` keeps the source only.
@@ -121,8 +123,8 @@ It needs, and refuses to start without:
 ### cmod install
 
 ```text
-cmod install <owner/repo | path> [name] [--yes]
-cmod install <name | name@marketplace> [--yes]
+cmod install <owner/repo | path> [name] [--yes] [--option key=value]...
+cmod install <name | name@marketplace> [--yes] [--option key=value]...
 ```
 
 Adds the plugin's marketplace to Claude Code and installs the plugin through Claude Code. A mod also gets the cmod plugin when Claude Code lacks it, and its install step runs. Any other plugin installs through Claude Code alone, and cmod keeps no record of it.
@@ -132,6 +134,7 @@ Adds the plugin's marketplace to Claude Code and installs the plugin through Cla
 - Given the name of a plugin Claude Code already holds, it runs a mod's install step again.
 - A path holds a `/`, such as `./my-mod`.
 - `--yes` approves the mod's install and uninstall commands without asking.
+- `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option, so a scripted install needs no visit to `/config`. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
 
 ### cmod update
 
@@ -173,7 +176,7 @@ Downloads a program for an install script: fetches the download for this machine
 
 ## Run by cmod
 
-cmod runs these two itself. A person runs them to see a step's whole log or to finish a step.
+cmod runs these itself. A person runs them to see a step's whole log, to finish a step, or to grant a permission.
 
 ### cmod setup
 
@@ -181,7 +184,7 @@ cmod runs these two itself. A person runs them to see a step's whole log or to f
 cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
 ```
 
-Downloads the program the mod's `package.json` `cmod.program` names into `~/.local/bin`, runs the mod's install step, saves its uninstall step, and records the mod as set up. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's progress line in Claude Code reads them.
+Downloads the program the mod's `package.json` `cmod.program` names into `~/.local/bin`, runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's progress line in Claude Code reads them.
 
 ### cmod teardown
 
@@ -189,4 +192,12 @@ Downloads the program the mod's `package.json` `cmod.program` names into `~/.loc
 cmod teardown <plugin-name> [--events]
 ```
 
-Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, and its data folder, and forgets the scripts the person approved for it. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
+Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, and its data folder, and forgets the scripts and the permissions the person approved for it. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
+
+### cmod permission
+
+```text
+cmod permission <mod> <name> [value] on|off
+```
+
+Turns one permission of a set-up mod on or off, such as `cmod permission ci-watch model off` or `cmod permission ci-watch network api.github.com on`. A toggle in `/mods` runs it. It refuses a permission the mod's `package.json` `cmod.permissions` does not list, and the mod sees the change before its next call, with no reload ([permissions.md](permissions.md)).

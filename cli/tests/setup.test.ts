@@ -303,6 +303,73 @@ test('setup --events asks consent for a mod that names only a program', async ()
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
 
+async function createWatcher(home: string, cmodKey: object): Promise<string> {
+  const root = join(home, 'ci-watch')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'ci-watch', cmod: cmodKey }),
+  })
+  return root
+}
+
+const consentFile = (home: string) => join(home, '.local/share/cmod/consent.json')
+
+test('setup --events asks consent for the permissions, and --consent grants each one with the scripts', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { network: ['api.github.com'], prompt: true } })
+  const sha256 = await hashOf(root)
+
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked.stdout).toBe(`needs-consent ${sha256}\t\t\t\tnetwork:api.github.com\tprompt\n`)
+  expect(asked.exitCode).toBe(10)
+  expect(await cmod(home, 'setup', root, '--events', '--consent', sha256)).toMatchObject({ stdout: 'done ci-watch 0.2.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'network:api.github.com', 'prompt'] })
+})
+
+test('an update that asks for one more permission asks consent for that permission alone', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true } })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions: { prompt: true, network: ['api.github.com'] } } }),
+  })
+
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\t\tnetwork:api.github.com\n`)
+})
+
+test('cmod permission turns a permission the mod lists off and on, and refuses one it does not list', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true, network: ['api.github.com'] } })
+  const sha256 = await hashOf(root)
+  await cmod(home, 'setup', root, '--events', '--consent', sha256)
+
+  expect(await cmod(home, 'permission', 'ci-watch', 'network', 'api.github.com', 'off')).toMatchObject({ stdout: 'Turned off for ci-watch: Connect to api.github.com\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'prompt'] })
+  expect(await cmod(home, 'permission', 'ci-watch', 'network', 'api.github.com', 'on')).toMatchObject({ stdout: 'Turned on for ci-watch: Connect to api.github.com\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'prompt', 'network:api.github.com'] })
+
+  const refused = await cmod(home, 'permission', 'ci-watch', 'agents', 'on')
+
+  expect(refused.exitCode).toBe(1)
+  expect(refused.stderr).toBe('cmod permission: ci-watch does not list agents in its package.json "cmod.permissions", so there is nothing to turn on. It lists: prompt, network:api.github.com.\n')
+  expect((await cmod(home, 'permission', 'ci-watch', 'network', 'on')).stderr).toBe('cmod permission: network takes a value, such as cmod permission ci-watch network api.github.com on.\n')
+})
+
+test('teardown revokes every permission it granted', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true, model: true } })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'permission', 'ci-watch', 'model', 'off')
+
+  await cmod(home, 'teardown', 'ci-watch', '--events')
+
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({})
+})
+
 test('setup --events on a set-up mod prints done and runs nothing', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
@@ -1276,6 +1343,16 @@ test('the consent question says it puts the program into ~/.local/bin', async ()
 
   expect(result.exitCode).toBe(10)
   expect(result.stdout).toContain('  It puts the program hello into ~/.local/bin.\n')
+})
+
+test('the consent question lists each permission in the words the person reads', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { network: ['api.github.com'], run: ['gh'] } })
+
+  const result = await cmod(home, 'setup', root)
+
+  expect(result.exitCode).toBe(10)
+  expect(result.stdout).toContain('  It asks to:\n    Connect to api.github.com\n    Run gh on your computer\n')
 })
 
 test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async () => {

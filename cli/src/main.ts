@@ -6,6 +6,7 @@ import * as install from './commands/install.js'
 import * as link from './commands/link.js'
 import * as list from './commands/list.js'
 import * as newMod from './commands/new.js'
+import * as permission from './commands/permission.js'
 import * as publish from './commands/publish.js'
 import * as remove from './commands/remove.js'
 import * as setup from './commands/setup.js'
@@ -30,6 +31,7 @@ const commands: Record<string, Command> = {
   publish,
   setup,
   teardown,
+  permission,
   download,
 }
 
@@ -38,7 +40,7 @@ const overview = `Usage: cmod <command> [arguments]
 Claude Mod Manager installs, builds, checks, and publishes Claude Code mods.
 
 ${Object.entries(commands)
-  .map(([name, command]) => `  ${name.padEnd(10)}${command.summary}`)
+  .map(([name, command]) => `  ${name.padEnd(12)}${command.summary}`)
   .join('\n')}
 
 Run cmod <command> --help for a command's arguments. cmod --version prints the version.`

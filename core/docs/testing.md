@@ -27,11 +27,13 @@ Assert what a person or Claude sees: `tested.lines(...)`, `tested.shown`, `teste
 type TestOptions<State, Options> = {
   readonly state?: { [Lifetime in keyof State]?: Partial<State[Lifetime]> }
   readonly options?: Partial<OptionValues<Options>>
+  readonly permissions?: readonly string[]
   readonly scope?: 'user' | 'project'
   readonly projectRoot?: string
   readonly cwd?: string
   readonly dependencies?: { [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
+  readonly links?: Readonly<Record<string, string>>
 }
 ```
 
@@ -39,11 +41,13 @@ type TestOptions<State, Options> = {
 | --- | --- | --- |
 | `state` | Values over the declared starting state | The declared state |
 | `options` | The option values Claude Code passes, as a person set them ([options.md](options.md)) | none: each option gets its default |
+| `permissions` | Exactly the permissions the person granted, such as `['network:api.github.com', 'model']` ([permissions.md](permissions.md)) | every permission the mod's `package.json` declares |
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `mod.projectRoot` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `mod.cwd` | `projectRoot` |
 | `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Run cmod install <name>.` |
 | `files` | The fake file system, absolute path to text | no files |
+| `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
 
 A project plugin finds its repository through a `.git` entry at `projectRoot`, so a test of one puts it in `files`, such as `files: { '/test/project/.git': '' }`. Without it the project plugin has no repository, and its rules match calls in every folder, as a user mod's do.
 
@@ -239,6 +243,9 @@ Set a fake to answer a call:
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
 - `config.list` answers no `/config` rows by default, and `config.set` answers every change with `{ value }`. A `config.list` fake that answers a row with `isLocked: true` locks that option as managed settings do.
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
+- `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `mod.fs.find` or `mod.metadata.update` follows it as a real file system does.
+- `testMod` runs no installer pane: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.
+- The `committer` below runs `git`, so its `package.json` declares `"permissions": { "run": ["git"] }`. A gated call the mod does not declare fails before it reaches a fake ([permissions.md](permissions.md)).
 
 ```ts
 import { expect, test } from 'bun:test'

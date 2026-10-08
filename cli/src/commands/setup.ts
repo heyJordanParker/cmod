@@ -3,7 +3,7 @@ import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, keyWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, keyWords, permissionWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
@@ -11,7 +11,7 @@ import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../pr
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
 import { bindKeys, keybindingsPath, unbindKeys } from '../settings.js'
-import { approve, isApproved, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
+import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
 
@@ -36,7 +36,7 @@ has finished, the setup records the mod, then exits.
 
 Options:
   --events            Print one event per line for a program to read:
-                        needs-consent <sha256>\\t<install>\\t<uninstall>\\t<keys>   exit 10
+                        needs-consent <sha256>\\t<install>\\t<uninstall>\\t<keys>[\\t<permission>…]   exit 10
                         progress <done> <total> <label>
                         log <text>
                         done <name> <version>                          exit 0
@@ -44,7 +44,7 @@ Options:
   --consent <sha256>  Approve the scripts whose hash a needs-consent event named
   --yes               Approve the scripts without asking`
 
-type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean }
+type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean; missing: readonly string[] }
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -88,8 +88,8 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
   const failure = { code: 0, message: '' }
   let code = 10
   while (code === 10) {
-    const { sha256, needsConsent } = await checkSetup(plugin)
-    const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, hold.abortSignal))
+    const { sha256, needsConsent, missing } = await checkSetup(plugin)
+    const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, missing, hold.abortSignal))
     if (answer !== true) {
       progress.fail(answer === false ? `${plugin.name} is not set up: it needs your consent. Run the command again with --yes after reading what it does.` : `Cancelled: ${plugin.name} is not set up.`)
       return 10
@@ -148,8 +148,10 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   const sha256 = await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
   const record = await readRecord(readText, storeFolder(process.env), plugin.name)
   const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256
-  const needsConsent = !isCurrent && Object.keys(plugin.steps).length > 0 && !(await isApproved(plugin.name, sha256))
-  return { sha256, isCurrent, needsConsent }
+  const approved = await approvals(plugin.name)
+  const missing = (plugin.steps.permissions ?? []).filter((item) => !approved.includes(item))
+  const needsConsent = !isCurrent && Object.keys(plugin.steps).length > 0 && !approved.includes(sha256)
+  return { sha256, isCurrent, needsConsent, missing }
 }
 
 async function runSetup(plugin: Plugin, consent: string | undefined, emit: (event: RunnerEvent) => void): Promise<number> {
@@ -159,7 +161,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
   const state = await checkSetup(plugin)
   if (state.isCurrent) return 0
   if (state.needsConsent && consent !== state.sha256) {
-    emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys) })
+    emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys), permissions: state.missing })
     return 10
   }
   const store = storeFolder(process.env)
@@ -168,7 +170,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
     code = await setUpMod(plugin, state, hold, emit)
     return code
   } finally {
-    if (code !== 0 && state.needsConsent) await revokeApprovals(plugin.name, state.sha256)
+    if (code !== 0 && state.needsConsent) await revokeApprovals(plugin.name, [state.sha256, ...state.missing])
     if (code !== 0 && !existsSync(recordPath(store, plugin.name))) await rm(dataFolder(store, plugin.name), { recursive: true, force: true })
   }
 }
@@ -178,7 +180,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   const { install, uninstall, program } = plugin.steps
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
-  if (state.needsConsent) await approve(plugin.name, state.sha256)
+  if (state.needsConsent) await approve(plugin.name, [state.sha256, ...state.missing])
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
   const folder = storePath('uninstall', plugin.name)
@@ -270,7 +272,7 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
   return true
 }
 
-async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean | undefined> {
+async function askConsent(plugin: Plugin, missing: readonly string[], cancel: AbortSignal): Promise<boolean | undefined> {
   const style = paint()
   const { install, uninstall, program, keys } = plugin.steps
   const lines = [
@@ -287,6 +289,7 @@ async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean 
         ]),
     ...(program === undefined ? [] : [`  It puts the program ${style.cyan(program)} into ~/.local/bin.`]),
     ...(keys === undefined ? [] : [`  It binds keys in ${tilde(keybindingsPath())}:`, ...Object.entries(keys).map(([key, command]) => `    ${key.padEnd(10)} ${style.cyan(`/${command}`)}`)]),
+    ...(missing.length === 0 ? [] : ['  It asks to:', ...missing.map((item) => `    ${style.cyan(permissionWords(item))}`)]),
     '',
   ]
   process.stdout.write(`${lines.join('\n')}\n`)

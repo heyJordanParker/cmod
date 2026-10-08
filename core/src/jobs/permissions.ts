@@ -37,7 +37,7 @@ export function permissions<State extends object = Record<never, never>>(rules: 
       }
     }
 
-    job.on('tool.check', async (e, next) => {
+    job.mod.claude.on('tool.check', async (e, next) => {
       const [below, ours] = await Promise.all([next(e), verdictOf(e)])
       return ours === undefined ? below : stricterVerdict<Verdict>(below, ours)
     })

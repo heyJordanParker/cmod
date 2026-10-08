@@ -66,7 +66,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
   const reachedBelow = new Promise<void>((resolve) => (reachBelow = resolve))
   const callFinished = new Promise<void>((resolve) => (finishCall = resolve))
   const coreBeneath: Job<void> = (job) => {
-    job.on('tool.call', async (e, next) => {
+    job.mod.claude.on('tool.call', async (e, next) => {
       reachBelow()
       await callFinished
       return next(e)
@@ -137,6 +137,7 @@ test('a when check whose mod.process.run passes the 2 s deadline gives the rule 
         mod.use(permissions({ deny: [{ command: 'git commit', when: async (_call, mod) => (await mod.process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] }))
       },
     }),
+    { permissions: ['run:git'] },
   )
   const timers: number[] = []
   tested.fakes.process.run = () => new Promise(() => undefined)
@@ -173,7 +174,7 @@ function inProject(rules: PermissionRules) {
         mod.use(permissions(rules))
       },
     }),
-    { scope: 'project', projectRoot: project, files },
+    { scope: 'project', projectRoot: project, files, permissions: ['run:git'] },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   return tested

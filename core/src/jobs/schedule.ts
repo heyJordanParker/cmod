@@ -10,7 +10,8 @@ export function schedule<State extends object = Record<never, never>>(entry: Sch
   if (typeof entry !== 'function') checked(entry)
 
   return (job) => {
-    const { mod, claude } = job
+    const { mod } = job
+    const { claude } = mod
     const order = scheduleCounts.get(mod) ?? 0
     scheduleCounts.set(mod, order + 1)
     const storeKey = `cmod:schedule:${order}`

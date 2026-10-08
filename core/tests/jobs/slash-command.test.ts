@@ -99,6 +99,7 @@ test('a fetch in reply that passes the 30 s deadline shows /<name> failed with t
         )
       },
     }),
+    { permissions: ['network:weather.example'] },
   )
   tested.fakes.http.fetch = () => new Promise(() => undefined)
   tested.fakes.clock.after = (ms, fn) => {

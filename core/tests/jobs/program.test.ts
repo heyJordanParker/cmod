@@ -26,6 +26,7 @@ function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpaw
         handle = mod.use(program({ command: ['preview-server', '--port', '0'] }))
       },
     }),
+    { permissions: ['run:preview-server'] },
   )
   tested.fakes.process.spawn = spawn
   const ready = async (): Promise<Program> => {
@@ -148,4 +149,17 @@ test('a program that has not exited is in backoff between starts, and ready() wa
   pending.shift()?.()
 
   expect(await answer).toEqual({ url: 'http://localhost', socketPath: '/tmp/y.sock' })
+})
+
+test('a program the mod has no grant to run stops at once and names the line to add, with no retries', async () => {
+  let handle: Program | undefined
+  const tested = testMod(defineMod({ name: 'preview', setup: (mod) => void (handle = mod.use(program({ command: ['preview-server'] }))) }), { permissions: [] })
+  await tested.start()
+  await tested.settle()
+
+  expect(handle?.state).toBe('fatal')
+  await expect((handle as Program).ready()).rejects.toThrow(
+    'preview calls process.spawn(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod". Add it, then run /reload-plugins.',
+  )
+  expect(tested.calls.filter((call) => call.call === 'clock.after')).toEqual([])
 })

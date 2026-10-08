@@ -15,7 +15,9 @@ In Claude Code, add the mod's marketplace and install the mod:
 /plugin install <mod>@<marketplace>
 ```
 
-Claude Code installs the cmod plugin with the mod. cmod then fetches the cmod program, and the mod runs its install step. A progress bar shows each step. A notice tells you when the mod is ready.
+Claude Code installs the cmod plugin with the mod. cmod then fetches the cmod program and opens the mod's installer pane, and the mod runs its install step once you accept. The pane names each command the mod runs, each key it binds, and each permission it asks for, such as "connect to api.github.com" or "run gh on your computer". It then asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. The mod can reach nothing else through cmod. A progress bar shows each step. A notice tells you when the mod is ready.
+
+`/mods` lists every mod with its settings, its permissions, its keys, and its own pages. Turn a permission off there and the mod loses it before its next call.
 
 When you remove a mod with `/plugin uninstall`, cmod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
 
@@ -29,10 +31,13 @@ A plugin that is not a mod installs through Claude Code alone, with no consent q
 
 ## What the cmod plugin runs
 
-The cmod plugin runs two programs, and sends no data anywhere:
+The cmod plugin runs three programs, and sends no data anywhere:
 
 - **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/bin/cmod` to it. That download is its only network request.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
+- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`.
+
+A setting you change in `/mods` goes to Claude Code's `/config`, the same place Claude Code keeps it when you change it there.
 
 It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its link at `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
 
@@ -148,6 +153,7 @@ The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@c
 - [mod.md](core/docs/mod.md): `defineMod`, `setup`, and what `mod` can call
 - [state.md](core/docs/state.md): state groups and Skill overrides
 - [options.md](core/docs/options.md): options a person sets, typed in code, stored by Claude Code
+- [permissions.md](core/docs/permissions.md): the hosts, programs, and files a mod may reach, granted by the person
 - [hooks.md](core/docs/hooks.md): `mod.on`, every event, and what a hook can answer
 - [ui.md](core/docs/ui.md): panes, slots, markdown slots, elements, toasts, progress, and questions
 - [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, status lines, and programs

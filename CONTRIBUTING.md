@@ -66,7 +66,7 @@ The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 
 Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway.
 
-The workflow's GitHub release holds only a link to the commits. Once it finishes, write what the version lets people do from the commits since the last tag, and set it with `gh release edit v<version> --notes-file <file>`. The `/release` Skill in `.claude/skills/` runs every step, the changelog included.
+The workflow's GitHub release holds a link to the commits, opened by a `## Breaking changes` list that `cmod publish` builds from each `BREAKING CHANGE:` footer and each `!` commit, such as `feat!:`, since the last tag. A commit that changes what a mod author writes carries both. Once the workflow finishes, write what the version lets people do from the commits since the last tag, with each breaking change's before and after, and set it with `gh release edit v<version> --notes-file <file>`. The `/release` Skill in `.claude/skills/` runs every step, the changelog included.
 
 A package never published before needs one manual publish, and npm trust for the workflow, before the workflow can publish it. Run these in the package's folder, `core/` or `cli/`:
 

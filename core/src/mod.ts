@@ -21,14 +21,15 @@ import type {
   ProcessSpawnRequest,
   ProcessSpawnResult,
   RenderElement,
-  Settings,
-  SettingsReadArgs,
+  SessionMessage,
   Timer,
   ToastOptions,
   UiScrollArgs,
   UiScrollResult,
 } from 'claude-code'
+import type { Step } from './installer.js'
 import { checkOptions, type Option, type Options, type OptionValues } from './options.js'
+import type { FlagPermission, ListPermission } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import type { RoutedHook } from './runtime/router.js'
@@ -126,6 +127,26 @@ export type HookOptions = {
   readonly timeoutMs?: number
 }
 
+export type ScrollArgs = Omit<UiScrollArgs, 'to'> & { readonly to: Exclude<UiScrollArgs['to'], { requestId: string }> }
+
+export type ModClaude = Claude & {
+  on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
+}
+
+export type Metadata = Readonly<Record<string, string>>
+
+export type FileMatch = {
+  readonly path: string
+  readonly name?: string
+  readonly metadata: Metadata
+  readonly error?: string
+}
+
+type SessionMessages = {
+  (): Promise<SessionMessage[]>
+  (args: { readonly agentId: string }): Promise<SessionMessage[] | { readonly deny: string }>
+}
+
 export type Mod<State extends object = Record<never, never>, Declared extends Options = Options> = {
   readonly name: string
   readonly state: Readonly<State>
@@ -140,7 +161,7 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
     toast(text: string, options?: ToastOptions): void
     progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
     ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
-    scroll(args: UiScrollArgs): Promise<UiScrollResult>
+    scroll(args: ScrollArgs): Promise<UiScrollResult>
   }
   readonly process: {
     run(argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult>
@@ -152,15 +173,21 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
     list(path?: string): Promise<FsEntry[]>
     exists(path: string): Promise<boolean>
     stat(path: string, options?: FsStatOptions): Promise<FsStat>
+    find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
+  }
+  readonly metadata: {
+    read(path: string): Promise<Metadata>
+    update(path: string, change: (metadata: Record<string, string>) => void): Promise<void>
   }
   readonly http: {
     fetch(url: string, init?: HttpInit): Promise<HttpResponse>
   }
   readonly settings: {
-    read(args?: SettingsReadArgs): Promise<Settings>
+    page(page: Pane<State>): void
+    open(pageId?: string): Promise<void>
   }
   readonly session: {
-    messages: Claude['session']['messages']
+    messages: SessionMessages
     append(text: string): Promise<void>
     submit(text: string): Promise<void>
   }
@@ -170,9 +197,14 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly model: {
     complete(request: ModelCompleteRequest, options?: ModelCompleteOptions): Promise<ModelCompleteResult>
   }
+  readonly permissions: {
+    has(name: ListPermission, value: string): boolean
+    has(name: FlagPermission): boolean
+  }
   readonly projectRoot: string
   readonly cwd: string
   readonly dependencies: CmodDependencies
+  readonly claude: ModClaude
 }
 
 type StateGroups = {
@@ -191,13 +223,12 @@ export type ModDefinition<State extends StateGroups = Record<never, never>, Name
   readonly state?: State
   readonly options?: Declared
   readonly api?: Name extends keyof CmodDependencies ? Api<CmodDependencies[Name], State> : { readonly [method: string]: (input: never, mod: Mod<State>) => unknown }
+  readonly installer?: readonly Step<State>[]
   setup(mod: Mod<State, Declared>): void | Promise<void>
 }
 
 export type JobContext<State extends object = Record<never, never>> = {
   readonly mod: Mod<State>
-  readonly claude: Claude
-  on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
   announce(feature: string): void
   reserveName(kind: string, name: string, taken: string): void
   readonly toolCalls: ToolCalls

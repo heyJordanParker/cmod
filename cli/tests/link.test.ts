@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -162,6 +162,32 @@ test('link installs no cmod plugin when a linked cmod checkout provides it', asy
 
   expect(linked.exitCode).toBe(0)
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
+})
+
+const claudeConfiguring = claudeAnswering(cmodPluginListed).replace('  *) exit 1 ;;', '  "plugin configure "*) cat > "$HOME/configured" ;;\n  *) exit 1 ;;')
+
+test('link --option sets each option through claude plugin configure', async () => {
+  const home = await temporaryHome()
+  const userConfig = { branch: { type: 'string', title: 'Branch', description: '' }, interval: { type: 'number', title: 'Interval', description: '' } }
+  await writeFiles(home, { 'bin/claude': claudeConfiguring, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', userConfig }) })
+
+  const linked = await cmod(home, 'link', join(home, 'Developer/demo'), '--option', 'branch=main', '--option', 'interval=30')
+
+  expect(linked.exitCode).toBe(0)
+  expect(linked.stdout).toContain('✔ Set branch, interval for demo')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin configure demo --values-stdin --json\n')
+  expect(JSON.parse(await readFile(join(home, 'configured'), 'utf8'))).toEqual({ branch: 'main', interval: '30' })
+})
+
+test('link --option names the options a mod has when the key is not one of them', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { 'bin/claude': claudeConfiguring, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', userConfig: { branch: { type: 'string', title: 'Branch', description: '' } } }) })
+
+  const linked = await cmod(home, 'link', join(home, 'Developer/demo'), '--option', 'brnach=main')
+
+  expect(linked.exitCode).toBe(1)
+  expect(`${linked.stdout}${linked.stderr}`).toContain('demo has no option brnach. Its options are: branch.')
+  expect(existsSync(join(home, 'configured'))).toBe(false)
 })
 
 const claudeBeforeCmodIsLinked = `#!/bin/sh

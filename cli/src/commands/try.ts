@@ -9,7 +9,7 @@ import { preparePackages, readPlugin, sourceOf, type Plugin } from '../plugin.js
 import { run as runCommand, runAttached } from '../process.js'
 import { startProgress } from '../progress.js'
 import { configRoot, keepSettings, keptSettings } from '../settings.js'
-import { installCmodPlugin } from './install.js'
+import { installCmodPlugin, setOptions } from './install.js'
 import { holdSignals, setupInTerminal } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
 
@@ -47,7 +47,11 @@ A checkout already set up from the same folder keeps its setup. Arguments after
 Options:
   --yes            Approve each mod's install and uninstall commands and key
                    bindings without asking
-  --home <folder>  Run in this home folder and keep it, such as --home ~`
+  --home <folder>  Run in this home folder and keep it, such as --home ~
+  --option key=value
+                   Set one of a mod's options in the home, as /config does.
+                   Repeat it for each option. With several mods, write
+                   mod.key=value`
 
 type Tried = { readonly plugin: Plugin; readonly record: InstallRecord | undefined }
 
@@ -55,7 +59,7 @@ export async function run(argv: string[]): Promise<number> {
   const split = argv.indexOf('--')
   const own = split === -1 ? argv : argv.slice(0, split)
   const forwarded = split === -1 ? [] : argv.slice(split + 1)
-  const { values, positionals } = parseArgs({ args: own, allowPositionals: true, options: { yes: { type: 'boolean', default: false }, home: { type: 'string' } } })
+  const { values, positionals } = parseArgs({ args: own, allowPositionals: true, options: { yes: { type: 'boolean', default: false }, home: { type: 'string' }, option: { type: 'string', multiple: true } } })
   if (positionals.length === 0) throw new Error(`cmod try takes at least one source.\n\n${help}`)
   const sources = positionals.map(sourceOf)
   const kept = values.home === undefined ? undefined : homeFolder(values.home)
@@ -89,6 +93,7 @@ export async function run(argv: string[]): Promise<number> {
     const setUp: string[] = []
     try {
       for (const { plugin, record } of tried) {
+        await setOptions(plugin.name, plugin.root, optionsFor(plugin.name, values.option ?? [], tried.length), progress)
         const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
         if (code !== 0) return code
         if (record === undefined) setUp.push(plugin.name)
@@ -104,6 +109,11 @@ export async function run(argv: string[]): Promise<number> {
     for (const clone of clones) await rm(clone, { recursive: true, force: true })
     if (temporary !== undefined) await rm(temporary, { recursive: true, force: true })
   }
+}
+
+function optionsFor(name: string, given: readonly string[], mods: number): string[] {
+  if (mods === 1) return [...given]
+  return given.flatMap((pair) => (pair.startsWith(`${name}.`) ? [pair.slice(name.length + 1)] : []))
 }
 
 function homeFolder(path: string): string {

@@ -101,6 +101,45 @@ test('cmod check writes the options defineMod declares into plugin.json userConf
   expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n')
 })
 
+test('cmod check shows what the person grants at install, and adds approve when register.ts calls registerPermissionCheck', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'guard')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'guard', cmod: { permissions: { network: ['api.github.com'] } } }),
+  })
+
+  const shown = await cmod(home, 'check', root)
+
+  expect(shown.stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
+
+  await writeFiles(root, { 'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n  registerPermissionCheck(addHook)\n}\n' })
+
+  const added = await cmod(home, 'check', root)
+
+  expect(added.stdout).toContain(
+    '✔ Added "approve": true to package.json "cmod", because hooks/register.ts calls registerPermissionCheck\n    At install the person grants: Connect to api.github.com; Approve Claude\'s tool calls for you\n',
+  )
+  expect(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).cmod).toEqual({ permissions: { network: ['api.github.com'], approve: true } })
+})
+
+test('cmod check names the line of a metadata block it cannot read', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'tagged')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'tagged', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'tagged' }),
+    'skills/commit/SKILL.md': '---\nname: commit\nmetadata:\n  tagged.mode:\n    - build\n---\n',
+    'agents/reviewer.md': '---\nname: reviewer\nmetadata: { tagged.mode: review }\n---\n',
+  })
+
+  const shown = await cmod(home, 'check', root)
+
+  expect(shown.stdout).toContain('Reading the metadata…\n✘ 1 file with metadata cmod cannot read\n    fix: skills/commit/SKILL.md line 5: a metadata value holds a list or a map.')
+})
+
 test('cmod check type-checks tests/ with tests/tsconfig.json beside the root config', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')

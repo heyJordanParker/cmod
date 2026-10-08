@@ -55,6 +55,6 @@ export async function run(argv: string[]): Promise<number> {
     if (await usesCmod(plugin.installPath, plugin.name)) mods.push(plugin)
   }
   if (mods.length > 0) await installCmodPlugin(progress)
-  for (const plugin of mods) exitCode = Math.max(exitCode, await installMod(plugin, values.yes, progress))
+  for (const plugin of mods) exitCode = Math.max(exitCode, await installMod(plugin, { yes: values.yes, options: [] }, progress))
   return exitCode
 }

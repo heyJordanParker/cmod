@@ -130,6 +130,84 @@ test('a teardown that fails before any event shows its last line of standard err
   expect(tested.shown.toasts).toEqual(['cmod is ready', 'cmod teardown four-step exited 1: cmod teardown: records/four-step.json is not JSON'])
 })
 
+const store = '/test/home/.local/share/cmod'
+
+function testPanel() {
+  const tested = testMod(cmodPlugin, {
+    state: { global: { installedPlugins: [] } },
+    files: {
+      [`${store}/records/ci-watch.json`]: JSON.stringify({ name: 'ci-watch', version: '0.2.0', root: '/plugins/ci-watch', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: { 'ctrl+l': 'ci-watch' } }),
+      [`${store}/consent.json`]: JSON.stringify({ 'ci-watch': ['network:api.github.com'] }),
+      '/plugins/ci-watch/package.json': JSON.stringify({ cmod: { permissions: { network: ['api.github.com'], model: true } } }),
+    },
+  })
+  const ran: string[] = []
+  tested.fakes.process.run = async (argv) => {
+    ran.push(argv.join(' '))
+    return { exitCode: 0, stdout: 'Turned on for ci-watch: Ask a model, which uses your plan\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+  }
+  tested.fakes.config.list = async () => [{ key: 'ci-watch.branch', label: 'Branch', kind: 'text', value: 'main', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false } as never]
+  const called: string[] = []
+  tested.fakes.cmod.call = async (input) => {
+    called.push(`${input.to} ${input.method}`)
+    if (input.method === 'cmod:settingsPages') return { value: [{ id: 'runs', title: 'Runs' }] }
+    if (input.method === 'cmod:pendingSteps') return { value: called.includes('ci-watch cmod:finishSteps') ? [] : ['Sign in to GitHub'] }
+    return { value: null }
+  }
+  return { tested, ran, called }
+}
+
+test('/mods lists each set-up mod with its options, permissions, keys, and pages', async () => {
+  const { tested } = testPanel()
+
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+  const options = (await tested.lines('mods')).join('\n')
+  await tested.press('mods', 'tab:permissions')
+  const permissions = (await tested.lines('mods')).join('\n')
+  await tested.press('mods', 'tab:keys')
+  const keys = (await tested.lines('mods')).join('\n')
+  await tested.press('mods', 'tab:pages')
+  const pages = (await tested.lines('mods')).join('\n')
+
+  expect(tested.shown.openPanes.has('mods')).toBe(true)
+  expect(options).toContain('ci-watch 0.2.0')
+  expect(options).toContain('Branch')
+  expect(permissions).toContain('[x] Connect to api.github.com')
+  expect(permissions).toContain('[ ] Ask a model, which uses your plan')
+  expect(keys).toContain('ctrl+l')
+  expect(pages).toContain('Runs')
+})
+
+test('a /mods permission toggle runs cmod permission, and an option saves through /config', async () => {
+  const { tested, ran } = testPanel()
+  const saved: unknown[] = []
+  tested.fakes.config.set = async (args) => (saved.push(args), { value: args.value })
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  await tested.input('mods', 'option:ci-watch.branch', 'release')
+  await tested.press('mods', 'tab:permissions')
+  await tested.press('mods', 'permission:model')
+  await tested.settle()
+
+  expect(saved).toEqual([{ key: 'ci-watch.branch', value: 'release' }])
+  expect(ran).toEqual(['cmod permission ci-watch model on'])
+})
+
+test('/mods shows the installer steps a mod still needs, and Finish setup runs them', async () => {
+  const { tested, called } = testPanel()
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+  expect((await tested.lines('mods')).join('\n')).toContain('Needs setup: Sign in to GitHub')
+
+  await tested.press('mods', 'finish')
+  await tested.settle()
+
+  expect(called).toContain('ci-watch cmod:finishSteps')
+  expect((await tested.lines('mods')).join('\n')).not.toContain('Needs setup')
+})
+
 test('cmod.call denies a call no mod takes with the install command', async () => {
   const hooks = new Map<string, (...args: unknown[]) => Promise<EngineCreateResult>>()
   const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => void hooks.set(event, hook)

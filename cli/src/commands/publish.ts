@@ -32,8 +32,10 @@ branch. Builds the release archive from that commit and the program cli/
 declares, writes SHA256SUMS for every file of the release, and writes
 .claude-plugin/marketplace.json listing the archive and the cmod plugin. Then
 commits that file, tags v<version>, pushes the tag and the release branch, and
-creates the GitHub release. It refuses a package.json that depends on a file:
-or link: path, which no user has.
+creates the GitHub release. The release notes open with a Breaking changes
+list: each BREAKING CHANGE: footer of a commit since the last v tag, or the
+subject of a commit typed with !, such as feat!:. It refuses a package.json
+that depends on a file: or link: path, which no user has.
 
 Options:
   --dry-run  Build everything into a temporary folder, marketplace.json
@@ -130,8 +132,10 @@ export async function run(argv: string[]): Promise<number> {
 
   const assets = [archive, ...programs, sums]
   const directoryLink = `https://github.com/${repository}/tree/${releaseBranch}`
+  const breaking = breakingNotes(await commitsSinceLastTag(git))
   if (dryRun) {
     process.stdout.write(`\nDry run: ${tag} would release these files to https://github.com/${repository}, and ${tree} to its ${releaseBranch} branch. Nothing was pushed:\n${assets.map((asset) => `  ${asset}`).join('\n')}\n`)
+    if (breaking !== undefined) process.stdout.write(`\nIts release notes would open with:\n\n${breaking}\n`)
     return 0
   }
   progress.step(`Releasing ${tag}`)
@@ -139,10 +143,26 @@ export async function run(argv: string[]): Promise<number> {
   await git('commit', '--message', `release ${tag}`)
   await git('tag', tag)
   await git('push', '--atomic', 'origin', 'HEAD', tag, `${release}:refs/heads/${releaseBranch}`)
-  await runCommand(['gh', 'release', 'create', tag, ...assets, '--repo', repository, '--title', `${plugin.name} ${plugin.version}`, '--generate-notes'])
+  await runCommand(['gh', 'release', 'create', tag, ...assets, '--repo', repository, '--title', `${plugin.name} ${plugin.version}`, '--generate-notes', ...(breaking === undefined ? [] : ['--notes', breaking])])
   progress.succeed(`Released ${tag}: https://github.com/${repository}/releases/tag/${tag}`)
   process.stdout.write(`\nTo list ${plugin.name} in Anthropic's plugin directory, open https://claude.ai/directory/manage, select Submit new, and paste this as the Repository:\n  ${directoryLink}\n`)
   return 0
+}
+
+async function commitsSinceLastTag(git: (...args: string[]) => Promise<string>): Promise<string[]> {
+  const last = (await git('describe', '--tags', '--abbrev=0', '--match', 'v*').catch(() => '')).trim()
+  const log = await git('log', '--format=%B%x00', last === '' ? 'HEAD' : `${last}..HEAD`)
+  return log.split('\0').map((message) => message.trim()).filter((message) => message !== '')
+}
+
+function breakingNotes(messages: readonly string[]): string | undefined {
+  const changes = messages.flatMap((message) => {
+    const footers = [...message.matchAll(/^BREAKING[ -]CHANGE:[ \t]*((?:.+\n?)+)/gm)].map((footer) => footer[1]?.trim().replace(/\s*\n\s*/g, ' ') ?? '')
+    if (footers.length > 0) return footers
+    const subject = /^\w+(?:\([^)]*\))?!:\s*(.+)$/.exec(message.split('\n')[0] ?? '')
+    return subject === null ? [] : [subject[1] ?? '']
+  })
+  return changes.length === 0 ? undefined : `## Breaking changes\n\n${changes.map((change) => `- ${change}`).join('\n')}\n`
 }
 
 async function releasedPaths(listed: readonly string[], needed: readonly string[], git: (...args: string[]) => Promise<string>): Promise<string[]> {

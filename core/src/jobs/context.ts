@@ -14,7 +14,7 @@ type Session = Omit<Workspace, 'projectRoot' | 'cwd'>
 
 type Stream = HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 
-export function workspaceReader({ claude }: JobContext): () => Promise<Workspace> {
+export function workspaceReader({ mod: { claude } }: JobContext): () => Promise<Workspace> {
   let session: Promise<Session> | undefined
   return async () => {
     session ??= readSession(claude)
@@ -40,7 +40,7 @@ export function afterCall<State extends object>(
   failed: (error: unknown) => readonly string[],
 ): void {
   const readWorkspace = workspaceReader(job)
-  job.on('tool.call', async (e, next) => {
+  job.mod.claude.on('tool.call', async (e, next) => {
     const before = Promise.all([useOf(job, e), readWorkspace()])
     await before.catch(() => undefined)
     const result = await next(e)
@@ -58,7 +58,8 @@ export function modOf<State extends object>(job: JobContext<State>, { call, fold
   return modWithin(job, deadline, async () => workspace.scope?.workTreeOf(call !== undefined && 'path' in call ? call.path : folder))
 }
 
-export function modWithin<State extends object>({ mod, claude }: JobContext<State>, deadline: Deadline, workTree: () => Promise<string | undefined> = async () => undefined): Mod<State> {
+export function modWithin<State extends object>({ mod }: JobContext<State>, deadline: Deadline, workTree: () => Promise<string | undefined> = async () => undefined): Mod<State> {
+  const { claude } = mod
   const within = <Value>(call: string, task: Promise<Value>) => beforeDeadline(claude, deadline, call, task)
   const folderOf = async (cwd: string | undefined) => {
     const folder = cwd ?? (await workTree())
@@ -79,6 +80,7 @@ export function modWithin<State extends object>({ mod, claude }: JobContext<Stat
       list: (path) => within('mod.fs.list', mod.fs.list(path)),
       exists: (path) => within('mod.fs.exists', mod.fs.exists(path)),
       stat: (path, options) => within('mod.fs.stat', mod.fs.stat(path, options)),
+      find: (glob) => within('mod.fs.find', mod.fs.find(glob)),
     },
     http: { fetch: (url, init) => within('mod.http.fetch', mod.http.fetch(url, init)) },
     dependencies: dependencyCalls(claude, within),

@@ -22,7 +22,7 @@ const fs = fakeFiles(files)
 
 async function jobContextFor() {
   let used: JobContext | undefined
-  const tested = testMod(defineMod({ name: 'dent', setup: (mod) => mod.use((context) => void (used = context)) }), { projectRoot: root })
+  const tested = testMod(defineMod({ name: 'dent', setup: (mod) => mod.use((context) => void (used = context)) }), { projectRoot: root, permissions: ['run:git'] })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   await tested.start()
   if (used === undefined) throw new Error('setup did not run')
@@ -66,7 +66,7 @@ test('a job of your own names the Claude, RoutedEvent, RoutedHook, and ToolCalls
     defineMod({
       name: 'where',
       setup(mod) {
-        mod.use(({ on, claude, toolCalls }) => on(event, answerWhere(claude, toolCalls)))
+        mod.use(({ mod: { claude }, toolCalls }) => claude.on(event, answerWhere(claude, toolCalls)))
       },
     }),
   )
@@ -121,7 +121,7 @@ test('spawn inside a prompt callback runs in the work tree', async () => {
         mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: (_input, mod) => readAll(mod.process.spawn(['git', 'status'])) }))
       },
     }),
-    { scope: 'project', projectRoot: root, files },
+    { scope: 'project', projectRoot: root, files, permissions: ['prompt', 'run:git'] },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.spawn = () => written('On branch design\n')
@@ -159,6 +159,7 @@ test("a spawn inside a job stops at the job's deadline", async () => {
         mod.use(tool({ name: 'sync', description: 'Sync the tickets', execute: (_input, mod) => readAll(mod.process.spawn(['tracker', 'sync'])) }))
       },
     }),
+    { permissions: ['run:tracker'] },
   )
   tested.fakes.process.spawn = () => endless(() => (isKilled = true))
   tested.fakes.clock.after = (ms, fire) => {

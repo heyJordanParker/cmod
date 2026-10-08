@@ -127,6 +127,7 @@ test('a fetch in execute that passes the 30 s deadline is denied, and process.ru
         )
       },
     }),
+    { permissions: ['network:tracker.example', 'run:tracker'] },
   )
   tested.fakes.http.fetch = () => new Promise(() => undefined)
   tested.fakes.process.run = async (argv, init) => {

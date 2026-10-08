@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { isObject, recordPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { consentPath, parseConsent, recordPath, storeFolder } from '@cmodjs/core/src/records.js'
 import { readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
 import { interruptProgress } from './progress.js'
@@ -99,24 +99,25 @@ async function startTime(processId: number): Promise<string> {
   return stdout.trim()
 }
 
-export async function isApproved(name: string, sha256: string): Promise<boolean> {
-  return (await readConsent())[name]?.includes(sha256) ?? false
+export async function approvals(name: string): Promise<readonly string[]> {
+  return (await readConsent())[name] ?? []
 }
 
-export async function approve(name: string, sha256: string): Promise<void> {
+export async function approve(name: string, items: readonly string[]): Promise<void> {
   await changeConsent((consent) => {
     const approved = consent[name] ?? []
-    if (approved.includes(sha256)) return false
-    consent[name] = [...approved, sha256]
+    const added = items.filter((item) => !approved.includes(item))
+    if (added.length === 0) return false
+    consent[name] = [...approved, ...added]
     return true
   })
 }
 
-export async function revokeApprovals(name: string, sha256?: string): Promise<void> {
+export async function revokeApprovals(name: string, items?: readonly string[]): Promise<void> {
   await changeConsent((consent) => {
     const approved = consent[name]
     if (approved === undefined) return false
-    const kept = approved.filter((hash) => sha256 !== undefined && hash !== sha256)
+    const kept = approved.filter((item) => items !== undefined && !items.includes(item))
     if (kept.length === approved.length) return false
     if (kept.length > 0) consent[name] = kept
     else delete consent[name]
@@ -128,15 +129,13 @@ async function changeConsent(change: (consent: Record<string, string[]>) => bool
   const lock = await takeLock(storePath('consent.json.lock'))
   try {
     const consent = await readConsent()
-    if (change(consent)) await writeAtomically(storePath('consent.json'), `${JSON.stringify(consent, null, 2)}\n`)
+    if (change(consent)) await writeAtomically(consentPath(storeFolder(process.env)), `${JSON.stringify(consent, null, 2)}\n`)
   } finally {
     await lock[Symbol.asyncDispose]()
   }
 }
 
 async function readConsent(): Promise<Record<string, string[]>> {
-  const path = storePath('consent.json')
-  const value = await readJson(path)
-  if (value !== undefined && !isObject(value)) throw new Error(`${path} is not a map of plugin names to approved hashes. Delete it, and cmod asks again.`)
-  return Object.assign(Object.create(null), value)
+  const path = consentPath(storeFolder(process.env))
+  return parseConsent(await readJson(path), path)
 }

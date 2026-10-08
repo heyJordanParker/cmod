@@ -77,6 +77,31 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(await Bun.file(join(root, '.claude-plugin/marketplace.json')).exists()).toBe(false)
 })
 
+test('publish opens the release notes with every breaking change since the last v tag', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home)
+  const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
+  await git('tag', 'v0.1.0')
+  await git('commit', '-q', '--allow-empty', '-m', 'feat: greet by name\n\nBREAKING CHANGE: greet() takes the name to greet.\nPass it as greet(name).\n\nBREAKING CHANGE: wave() is gone. Call greet(name).\n\nsrc/\n└── greet.ts*')
+  await git('commit', '-q', '--allow-empty', '-m', 'feat!: the greeter speaks only on session start')
+  await git('commit', '-q', '--allow-empty', '-m', 'fix: greet once per session')
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('Its release notes would open with:\n\n## Breaking changes\n\n- the greeter speaks only on session start\n- greet() takes the name to greet. Pass it as greet(name).\n- wave() is gone. Call greet(name).\n')
+})
+
+test('publish adds no breaking changes section when no commit since the last v tag has one', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home)
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).not.toContain('Breaking changes')
+})
+
 async function committedHooksMod(home: string, files: Record<string, string> = {}): Promise<string> {
   const root = join(home, 'greeter')
   await writeFiles(root, {

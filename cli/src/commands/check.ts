@@ -2,10 +2,11 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
-import { isObject, scriptsSha256 } from '@cmodjs/core/src/records.js'
+import { isObject, permissionWords, scriptsSha256 } from '@cmodjs/core/src/records.js'
 import { version as cmodVersion } from '../../package.json'
+import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/metadata.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listPlugins } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
@@ -43,6 +44,8 @@ const checks: Check[] = [
   { heading: 'Installing packages', run: checkPackages },
   { heading: 'Checking the layout', run: checkLayout },
   { heading: 'Checking the steps', run: checkSteps },
+  { heading: 'Reading the permissions', run: checkPermissions },
+  { heading: 'Reading the metadata', run: checkMetadata },
   { heading: 'Writing the options into plugin.json', run: checkOptions },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
@@ -101,6 +104,44 @@ async function checkSteps(plugin: Plugin): Promise<Result> {
     return { status: 'fail', text: 'The steps have a problem', fix: messageOf(error) }
   }
   return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
+}
+
+async function checkPermissions(plugin: Plugin): Promise<Result> {
+  let permissions = plugin.steps.permissions ?? []
+  const register = (await readText(join(plugin.root, 'hooks', 'register.ts'))) ?? ''
+  const isAdded = /\bregisterPermissionCheck\s*\(/.test(register) && !permissions.includes('approve')
+  if (isAdded) {
+    const path = join(plugin.root, 'package.json')
+    const manifest = (await readJson(path)) as Record<string, unknown>
+    const steps = isObject(manifest['cmod']) ? manifest['cmod'] : {}
+    const declared = isObject(steps['permissions']) ? steps['permissions'] : {}
+    await writeAtomically(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, permissions: { ...declared, approve: true } } }, null, 2)}\n`)
+    permissions = [...permissions, 'approve']
+  }
+  if (permissions.length === 0) return { status: 'skip', text: 'package.json "cmod" asks for no permissions' }
+  const added = isAdded ? 'Added "approve": true to package.json "cmod", because hooks/register.ts calls registerPermissionCheck\n    ' : ''
+  return { status: 'pass', text: `${added}At install the person grants: ${permissions.map(permissionWords).join('; ')}` }
+}
+
+async function checkMetadata(plugin: Plugin): Promise<Result> {
+  const problems: string[] = []
+  let count = 0
+  for (const file of await walk(plugin.root)) {
+    if (file.endsWith(sidecarSuffix)) continue
+    const extensionless = !basename(file).includes('.')
+    const format = formatOf(file, extensionless ? (await readText(file))?.split('\n', 1)[0] : undefined)
+    const holder = format.kind === 'sidecar' ? `${file}${sidecarSuffix}` : file
+    if (!existsSync(holder)) continue
+    const text = (await readText(holder)) ?? ''
+    try {
+      if (Object.keys(readMetadata(text, format).metadata).length > 0) count += 1
+    } catch (error) {
+      problems.push(`${relative(plugin.root, holder)} ${messageOf(error)}`)
+    }
+  }
+  if (problems.length > 0) return { status: 'fail', text: `${problems.length} file${problems.length === 1 ? '' : 's'} with metadata cmod cannot read`, fix: problems.join('\n    fix: ') }
+  if (count === 0) return { status: 'skip', text: 'No file in the mod holds metadata' }
+  return { status: 'pass', text: `cmod reads the metadata of ${count === 1 ? '1 file' : `${count} files`}` }
 }
 
 async function checkOptions(plugin: Plugin): Promise<Result> {

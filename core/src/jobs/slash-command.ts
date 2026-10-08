@@ -20,7 +20,8 @@ export function slashCommand<State extends object = Record<never, never>>(option
 }): Job<void, State> {
   const { name, description, argumentHint, immediate, reply } = options
   return (job) => {
-    const { mod, claude, announce, reserveName } = job
+    const { mod, announce, reserveName } = job
+    const { claude } = mod
     if (!commandName.test(name)) throw new Error(`${mod.name}: "${name}" is not a slash command name. Use 1 to 64 letters, digits, "_", or "-", without the slash.`)
     reserveName('slashCommand', name, `${mod.name}: the slash command /${name} is already added. Give each slashCommand its own name.`)
 
@@ -36,7 +37,7 @@ export function slashCommand<State extends object = Record<never, never>>(option
     announce(`/${name}`)
 
     const replyMod = modWithin(job, deadline)
-    job.on('command.run', async (e, next) => {
+    claude.on('command.run', async (e, next) => {
       if (e.command !== registered) return next(e)
       try {
         return answerOf(await reply({ args: e.args, positionals: splitWords(e.args) }, replyMod))

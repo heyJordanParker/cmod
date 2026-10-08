@@ -35,6 +35,24 @@ export async function changePlugin(action: 'install' | 'uninstall' | 'update', i
   }
 }
 
+export async function configurePlugin(id: string, values: Readonly<Record<string, string>>): Promise<void> {
+  if (Object.keys(values).length === 0) return
+  const result = await capture(['claude', 'plugin', 'configure', id, '--values-stdin', '--json'], { stdin: { text: JSON.stringify(values) } })
+  if (result.exitCode !== 0) throw new Error(`claude plugin configure ${id} failed: ${(result.stderr.trim() || result.stdout.trim()).split('\n').slice(-3).join('\n')}`)
+}
+
+export function optionValues(given: readonly string[] | undefined, userConfig: Readonly<Record<string, unknown>>, plugin: string): Record<string, string> {
+  const values: Record<string, string> = {}
+  for (const pair of given ?? []) {
+    const split = pair.indexOf('=')
+    const key = pair.slice(0, split)
+    if (split <= 0) throw new Error(`--option ${pair} is not key=value. Write it as --option ${pair || 'key'}=value.`)
+    if (!Object.hasOwn(userConfig, key)) throw new Error(`${plugin} has no option ${key}. Its options are: ${Object.keys(userConfig).join(', ') || 'none'}.`)
+    values[key] = pair.slice(split + 1)
+  }
+  return values
+}
+
 function parse(text: string, command: string): unknown {
   try {
     return JSON.parse(text)

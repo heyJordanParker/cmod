@@ -11,14 +11,28 @@ export type InstallRecord = {
   keys: Readonly<Record<string, string>>
 }
 
-export type Steps = { install?: string; uninstall?: string; program?: string; keys?: Readonly<Record<string, string>> }
+export type Steps = {
+  install?: string
+  uninstall?: string
+  program?: string
+  keys?: Readonly<Record<string, string>>
+  permissions?: readonly string[]
+}
+
+export const listPermissions = ['network', 'run', 'files'] as const
+export const flagPermissions = ['conversation', 'prompt', 'model', 'agents', 'tools', 'config', 'approve'] as const
+export type ListPermission = (typeof listPermissions)[number]
+export type FlagPermission = (typeof flagPermissions)[number]
+const permissionNames: readonly string[] = [...listPermissions, ...flagPermissions]
+const hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/
+const programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 
 export type ReadFile = (path: string) => Promise<string | undefined>
 
 export type RunnerEvent =
   | { kind: 'progress'; done: number; total: number; label: string }
   | { kind: 'log'; text: string }
-  | { kind: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string }
+  | { kind: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string; permissions: readonly string[] }
   | { kind: 'done'; name: string; version?: string }
   | { kind: 'missing'; name: string }
   | { kind: 'failed'; code: number; message: string }
@@ -112,7 +126,92 @@ export function readSteps(pkg: unknown): Steps | undefined {
   if (!isObject(steps)) throw new Error('package.json has a "cmod" key that is not an object. Write "cmod": { "install": "./setup/install.sh", "uninstall": "./setup/uninstall.sh" }.')
   const program = steps['program']
   if (program !== undefined && (typeof program !== 'string' || !pluginName.test(program))) throw new Error('package.json "cmod.program" must be the program\'s command, such as "hello".')
-  return { ...readCommand(steps, 'install'), ...readCommand(steps, 'uninstall'), ...(program === undefined ? {} : { program }), ...readKeys(steps['keys']) }
+  const permissions = readPermissions(steps)
+  return {
+    ...readCommand(steps, 'install'),
+    ...readCommand(steps, 'uninstall'),
+    ...(program === undefined ? {} : { program }),
+    ...readKeys(steps['keys']),
+    ...(permissions.length === 0 ? {} : { permissions }),
+  }
+}
+
+function readPermissions(steps: Record<string, unknown>): string[] {
+  const declared = steps['permissions']
+  if (declared === undefined) return []
+  const at = 'package.json "cmod.permissions"'
+  if (!isObject(declared)) throw new Error(`${at} must be an object, such as { "network": ["api.github.com"], "prompt": true }.`)
+  const items: string[] = []
+  for (const [name, value] of Object.entries(declared)) {
+    if (!permissionNames.includes(name)) throw new Error(`${at} names "${name}", which is not a permission. Use ${listed(permissionNames.map((each) => `"${each}"`))}.`)
+    if ((flagPermissions as readonly string[]).includes(name)) {
+      if (value !== true) throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write "${name}": true, or leave it out.`)
+      items.push(name)
+      continue
+    }
+    if (name === 'run' && value === '*') {
+      items.push('run:*')
+      continue
+    }
+    const example = name === 'network' ? '["api.github.com"]' : name === 'run' ? '["gh"], or "*" for any program' : '["~/.zshrc"]'
+    if (!Array.isArray(value) || value.length === 0 || !value.every((each) => typeof each === 'string')) throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write a list, such as "${name}": ${example}.`)
+    for (const each of value as string[]) {
+      const isPath = /^(~\/|\/)/.test(each) && !each.split('/').includes('..')
+      const isValid = name === 'network' ? hostName.test(each) || isPath : name === 'run' ? programName.test(each) : isPath
+      if (!isValid) throw new Error(`${at} lists "${each}" under "${name}". Write ${name === 'network' ? 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"' : name === 'run' ? 'a program\'s command, such as "gh"' : 'a path that starts with ~/ or /, such as "~/.zshrc"'}.`)
+      items.push(`${name}:${each}`)
+    }
+  }
+  return items
+}
+
+export function permissionWords(item: string): string {
+  const split = item.indexOf(':')
+  const target = item.slice(split + 1)
+  switch (split === -1 ? item : item.slice(0, split)) {
+    case 'network':
+      return `Connect to ${target}`
+    case 'run':
+      return target === '*' ? 'Run any program on your computer' : `Run ${target} on your computer`
+    case 'files':
+      return `Change ${target}`
+    case 'conversation':
+      return 'Read this conversation'
+    case 'prompt':
+      return 'Add text Claude reads and start turns'
+    case 'model':
+      return 'Ask a model, which uses your plan'
+    case 'agents':
+      return 'Start agents'
+    case 'tools':
+      return "Use and change Claude's tool calls"
+    case 'config':
+      return 'Change your Claude Code settings'
+    case 'approve':
+      return "Approve Claude's tool calls for you"
+    default:
+      return item
+  }
+}
+
+export const settingsPagesMethod = 'cmod:settingsPages'
+
+export const openPageMethod = 'cmod:openPage'
+
+export const pendingStepsMethod = 'cmod:pendingSteps'
+
+export const finishStepsMethod = 'cmod:finishSteps'
+
+export function consentPath(store: string): string {
+  return `${store}/consent.json`
+}
+
+export function parseConsent(value: unknown, path: string): Record<string, string[]> {
+  if (value === undefined) return Object.create(null)
+  if (!isObject(value) || Object.values(value).some((items) => !Array.isArray(items) || items.some((item) => typeof item !== 'string'))) {
+    throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod asks again.`)
+  }
+  return Object.assign(Object.create(null), value) as Record<string, string[]>
 }
 
 function readKeys(keys: unknown): Steps {
@@ -127,8 +226,9 @@ function readKeys(keys: unknown): Steps {
   return { keys: commands }
 }
 
-export function oldestCmodFor(keys: Readonly<Record<string, string>>): string {
-  return Object.keys(keys).length > 0 ? '0.1.12' : '0.0.0'
+export function oldestCmodFor(steps: Steps): string {
+  if (steps.permissions !== undefined) return '0.2.0'
+  return Object.keys(steps.keys ?? {}).length > 0 ? '0.1.12' : '0.0.0'
 }
 
 export function keyWords(keys: Readonly<Record<string, string>> | undefined): string {
@@ -169,7 +269,13 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
     if (scriptFolders.length === 0) throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/${key}.sh.`)
     for (const folder of scriptFolders) folders.add(folder)
   }
-  let text = [steps.install ?? '', steps.uninstall ?? '', steps.program ?? '', ...(steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())])].join('\0')
+  let text = [
+    steps.install ?? '',
+    steps.uninstall ?? '',
+    steps.program ?? '',
+    ...(steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())]),
+    ...(steps.permissions === undefined ? [] : [JSON.stringify([...steps.permissions].sort())]),
+  ].join('\0')
   for (const folder of [...folders].sort()) {
     for (const name of (await files.list(folder)).sort()) {
       const path = `${folder}/${name}`
@@ -189,7 +295,7 @@ export function formatEvent(event: RunnerEvent): string {
     case 'log':
       return `log ${event.text}`
     case 'needs-consent':
-      return `needs-consent ${event.sha256}\t${event.install}\t${event.uninstall}\t${event.keys}`
+      return `needs-consent ${[event.sha256, event.install, event.uninstall, event.keys, ...event.permissions].join('\t')}`
     case 'done':
       return event.version === undefined ? `done ${event.name}` : `done ${event.name} ${event.version}`
     case 'missing':
@@ -203,7 +309,10 @@ export function parseEvent(line: string): RunnerEvent {
   const progress = /^progress (\d+) (\d+)(?: (.*))?$/.exec(line)
   if (progress !== null) return { kind: 'progress', done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? '' }
   const consent = /^needs-consent (\S+)\t([^\t]*)\t([^\t]*)(?:\t(.*))?$/.exec(line)
-  if (consent !== null) return { kind: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, keys: consent[4] ?? '' }
+  if (consent !== null) {
+    const [keys = '', ...permissions] = (consent[4] ?? '').split('\t')
+    return { kind: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, keys, permissions: permissions.filter((item) => item !== '') }
+  }
   const done = /^done (\S+)(?: (\S+))?$/.exec(line)
   if (done !== null) return { kind: 'done', name: done[1] as string, ...(done[2] === undefined ? {} : { version: done[2] }) }
   const missing = /^missing (\S+)$/.exec(line)

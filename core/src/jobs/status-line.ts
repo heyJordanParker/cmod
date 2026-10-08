@@ -17,7 +17,8 @@ export function statusLine<State extends object = Record<never, never>>(options:
 }): Job<void, State> {
   const { text, interval = 10000 } = options
   return (job) => {
-    const { mod, claude, announce, reserveName } = job
+    const { mod, announce, reserveName } = job
+    const { claude } = mod
     if (!(interval >= 1)) throw new Error(`${mod.name}: the status line interval is ${interval}. Give it in milliseconds, 1 or more.`)
     reserveName('statusLine', '', `${mod.name}: a status line is already added. A mod has one status line: join the texts in one statusLine.`)
 
@@ -48,7 +49,7 @@ export function statusLine<State extends object = Record<never, never>>(options:
     }
 
     announce('a status line')
-    job.on('session.measure', (e, next) => {
+    claude.on('session.measure', (e, next) => {
       refresh()
       return next(e)
     })

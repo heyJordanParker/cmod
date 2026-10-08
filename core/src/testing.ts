@@ -20,7 +20,7 @@ import type {
 import type { Reply } from './jobs/slash-command.js'
 import type { ModDefinition, ModEvent } from './mod.js'
 import type { Options, OptionValues } from './options.js'
-import { storeFolder } from './records.js'
+import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, notInstalled } from './runtime/dependencies.js'
 import type { RoutedEvent } from './runtime/hooks.js'
@@ -38,11 +38,13 @@ export type { Fakes, Shown, TestCall } from './testing/fake-claude.js'
 export type TestOptions<State extends object, Declared extends Options = Options> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
   readonly options?: Partial<OptionValues<Declared>>
+  readonly permissions?: readonly string[]
   readonly scope?: 'user' | 'project'
   readonly projectRoot?: string
   readonly cwd?: string
   readonly dependencies?: { readonly [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
+  readonly links?: Readonly<Record<string, string>>
 }
 
 type FilledField = 'session_id' | 'transcript_path' | 'cwd' | 'hook_event_name' | 'tool_use_id'
@@ -98,23 +100,27 @@ export function testMod<State extends object, Declared extends Options = Options
     if (fake.fakes.agent.list !== undefined || firedAgents.size === 0) return listAgents()
     return [...firedAgents].map(([id, type]) => ({ id, type, description: '', status: 'running' as const }))
   }
-  Object.assign(fake.fakes.fs, fakeFiles(options.files ?? {}))
+  Object.assign(fake.fakes.fs, fakeFiles(options.files ?? {}, options.links))
   const starting = options.state as Record<string, object> | undefined
   const declared = Object.entries(definition.state ?? {}) as [string, object][]
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
-  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => true, (options.options ?? {}) as PluginOptions)
+  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => true, (options.options ?? {}) as PluginOptions, false)
   let started: Promise<void> | undefined
 
   const start = async () => {
-    started ??= lifecycle.start(fake.claude, async (claude) => ({
-      name,
-      root,
-      version: '0.0.0',
-      store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
-      isInstalled: true,
-      shouldRecord: false,
-      keys: {},
-    }))
+    started ??= lifecycle.start(fake.claude, async (claude) => {
+      const steps = await modSteps()
+      return {
+        name,
+        root,
+        version: '0.0.0',
+        store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
+        isInstalled: true,
+        shouldRecord: false,
+        steps,
+        granted: options.permissions ?? steps.permissions ?? [],
+      }
+    })
     await started
     const { failure } = lifecycle
     if (failure instanceof MissingOptions) {
@@ -290,6 +296,15 @@ function plainOutput({ component, props }: Args<'ui.render'>): RenderElement {
 
 function replyOf({ text, context }: CommandRunResult): Reply {
   return { ...(text === undefined ? {} : { text }), ...(context === undefined ? {} : { context: context.join('\n') }) }
+}
+
+async function modSteps(): Promise<Steps> {
+  const manifest = '../../../package.json'
+  const loaded: unknown = await import(manifest, { with: { type: 'json' } }).then(
+    (module: { default: unknown }) => module.default,
+    () => undefined,
+  )
+  return readSteps(loaded) ?? {}
 }
 
 function installJsx(): void {

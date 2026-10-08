@@ -34,16 +34,42 @@ cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 
 ## Consent
 
-Before a step runs for the first time, cmod shows the person the commands and the keys, and asks to run them. cmod hashes the commands, the keys, and every file in each script folder, and remembers the hash the person approved. A change to any of those asks again.
+Before a step runs for the first time, cmod shows the person the commands, the keys, and the permissions, and asks to run them. cmod hashes the commands, the keys, the permissions, and every file in each script folder, and remembers the hash the person approved with each permission. A change to any of those asks again, and an added permission is the only one it asks about ([permissions.md](permissions.md)).
 
-- In Claude Code, the mod asks `<mod> runs <install> to install, runs <uninstall> when you remove it and binds shift+tab to /mode. Install it now?` with `Install` and `Not now`, naming only what the mod has. A progress line above the prompt shows the install.
+- In Claude Code, the mod opens the installer pane, `Install <mod>`, focused. It lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it` and `Bind shift+tab to /mode`, naming only what the mod has. `Accept` (a) runs the setup, and a progress line above the prompt shows the install. `Not now` (n) and Escape decline.
 - In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.`
-- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, and the keys, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
+- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, the keys, and the permissions, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
 - `Not now` leaves the mod off and logs `<mod> is not installed. Run cmod install <mod> to install it.`
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
 
-In Claude Code, the mod sets itself up through the `cmod` that PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
+In Claude Code, the mod sets itself up through the `cmod` that PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys, and a mod with `permissions` waits for cmod 0.2.0 or later, because an older cmod grants none of them. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
+
+## Steps in Claude Code
+
+Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and the installer pane shows each one after the permissions and the options, once the mod has started:
+
+```ts
+import { defineStep } from '../node_modules/@cmodjs/core/installer.js'
+
+const signIn = defineStep({
+  id: 'sign-in',
+  title: 'Sign in to GitHub',
+  render: () => <Text>Run gh auth login in a terminal, then press Next.</Text>,
+  isDone: async (mod) => (await mod.process.run(['gh', 'auth', 'status'])).exitCode === 0,
+})
+
+export const ciWatch = defineMod({ name: 'ci-watch', installer: [signIn], setup(mod) { … } })
+```
+
+```ts
+defineStep<State>(step: { id: string; title: string; render(mod, props): RenderElement; isDone(mod): boolean | Promise<boolean> }): Step<State>
+```
+
+- `id` is 1 to 64 letters, digits, `_`, or `-`. `title` is the line above the step, with `(1 of 2)`. `defineStep` throws for either one missing.
+- `render` draws the step's body, the way a pane's `render` does ([ui.md](ui.md)).
+- `isDone` says whether the step is finished. A step that is done is skipped, so the pane opens only for what is left. `Next` checks `isDone`, and shows `Finish <title> first.` while it is false. The last step's button says `Finish`.
+- `Not now` closes the pane and logs `<mod> needs one more step, starting with <title>. Run /mods <mod> to finish.` The mod keeps running. `/mods <mod>` shows `Needs setup: <title>` with a `Finish setup` button, which opens the pane on the first step left.
 
 ## Key bindings
 

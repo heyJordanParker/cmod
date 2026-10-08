@@ -61,6 +61,10 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
 | How do I keep values across prompts, sessions, and projects? | [state.md](state.md) |
 | How does a person set a token, a URL, or a setting for my mod, for themselves or their team? | [options.md](options.md) |
+| Which hosts, programs, and files may my mod reach, and how does the person grant them? | [permissions.md](permissions.md) |
+| How does my mod find files and keep its own keys on each one, such as on a Skill? | [mod.md](mod.md#mod-metadata) |
+| How does the person finish a setup step only they can do, such as signing in? | [install-steps.md](install-steps.md#steps-in-claude-code) |
+| How do I add my mod's own page to `/mods`? | [mod.md](mod.md#mod-settings) |
 | How do I react to a Claude Code event, and what can a hook answer? | [hooks.md](hooks.md) |
 | How do I draw a pane, change a row Claude Code draws, or ask the person something? | [ui.md](ui.md) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, a status line, or a background program? | [jobs.md](jobs.md) |
@@ -76,7 +80,9 @@ A mod imports from the files below, and every other file in this package is inte
 | Import | Exports | Docs |
 | --- | --- | --- |
 | `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `ProgressStep`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [ui.md](ui.md) |
-| `mod.js` | `Claude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
+| `mod.js` | `Claude`, `ModClaude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
+| `mod.js` | `FileMatch`, `Metadata`, `ScrollArgs` | [mod.md](mod.md), [ui.md](ui.md) |
+| `installer.js` | `defineStep`, `Step` | [install-steps.md](install-steps.md#steps-in-claude-code) |
 | `mod.js` | `ModEvent`, `ModHook`, `HookOptions`, `HookInput`, `HookAnswer` | [hooks.md](hooks.md) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
 | `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod` | [mod.md](mod.md) |

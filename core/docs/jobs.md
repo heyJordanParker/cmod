@@ -167,6 +167,8 @@ A `command` pattern is not a glob. cmod splits it into words the way it splits a
 
 ## permissions
 
+A `deny` rule needs no permission. An `ask` rule takes effect only with `"approve": true` in `package.json` `"cmod".permissions` ([permissions.md](permissions.md)).
+
 ```ts
 permissions<State>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<void, State>
 
@@ -222,6 +224,8 @@ export const guard = defineMod({
 
 ## check
 
+Its command needs `"run"` with the program's name, such as `"run": ["tsc"]` ([permissions.md](permissions.md)).
+
 ```ts
 check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State>
 ```
@@ -246,6 +250,8 @@ export const lint = defineMod({
 ```
 
 ## prompt
+
+It needs `"prompt": true`. Without the grant it adds nothing and logs once which line to add ([permissions.md](permissions.md)).
 
 ```ts
 prompt<State>(options: {
@@ -287,6 +293,8 @@ export const conventions = defineMod({
 ```
 
 ## schedule
+
+It needs `"prompt": true`, because each cron starts a turn ([permissions.md](permissions.md)).
 
 ```ts
 schedule<State>(entry: Schedule | ((state: State) => Schedule | undefined)): Job<void, State>
@@ -346,6 +354,8 @@ export const usage = defineMod({
 
 ## program
 
+It needs `"run"` with the program's name. Without the grant the program stops at once and names the line to add ([permissions.md](permissions.md)).
+
 ```ts
 program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program>
 
@@ -394,17 +404,20 @@ A `Job` is a function. `mod.use` calls it with a `JobContext` and returns what i
 ```ts
 type JobContext<State> = {
   readonly mod: Mod<State>
-  readonly claude: Claude
-  on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
   announce(feature: string): void
   reserveName(kind: string, name: string, taken: string): void
   readonly toolCalls: ToolCalls
 }
 ```
 
-- `claude` reaches Claude Code itself. [The claude members](#the-claude-members) lists each one.
-- `claude.store` is where cmod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind cmod's back.
-- `on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.scroll`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. A job with a handler on `tool.check` or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
+A job reaches Claude Code through `mod.claude`, the same member every hook has:
+
+- `mod.claude` holds Claude Code's own calls. [The claude members](#the-claude-members) lists each one. Each call checks the permission it needs, as `mod`'s own members do ([permissions.md](permissions.md)).
+- `mod.claude.store` is where cmod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind cmod's back.
+- `mod.claude.on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.scroll`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. cmod checks what it answers against the person's grants, part by part ([permissions.md](permissions.md#when-a-hook-answer-has-no-grant)). A job with a handler on `tool.check` or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
+
+The context adds what only a job needs:
+
 - `announce` adds a phrase to the list cmod logs when the mod first starts.
 - `reserveName` throws `taken` when the mod already reserved that `kind` and `name`. A job calls it to refuse a duplicate.
 - `toolCalls.agentOf(toolUseId)` resolves `{ agentId?, agentType? }`, the subagent behind a call.
@@ -413,9 +426,9 @@ type JobContext<State> = {
 ```ts
 import { defineMod, type Job } from '../node_modules/@cmodjs/core/mod.js'
 
-const clock: Job<{ now(): Promise<number> }> = ({ claude, announce }) => {
+const clock: Job<{ now(): Promise<number> }> = ({ mod, announce }) => {
   announce('a clock')
-  return { now: () => claude.clock.now() }
+  return { now: () => mod.claude.clock.now() }
 }
 
 export const timer = defineMod({
@@ -433,7 +446,9 @@ export const timer = defineMod({
 
 `mod.js` exports the types `Claude`, `RoutedEvent`, `RoutedHook`, and `ToolCalls`, so a job of your own names them in its own helpers, such as `(claude: Claude, calls: ToolCalls): RoutedHook<'command.run'> => …`.
 
-Each member calls the member of the same name in Claude Code's hooks API, `$`, with the same arguments. The `env` members read `$.env.get` instead.
+Each member calls the member of the same name in Claude Code's hooks API, `$`, with the same arguments. The `env` members read `$.env.get` instead. `mod.claude.on` adds a handler, as [Write a job of your own](#write-a-job-of-your-own) shows.
+
+A member that does what a permission covers checks it first and rejects with the fix: `process` needs `run`, `http.fetch` needs `network`, `fs.write` outside the project and the data folder needs `files` or, for Claude Code's own settings files, `config`, `fs.read` of a transcript needs `conversation`, `session.messages` needs `conversation`, `session.append` and `prompt.submit` need `prompt`, `model.complete` needs `model`, `agent.spawn` needs `agents`, `config.set` needs `config`, and `tool.call` needs `tools`, except `CronCreate`, which needs `prompt`, and `CronList` and `CronDelete`, which need nothing ([permissions.md](permissions.md)).
 
 | Member | What it does |
 | --- | --- |
@@ -454,7 +469,8 @@ Each member calls the member of the same name in Claude Code's hooks API, `$`, w
 | `process.spawn(request)` | Starts a program and streams its output. `mod.process.spawn` is built on it. |
 | `fs.read`, `fs.write`, `fs.list`, `fs.exists`, `fs.stat` | What `mod.fs` calls. A relative path is under the session's working folder. |
 | `http.fetch(url, init?)` | What `mod.http.fetch` calls. |
-| `settings.read(args?)` | What `mod.settings.read` calls. |
+| `settings.read(args?)` | Reads Claude Code's own `settings.json` files. Without `{ source }` it answers every source merged. `user`, `project`, `local`, `flag`, and `policy` each answer one. |
+| `config.list()`, `config.set({ key, value })` | Lists the rows `/config` shows, and changes one, such as `<mod>.<option>`. `set` needs `config`. |
 | `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where cmod also keeps `mod.state`. |
 | `clock.now()` | Resolves milliseconds since the epoch. |
 | `clock.after(ms, fn)` | Calls `fn` once after `ms` milliseconds, and returns `{ cancel() }`. |

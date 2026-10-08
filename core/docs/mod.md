@@ -14,6 +14,7 @@ type ModDefinition<State, Name, Options> = {
   readonly state?: State
   readonly options?: Options
   readonly api?: { … }
+  readonly installer?: readonly Step<State>[]
   setup(mod: Mod<State, Options>): void | Promise<void>
 }
 ```
@@ -22,6 +23,7 @@ type ModDefinition<State, Name, Options> = {
 - `state` holds the starting values, grouped by how long they last. [state.md](state.md) explains the groups.
 - `options` declares what a person sets, such as a token, and types `mod.options`. [options.md](options.md) explains them.
 - `api` holds the methods other mods call. [dependencies.md](dependencies.md) explains it.
+- `installer` lists the steps the person finishes in Claude Code after the permissions and the options, such as signing in. [install-steps.md](install-steps.md#steps-in-claude-code) explains them.
 - `setup` runs once when the mod starts. It adds hooks, panes, slot renders, and jobs. It may be `async`.
 
 ```tsx
@@ -43,7 +45,7 @@ export const greeter = defineMod({
 
 ## When setup runs
 
-Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod with an install step that has not run waits for the person's consent and the install first ([install-steps.md](install-steps.md)). Then cmod loads the saved state, runs `setup`, and marks as open each of the mod's panes that Claude Code already shows.
+Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod the person has not accepted yet opens the installer pane, `Install <name>`, which lists its permissions and the changes it makes to the computer, and waits for Accept ([install-steps.md](install-steps.md)). An option with no default and no value is asked on the next page of the same pane. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the pane again for each `installer` step the mod declares that is not done.
 
 The first time a version starts, cmod shows the toast `<name> is ready` and logs `<name> added <what setup added>`, such as `the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit`.
 
@@ -51,7 +53,7 @@ When a step fails, the mod does not start. Its progress line above the prompt na
 
 - `<mod>: state.<group> is not a lifetime. …` or `<mod>: state.<group> is not an object of values. …` when the declared state is not valid ([state.md](state.md)).
 - `its state did not load: <error>` when reading the saved values fails.
-- `it needs <titles>` when an option with no default has no value ([options.md](options.md)). This one says `Set it in /config.` instead, and Claude Code reloads the mod once the value is set.
+- `it needs <titles>` when the person chose Not now on an option with no default, or no one can answer, as in `claude -p` ([options.md](options.md)). This one says `Set it in /config.` instead, and Claude Code reloads the mod once the value is set.
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
@@ -89,7 +91,7 @@ export function register(addHook: On, options: PluginOptions): void {
 }
 ```
 
-A mod without it has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its progress line names the line to add.
+Such a mod also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its progress line names the line to add.
 
 Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. The plugin directory reads the bundled module too, and flags it when the name of `register`'s first parameter is declared anywhere else in the bundle. `@cmodjs/core` declares `on` as the method `mod.on`, so name that parameter `addHook`. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
 
@@ -110,13 +112,16 @@ type Mod<State, Options> = {
   every(ms, hook): Timer
   readonly ui: { pane, render, toast, progress, ask, scroll }
   readonly process: { run, spawn }
-  readonly fs: { read, write, list, exists, stat }
+  readonly fs: { read, write, list, exists, stat, find }
+  readonly metadata: { read, update }
   readonly http: { fetch }
-  readonly settings: { read }
+  readonly settings: { page, open }
   readonly session: { messages, append, submit }
   readonly agent: { spawn }
   readonly model: { complete }
+  readonly permissions: { has }
   readonly dependencies: CmodDependencies
+  readonly claude: ModClaude
 }
 ```
 
@@ -133,13 +138,16 @@ type Mod<State, Options> = {
 | `every` | Runs a function every so many milliseconds while the session runs. | below |
 | `ui` | Panes, slot renders, toasts, progress lines, questions, and scrolling. | [ui.md](ui.md) |
 | `process` | Runs a program. | below |
-| `fs` | Reads, writes, and looks up files. | below |
+| `fs` | Reads, writes, looks up, and finds files. | below |
+| `metadata` | Reads and changes the mod's keys in one file's metadata. | below |
 | `http` | Fetches a URL. | below |
-| `settings` | Reads Claude Code's settings. | below |
+| `settings` | Adds the mod's own pages to `/mods`, and opens them. | below |
 | `session` | Reads the conversation or a subagent's, adds a note Claude reads, and asks Claude for a turn. | below |
 | `agent` | Starts a subagent. | below |
 | `model` | Asks a model one question, outside the conversation. | below |
+| `permissions` | Says whether the person has a permission turned on. `process`, `fs.write`, `metadata.update`, `http`, `session`, `agent`, `model`, and `claude` each check theirs. | [permissions.md](permissions.md) |
 | `dependencies` | Calls the methods of other mods. | [dependencies.md](dependencies.md) |
+| `claude` | Claude Code's own calls and events, for what `mod` has no member for. | [jobs.md](jobs.md#the-claude-members) |
 
 ### mod.every
 
@@ -201,6 +209,7 @@ mod.fs.write(path: string, text: string): Promise<void>
 mod.fs.list(path?: string): Promise<FsEntry[]>
 mod.fs.exists(path: string): Promise<boolean>
 mod.fs.stat(path: string, options?: { resolve: boolean }): Promise<FsStat>
+mod.fs.find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
 ```
 
 - A relative path is under the session's working folder. An absolute path is used as given. Text is UTF-8.
@@ -210,7 +219,64 @@ mod.fs.stat(path: string, options?: { resolve: boolean }): Promise<FsStat>
 - `exists` answers whether the path leads to a file or a folder.
 - `stat` answers `{ kind, size, mtimeMs, isLink }` of what the path leads to, following a symbolic link, and rejects a missing path. With `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
 
-A file the mod ships is under the plugin's folder. `mod` has no member that names that folder, so a job of your own reads it from `claude.plugin.root` ([jobs.md](jobs.md#the-claude-members)). A file the mod keeps for itself belongs in `mod.dataFolder`.
+A file the mod ships is under the plugin's folder, `mod.claude.plugin.root` ([jobs.md](jobs.md#the-claude-members)). A file the mod keeps for itself belongs in `mod.dataFolder`.
+
+`find` answers every file a glob matches, each with its metadata, so a mod finds the Skills, agents, scripts, or notes it acts on in one call:
+
+```ts
+type FileMatch = { readonly path: string; readonly name?: string; readonly metadata: Readonly<Record<string, string>>; readonly error?: string }
+```
+
+- A glob starting with `~/.claude` starts at Claude Code's config folder, `CLAUDE_CONFIG_DIR` when it is set. One starting with `~/` starts at home, one starting with `/` is absolute, and any other starts at the project root. Several globs answer each file once.
+- `path` is absolute. `name` is a Markdown file's frontmatter `name`. `metadata` holds the mod's own keys, bare, as `mod.metadata.read` answers them.
+- `find` follows symbolic links into the folders they point at, once each. It skips `.git` and `node_modules` unless the glob names them.
+- A file whose metadata cmod cannot read comes back with empty `metadata` and an `error` naming the line, and cmod logs it once.
+- cmod keeps what it read of each file until the file's modified time or size changes.
+
+```ts
+const skills = await mod.fs.find(['~/.claude/skills/*/SKILL.md', '.claude/skills/*/SKILL.md'])
+const planning = skills.filter((skill) => skill.metadata['modes']?.split(' ').includes('plan'))
+```
+
+### mod.metadata
+
+```ts
+mod.metadata.read(path: string): Promise<Readonly<Record<string, string>>>
+mod.metadata.update(path: string, change: (metadata: Record<string, string>) => void): Promise<void>
+```
+
+Metadata is a file's own set of string keys, kept in the file, so it moves and is committed with the file. Each mod reads and writes its own keys only: the file stores them as `<mod>.<key>`, and the mod sees them bare. A value is one line of text, and a list is one space-separated string.
+
+Where a file keeps its metadata depends on its kind:
+
+```markdown
+---
+name: plan
+metadata:
+  modes.modes: plan build
+---
+```
+
+```sh
+#!/bin/sh
+# /// metadata
+# modes.modes: plan build
+# ///
+```
+
+- A Markdown file keeps it in its frontmatter, under `metadata:`.
+- A `.sh`, `.py`, `.ts`, `.js`, `.yaml`, or `.toml` file keeps it in a `/// metadata` comment block after any shebang, in the file's own comment, `#` or `//`, the way PEP 723 keeps a Python script's dependencies.
+- Any other file keeps it in a sidecar, `<file>.meta`.
+
+`update` hands `change` the mod's current keys, and writes what `change` leaves. It changes only the metadata block, keeps other mods' keys, writes nothing when nothing changed, and removes an empty block. It writes through a symbolic link to the file it points at. Writing a file outside the project and the mod's data folder needs the `files` permission, as `mod.fs.write` does ([permissions.md](permissions.md)). A key is letters, digits, `_`, `.`, and `-`, and `update` rejects any other key and a value with a line break.
+
+```ts
+await mod.metadata.update('.claude/skills/plan/SKILL.md', (metadata) => {
+  metadata['modes'] = 'plan build'
+})
+```
+
+`cmod check` reads the metadata of every file the mod ships, and fails one cmod cannot read.
 
 ### mod.http
 
@@ -224,35 +290,29 @@ mod.http.fetch(url: string, init?: HttpInit): Promise<HttpResponse>
 ### mod.settings
 
 ```ts
-mod.settings.read(args?: { source?: 'user' | 'project' | 'local' | 'flag' | 'policy' }): Promise<Settings>
+mod.settings.page(page: Pane<State>): void
+mod.settings.open(pageId?: string): Promise<void>
 ```
 
-Without a `source` it answers the settings Claude Code runs under, every source merged. With a `source` it answers that one source: `user` is `~/.claude/settings.json`, `project` is `.claude/settings.json`, and `local` is `.claude/settings.local.json`. The answer is keyed as a `settings.json` is, such as `permissions`, `env`, and `enabledPlugins`.
+`/mods` shows each mod's options, permissions, and keys. `page` adds a page of the mod's own to its entry there, drawn as any pane is ([ui.md](ui.md)). `open` opens that page, or with no id opens the mod's entry in `/mods`. `open` rejects for an id `page` did not add.
 
-```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
-
-export const pluginCount = defineMod({
-  name: 'plugin-count',
-  setup(mod) {
-    mod.on('SessionStart', async () => {
-      const enabled = (await mod.settings.read({ source: 'user' }))['enabledPlugins'] as Record<string, unknown> | undefined
-      mod.ui.toast(`${Object.keys(enabled ?? {}).length} plugins are enabled`)
-    })
-  },
-})
+```tsx
+mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: (current) => <Text>{current.state.session.lastRun}</Text> }))
+mod.use(slashCommand({ name: 'ci-runs', description: 'Show the CI runs', reply: () => void mod.settings.open('runs') }))
 ```
+
+Claude Code's own `settings.json` files are read with `mod.claude.settings.read`, such as `(await mod.claude.settings.read({ source: 'user' }))['enabledPlugins']` ([jobs.md](jobs.md#the-claude-members)).
 
 ### mod.session
 
 ```ts
 mod.session.messages(): Promise<SessionMessage[]>
-mod.session.messages(args: { agentId?: string; as?: 'api' }): Promise<…>
+mod.session.messages(args: { agentId: string }): Promise<SessionMessage[] | { deny: string }>
 mod.session.append(text: string): Promise<void>
 mod.session.submit(text: string): Promise<void>
 ```
 
-`messages` reads the main conversation, one `{ role, text, toolUses, toolResults }` entry per message. A message has no id of its own, and each tool use carries its `tool_use_id`. `{ agentId }` reads that subagent's conversation instead, the id a `SubagentStart` or `SubagentStop` hook gets as `agent_id`, and answers `{ deny }` when the session cannot read it, so `Array.isArray` tells the two apart. `{ as: 'api' }` reads it in the Messages API form, `{ role, content }` with the content blocks whole.
+`messages` reads the main conversation, one `{ role, text, toolUses, toolResults }` entry per message. A message has no id of its own, and each tool use carries its `tool_use_id`. `{ agentId }` reads that subagent's conversation instead, the id a `SubagentStart` or `SubagentStop` hook gets as `agent_id`, and answers `{ deny }` when the session cannot read it, so `Array.isArray` tells the two apart. The Messages API form, `{ role, content }` with the content blocks whole, is `mod.claude.session.messages({ as: 'api' })`.
 
 ```ts
 mod.on('SubagentStop', async ({ agent_id }) => {

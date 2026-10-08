@@ -35,7 +35,7 @@ const touchTracker = defineMod({
 })
 
 test("an installed mod's setup runs during session.start and its PostToolUse hook answers the first event", async () => {
-  const tested = testMod(touchTracker)
+  const tested = testMod(touchTracker, { permissions: ['prompt'] })
   await tested.start()
   expect(tested.state).toEqual({ session: { hasSetUp: true, touched: [] } })
 
@@ -82,7 +82,7 @@ const safeDelete = defineMod({
 })
 
 test('a PreToolUse hook that answers updatedInput rewrites the Bash command Claude Code runs', async () => {
-  const tested = testMod(safeDelete)
+  const tested = testMod(safeDelete, { permissions: ['tools'] })
 
   const answer = await tested.fire('PreToolUse', preToolUse('rm -rf build'))
 
@@ -93,7 +93,7 @@ test("Claude Code's permission check and the tool get the input a PreToolUse hoo
   const fake = fakeClaude({ name: 'safe-delete', root: '/test/plugins/safe-delete' })
   fake.fakes.agent.list = async () => [{ id: 'agent-2', type: 'explorer' } as AgentInfo]
   const lifecycle = createLifecycle(safeDelete)
-  await lifecycle.start(fake.claude, async () => ({ name: 'safe-delete', root: '/test/plugins/safe-delete', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'safe-delete', root: '/test/plugins/safe-delete', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: ['tools'] }))
   const reached: unknown[] = []
   const core = async (e: unknown) => (reached.push(e), { result: '' }) as EventResult<'tool.call'>
 
@@ -145,7 +145,7 @@ test('mod.every refuses a time that is not a whole number of milliseconds', asyn
   const lifecycle = createLifecycle(defineMod({ name: 'ticker', setup: (mod) => void mod.every(0.5, () => undefined) }))
   const fake = fakeClaude({ name: 'ticker', root: '/test/plugins/ticker' })
 
-  await lifecycle.start(fake.claude, async () => ({ name: 'ticker', root: '/test/plugins/ticker', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'ticker', root: '/test/plugins/ticker', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
 
   expect(String(lifecycle.failure)).toContain('ticker: mod.every is 0.5. Give a whole number of milliseconds above 0 and at most 2147483647.')
 })
@@ -161,6 +161,7 @@ test('mod.session.append adds a note Claude reads, and mod.session.submit asks C
         })
       },
     }),
+    { permissions: ['prompt'] },
   )
 
   await tested.fire('SessionStart', { source: 'startup' })
@@ -177,6 +178,7 @@ test('mod.session.append rejects with the reason when a plugin refuses the note'
       name: 'ci-watch',
       setup: (mod) => mod.on('SessionStart', () => mod.session.append('CI failed.').catch((error: Error) => void (failure = error.message))),
     }),
+    { permissions: ['prompt'] },
   )
   tested.fakes.session.append = async () => ({ deny: 'Notes are off in this organization.' })
 
@@ -192,6 +194,7 @@ test("mod.model.complete passes the request and options to Claude Code's model c
       name: 'babysitter',
       setup: (mod) => mod.on('Stop', async () => void (verdict = await mod.model.complete({ model: 'haiku', prompt: 'Is this reply a waste of time?', timeoutMs: 8000 }))),
     }),
+    { permissions: ['model'] },
   )
   tested.fakes.model.complete = async () => ({ isAnswered: true, text: 'no' }) as never
 
@@ -230,6 +233,7 @@ test('a hook that answers before its timeoutMs keeps its answer', async () => {
       name: 'babysitter',
       setup: (mod) => mod.on('Stop', async () => ({ decision: 'block', reason: 'Answer the question directly.' }), { timeoutMs: 8000 }),
     }),
+    { permissions: ['prompt'] },
   )
 
   expect(await tested.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Done.' } as never, {})).toEqual({ block: 'Answer the question directly.' })
@@ -241,7 +245,7 @@ test("mod.ui.toast passes Claude Code's timeoutMs on", async () => {
   fake.claude.ui.toast = (text, options) => void toasts.push({ text, options })
   const lifecycle = createLifecycle(defineMod({ name: 'notes', setup: (mod) => mod.ui.toast('Saved 3 notes', { timeoutMs: 8000 }) }))
 
-  await lifecycle.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
 
   expect(toasts).toContainEqual({ text: 'Saved 3 notes', options: { timeoutMs: 8000 } })
 })
@@ -254,6 +258,7 @@ test('a PreToolUse hook that answers additionalContext adds it to the call', asy
         mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'src/CLAUDE.md says: no default exports.' } }))
       },
     }),
+    { permissions: ['prompt'] },
   )
 
   expect(await tested.fire('PreToolUse', preToolUse('cat src/a.ts'))).toEqual({ additionalContext: ['src/CLAUDE.md says: no default exports.'] })
@@ -269,12 +274,22 @@ const decides = (permissionDecision: 'allow' | 'ask') =>
   })
 
 test("a PreToolUse allow skips Claude Code's ask, and an ask puts the call to the person", async () => {
-  expect(await testMod(decides('allow')).fire('PreToolUse', preToolUse('ls'))).toEqual({ allow: true })
-  expect(await testMod(decides('ask')).fire('PreToolUse', preToolUse('ls'))).toEqual({ ask: 'Checked by auto-approve.' })
+  expect(await testMod(decides('allow'), { permissions: ['approve'] }).fire('PreToolUse', preToolUse('ls'))).toEqual({ allow: true })
+  expect(await testMod(decides('ask'), { permissions: ['approve'] }).fire('PreToolUse', preToolUse('ls'))).toEqual({ ask: 'Checked by auto-approve.' })
+})
+
+test('a PreToolUse allow without the grant to approve tool calls leaves the call to Claude Code, and says so once', async () => {
+  const tested = testMod(decides('allow'), { permissions: [] })
+
+  expect(await tested.fire('PreToolUse', preToolUse('ls'))).toEqual({})
+  expect(await tested.fire('PreToolUse', preToolUse('pwd'))).toEqual({})
+  expect(tested.shown.logs.filter((line) => line.includes('without your grant'))).toEqual([
+    `auto-approve answered allow on a tool call without your grant to "Approve Claude's tool calls for you", so cmod dropped it. It needs "permissions": { "approve": true } in package.json "cmod".`,
+  ])
 })
 
 test('a deny beneath a PreToolUse allow stands', async () => {
-  expect(await testMod(decides('allow')).fire('PreToolUse', preToolUse('rm build'), { deny: 'org policy' })).toEqual({ deny: 'org policy' })
+  expect(await testMod(decides('allow'), { permissions: ['approve'] }).fire('PreToolUse', preToolUse('rm build'), { deny: 'org policy' })).toEqual({ deny: 'org policy' })
 })
 
 test('a PreToolUse hook that returns nothing leaves the call to the hooks beneath it', async () => {
@@ -286,7 +301,7 @@ test('a PreToolUse hook that returns nothing leaves the call to the hooks beneat
 })
 
 test("Claude Code's deny of a rewritten call stays the call's answer", async () => {
-  const tested = testMod(safeDelete)
+  const tested = testMod(safeDelete, { permissions: ['tools'] })
 
   const answer = await tested.fire('PreToolUse', preToolUse('rm build'), { deny: 'org policy' })
 
@@ -347,7 +362,7 @@ test('a PreToolUse hook in a subagent sees agent_id and agent_type', async () =>
       },
     }),
   )
-  await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
 
   await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls', agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, async () => ({ result: '' }) as EventResult<'tool.call'>)
 
@@ -435,6 +450,7 @@ test('a Stop hook that throws is logged and the event passes on', async () => {
         mod.on('Stop', () => ({ decision: 'block', reason: 'Run the tests first.' }))
       },
     }),
+    { permissions: ['prompt'] },
   )
 
   const answer = await tested.fire('Stop', { ...base, hook_event_name: 'Stop', stop_hook_active: false } as ClassicHookInputs['Stop'], { additionalContext: ['from settings'] })
@@ -468,6 +484,7 @@ test('a Stop hook that blocks keeps Claude going with the reason', async () => {
         mod.on('Stop', () => ({ decision: 'block', reason: 'Run the tests first.' }))
       },
     }),
+    { permissions: ['prompt'] },
   )
 
   const answer = await tested.fire('Stop', { ...base, hook_event_name: 'Stop', stop_hook_active: false } as ClassicHookInputs['Stop'])
@@ -533,9 +550,9 @@ test('mod.ui.progress draws a bar line above the prompt while its task runs', as
 
 const noForcePush: Job<{ readonly denied: string[] }> = (job) => {
   const denied: string[] = []
-  void job.claude.command.register({ name: 'pushes', description: 'List refused pushes' })
+  void job.mod.claude.command.register({ name: 'pushes', description: 'List refused pushes' })
   job.announce('the /pushes command')
-  job.on('tool.check', async (e, next) => {
+  job.mod.claude.on('tool.check', async (e, next) => {
     const command = (e.input as { command?: string }).command ?? ''
     if (e.tool !== 'Bash' || !command.includes('push --force')) return next(e)
     denied.push(command)
@@ -636,7 +653,7 @@ test('a CwdChanged hook that refreshes runs once after /cd, before the next prom
         mod.on('CwdChanged', () => void mod.process.run(['git', 'status', '--porcelain'], { cwd: mod.projectRoot }))
       },
     }),
-    { projectRoot: '/work/a' },
+    { projectRoot: '/work/a', permissions: ['run:git'] },
   )
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   const refreshedFolders = () => tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])
@@ -797,13 +814,13 @@ test('pushing into a state array throws and names assignment', async () => {
   expect(tested.state.session.notes).toEqual(['buy milk', 'call mum'])
 })
 
-test("mod.settings.read({ source: 'user' }) reads one settings source", async () => {
+test("mod.claude.settings.read({ source: 'user' }) reads one settings source", async () => {
   let enabled: unknown
   const tested = testMod(
     defineMod({
       name: 'cmod',
       async setup(mod) {
-        enabled = (await mod.settings.read({ source: 'user' }))['enabledPlugins']
+        enabled = (await mod.claude.settings.read({ source: 'user' }))['enabledPlugins']
       },
     }),
   )
@@ -847,6 +864,7 @@ test("mod.session.messages reads the main conversation, or a subagent's by agent
         })
       },
     }),
+    { permissions: ['conversation'] },
   )
   tested.fakes.session.messages = (async (args?: { agentId?: string }) => [{ role: 'user', text: args?.agentId ?? 'main' }]) as unknown as Claude['session']['messages']
 
@@ -866,6 +884,7 @@ test('mod.agent.spawn starts a subagent and returns its agentId', async () => {
         })
       },
     }),
+    { permissions: ['agents'] },
   )
   tested.fakes.agent.spawn = async () => ({ agentId: 'agent-7', model: 'test-model' }) as Awaited<ReturnType<Claude['agent']['spawn']>>
 
@@ -920,9 +939,7 @@ test('a clock.after with no fake answer fires on a real timer', async () => {
     defineMod({
       name: 'timer',
       setup(mod) {
-        mod.use(({ claude }) => {
-          fired = new Promise<void>((resolve) => claude.clock.after(1, resolve))
-        })
+        fired = new Promise<void>((resolve) => mod.claude.clock.after(1, resolve))
       },
     }),
   )
@@ -1298,4 +1315,27 @@ test('a provider whose api method returns the wrong type fails tsc', () => {
   })
 
   expect(wrong.name).toBe('tracer')
+})
+
+test("a mod's settings pages are listed to /mods and open by id, and open() with no id asks cmod to show the mod", async () => {
+  let started: Mod | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'ci-watch',
+      setup(mod) {
+        started = mod
+        mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) }))
+      },
+    }),
+  )
+  const asked: unknown[] = []
+  tested.fakes.cmod.call = async (input) => (asked.push(input), { value: null })
+  await tested.start()
+
+  expect(await tested.fire('cmod.call', { to: 'ci-watch', method: 'cmod:settingsPages', input: null })).toEqual({ value: [{ id: 'runs', title: 'Runs' }] })
+  await tested.fire('cmod.call', { to: 'ci-watch', method: 'cmod:openPage', input: 'runs' })
+  expect(tested.shown.openPanes.has('runs')).toBe(true)
+  await started?.settings.open()
+  expect(asked).toEqual([{ to: 'cmod', method: 'openSettings', input: { mod: 'ci-watch' } }])
+  await expect(started?.settings.open('history') ?? Promise.resolve()).rejects.toThrow('ci-watch has no settings page "history". It has: runs.')
 })

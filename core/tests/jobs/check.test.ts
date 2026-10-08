@@ -17,6 +17,7 @@ function typed(...jobs: Job<void>[]) {
         for (const job of jobs) mod.use(job)
       },
     }),
+    { permissions: ['run:tsc', 'run:bun', 'prompt'] },
   )
   tested.fakes.fs.exists = async (path) => path.endsWith('.ts')
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
@@ -75,8 +76,8 @@ test('a check that passes its deadline tells Claude the check and the deadline',
 
 test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () => {
   const bashMovesFolder: Job<void> = (job) => {
-    const { claude } = job
-    job.on('tool.call', async (e, next) => {
+    const { claude } = job.mod
+    claude.on('tool.call', async (e, next) => {
       claude.session.cwd = async () => `${root}/app`
       return next(e)
     })
@@ -98,7 +99,7 @@ test('a check after edits to src/** still runs after cd src', async () => {
         mod.use(check({ after: { write: 'src/**' }, run: ['tsc', '--noEmit'] }))
       },
     }),
-    { cwd: `${root}/src`, files: { [`${root}/src/a.ts`]: 'let a = 1' } },
+    { cwd: `${root}/src`, files: { [`${root}/src/a.ts`]: 'let a = 1' }, permissions: ['run:tsc'] },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
@@ -137,6 +138,7 @@ test('a command check in a project runs in the work tree the matched command run
     {
       scope: 'project',
       projectRoot: project,
+      permissions: ['run:bun'],
       files: {
         [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
         [`${project}/.git/worktrees/design/commondir`]: '../..\n',

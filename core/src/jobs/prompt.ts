@@ -26,7 +26,7 @@ export function prompt<State extends object = Record<never, never>>({ name, prom
   return (job) => {
     job.reserveName('prompt', name, `prompt: ${job.mod.name} adds the name "${name}" two times. Give each prompt its own name.`)
 
-    const log = (reason: string) => job.claude.ui.log(`prompt "${name}" added nothing: ${reason}`, { to: 'debug' })
+    const log = (reason: string) => job.mod.claude.ui.log(`prompt "${name}" added nothing: ${reason}`, { to: 'debug' })
     const textFor = async (input: PromptInput, mod: Mod<State>) => {
       try {
         const value = typeof text === 'string' ? text : await text(input, mod)
@@ -61,12 +61,12 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
   let isQueued = false
   let updates = Promise.resolve()
 
-  job.on('classic.SessionStart', (e, next) => {
+  job.mod.claude.on('classic.SessionStart', (e, next) => {
     hasStarted = e.source === 'resume' || e.source === 'compact'
     if (!hasStarted) given = undefined
     return next(e)
   })
-  job.on('prompt.context', async (e, next) => {
+  job.mod.claude.on('prompt.context', async (e, next) => {
     const below = await next(e)
     hasStarted = true
     if (below.blocks.some((block) => block.name === name)) {
@@ -83,7 +83,7 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
     const value = await textFor()
     if (value === undefined || value === given) return
     given = value
-    await job.claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: `# ${name}\n${value}` }] } }).then((added) => {
+    await job.mod.claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: `# ${name}\n${value}` }] } }).then((added) => {
       if (added.deny !== undefined) log(`Claude Code refused the new text: ${added.deny}`)
     })
   }
@@ -95,7 +95,7 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
 }
 
 function addAfterUserPrompts(job: JobContext, when: RegExp | ((userPrompt: string) => boolean), textFor: (userPrompt: string) => Promise<string | undefined>, log: (reason: string) => void): void {
-  job.on('prompt.submit', async (e, next) => {
+  job.mod.claude.on('prompt.submit', async (e, next) => {
     let value: string | undefined
     try {
       if (typeof when === 'function' ? when(e.text) : e.text.search(when) >= 0) value = await textFor(e.text)

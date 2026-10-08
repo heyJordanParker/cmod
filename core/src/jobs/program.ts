@@ -1,4 +1,5 @@
 import type { Job } from '../mod.js'
+import { PermissionRefused } from '../runtime/grants.js'
 import { messageOf } from '../utils/text.js'
 
 export type Program = {
@@ -12,7 +13,8 @@ const backoffSeconds = [1, 2, 4, 8, 16] as const
 
 export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program> {
   const { command, environment } = options
-  return ({ mod, claude, announce }) => {
+  return ({ mod, announce }) => {
+    const { claude } = mod
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
     let state: Program['state'] = 'stopped'
@@ -53,6 +55,7 @@ export function program(options: { readonly command: readonly string[]; readonly
           for (const waiter of waiting.splice(0)) waiter.resolve(address)
         }
       } catch (error) {
+        if (error instanceof PermissionRefused) return stop(`${messageOf(error)} Add it, then run /reload-plugins.`)
         lastError = messageOf(error)
       }
       address = undefined

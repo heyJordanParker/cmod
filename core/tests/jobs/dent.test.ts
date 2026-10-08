@@ -24,7 +24,7 @@ const allowed: EventResult<'tool.check'> = { decision: 'allow' }
 const answered = { result: { filePath: `${root}/app/cart.ts` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 
 function dentSession(gitStatus = '') {
-  const tested = testMod(dent, { scope: 'project', projectRoot: root, files })
+  const tested = testMod(dent, { scope: 'project', projectRoot: root, files, permissions: ['run:git', 'run:bun'] })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: gitStatus, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   let calls = 0
   const decide = (use: Use) => tested.fire('tool.check', { ...use, tool_use_id: `toolu_${(calls += 1)}` } as never, allowed)

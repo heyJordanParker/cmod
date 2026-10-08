@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { EngineInterface, On } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
 import { defineMod } from '../src/mod.js'
+import { scriptsSha256 } from '../src/records.js'
 import { Text } from '../src/ui/elements.js'
 
 type Registration = {
@@ -73,15 +74,18 @@ const demo = defineMod({
   },
 })
 
+const consentedSha = await scriptsSha256({ permissions: ['prompt'] }, { read: async () => undefined, list: async () => [] })
+
 const files = {
   '/plugins/demo/.claude-plugin/plugin.json': '{ "name": "demo", "version": "1.0.0" }',
-  '/plugins/demo/package.json': '{ "dependencies": { "@cmodjs/core": "^0.1.1" } }',
+  '/plugins/demo/package.json': '{ "dependencies": { "@cmodjs/core": "^0.1.1" }, "cmod": { "permissions": { "prompt": true } } }',
+  '/home/test/.local/share/cmod/consent.json': JSON.stringify({ demo: [consentedSha, 'prompt'] }),
   '/home/test/.local/share/cmod/records/demo.json': JSON.stringify({
     name: 'demo',
     version: '1.0.0',
     root: '/plugins/demo',
     installedAt: '2026-10-05T00:00:00.000Z',
-    scriptsSha256: 'none',
+    scriptsSha256: consentedSha,
     uninstall: null,
     program: null,
   }),

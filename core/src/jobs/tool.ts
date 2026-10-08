@@ -16,7 +16,8 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
 }): Job<{ readonly name: string }, State> {
   const { name, description, inputSchema, execute } = options
   return (job) => {
-    const { mod, claude, announce, reserveName } = job
+    const { mod, announce, reserveName } = job
+    const { claude } = mod
     if (!toolName.test(name)) throw new Error(`${mod.name}: "${name}" is not a tool name. Use 1 to 64 letters, digits, "_", or "-".`)
     const properties = (inputSchema as { properties?: object } | undefined)?.properties ?? {}
     const reserved = reservedKeys.filter((key) => Object.hasOwn(properties, key))
@@ -36,7 +37,7 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
     announce(`the ${name} tool`)
 
     const executeMod = modWithin(job, toolDeadline)
-    job.on('tool.call', async (e, next) => {
+    claude.on('tool.call', async (e, next) => {
       if (e.tool !== registered) return next(e)
       const input = toolInputOf(e)
       const { valid, errors } = validator.validate(input)

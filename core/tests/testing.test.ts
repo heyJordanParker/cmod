@@ -319,7 +319,7 @@ const journal = defineMod({
 })
 
 test("a read after testMod's fake write sees the new text", async () => {
-  const tested = testMod(journal, { files: { '/work/journal.md': 'buy milk\n' } })
+  const tested = testMod(journal, { files: { '/work/journal.md': 'buy milk\n' }, permissions: ['files:/work/journal.md'] })
 
   await tested.type('/jot call mum')
 
@@ -405,10 +405,11 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
     defineMod({
       name: 'git-letters',
       setup(mod) {
-        clock = mod.use(({ claude }) => claude.clock)
+        clock = mod.claude.clock
         mod.on('Stop', () => void showGitLetters(mod))
       },
     }),
+    { permissions: ['run:git'] },
   )
   tested.fakes.process.run = (argv) => new Promise((resolve) => clock?.after(0, () => resolve(gitAnswer(argv))))
 
@@ -420,7 +421,7 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
 
 test('settle returns while a fake is held open by the test', async () => {
   const answers: (() => void)[] = []
-  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => mod.on('Stop', () => void showGitLetters(mod)) }))
+  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => mod.on('Stop', () => void showGitLetters(mod)) }), { permissions: ['run:git'] })
   tested.fakes.process.run = (argv) => new Promise((resolve) => answers.push(() => resolve(gitAnswer(argv))))
 
   await tested.fire('Stop', { stop_hook_active: false })
@@ -478,7 +479,7 @@ test("after /cd while Claude Code still reports the old cwd, the mod's cwd is th
 
 test('after moveTo another project, Claude Code reports the new root at once and the old cwd until the next prompt', async () => {
   let session: Claude['session'] | undefined
-  const tested = testMod(defineMod({ name: 'session-reader', setup: (mod) => mod.use((context) => void (session = context.claude.session)) }), { projectRoot: '/work/a' })
+  const tested = testMod(defineMod({ name: 'session-reader', setup: (mod) => void (session = mod.claude.session) }), { projectRoot: '/work/a' })
   const reported = async () => [await session?.root(), await session?.cwd()]
 
   await tested.moveTo('/work/b')
@@ -504,6 +505,7 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
         mod.use(slashCommand({ name: 'branch', description: 'Name the branch', reply: async (_input, mod) => (await mod.process.run(['git', 'branch', '--show-current'])).stdout.trim() }))
       },
     }),
+    { permissions: ['run:git'] },
   )
   onMain(tested.fakes)
 

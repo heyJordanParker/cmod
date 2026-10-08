@@ -437,7 +437,7 @@ test('a markdown slot component takes the props its block carries', () => {
 async function started(definition: ModDefinition) {
   const root = `/test/plugins/${definition.name}`
   const lifecycle = createLifecycle(definition)
-  await lifecycle.start(fakeClaude({ name: definition.name, root }).claude, async () => ({ name: definition.name, root, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, keys: {} }))
+  await lifecycle.start(fakeClaude({ name: definition.name, root }).claude, async () => ({ name: definition.name, root, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
   return lifecycle
 }
 
