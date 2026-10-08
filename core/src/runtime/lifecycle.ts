@@ -1,6 +1,6 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { HookInput, Mod, ModDefinition, ModEvent, ModHook } from '../mod.js'
-import { dataFolder, isAtLeast, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
+import { dataFolder, isAtLeast, oldestCmodFor, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -233,7 +233,8 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     if (plugin === undefined) return
     if (plugin.name === cmodPluginName) return bootstrap(plugin.root)
     phase = 'installing'
-    if ((await cmodVersion(claude())) === undefined) return waitForcmod()
+    const found = await cmodVersion(claude())
+    if (!fits(found)) return waitForcmod(found)
     endLine()
     const progress = showLine()
     let outcome: RunnerEvent | undefined
@@ -249,9 +250,12 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`)
   }
 
-  const waitForcmod = () => {
+  const fits = (found: string | undefined): found is string => found !== undefined && isAtLeast(found, oldestCmodFor(plugin?.keys ?? {}))
+
+  const waitForcmod = (found: string | undefined) => {
     phase = 'waiting'
     showLine().wait('Waiting for cmod')
+    let latest = found
     let check: Promise<void> | undefined
     const stop = () => {
       timer.cancel()
@@ -261,7 +265,8 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
       check ??= cmodVersion(claude())
         .then((version) => {
           check = undefined
-          if (version === undefined) return
+          latest = version
+          if (!fits(version)) return
           stop()
           return install()
         })
@@ -270,7 +275,13 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
           report(error)
         })
     })
-    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for cmod to download cmod. See cmod's own line."))
+    const longWait = claude().clock.after(cmodWaitMs, () =>
+      showLine().wait(
+        latest === undefined
+          ? "Still waiting for cmod to download cmod. See cmod's own line."
+          : `PATH finds cmod ${latest}, and ${definition.name} needs cmod ${oldestCmodFor(plugin?.keys ?? {})} or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.`,
+      ),
+    )
   }
 
   const bootstrap = async (root: string) => {

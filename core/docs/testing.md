@@ -220,6 +220,7 @@ type Fakes = {
   agent: { list?, spawn? }
   clock: { after?, every? }
   cmod: { call? }
+  tool: { call? }
 }
 ```
 
@@ -233,6 +234,7 @@ Set a fake to answer a call:
 - `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
 - `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
+- `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 
 ```ts
 import { expect, test } from 'bun:test'
@@ -263,10 +265,11 @@ type Shown = {
   readonly openPanes: Set<string>
   readonly commands: string[]
   readonly tools: string[]
+  readonly schedules: { readonly id: string; readonly cron: string; readonly prompt: string }[]
 }
 ```
 
-What the person and Claude would see: the toasts, the notes the mod added for Claude with `mod.session.append` or a `prompt` that follows the state, the prompts it sent with `mod.session.submit`, the log lines, the debug log lines, each status line text, the open panes, and the slash commands and tools the mod added.
+What the person and Claude would see: the toasts, the notes the mod added for Claude with `mod.session.append` or a `prompt` that follows the state, the prompts it sent with `mod.session.submit`, the log lines, the debug log lines, each status line text, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
 ```ts
 test('the Mode prompt follows the mode', async () => {

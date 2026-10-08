@@ -1,13 +1,14 @@
 import { existsSync, realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { readRecord, storeFolder, type InstallRecord } from '@cmodjs/core/src/records.js'
-import { home, readText, tilde, writeAtomically } from '../files.js'
+import { home, readText, tilde } from '../files.js'
 import { preparePackages, readPlugin, sourceOf, type Plugin } from '../plugin.js'
 import { run as runCommand, runAttached } from '../process.js'
 import { startProgress } from '../progress.js'
+import { configRoot, keepSettings, keptSettings } from '../settings.js'
 import { installCmodPlugin } from './install.js'
 import { holdSignals, setupInTerminal } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
@@ -20,10 +21,12 @@ ${summary}
 
 Runs Claude Code with a new, empty home folder, so the session sees only the
 mods named here and changes none of your Claude Code settings, mods, key
-bindings, or history. The folder is deleted when the session ends. It keeps
-CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY, so set one of them to skip the
-login. --home <folder> runs in that folder and keeps it for the next try, and
---home ~ runs in your own home.
+bindings, or history. The folder is deleted when the session ends. The
+session stays logged in as you, and keeps how Claude Code reaches the model
+and what it must never do: env, the credential helpers and login pins,
+sandbox, and permissions.deny from your settings.json. Hooks, plugins, allow
+rules, and preferences stay behind. --home <folder> runs in that folder and
+keeps it for the next try, and --home ~ runs in your own home.
 
 Installs the cmod plugin into Claude Code when it lacks it and runs each mod's
 install step after asking consent for its install and uninstall commands and
@@ -110,10 +113,21 @@ function homeFolder(path: string): string {
 async function useHome(folder: string): Promise<void> {
   await mkdir(folder, { recursive: true })
   const real = realpathSync(folder)
-  if (real === realpathSync(home())) return
+  const own = home()
+  if (real === realpathSync(own)) return
+  const kept = await keptSettings()
+  const keychains = join(own, 'Library/Keychains')
+  if (existsSync(keychains) && !existsSync(join(real, 'Library/Keychains'))) {
+    await mkdir(join(real, 'Library'), { recursive: true })
+    await symlink(keychains, join(real, 'Library/Keychains'))
+  }
+  if (process.env['CLAUDE_SECURESTORAGE_CONFIG_DIR'] === undefined && (process.env['CLAUDE_CONFIG_DIR'] || process.platform !== 'darwin')) {
+    process.env['CLAUDE_SECURESTORAGE_CONFIG_DIR'] = configRoot()
+  }
+  const profiles = join(process.env['XDG_CONFIG_HOME'] || join(own, '.config'), 'anthropic')
+  if (process.env['ANTHROPIC_CONFIG_DIR'] === undefined && existsSync(profiles)) process.env['ANTHROPIC_CONFIG_DIR'] = profiles
   for (const name of ['CLAUDE_CONFIG_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) delete process.env[name]
   process.env['HOME'] = real
   process.env['PATH'] = [join(real, '.local/bin'), process.env['PATH']].filter(Boolean).join(':')
-  const state = join(real, '.claude.json')
-  if (!existsSync(state)) await writeAtomically(state, `${JSON.stringify({ hasCompletedOnboarding: true }, null, 2)}\n`)
+  await keepSettings(kept)
 }

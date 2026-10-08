@@ -149,7 +149,7 @@ The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@c
 - [state.md](core/docs/state.md): state groups, `state.json`, and Skill overrides
 - [hooks.md](core/docs/hooks.md): `mod.on`, every event, and what a hook can answer
 - [ui.md](core/docs/ui.md): panes, slots, markdown slots, elements, toasts, progress, and questions
-- [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, status lines, and programs
+- [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, status lines, and programs
 - [dependencies.md](core/docs/dependencies.md): calling another mod
 - [install-steps.md](core/docs/install-steps.md): install and uninstall steps, and shipping a program
 - [testing.md](core/docs/testing.md): `testMod`

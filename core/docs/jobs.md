@@ -10,7 +10,7 @@ type Job<Handle, State> = (context: JobContext<State>) => Handle
 
 Each job function, such as `slashCommand(options)`, returns a `Job`. `mod.use` runs the job and returns its handle. A job that has nothing to hand back returns `void`.
 
-A job's bad options throw at one of two times. `check`, `permissions`, and `prompt` check their options when the job function is called. `slashCommand`, `tool`, `statusLine`, and `program` check theirs when the job runs, at `mod.use`, so the error surfaces as `its setup function threw: …`.
+A job's bad options throw at one of two times. `check`, `permissions`, `prompt`, and `schedule` check their options when the job function is called. `slashCommand`, `tool`, `statusLine`, and `program` check theirs when the job runs, at `mod.use`, so the error surfaces as `its setup function threw: …`.
 
 | Job | Import | Adds |
 | --- | --- | --- |
@@ -19,6 +19,7 @@ A job's bad options throw at one of two times. `check`, `permissions`, and `prom
 | `permissions` | `jobs/permissions.js` | Rules that deny a call, or ask the person first |
 | `check` | `jobs/check.js` | A command that runs after matching calls, and reports a failure to Claude |
 | `prompt` | `jobs/prompt.js` | Text Claude reads: kept current with the mod's state, before matching prompts, or after matching calls |
+| `schedule` | `jobs/schedule.js` | A prompt Claude Code sends Claude on a cron schedule, kept current with the mod's state |
 | `statusLine` | `jobs/status-line.js` | A status line |
 | `program` | `jobs/program.js` | A background program the mod talks to over HTTP |
 
@@ -285,6 +286,35 @@ export const conventions = defineMod({
 })
 ```
 
+## schedule
+
+```ts
+schedule<State>(entry: Schedule | ((state: State) => Schedule | undefined)): Job<void, State>
+
+type Schedule = { readonly cron: string; readonly prompt: string }
+```
+
+`schedule` gives Claude a prompt on a schedule, through the cron jobs Claude Code keeps for `/loop`. `cron` is a standard 5-field cron in local time, such as `*/10 * * * *` for every 10 minutes. At each fire Claude Code shows one `Running scheduled task` row and Claude answers the prompt.
+
+- A function of the state follows it. After each change to `mod.state`, cmod calls it again, and when its answer differs, cmod deletes the cron and makes the new one. `undefined` deletes the cron and makes none, which is how a mod pauses.
+- Claude Code fires a cron only while Claude is idle, on whole minutes, up to a tenth of the period late. A recurring cron expires after 7 days.
+- A cron lasts only as long as the session. The job makes it again each time the mod starts, and deletes the one it made before `/reload-plugins`, so a cron is never doubled.
+- A blank `cron` or `prompt` throws. A function that throws keeps the last cron, and a cron Claude Code refuses writes a log line naming why.
+- Work that needs no turn of Claude's, such as polling a file, belongs in `mod.every`. A mod pauses a schedule by turning it off: a hook that drops a fire still leaves two rows, `Running scheduled task` and `Prompt dropped by a hook:`.
+
+```ts
+import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { schedule } from '../node_modules/@cmodjs/core/jobs/schedule.js'
+
+export const loop = defineMod({
+  name: 'loop',
+  state: { project: { isOn: false, cron: '*/10 * * * *', prompt: 'Check the CI and fix what failed.' } },
+  setup(mod) {
+    mod.use(schedule((state) => (state.project.isOn ? { cron: state.project.cron, prompt: state.project.prompt } : undefined)))
+  },
+})
+```
+
 ## statusLine
 
 ```ts
@@ -441,6 +471,7 @@ Each member calls the member of the same name in Claude Code's hooks API, `$`, w
 | `model.complete(request, options?)` | What `mod.model.complete` calls. |
 | `command.register(spec)` | Adds a slash command. `slashCommand` is built on it. |
 | `tool.register(spec)` | Adds a tool. `tool` is built on it. |
+| `tool.call({ tool, ...input })` | Calls a tool the way Claude does, through the permission check, and resolves `{ result, text, isError? }` or `{ deny }`. `schedule` is built on it, calling `CronCreate` and `CronDelete`. |
 | `agent.list()` | The session's subagents and teammates so far. |
 | `agent.spawn(args)` | What `mod.agent.spawn` calls. |
 | `env.home()` | The `HOME` variable, or `undefined` when it is unset. |

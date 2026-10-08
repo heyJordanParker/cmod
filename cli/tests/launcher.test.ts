@@ -57,6 +57,13 @@ test('the cmod plugin, @cmodjs/cli, and @cmodjs/core share one version, which th
   expect({ cli: await versionOf('cli/package.json'), core: await versionOf('core/package.json') }).toEqual({ cli: plugin, core: plugin })
 })
 
+test("the cmod plugin's release carries bun.lock, the file that makes Claude Code install @cmodjs/cli and the launcher the bootstrap runs", async () => {
+  const manifest = JSON.parse(await Bun.file(join(checkout, 'package.json')).text())
+
+  expect(manifest.files).toContain('bun.lock')
+  expect(manifest.dependencies['@cmodjs/cli']).toBeString()
+})
+
 test('the cmod launcher downloads its version, checks it against SHA256SUMS, and runs it', async () => {
   const home = await temporaryHome()
   using release = serveRelease('0.1.1')

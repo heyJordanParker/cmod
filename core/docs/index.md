@@ -56,10 +56,11 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | --- | --- |
 | How do I define a mod, and what can `mod` call? | [mod.md](mod.md) |
 | How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every) |
+| How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
 | How do I keep values across prompts, sessions, and projects? How does a person change them? | [state.md](state.md) |
 | How do I react to a Claude Code event, and what can a hook answer? | [hooks.md](hooks.md) |
 | How do I draw a pane, change a row Claude Code draws, or ask the person something? | [ui.md](ui.md) |
-| How do I add a slash command, a tool, a permission rule, a check, a prompt, a status line, or a background program? | [jobs.md](jobs.md) |
+| How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, a status line, or a background program? | [jobs.md](jobs.md) |
 | How does one mod call another? | [dependencies.md](dependencies.md) |
 | How does a mod change the machine, bind a key, ship a program, or clean up after itself? | [install-steps.md](install-steps.md) |
 | How do I test a mod without Claude Code? | [testing.md](testing.md) |
@@ -89,6 +90,7 @@ A mod imports from the files below, and every other file in this package is inte
 | `jobs/permissions.js` | `permissions`, `Rule`, `PermissionRules`, `Target`, `CommandCall`, `FileCall`, `FetchCall`, `ToolCall` | [jobs.md](jobs.md) |
 | `jobs/check.js` | `check` | [jobs.md](jobs.md) |
 | `jobs/prompt.js` | `prompt` | [jobs.md](jobs.md) |
+| `jobs/schedule.js` | `schedule`, `Schedule` | [jobs.md](jobs.md) |
 | `jobs/status-line.js` | `statusLine`, `Usage` | [jobs.md](jobs.md) |
 | `jobs/program.js` | `program`, `Program` | [jobs.md](jobs.md) |
 | `jobs/context.js` | `afterCall`, `modWithin`, `modOf`, `workspaceReader` | [jobs.md](jobs.md) |

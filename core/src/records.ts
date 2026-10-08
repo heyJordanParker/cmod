@@ -127,6 +127,10 @@ function readKeys(keys: unknown): Steps {
   return { keys: commands }
 }
 
+export function oldestCmodFor(keys: Readonly<Record<string, string>>): string {
+  return Object.keys(keys).length > 0 ? '0.1.12' : '0.0.0'
+}
+
 export function keyWords(keys: Readonly<Record<string, string>> | undefined): string {
   return listed(Object.entries(keys ?? {}).map(([key, command]) => `${key} to /${command}`))
 }

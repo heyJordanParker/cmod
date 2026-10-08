@@ -88,7 +88,7 @@ export type Claude = {
   readonly prompt: { submit: EngineInterface['prompt']['submit'] }
   readonly model: { complete: EngineInterface['model']['complete'] }
   readonly command: { register(command: CommandSpec): Promise<{ command: string }> }
-  readonly tool: { register(tool: ToolSpec): Promise<{ tool: string }> }
+  readonly tool: { register(tool: ToolSpec): Promise<{ tool: string }>; call: EngineInterface['tool']['call'] }
   readonly agent: {
     list(): Promise<AgentInfo[]>
     spawn(args: AgentSpawnArgs): Promise<AgentSpawnResult>

@@ -38,10 +38,12 @@ Before a step runs for the first time, cmod shows the person the commands and th
 
 - In Claude Code, the mod asks `<mod> runs <install> to install, runs <uninstall> when you remove it and binds shift+tab to /mode. Install it now?` with `Install` and `Not now`, naming only what the mod has. A progress line above the prompt shows the install.
 - In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.`
-- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands and ask `Run them? [y/N]`. `--yes` approves without asking.
+- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, and the keys, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
 - `Not now` leaves the mod off and logs `<mod> is not installed. Run cmod install <mod> to install it.`
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
+
+In Claude Code, the mod sets itself up through the `cmod` that PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
 
 ## Key bindings
 

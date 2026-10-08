@@ -1,4 +1,4 @@
-import type { Args, EngineInterface, EventResult, Frozen, Next, On } from 'claude-code'
+import type { Args, EngineInterface, EventResult, Frozen, Next, On, ToolCallArgs } from 'claude-code'
 import type { ModDefinition } from './mod.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
@@ -61,7 +61,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     prompt: { submit: (args) => $.prompt.submit(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
     command: { register: (command) => $.command.register(command) },
-    tool: { register: (tool) => $.tool.register(tool) },
+    tool: { register: (tool) => $.tool.register(tool), call: ((input: ToolCallArgs) => $.tool.call(input)) as Claude['tool']['call'] },
     agent: {
       list: () => $.agent.list(),
       spawn: (args) => $.agent.spawn(args),

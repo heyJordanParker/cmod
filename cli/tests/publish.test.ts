@@ -73,6 +73,8 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   const expected = []
   for (const asset of assets.slice(0, -1)) expected.push(`${new Bun.CryptoHasher('sha256').update(await Bun.file(asset).arrayBuffer()).digest('hex')}  ${basename(asset)}`)
   expect(sums).toBe(`${expected.join('\n')}\n`)
+  expect(JSON.parse(await readFile(join(dirname(archive), 'marketplace.json'), 'utf8')).plugins[0].source.sha256).toBe(expected[0]?.split('  ')[0])
+  expect(await Bun.file(join(root, '.claude-plugin/marketplace.json')).exists()).toBe(false)
 })
 
 async function committedHooksMod(home: string, files: Record<string, string> = {}): Promise<string> {

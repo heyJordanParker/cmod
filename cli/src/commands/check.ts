@@ -191,7 +191,7 @@ async function checkLint(plugin: Plugin): Promise<Result> {
   const tool = await fetchTool(oxlint)
   if (typeof tool !== 'string') return tool
   const config = existsSync(join(plugin.root, '.oxlintrc.json')) ? ['-c', join(plugin.root, '.oxlintrc.json')] : []
-  const result = await runTool(tool, [...config, '--ignore-pattern', 'cli/**', '.'], plugin.root)
+  const result = await runTool(tool, [...config, '--ignore-pattern', 'cli/**', '--ignore-pattern', 'node_modules/**', '.'], plugin.root)
   if (result.exitCode !== 0) return { status: 'fail', text: `oxlint ${oxlint.version} found problems:\n${indent(result.output)}`, fix: 'Fix each problem, or change the rule in .oxlintrc.json, then run cmod check again.' }
   return { status: 'pass', text: `oxlint ${oxlint.version} found no problems${config.length > 0 ? ' with the mod\'s .oxlintrc.json' : ''}` }
 }

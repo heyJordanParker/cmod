@@ -183,7 +183,7 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
 - \`src/panes/\` holds one \`definePane\` per file.
 - \`src/components/\` holds the components panes and slot renders draw with.
 - \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.
-- \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release without pushing, and rewrites \`.claude-plugin/marketplace.json\`, so commit that file before \`cmod publish\`.
+- \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release in a temporary folder without pushing, and leaves this checkout as it was.
 `
   }
   return files

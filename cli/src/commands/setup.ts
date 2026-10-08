@@ -295,7 +295,7 @@ async function askConsent(plugin: Plugin, cancel: AbortSignal): Promise<boolean 
   prompt.on('SIGINT', () => process.kill(process.pid, 'SIGINT'))
   const closed = new Promise<undefined>((resolve) => prompt.once('close', () => resolve(undefined)))
   try {
-    const answer = await Promise.race([prompt.question('Run them? [y/N] ', { signal: cancel }), closed])
+    const answer = await Promise.race([prompt.question(`Set up ${plugin.name}? [y/N] `, { signal: cancel }), closed])
     return answer === undefined ? undefined : /^y(es)?$/i.test(answer.trim())
   } catch (error) {
     if ((error as Error).name === 'AbortError') return undefined

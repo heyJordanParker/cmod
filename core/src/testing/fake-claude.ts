@@ -19,7 +19,10 @@ export type Fakes = {
   agent: { list?: Claude['agent']['list']; spawn?: Claude['agent']['spawn'] }
   clock: { after?: Claude['clock']['after']; every?: Claude['clock']['every'] }
   cmod: { call?: Claude['cmod']['call'] }
+  tool: { call?: Claude['tool']['call'] }
 }
+
+export type ShownSchedule = { readonly id: string; readonly cron: string; readonly prompt: string }
 
 export type Shown = {
   readonly toasts: string[]
@@ -31,6 +34,7 @@ export type Shown = {
   readonly openPanes: Set<string>
   readonly commands: string[]
   readonly tools: string[]
+  readonly schedules: ShownSchedule[]
 }
 
 export type FakeClaude = {
@@ -44,8 +48,8 @@ export type FakeClaude = {
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {} }
-  const shown: Shown = { toasts: [], notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [] }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
+  const shown: Shown = { toasts: [], notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
   const store = new Map<string, unknown>()
@@ -72,6 +76,22 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const submitPrompt: Claude['prompt']['submit'] = async ({ text }) => {
     shown.prompts.push(text)
     return { text, origin: { kind: 'plugin', name: plugin.name } } as unknown as Awaited<ReturnType<Claude['prompt']['submit']>>
+  }
+  let scheduled = 0
+  const scheduleTools = async (input: Record<string, unknown>): Promise<unknown> => {
+    if (input['tool'] === 'CronCreate') {
+      const created = { id: `cron-${(scheduled += 1)}`, cron: String(input['cron']), prompt: String(input['prompt']) }
+      shown.schedules.push(created)
+      return { result: { id: created.id, humanSchedule: created.cron, recurring: input['recurring'] !== false } }
+    }
+    if (input['tool'] === 'CronDelete') {
+      const at = shown.schedules.findIndex((created) => created.id === input['id'])
+      if (at === -1) return { result: { id: input['id'] }, text: `No job ${String(input['id'])}`, isError: true }
+      shown.schedules.splice(at, 1)
+      return { result: { id: input['id'] }, text: `Cancelled job ${String(input['id'])}.` }
+    }
+    if (input['tool'] === 'CronList') return { result: { jobs: shown.schedules.map(({ id, cron, prompt }) => ({ id, cron, humanSchedule: cron, prompt })) } }
+    throw new Error(`tool.call(${JSON.stringify(input)}) has no fake answer. Set fakes.tool.call on the tested mod.`)
   }
 
   const claude: Claude = {
@@ -170,6 +190,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         shown.tools.push(tool.name)
         return { tool: `mcp__${plugin.name}__${tool.name}` }
       },
+      call: rejected('tool.call', () => fakes.tool.call ?? scheduleTools) as Claude['tool']['call'],
     },
     env: {
       home: async () => '/test/home',

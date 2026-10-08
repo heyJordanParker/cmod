@@ -36,7 +36,8 @@ creates the GitHub release. It refuses a package.json that depends on a file:
 or link: path, which no user has.
 
 Options:
-  --dry-run  Build and write everything, and push nothing`
+  --dry-run  Build everything into a temporary folder, marketplace.json
+             included, and push nothing`
 
 const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
 
@@ -117,7 +118,7 @@ export async function run(argv: string[]): Promise<number> {
     plugins.push(await cmodPluginEntry())
     progress.succeed(`Listed the cmod plugin ${cmodVersion}, so the cmod dependency resolves in this marketplace`)
   }
-  const marketplacePath = join(plugin.root, '.claude-plugin', 'marketplace.json')
+  const marketplacePath = dryRun ? join(output, 'marketplace.json') : join(plugin.root, '.claude-plugin', 'marketplace.json')
   const marketplace = { name: plugin.name, owner: { name: repository.split('/')[0] }, description: plugin.description ?? `${plugin.name}, a Claude Code mod`, plugins }
   await writeAtomically(marketplacePath, `${JSON.stringify(marketplace, null, 2)}\n`)
   progress.succeed(`Wrote ${marketplacePath}`)

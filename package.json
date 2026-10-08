@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "cmod": { "program": "cmod" },
-  "files": ["hooks", "setup", "src", "types"],
+  "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^0.1.12",
-    "@cmodjs/core": "^0.1.12"
+    "@cmodjs/cli": "^0.1.13",
+    "@cmodjs/core": "^0.1.13"
   }
 }

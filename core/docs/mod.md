@@ -257,7 +257,7 @@ mod.on('SubagentStop', async ({ agent_id }) => {
 
 `append` adds `text` to the conversation as a user message the person does not see, so Claude reads it on its next call to the model. It starts no turn. It rejects with `<mod>: Claude Code refused the note: <reason>` when a plugin's `session.append` handler refuses it.
 
-`submit` sends `text` as the person's next prompt, so Claude answers it as a turn of its own. Claude Code holds it until the session is idle, so it never cuts into a turn. It rejects with `<mod>: Claude Code dropped the prompt: <reason>` when a plugin drops it.
+`submit` sends `text` as the person's next prompt, so Claude answers it as a turn of its own. Claude Code holds it until the session is idle, so it never cuts into a turn, and shows it under `The <mod> plugin sent a message:`. It rejects with `<mod>: Claude Code dropped the prompt: <reason>` when a plugin drops it. A prompt that comes on a clock, such as every 10 minutes, belongs in a `schedule` job instead, which Claude Code shows as one `Running scheduled task` row ([jobs.md](jobs.md#schedule)).
 
 ```ts
 mod.every(60_000, async () => {

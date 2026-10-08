@@ -323,6 +323,44 @@ test('a waiting mod continues its install once the cmod program appears, with no
   expect(runs).toEqual([])
 })
 
+test('a mod that binds keys waits while PATH finds a cmod older than 0.1.12, names the fix, and sets up once a newer cmod answers', async () => {
+  const fake = fakeClaude({ name: 'modes', root })
+  const cmodAt = (version: string) => async (): Promise<ProcessRunResult> => ({ exitCode: 0, stdout: `cmod ${version}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  fake.fakes.process.run = cmodAt('0.1.8')
+  const spawned: ProcessSpawnRequest[] = []
+  fake.fakes.process.spawn = (request) => {
+    spawned.push(request)
+    return finished(['done modes 0.2.0'], 0)
+  }
+  const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
+  const timer = (ms: number, fire: () => void) => {
+    const made = { ms, fire, isCancelled: false }
+    timers.push(made)
+    return { cancel: () => (made.isCancelled = true) }
+  }
+  fake.fakes.clock.every = timer
+  fake.fakes.clock.after = timer
+  const lifecycle = createLifecycle(defineMod({ name: 'modes', setup() {} }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'modes', keys: { 'shift+tab': 'mode' } }))
+  await fake.settle()
+  timers.find((made) => made.ms === 1000)?.fire()
+  await fake.settle()
+  timers.find((made) => made.ms === 60_000)?.fire()
+  await fake.settle()
+
+  expect(spawned).toEqual([])
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe(
+    '>\n◌ Installing modes  PATH finds cmod 0.1.8, and modes needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.',
+  )
+
+  fake.fakes.process.run = cmodAt('0.1.12')
+  timers.find((made) => made.ms === 1000)?.fire()
+  await fake.settle()
+
+  expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
+})
+
 test('a mod keeps waiting for cmod past 60 seconds and starts once cmod is ready', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodMissing

@@ -68,8 +68,12 @@ cmod try <owner/repo | path>... [--yes] [--home <folder>] [-- claude arguments]
 
 Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then starts one Claude Code session with every mod loaded through `--plugin-dir`.
 
-- The session runs with a new, empty home folder, so it sees only the mods named here and changes none of your Claude Code settings, mods, key bindings, or history. The folder is deleted when the session ends.
-- The session keeps `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`. Set one of them to skip the login. `claude setup-token` prints a token for `CLAUDE_CODE_OAUTH_TOKEN`.
+- The session runs with a new home folder, so it sees only the mods named here and changes none of your Claude Code settings, mods, key bindings, or history. The folder is deleted when the session ends.
+- The session stays logged in as you, with no login screen:
+  - On macOS, Claude Code reads your login from the keychain, which `cmod try` links into the new home as `~/Library/Keychains`. Deleting the home removes only the link.
+  - Elsewhere, `CLAUDE_SECURESTORAGE_CONFIG_DIR` points Claude Code at the folder that holds your login, so it reads and refreshes that login where it is.
+  - `ANTHROPIC_CONFIG_DIR` points at your `~/.config/anthropic` login profiles, and `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` pass through.
+- The session keeps how Claude Code reaches the model and what it must never do, so a try is as safe as your own session. From your `settings.json` it keeps `env` (a proxy or `ANTHROPIC_BASE_URL`, without `cmod link`'s `CLAUDE_CODE_PLUGIN_DIRS`), the credential helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`), the login pins (`forceLoginMethod`, `forceLoginOrgUUID`, `forceLoginGatewayUrl`, `gatewayInternalNetworks`), `sandbox`, and `permissions.deny`. From `~/.claude.json` it keeps your account and the API keys you approved. A `~/` in a helper still means your own home. Hooks, plugins, allow rules, the model, and every other preference stay behind. Managed settings apply as always.
 - `--home <folder>` runs in that folder and keeps it, so the next `cmod try --home <folder>` starts from it. `--home ~` runs in your own home, with your settings and mods.
 - Unlike `cmod link`, it builds no program from `cli/`. A mod whose `package.json` `cmod.program` names a program downloads it from the GitHub release of the mod's version, so it fails until `cmod publish` has released that version.
 - When the session ends, even when its terminal closes, it runs each mod's uninstall step and deletes its record, data folder, approval, key bindings, and program, so the mod stays uninstalled. A checkout already set up from the same folder keeps its setup.
@@ -109,7 +113,7 @@ It needs, and refuses to start without:
 - the network, to hash the cmod plugin release it lists, unless the mod is cmod itself
 - for a real publish, a working tree with no uncommitted changes, a `v<version>` tag that does not exist yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
-`--dry-run` builds and writes everything, and pushes nothing. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
+`--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
 
 ## Install mods
 

@@ -18,8 +18,49 @@ export function keybindingsPath(): string {
   return join(configRoot(), 'keybindings.json')
 }
 
-function configRoot(): string {
+export function configRoot(): string {
   return process.env['CLAUDE_CONFIG_DIR'] || join(home(), '.claude')
+}
+
+function statePath(): string {
+  return process.env['CLAUDE_CONFIG_DIR'] ? join(configRoot(), '.claude.json') : join(home(), '.claude.json')
+}
+
+const keptKeys = ['env', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'gcpAuthRefresh', 'otelHeadersHelper', 'proxyAuthHelper', 'forceLoginMethod', 'forceLoginOrgUUID', 'forceLoginGatewayUrl', 'gatewayInternalNetworks', 'sandbox']
+
+const keptState = ['oauthAccount', 'customApiKeyResponses']
+
+export type KeptSettings = { readonly settings: Record<string, unknown>; readonly state: Record<string, unknown> }
+
+export async function keptSettings(): Promise<KeptSettings> {
+  const own = settingsObject((await readSettings()).text)
+  const settings: Record<string, unknown> = {}
+  for (const key of keptKeys) {
+    const value = own[key]
+    if (value !== undefined) settings[key] = typeof value === 'string' ? expand(value) : value
+  }
+  const env = settings['env']
+  if (isObject(env)) settings['env'] = Object.fromEntries(Object.entries(env).filter(([name]) => name !== pluginFolders))
+  const permissions = own['permissions']
+  if (isObject(permissions) && Array.isArray(permissions['deny'])) settings['permissions'] = { deny: permissions['deny'] }
+  const { path, text } = await readConfig(statePath())
+  const ownState = configObject(text, path)
+  return { settings, state: Object.fromEntries(keptState.flatMap((key) => (ownState[key] === undefined ? [] : [[key, ownState[key]]]))) }
+}
+
+export async function keepSettings(kept: KeptSettings): Promise<void> {
+  if (Object.keys(kept.settings).length > 0) await writeValues(settingsPath(), '{}\n', kept.settings)
+  await writeValues(statePath(), `${JSON.stringify({ hasCompletedOnboarding: true }, null, 2)}\n`, kept.state)
+}
+
+async function writeValues(link: string, fresh: string, values: Record<string, unknown>): Promise<void> {
+  const { path, text } = await readConfig(link)
+  if (text.trim() !== '' && Object.keys(values).length === 0) return
+  const base = text.trim() === '' ? fresh : text
+  const formattingOptions = indentation(base)
+  let next = base
+  for (const [key, value] of Object.entries(values)) next = applyEdits(next, modify(next, [key], value, { formattingOptions }))
+  await writeAtomically(path, next)
 }
 
 export async function bindKeys(keys: Readonly<Record<string, string>>): Promise<{ bound: Record<string, string>; kept: string[] }> {
