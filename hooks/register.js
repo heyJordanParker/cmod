@@ -5164,7 +5164,7 @@ function registerMod(addHook, definition) {
   addHook("cmod.call", routeToMod);
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-P2y733/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-UwEEft/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -5207,7 +5207,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-P2y733/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-UwEEft/release/hooks/register.ts
 function register(addHook) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
