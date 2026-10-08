@@ -1,13 +1,13 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
-import { messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { longestMs, messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { consentPath, finishStepsMethod, isObject, openPageMethod, parseConsent, pendingStepsMethod, permissionWords, readRecord, readSteps, settingsPagesMethod, storeFolder } from '../node_modules/@cmodjs/core/records.js'
 import { Tabs } from '../node_modules/@cmodjs/core/ui/components.js'
 import { definePane } from '../node_modules/@cmodjs/core/ui/define-pane.js'
 import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
-export type ModsState = { readonly memory: { selected: string | null; tab: Tab; notice: string | null; views: readonly ModView[] } }
+export type ModsState = { readonly memory: { selected: string | null; tab: Tab; notice: string | null; removing: string | null; views: readonly ModView[] } }
 
-export const modsMemory: ModsState['memory'] = { selected: null, tab: 'options', notice: null, views: [] }
+export const modsMemory: ModsState['memory'] = { selected: null, tab: 'options', notice: null, removing: null, views: [] }
 
 type Tab = 'options' | 'permissions' | 'keys' | 'pages'
 
@@ -16,6 +16,8 @@ type Permission = { readonly item: string; readonly isOn: boolean }
 export type ModView = {
   readonly name: string
   readonly version: string
+  readonly description: string | undefined
+  readonly isOn: boolean
   readonly permissions: readonly Permission[]
   readonly keys: readonly (readonly [string, string])[]
   readonly options: readonly ConfigRow[]
@@ -35,12 +37,17 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
     const store = storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() })
     const consent = (await mod.fs.exists(consentPath(store))) ? parseConsent(JSON.parse(await mod.fs.read(consentPath(store))), consentPath(store)) : {}
     const rows = await mod.claude.config.list()
+    const enabledPlugins = (await mod.claude.settings.read())['enabledPlugins']
+    const turnedOff = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {})
+      .filter(([, isEnabled]) => isEnabled === false)
+      .map(([id]) => id.replace(/@[^@]*$/, ''))
     const names = (await mod.fs.exists(`${store}/records`)) ? (await mod.fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)) : []
     const read = (path: string) => mod.fs.read(path).catch(() => undefined)
     const records = (await Promise.all(names.map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
     const views = await Promise.all(
       records.map(async (record): Promise<ModView> => {
         const manifest: unknown = await mod.fs.read(`${record.root}/package.json`).then(JSON.parse, () => undefined)
+        const plugin: unknown = await mod.fs.read(`${record.root}/.claude-plugin/plugin.json`).then(JSON.parse, () => undefined)
         const declared = (isObject(manifest) ? readSteps(manifest)?.permissions : undefined) ?? []
         const granted = consent[record.name] ?? []
         const ask = async <Value>(method: string): Promise<readonly Value[]> => {
@@ -52,6 +59,8 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
         return {
           name: record.name,
           version: record.version,
+          description: isObject(plugin) && typeof plugin['description'] === 'string' ? plugin['description'] : undefined,
+          isOn: !turnedOff.includes(record.name),
           permissions: declared.map((item) => ({ item, isOn: granted.includes(item) })),
           keys: Object.entries(record.keys ?? {}).map(([key, command]) => [key, `/${command}`] as const),
           options: rows.filter((row) => row.key.startsWith(`${record.name}.`)),
@@ -85,6 +94,15 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       const words = split === -1 ? [item] : [item.slice(0, split), item.slice(split + 1)]
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'permission', name, ...words, isOn ? 'off' : 'on'])
       return exitCode === 0 ? stdout.trim() : stderr.trim()
+    })
+
+  const remove = (name: string) =>
+    act(async () => {
+      mod.state.memory.removing = null
+      mod.state.memory.notice = `Removing ${name}…`
+      const { exitCode, stderr } = await mod.process.run(['cmod', 'remove', name], { timeoutMs: longestMs })
+      if (exitCode === 0) return `Removed ${name}. This session stops running it after /reload-plugins.`
+      return `cmod remove ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
     })
 
   const setOption = (row: ConfigRow, text: string) =>
@@ -129,19 +147,50 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
     title: 'Mods',
     closeOnEscape: true,
     render(current) {
-      const { selected, tab, notice, views } = current.state.memory
+      const { selected, tab, notice, removing, views } = current.state.memory
       const view = views.find((each) => each.name === selected) ?? views[0]
-      if (view === undefined) return Text({ dimColor: true, children: 'No mod is set up yet. Run cmod install <owner/repo> to add one.' })
+      if (view === undefined) return Text({ dimColor: true, children: notice ?? 'No mod is set up yet. Run cmod install <owner/repo> to add one.' })
       const list = Box({
         flexDirection: 'column',
         minWidth: 18,
-        children: views.map((each) => (each === view ? Text({ bold: true, children: `▸ ${each.name}` }) : Button({ plain: true, key: `mod:${each.name}`, label: `  ${each.name}`, onPress: () => void (current.state.memory.selected = each.name) }))),
+        children: views.map((each) => {
+          const label = `${each === view ? '▸' : ' '} ${each.name}${each.isOn ? '' : ' (off)'}`
+          return each === view ? Text({ bold: true, children: label }) : Button({ plain: true, key: `mod:${each.name}`, label, onPress: () => void Object.assign(current.state.memory, { selected: each.name, removing: null }) })
+        }),
       })
+      const actions =
+        view.name === 'cmod'
+          ? []
+          : removing === view.name
+            ? [
+                Box({
+                  flexDirection: 'column',
+                  children: [
+                    Text({ color: 'warning', children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.` }),
+                    Box({
+                      gap: 2,
+                      children: [
+                        Button({ key: 'keep', label: 'Keep', onPress: () => void (current.state.memory.removing = null) }),
+                        Button({ key: 'remove-confirmed', label: 'Remove', onPress: () => remove(view.name) }),
+                      ],
+                    }),
+                  ],
+                }),
+              ]
+            : [Button({ key: 'remove', label: 'Remove', onPress: () => void (current.state.memory.removing = view.name) })]
       const details = Box({
         flexDirection: 'column',
         gap: 1,
         children: [
-          Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
+          Box({
+            flexDirection: 'column',
+            children: [
+              Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
+              ...(view.description === undefined ? [] : [Text({ dimColor: true, children: view.description })]),
+              ...(view.isOn ? [] : [Text({ color: 'warning', children: 'Off: Claude Code does not load it. Turn it on under /plugin.' })]),
+            ],
+          }),
+          ...actions,
           ...(view.pendingSteps.length === 0
             ? []
             : [

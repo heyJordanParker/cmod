@@ -28,7 +28,7 @@ export const cmodPlugin = defineMod({
     mod.use(
       slashCommand({
         name: 'mods',
-        description: 'See and change your mods: options, permissions, keys, and pages',
+        description: 'See your mods, remove them, and change their options, permissions, keys, and pages',
         argumentHint: '[mod] [page]',
         immediate: true,
         async reply({ positionals }) {

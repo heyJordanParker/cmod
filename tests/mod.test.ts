@@ -139,8 +139,10 @@ function testPanel() {
       [`${store}/records/ci-watch.json`]: JSON.stringify({ name: 'ci-watch', version: '0.2.0', root: '/plugins/ci-watch', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: { 'ctrl+l': 'ci-watch' } }),
       [`${store}/consent.json`]: JSON.stringify({ 'ci-watch': ['network:api.github.com'] }),
       '/plugins/ci-watch/package.json': JSON.stringify({ cmod: { permissions: { network: ['api.github.com'], model: true } } }),
+      '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0', description: 'Tells you when CI fails on your branch' }),
     },
   })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': true } })
   const ran: string[] = []
   tested.fakes.process.run = async (argv) => {
     ran.push(argv.join(' '))
@@ -172,6 +174,8 @@ test('/mods lists each set-up mod with its options, permissions, keys, and pages
 
   expect(tested.shown.openPanes.has('mods')).toBe(true)
   expect(options).toContain('ci-watch 0.2.0')
+  expect(options).toContain('Tells you when CI fails on your branch')
+  expect(options).not.toContain('Off:')
   expect(options).toContain('Branch')
   expect(permissions).toContain('[x] Connect to api.github.com')
   expect(permissions).toContain('[ ] Ask a model, which uses your plan')
@@ -193,6 +197,37 @@ test('a /mods permission toggle runs cmod permission, and an option saves throug
 
   expect(saved).toEqual([{ key: 'ci-watch.branch', value: 'release' }])
   expect(ran).toEqual(['cmod permission ci-watch model on'])
+})
+
+test('/mods marks a mod turned off in Claude Code', async () => {
+  const { tested } = testPanel()
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': false } })
+
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+  const lines = (await tested.lines('mods')).join('\n')
+
+  expect(lines).toContain('ci-watch (off)')
+  expect(lines).toContain('Off: Claude Code does not load it. Turn it on under /plugin.')
+})
+
+test('/mods Remove asks first, and Remove again runs cmod remove', async () => {
+  const { tested, ran } = testPanel()
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  await tested.press('mods', 'remove')
+  const asked = (await tested.lines('mods')).join('\n')
+  await tested.press('mods', 'keep')
+  const kept = (await tested.lines('mods')).join('\n')
+  await tested.press('mods', 'remove')
+  await tested.press('mods', 'remove-confirmed')
+  await tested.settle()
+
+  expect(asked.replace(/\s+/g, ' ')).toContain('Remove ci-watch? Its uninstall step runs, and Claude Code deletes it.')
+  expect(kept).not.toContain('Remove ci-watch?')
+  expect(ran).toEqual(['cmod remove ci-watch'])
+  expect((await tested.lines('mods')).join(' ').replace(/\s+/g, ' ')).toContain('Removed ci-watch. This session stops running it after /reload-plugins.')
 })
 
 test('/mods shows the installer steps a mod still needs, and Finish setup runs them', async () => {
