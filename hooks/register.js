@@ -6515,8 +6515,8 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-mbqyK5/release/src/mods.ts
-var modsMemory = { selected: null, tab: "options", notice: null, views: [] };
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-gqBof3/release/src/mods.ts
+var modsMemory = { selected: null, tab: "options", notice: null, removing: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
   { key: "permissions", label: "Permissions" },
@@ -6528,6 +6528,8 @@ function modsPanel(mod) {
     const store = storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() });
     const consent = await mod.fs.exists(consentPath(store)) ? parseConsent(JSON.parse(await mod.fs.read(consentPath(store))), consentPath(store)) : {};
     const rows = await mod.claude.config.list();
+    const enabledPlugins = (await mod.claude.settings.read())["enabledPlugins"];
+    const turnedOff = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {}).filter(([, isEnabled]) => isEnabled === false).map(([id]) => id.replace(/@[^@]*$/, ""));
     const names = await mod.fs.exists(`${store}/records`) ? (await mod.fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith(".json")).map((entry) => entry.name.slice(0, -".json".length)) : [];
     const read = (path) => mod.fs.read(path).catch(() => {
       return;
@@ -6535,6 +6537,9 @@ function modsPanel(mod) {
     const records = (await Promise.all(names.map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined);
     const views = await Promise.all(records.map(async (record) => {
       const manifest = await mod.fs.read(`${record.root}/package.json`).then(JSON.parse, () => {
+        return;
+      });
+      const plugin = await mod.fs.read(`${record.root}/.claude-plugin/plugin.json`).then(JSON.parse, () => {
         return;
       });
       const declared = (isObject(manifest) ? readSteps(manifest)?.permissions : undefined) ?? [];
@@ -6550,6 +6555,8 @@ function modsPanel(mod) {
       return {
         name: record.name,
         version: record.version,
+        description: isObject(plugin) && typeof plugin["description"] === "string" ? plugin["description"] : undefined,
+        isOn: !turnedOff.includes(record.name),
         permissions: declared.map((item) => ({ item, isOn: granted.includes(item) })),
         keys: Object.entries(record.keys ?? {}).map(([key, command]) => [key, `/${command}`]),
         options: rows.filter((row) => row.key.startsWith(`${record.name}.`)),
@@ -6575,6 +6582,23 @@ function modsPanel(mod) {
     const words = split === -1 ? [item] : [item.slice(0, split), item.slice(split + 1)];
     const { exitCode, stdout, stderr } = await mod.process.run(["cmod", "permission", name, ...words, isOn ? "off" : "on"]);
     return exitCode === 0 ? stdout.trim() : stderr.trim();
+  });
+  const remove = (name) => act(async () => {
+    mod.state.memory.removing = null;
+    mod.state.memory.notice = `Removing ${name}…`;
+    const { exitCode, stderr } = await mod.process.run(["cmod", "remove", name], { timeoutMs: longestMs });
+    if (exitCode === 0)
+      return `Removed ${name}. This session stops running it after /reload-plugins.`;
+    return `cmod remove ${name} exited ${exitCode}: ${stderr.trim().split(`
+`).at(-1) ?? ""}`;
+  });
+  const turn = (name, isOn) => act(async () => {
+    const action = isOn ? "enable" : "disable";
+    const { exitCode, stderr } = await mod.process.run(["cmod", action, name]);
+    if (exitCode === 0)
+      return `Turned ${name} ${isOn ? "on" : "off"}. This session follows after /reload-plugins.`;
+    return `cmod ${action} ${name} exited ${exitCode}: ${stderr.trim().split(`
+`).at(-1) ?? ""}`;
   });
   const setOption = (row, text) => act(async () => {
     const listed2 = text.split(",").map((item) => item.trim()).filter((item) => item !== "");
@@ -6617,20 +6641,54 @@ function modsPanel(mod) {
     title: "Mods",
     closeOnEscape: true,
     render(current) {
-      const { selected, tab, notice, views } = current.state.memory;
+      const { selected, tab, notice, removing, views } = current.state.memory;
       const view = views.find((each) => each.name === selected) ?? views[0];
       if (view === undefined)
-        return Text({ dimColor: true, children: "No mod is set up yet. Run cmod install <owner/repo> to add one." });
+        return Text({ dimColor: true, children: notice ?? "No mod is set up yet. Run cmod install <owner/repo> to add one." });
       const list = Box({
         flexDirection: "column",
         minWidth: 18,
-        children: views.map((each) => each === view ? Text({ bold: true, children: `▸ ${each.name}` }) : Button({ plain: true, key: `mod:${each.name}`, label: `  ${each.name}`, onPress: () => void (current.state.memory.selected = each.name) }))
+        children: views.map((each) => {
+          const label = `${each === view ? "▸" : " "} ${each.name}${each.isOn ? "" : " (off)"}`;
+          return each === view ? Text({ bold: true, children: label }) : Button({ plain: true, key: `mod:${each.name}`, label, onPress: () => void Object.assign(current.state.memory, { selected: each.name, removing: null }) });
+        })
       });
+      const actions = view.name === "cmod" ? [] : removing === view.name ? [
+        Box({
+          flexDirection: "column",
+          children: [
+            Text({ color: "warning", children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.` }),
+            Box({
+              gap: 2,
+              children: [
+                Button({ key: "keep", label: "Keep", onPress: () => void (current.state.memory.removing = null) }),
+                Button({ key: "remove-confirmed", label: "Remove", onPress: () => remove(view.name) })
+              ]
+            })
+          ]
+        })
+      ] : [
+        Box({
+          gap: 2,
+          children: [
+            Button({ key: "turn", label: view.isOn ? "Turn off" : "Turn on", onPress: () => turn(view.name, !view.isOn) }),
+            Button({ key: "remove", label: "Remove", onPress: () => void (current.state.memory.removing = view.name) })
+          ]
+        })
+      ];
       const details = Box({
         flexDirection: "column",
         gap: 1,
         children: [
-          Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
+          Box({
+            flexDirection: "column",
+            children: [
+              Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
+              ...view.description === undefined ? [] : [Text({ dimColor: true, children: view.description })],
+              ...view.isOn ? [] : [Text({ color: "warning", children: "Off: Claude Code does not load it." })]
+            ]
+          }),
+          ...actions,
           ...view.pendingSteps.length === 0 ? [] : [
             Box({
               gap: 2,
@@ -6666,7 +6724,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-mbqyK5/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-gqBof3/release/src/mod.ts
 var panels = new WeakMap;
 var cmodPlugin = defineMod({
   name: "cmod",
@@ -6686,7 +6744,7 @@ var cmodPlugin = defineMod({
     panels.set(mod, mods);
     mod.use(slashCommand({
       name: "mods",
-      description: "See and change your mods: options, permissions, keys, and pages",
+      description: "See your mods, turn them off or remove them, and change their options, permissions, keys, and pages",
       argumentHint: "[mod] [page]",
       immediate: true,
       async reply({ positionals }) {
@@ -6731,7 +6789,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-mbqyK5/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-gqBof3/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
