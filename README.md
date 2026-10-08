@@ -38,9 +38,9 @@ The cmod plugin runs these programs, and sends no data anywhere:
 - **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod` to it. It leaves a `~/.local/bin/cmod` it did not make in place. That download is its only network request.
 - **`setup/path.sh`**, at each session start. It writes one line to the file Claude Code reads into every Bash command's environment, `export PATH="~/.local/share/cmod/programs:$PATH"`, so Claude runs each program a mod installs by its name.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
-- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`, and **`cmod enable`**, **`cmod disable`**, and **`cmod remove`** with a mod's name, when you turn it on or off or remove it there.
+- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`, **`cmod option <mod> <key> <value>`**, when you save a setting there, and **`cmod enable`**, **`cmod disable`**, and **`cmod remove`** with a mod's name, when you turn it on or off or remove it there.
 
-A setting you change in `/mods` goes to Claude Code's `/config`, the same place Claude Code keeps it when you change it there.
+A setting you change in `/mods` goes through `cmod option` to Claude Code's `/config`, the same place Claude Code keeps it when you change it there. The cmod plugin never changes Claude Code's settings itself.
 
 It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its links at `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
 

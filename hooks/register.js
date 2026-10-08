@@ -3377,7 +3377,7 @@ function readHeredocBodies(source, from, heredocs) {
 function walk(tokens, markers, start, result) {
   let folder = start;
   const subshells = [];
-  let command = newCommand(false);
+  let command = newCommand(undefined);
   let caseState;
   for (let index = 0;index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -3413,12 +3413,14 @@ function walk(tokens, markers, start, result) {
     }
     const following = tokens[index + 1];
     if (operator === "(" && command.words.length === 1 && following !== undefined && !isWordToken(following) && "op" in following && following.op === ")") {
-      command = newCommand(false);
+      command = newCommand(undefined);
       index += 1;
       continue;
     }
+    const before = result.commands.length;
     folder = finish(command, operator, folder, result);
-    command = newCommand(operator === "|" || operator === "|&");
+    const writer = result.commands.length > before ? result.commands.length - 1 : undefined;
+    command = newCommand(operator === "|" || operator === "|&" ? { writer } : undefined);
     if (operator === "(")
       subshells.push(folder);
     else if (operator === ")") {
@@ -3433,8 +3435,8 @@ function walk(tokens, markers, start, result) {
   }
   finish(command, ";", folder, result);
 }
-function newCommand(isPipedIn) {
-  return { words: [], redirects: [], isPipedIn };
+function newCommand(pipe) {
+  return { words: [], redirects: [], pipe };
 }
 function isWordToken(token) {
   return typeof token === "string" || "op" in token && token.op === "glob";
@@ -3459,9 +3461,14 @@ function finish(command, operator, folder, result) {
   if (first === undefined || first.text === "for" || first.text === "select")
     return folder;
   const here = command.redirects.findLast((redirect) => redirect.operator === "<<<");
-  const stdin = here !== undefined ? { kind: "text", text: here.target.text } : command.isPipedIn ? { kind: "pipe" } : undefined;
+  const stdin = here !== undefined ? { kind: "text", text: here.target.text } : command.pipe !== undefined ? { kind: "pipe" } : undefined;
+  const reader = result.commands.length;
   const changed = addCommand(first, args, folder, stdin, result);
-  const isPiped = command.isPipedIn || operator === "|" || operator === "|&" || operator === "&";
+  const read = result.commands[reader];
+  const writer = command.pipe?.writer;
+  if (read !== undefined && writer !== undefined && here === undefined)
+    result.commands[reader] = { ...read, input: writer };
+  const isPiped = command.pipe !== undefined || operator === "|" || operator === "|&" || operator === "&";
   return changed === undefined || isPiped ? folder : changed;
 }
 function withoutPrefixes(words) {
@@ -4101,13 +4108,6 @@ function checkingGrants(claude, grants) {
       async fetch(url, init) {
         await gate(`http.fetch(${url})`, `network:${init?.socketPath ?? hostOf(url)}`);
         return claude.http.fetch(url, init);
-      }
-    },
-    config: {
-      ...claude.config,
-      set: async (args) => {
-        await gate("config.set", "config");
-        return claude.config.set(args);
       }
     },
     session: {
@@ -5685,8 +5685,8 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
     const misfit = option.kind === "toggle" && !["true", "false"].includes(text.trim()) ? "takes true or false" : fitsOption(option, value);
     if (misfit !== undefined)
       return `${option.title} ${misfit}.`;
-    const saved = await claude().config.set({ key: `${plugin.name}.${key}`, value });
-    return saved.deny;
+    const saved = await claude().process.run(["cmod", "option", plugin.name, key, Array.isArray(value) ? value.join(",") : String(value)]);
+    return saved.exitCode === 0 ? undefined : lastLineOf(saved.stderr) ?? `cmod option exited ${saved.exitCode}.`;
   };
   const askOptions = async (missing) => {
     if (!asksPerson || plugin === undefined || (await claude().session.surfaces()).length === 0)
@@ -6312,7 +6312,7 @@ async function startMod($, eventInput, passOn) {
     },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     settings: { read: (args) => $.settings.read(args) },
-    config: { list: () => $.config.list(), set: (args) => $.config.set(args) },
+    config: { list: () => $.config.list() },
     store: {
       get: (key) => $.store.get(key),
       set: (key, value) => $.store.set(key, value),
@@ -6515,7 +6515,7 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-gqBof3/release/src/mods.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-4pdj1Q/release/src/mods.ts
 var modsMemory = { selected: null, tab: "options", notice: null, removing: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
@@ -6558,7 +6558,7 @@ function modsPanel(mod) {
         description: isObject(plugin) && typeof plugin["description"] === "string" ? plugin["description"] : undefined,
         isOn: !turnedOff.includes(record.name),
         permissions: declared.map((item) => ({ item, isOn: granted.includes(item) })),
-        keys: Object.entries(record.keys ?? {}).map(([key, command]) => [key, `/${command}`]),
+        keys: Object.entries(record.keys).map(([key, command]) => [key, `/${command}`]),
         options: rows.filter((row) => row.key.startsWith(`${record.name}.`)),
         pages,
         pendingSteps
@@ -6600,11 +6600,13 @@ function modsPanel(mod) {
     return `cmod ${action} ${name} exited ${exitCode}: ${stderr.trim().split(`
 `).at(-1) ?? ""}`;
   });
-  const setOption = (row, text) => act(async () => {
-    const listed2 = text.split(",").map((item) => item.trim()).filter((item) => item !== "");
-    const value = row.kind === "number" ? Number(text) : row.kind === "boolean" ? text.trim() === "true" : Array.isArray(row.value) ? listed2 : text;
-    const saved = await mod.claude.config.set({ key: row.key, value });
-    return saved.deny ?? `Saved ${row.label}.`;
+  const setOption = (name, row, text) => act(async () => {
+    const value = text.split(",").map((item) => item.trim()).join(",");
+    const { exitCode, stderr } = await mod.process.run(["cmod", "option", name, row.key.slice(name.length + 1), value]);
+    if (exitCode === 0)
+      return `Saved ${row.label}. ${name} reads it at its next start.`;
+    return `cmod option ${name} exited ${exitCode}: ${stderr.trim().split(`
+`).at(-1) ?? ""}`;
   });
   const drawTab = (view, tab) => {
     if (tab === "options") {
@@ -6617,7 +6619,7 @@ function modsPanel(mod) {
           flexDirection: "column",
           children: [
             Text({ children: [Text({ bold: true, children: row.label }), row.isLocked ? Text({ dimColor: true, children: "  set by your organization" }) : ""] }),
-            row.isLocked ? Text({ children: String(row.value) }) : Input({ key: `option:${row.key}`, label: "› ", value: Array.isArray(row.value) ? row.value.join(", ") : String(row.value), submitLabel: "save", onSubmit: (text) => setOption(row, text) })
+            row.isLocked ? Text({ children: String(row.value) }) : Input({ key: `option:${row.key}`, label: "› ", value: Array.isArray(row.value) ? row.value.join(", ") : String(row.value), submitLabel: "save", onSubmit: (text) => setOption(view.name, row, text) })
           ]
         }))
       });
@@ -6724,7 +6726,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-gqBof3/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-4pdj1Q/release/src/mod.ts
 var panels = new WeakMap;
 var cmodPlugin = defineMod({
   name: "cmod",
@@ -6789,7 +6791,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-gqBof3/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-4pdj1Q/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
