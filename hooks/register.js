@@ -162,6 +162,9 @@ function readKeys(keys) {
   }
   return { keys: commands };
 }
+function oldestCmodFor(keys) {
+  return Object.keys(keys).length > 0 ? "0.1.12" : "0.0.0";
+}
 function readCommand(steps, key) {
   const command = steps[key];
   if (command === undefined)
@@ -4698,8 +4701,9 @@ function createLifecycle(definition, checksPermissions = () => true) {
     if (plugin.name === cmodPluginName)
       return bootstrap(plugin.root);
     phase = "installing";
-    if (await cmodVersion(claude()) === undefined)
-      return waitForcmod();
+    const found = await cmodVersion(claude());
+    if (!fits(found))
+      return waitForcmod(found);
     endLine();
     const progress = showLine();
     let outcome;
@@ -4718,9 +4722,11 @@ function createLifecycle(definition, checksPermissions = () => true) {
     const reason = outcome?.kind === "failed" ? outcome.message : `cmod setup ${formatExit(code, lastError)}`;
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`);
   };
-  const waitForcmod = () => {
+  const fits = (found) => found !== undefined && isAtLeast(found, oldestCmodFor(plugin?.keys ?? {}));
+  const waitForcmod = (found) => {
     phase = "waiting";
     showLine().wait("Waiting for cmod");
+    let latest = found;
     let check;
     const stop = () => {
       timer.cancel();
@@ -4729,7 +4735,8 @@ function createLifecycle(definition, checksPermissions = () => true) {
     const timer = claude().clock.every(cmodCheckMs, () => {
       check ??= cmodVersion(claude()).then((version) => {
         check = undefined;
-        if (version === undefined)
+        latest = version;
+        if (!fits(version))
           return;
         stop();
         return install();
@@ -4738,7 +4745,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
         report(error);
       });
     });
-    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait("Still waiting for cmod to download cmod. See cmod's own line."));
+    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait(latest === undefined ? "Still waiting for cmod to download cmod. See cmod's own line." : `PATH finds cmod ${latest}, and ${definition.name} needs cmod ${oldestCmodFor(plugin?.keys ?? {})} or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.`));
   };
   const bootstrap = async (root) => {
     const progress = showLine();
@@ -5107,7 +5114,7 @@ async function startMod($, eventInput, passOn) {
     prompt: { submit: (args) => $.prompt.submit(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
     command: { register: (command) => $.command.register(command) },
-    tool: { register: (tool) => $.tool.register(tool) },
+    tool: { register: (tool) => $.tool.register(tool), call: (input) => $.tool.call(input) },
     agent: {
       list: () => $.agent.list(),
       spawn: (args) => $.agent.spawn(args)
@@ -5157,7 +5164,7 @@ function registerMod(addHook, definition) {
   addHook("cmod.call", routeToMod);
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-0wtgRK/release/src/mod.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-P2y733/release/src/mod.ts
 var cmodPlugin = defineMod({
   name: "cmod",
   state: { global: { installedPlugins: null } },
@@ -5200,7 +5207,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-0wtgRK/release/hooks/register.ts
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-P2y733/release/hooks/register.ts
 function register(addHook) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
