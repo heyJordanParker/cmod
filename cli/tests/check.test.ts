@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
 import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
@@ -47,6 +48,32 @@ test('cmod check has Claude Code write .claude-plugin/types/ for a fresh clone, 
   const env = await readFile(join(home, 'claude-env'), 'utf8')
   expect(env).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:9\n')
   expect(env).toMatch(/^CLAUDE_CONFIG_DIR=.*cmod-claude-/m)
+})
+
+test('cmod check has Claude Code write .claude-plugin/types/ again when a link in it leads into a home cmod try deleted', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  const writeTypes = 'mkdir -p "$4/.claude-plugin/types" && echo "{}" > "$4/.claude-plugin/types/tsconfig.json"'
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering(cmodPluginListed, writeTypes),
+    '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n',
+    '.local/share/cmod/tools/tsc/7.0.2/node_modules/.bin/tsc': 'process.exit(0)\n',
+  })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    '.claude-plugin/types/tsconfig.json': JSON.stringify({ compilerOptions: { types: ['cmod'] } }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+    'tsconfig.json': '{}\n',
+  })
+  await mkdir(join(root, '.claude-plugin/types/cmod'))
+  await symlink(join(home, 'cmod-try-home-gone/.claude/plugins/cache/cmod/cmod/0.1.12/types/index.d.ts'), join(root, '.claude-plugin/types/cmod/index.d.ts'))
+
+  const result = await cmod(home, 'check', root)
+
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`--plugin-dir ${root} -p ok\n`)
+  expect(existsSync(join(root, '.claude-plugin/types/cmod'))).toBe(false)
+  expect(await readFile(join(root, '.claude-plugin/types/tsconfig.json'), 'utf8')).toBe('{}\n')
+  expect(result.stdout).toContain('✔ tsc 7.0.2 found no type errors with tsconfig.json\n')
 })
 
 test('cmod check type-checks tests/ with tests/tsconfig.json beside the root config', async () => {

@@ -36,6 +36,8 @@ A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.
 
 `.claude-plugin/types/` holds the `tsconfig.json` the mod's own extends, the `claude-code` module, and the `h` JSX global. Claude Code writes it when it loads the mod, and git ignores it. `cmod check` has Claude Code write it when it is missing, so a fresh clone and CI type-check too. Until it exists, `tsc` alone fails, so run `cmod check` once first.
 
+Claude Code links the types of each plugin the mod depends on, such as `cmod`, into the folder where that plugin is installed. `cmod try` installs the cmod plugin into a home it deletes when the session ends, which leaves those links leading nowhere, so `tsc` alone fails with `Cannot find type definition file for 'cmod'`. `cmod check` deletes a types folder with such a link and has Claude Code write it again.
+
 ## Where a mod runs
 
 Mod code runs inside Claude Code's hooks environment, not in Node or Bun. It has no Node or Bun modules, no DOM, and no `import()`. `mod.fs` reaches files, `mod.process` runs programs, and `mod.http` reaches the network ([mod.md](mod.md)). A job of your own also reaches the plugin's folder through `claude.plugin.root` and timers through `claude.clock` ([jobs.md](jobs.md)).

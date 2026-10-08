@@ -169,8 +169,10 @@ async function checkTypes(plugin: Plugin): Promise<Result> {
 }
 
 async function writeClaudeTypes(plugin: Plugin): Promise<void> {
-  const types = join(plugin.root, '.claude-plugin', 'types', 'tsconfig.json')
-  if (existsSync(types)) return
+  const folder = join(plugin.root, '.claude-plugin', 'types')
+  const types = join(folder, 'tsconfig.json')
+  if (existsSync(types) && (await readdir(folder, { recursive: true })).every((entry) => existsSync(join(folder, entry)))) return
+  await rm(folder, { recursive: true, force: true })
   const scratch = await mkdtemp(join(tmpdir(), 'cmod-claude-'))
   try {
     const cmodPlugin = join(scratch, 'cmod')
