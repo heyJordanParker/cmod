@@ -1,3 +1,44 @@
+// node_modules/@cmodjs/core/options.js
+var optionKey = /^[A-Za-z_]\w*$/;
+function checkOptions(name, options) {
+  for (const [key, declared] of Object.entries(options)) {
+    const at = `${name}: options.${key}`;
+    if (!optionKey.test(key))
+      throw new Error(`${at} is not an option name. Use letters, digits, and _, starting with a letter, as Claude Code passes each option on as CLAUDE_PLUGIN_OPTION_${key.toUpperCase()}.`);
+    if (declared.title.trim() === "")
+      throw new Error(`${at} needs a title, the label /config shows.`);
+    if (declared.kind === "choice" && (declared.choices ?? []).length === 0)
+      throw new Error(`${at} is a choice with no choices. Give option.choice(['a', 'b'], { ... }).`);
+    if (declared.kind === "choice" && declared.default !== undefined && !(declared.choices ?? []).includes(declared.default))
+      throw new Error(`${at} defaults to ${String(declared.default)}, which is not one of its choices: ${(declared.choices ?? []).join(", ")}.`);
+  }
+  return options;
+}
+function isUnset(value) {
+  return value === undefined || value === "" || Array.isArray(value) && value.length === 0;
+}
+function fitsOption(declared, value) {
+  const kind = declared.kind;
+  if (kind === "toggle")
+    return typeof value === "boolean" ? undefined : "takes true or false";
+  if (kind === "number") {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      return "takes a number";
+    if (declared.min !== undefined && value < declared.min)
+      return `takes ${declared.min} or more`;
+    if (declared.max !== undefined && value > declared.max)
+      return `takes ${declared.max} or less`;
+    return;
+  }
+  if (kind === "list")
+    return Array.isArray(value) && value.every((item) => typeof item === "string") ? undefined : "takes a list of text";
+  if (typeof value !== "string")
+    return "takes text";
+  if (kind === "choice" && !(declared.choices ?? []).includes(value))
+    return `takes one of: ${(declared.choices ?? []).join(", ")}`;
+  return;
+}
+
 // node_modules/@cmodjs/core/runtime/deadline.js
 var longestMs = 600000;
 function beforeDeadline(claude, { ms, job }, call, task) {
@@ -51,10 +92,17 @@ function notInstalled(name) {
 function defineMod(definition) {
   if (definition.name.trim() === "")
     throw new Error("defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.");
+  if (definition.options !== undefined)
+    checkOptions(definition.name, definition.options);
   return definition;
 }
 
 // node_modules/@cmodjs/core/records.js
+var listPermissions = ["network", "run", "files"];
+var flagPermissions = ["conversation", "prompt", "model", "agents", "tools", "config", "approve"];
+var permissionNames = [...listPermissions, ...flagPermissions];
+var hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
+var programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 var pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function storeFolder(env) {
   const dataHome = env["XDG_DATA_HOME"];
@@ -146,7 +194,91 @@ function readSteps(pkg) {
   const program = steps["program"];
   if (program !== undefined && (typeof program !== "string" || !pluginName.test(program)))
     throw new Error(`package.json "cmod.program" must be the program's command, such as "hello".`);
-  return { ...readCommand(steps, "install"), ...readCommand(steps, "uninstall"), ...program === undefined ? {} : { program }, ...readKeys(steps["keys"]) };
+  const permissions = readPermissions(steps);
+  return {
+    ...readCommand(steps, "install"),
+    ...readCommand(steps, "uninstall"),
+    ...program === undefined ? {} : { program },
+    ...readKeys(steps["keys"]),
+    ...permissions.length === 0 ? {} : { permissions }
+  };
+}
+function readPermissions(steps) {
+  const declared = steps["permissions"];
+  if (declared === undefined)
+    return [];
+  const at = 'package.json "cmod.permissions"';
+  if (!isObject(declared))
+    throw new Error(`${at} must be an object, such as { "network": ["api.github.com"], "prompt": true }.`);
+  const items = [];
+  for (const [name, value] of Object.entries(declared)) {
+    if (!permissionNames.includes(name))
+      throw new Error(`${at} names "${name}", which is not a permission. Use ${listed(permissionNames.map((each) => `"${each}"`))}.`);
+    if (flagPermissions.includes(name)) {
+      if (value !== true)
+        throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write "${name}": true, or leave it out.`);
+      items.push(name);
+      continue;
+    }
+    if (name === "run" && value === "*") {
+      items.push("run:*");
+      continue;
+    }
+    const example = name === "network" ? '["api.github.com"]' : name === "run" ? '["gh"], or "*" for any program' : '["~/.zshrc"]';
+    if (!Array.isArray(value) || value.length === 0 || !value.every((each) => typeof each === "string"))
+      throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write a list, such as "${name}": ${example}.`);
+    for (const each of value) {
+      const isPath = /^(~\/|\/)/.test(each) && !each.split("/").includes("..");
+      const isValid = name === "network" ? hostName.test(each) || isPath : name === "run" ? programName.test(each) : isPath;
+      if (!isValid)
+        throw new Error(`${at} lists "${each}" under "${name}". Write ${name === "network" ? 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"' : name === "run" ? `a program's command, such as "gh"` : 'a path that starts with ~/ or /, such as "~/.zshrc"'}.`);
+      items.push(`${name}:${each}`);
+    }
+  }
+  return items;
+}
+function permissionWords(item) {
+  const split = item.indexOf(":");
+  const target = item.slice(split + 1);
+  switch (split === -1 ? item : item.slice(0, split)) {
+    case "network":
+      return `Connect to ${target}`;
+    case "run":
+      return target === "*" ? "Run any program on your computer" : `Run ${target} on your computer`;
+    case "files":
+      return `Change ${target}`;
+    case "conversation":
+      return "Read this conversation";
+    case "prompt":
+      return "Add text Claude reads and start turns";
+    case "model":
+      return "Ask a model, which uses your plan";
+    case "agents":
+      return "Start agents";
+    case "tools":
+      return "Use and change Claude's tool calls";
+    case "config":
+      return "Change your Claude Code settings";
+    case "approve":
+      return "Approve Claude's tool calls for you";
+    default:
+      return item;
+  }
+}
+var settingsPagesMethod = "cmod:settingsPages";
+var openPageMethod = "cmod:openPage";
+var pendingStepsMethod = "cmod:pendingSteps";
+var finishStepsMethod = "cmod:finishSteps";
+function consentPath(store) {
+  return `${store}/consent.json`;
+}
+function parseConsent(value, path) {
+  if (value === undefined)
+    return Object.create(null);
+  if (!isObject(value) || Object.values(value).some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) {
+    throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod asks again.`);
+  }
+  return Object.assign(Object.create(null), value);
 }
 function readKeys(keys) {
   if (keys === undefined)
@@ -162,8 +294,10 @@ function readKeys(keys) {
   }
   return { keys: commands };
 }
-function oldestCmodFor(keys) {
-  return Object.keys(keys).length > 0 ? "0.1.12" : "0.0.0";
+function oldestCmodFor(steps) {
+  if (steps.permissions !== undefined)
+    return "0.2.0";
+  return Object.keys(steps.keys ?? {}).length > 0 ? "0.1.12" : "0.0.0";
 }
 function readCommand(steps, key) {
   const command = steps[key];
@@ -201,7 +335,13 @@ async function scriptsSha256(steps, files) {
     for (const folder of scriptFolders)
       folders.add(folder);
   }
-  let text = [steps.install ?? "", steps.uninstall ?? "", steps.program ?? "", ...steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())]].join("\x00");
+  let text = [
+    steps.install ?? "",
+    steps.uninstall ?? "",
+    steps.program ?? "",
+    ...steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())],
+    ...steps.permissions === undefined ? [] : [JSON.stringify([...steps.permissions].sort())]
+  ].join("\x00");
   for (const folder of [...folders].sort()) {
     for (const name of (await files.list(folder)).sort()) {
       const path = `${folder}/${name}`;
@@ -219,8 +359,10 @@ function parseEvent(line) {
   if (progress !== null)
     return { kind: "progress", done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? "" };
   const consent = /^needs-consent (\S+)\t([^\t]*)\t([^\t]*)(?:\t(.*))?$/.exec(line);
-  if (consent !== null)
-    return { kind: "needs-consent", sha256: consent[1], install: consent[2], uninstall: consent[3], keys: consent[4] ?? "" };
+  if (consent !== null) {
+    const [keys = "", ...permissions] = (consent[4] ?? "").split("\t");
+    return { kind: "needs-consent", sha256: consent[1], install: consent[2], uninstall: consent[3], keys, permissions: permissions.filter((item) => item !== "") };
+  }
   const done = /^done (\S+)(?: (\S+))?$/.exec(line);
   if (done !== null)
     return { kind: "done", name: done[1], ...done[2] === undefined ? {} : { version: done[2] } };
@@ -3901,6 +4043,939 @@ function mergeClassic(below, ours) {
   return merged;
 }
 
+// node_modules/@cmodjs/core/runtime/grants.js
+class PermissionRefused extends Error {
+}
+var configFiles = [".claude/settings.json", ".claude/settings.local.json", ".mcp.json"];
+var startsTurns = ["CronCreate"];
+var ownSchedule = ["CronDelete", "CronList"];
+async function checkGrant(grants, call, item) {
+  if (item === undefined)
+    return;
+  await grants.refresh();
+  if (!isCovered(grants.granted(), item, grants.home))
+    throw new PermissionRefused(refusal(grants, call, item));
+}
+function checkWrite(grants, call, path) {
+  return checkGrant(grants, call, writeItem(grants, path));
+}
+function checkingGrants(claude, grants) {
+  const gate = (call, item) => checkGrant(grants, call, item);
+  return {
+    ...claude,
+    process: {
+      async run(argv, init) {
+        await gate(`process.run(${argv.join(" ")})`, `run:${programOf(argv)}`);
+        return claude.process.run(argv, init);
+      },
+      spawn(request) {
+        const started = gate(`process.spawn(${request.argv.join(" ")})`, `run:${programOf(request.argv)}`).then(() => claude.process.spawn(request));
+        return spawned(started);
+      }
+    },
+    fs: {
+      ...claude.fs,
+      async read(path) {
+        await gate(`fs.read(${path})`, readItem(grants, path));
+        return claude.fs.read(path);
+      },
+      async write(path, text) {
+        await gate(`fs.write(${path})`, writeItem(grants, path));
+        return claude.fs.write(path, text);
+      }
+    },
+    http: {
+      async fetch(url, init) {
+        await gate(`http.fetch(${url})`, `network:${init?.socketPath ?? hostOf(url)}`);
+        return claude.http.fetch(url, init);
+      }
+    },
+    config: {
+      ...claude.config,
+      set: async (args) => {
+        await gate("config.set", "config");
+        return claude.config.set(args);
+      }
+    },
+    session: {
+      ...claude.session,
+      messages: async (...args) => {
+        await gate("session.messages", "conversation");
+        return claude.session.messages(...args);
+      },
+      append: async (args) => {
+        await gate("session.append", "prompt");
+        return claude.session.append(args);
+      }
+    },
+    prompt: {
+      submit: async (args) => {
+        await gate("session.submit", "prompt");
+        return claude.prompt.submit(args);
+      }
+    },
+    model: {
+      complete: async (...args) => {
+        await gate("model.complete", "model");
+        return claude.model.complete(...args);
+      }
+    },
+    agent: {
+      ...claude.agent,
+      async spawn(args) {
+        await gate("agent.spawn", "agents");
+        return claude.agent.spawn(args);
+      }
+    },
+    tool: {
+      ...claude.tool,
+      call: async (input) => {
+        const item = startsTurns.includes(input.tool) ? "prompt" : ownSchedule.includes(input.tool) ? undefined : "tools";
+        await gate(`tool.call(${input.tool})`, item);
+        return claude.tool.call(input);
+      }
+    }
+  };
+}
+function spawned(started) {
+  const result = started.then((stream2) => stream2.result);
+  result.catch(() => {
+    return;
+  });
+  const stream = {
+    next: async () => (await started).next(),
+    async return(value) {
+      const running = await started.catch(() => {
+        return;
+      });
+      return await running?.return?.(value) ?? { done: true, value };
+    },
+    [Symbol.asyncIterator]: () => stream,
+    result
+  };
+  return stream;
+}
+function itemOf(name, value) {
+  return value === undefined ? name : `${name}:${value}`;
+}
+function isCovered(granted, item, home) {
+  if (granted.has(item))
+    return true;
+  const split = item.indexOf(":");
+  if (split === -1)
+    return false;
+  const name = item.slice(0, split);
+  const target = expanded(item.slice(split + 1), home);
+  const values = [...granted].filter((each) => each.startsWith(`${name}:`)).map((each) => expanded(each.slice(name.length + 1), home));
+  if (name === "run")
+    return values.includes("*") || values.includes(target);
+  if (name === "files")
+    return values.some((each) => relativePath(each, target) !== undefined);
+  return values.includes(target);
+}
+function readItem(grants, path) {
+  if (grants.configRoot === undefined)
+    return;
+  return relativePath(`${grants.configRoot}/projects`, path) === undefined ? undefined : "conversation";
+}
+function writeItem(grants, path) {
+  const root = grants.projectRoot();
+  if (configFiles.some((file) => `${root}/${file}` === path))
+    return "config";
+  if (grants.freeFolders().some((folder) => relativePath(folder, path) !== undefined))
+    return;
+  return `files:${path}`;
+}
+function refusal(grants, call, item) {
+  const { name } = grants;
+  if (isCovered(new Set(grants.declared), item, grants.home))
+    return `${name} calls ${call} without your grant to "${permissionWords(item)}". Turn it on in /mods ${name}.`;
+  return `${name} calls ${call}, which needs ${declaration(item, grants.home)} in package.json "cmod".`;
+}
+function declaration(item, home) {
+  const split = item.indexOf(":");
+  if (split === -1)
+    return `"permissions": { "${item}": true }`;
+  const name = item.slice(0, split);
+  const target = item.slice(split + 1);
+  const fromHome = home === undefined ? undefined : relativePath(home, target);
+  const shown = name !== "run" && fromHome !== undefined ? `~/${fromHome}` : target;
+  return `"permissions": { "${name}": ["${shown}"] }`;
+}
+var classicParts = {
+  additionalContext: "prompt",
+  initialUserMessage: "prompt",
+  suppressOriginalPrompt: "prompt",
+  updatedToolOutput: "prompt",
+  updatedMCPToolOutput: "prompt",
+  updatedInput: "tools",
+  retry: "approve"
+};
+var blocksKeepWorking = ["classic.Stop", "classic.PostToolUse"];
+var reservedToolKeys = ["tool", "tool_use_id"];
+function checksAnswers(event) {
+  return event.startsWith("classic.") || event === "tool.check" || event === "tool.call" || event === "prompt.context" || event === "prompt.submit";
+}
+function passedDown(event, original, passed, check) {
+  if (passed === original)
+    return passed;
+  if (event === "tool.call") {
+    if (sameExcept(original, passed, reservedToolKeys) || check.isGranted("tools"))
+      return passed;
+    check.dropped("tools", "a changed tool input");
+    return original;
+  }
+  if (event === "prompt.context" || event === "prompt.submit") {
+    if (same(original, passed) || check.isGranted("prompt"))
+      return passed;
+    check.dropped("prompt", event === "prompt.submit" ? "a rewritten prompt" : "changed context");
+    return original;
+  }
+  return passed;
+}
+async function checkedAnswer(event, e, answer, below, check) {
+  if (!isFields(answer))
+    return answer;
+  if (event === "tool.check")
+    return decided(answer["decision"], answer, below, check);
+  if (event === "classic.PermissionRequest") {
+    const decision = isFields(answer["decision"]) ? answer["decision"]["behavior"] : undefined;
+    return decided(decision, answer, below, check);
+  }
+  if (event.startsWith("classic."))
+    return classicAnswer(event, answer, below, check);
+  if (event === "tool.call") {
+    if (answer["deny"] !== undefined || check.isGranted("prompt"))
+      return answer;
+    const tool = isFields(e) ? e["tool"] : undefined;
+    if (typeof tool === "string" && tool.startsWith(`mcp__${check.plugin}__`)) {
+      if (answer["context"] === undefined)
+        return answer;
+      check.dropped("prompt", "context after a tool call");
+      const { context: _context, ...rest } = answer;
+      return rest;
+    }
+    const theirs = await below();
+    if (same(answer, theirs))
+      return answer;
+    check.dropped("prompt", same(contextOf(answer), contextOf(theirs)) ? "a changed tool result" : "context after a tool call");
+    return theirs;
+  }
+  if (event === "prompt.submit" && answer["drop"] !== undefined)
+    return answer;
+  if (event === "prompt.context" || event === "prompt.submit") {
+    if (check.isGranted("prompt"))
+      return answer;
+    const theirs = await below();
+    if (same(answer, theirs))
+      return answer;
+    check.dropped("prompt", event === "prompt.submit" ? "a rewritten prompt" : "changed context");
+    return theirs;
+  }
+  return answer;
+}
+async function decided(decision, answer, below, check) {
+  if (decision !== "allow" && decision !== "ask" || check.isGranted("approve"))
+    return answer;
+  const theirs = await below();
+  if (same(answer, theirs))
+    return answer;
+  check.dropped("approve", `${decision} on a tool call`);
+  return theirs;
+}
+async function classicAnswer(event, answer, below, check) {
+  const blocks = blocksKeepWorking.includes(event) ? [["block", "prompt"]] : [];
+  const parts = [...Object.entries(classicParts), ...blocks].filter(([part, item]) => answer[part] !== undefined && !check.isGranted(item));
+  if (parts.length === 0)
+    return answer;
+  const theirs = await below();
+  const kept = { ...answer };
+  const theirFields = isFields(theirs) ? theirs : {};
+  for (const [part, item] of parts) {
+    if (same(answer[part], theirFields[part]))
+      continue;
+    check.dropped(item, part);
+    if (theirFields[part] === undefined)
+      delete kept[part];
+    else
+      kept[part] = theirFields[part];
+  }
+  return kept;
+}
+function contextOf(answer) {
+  return isFields(answer) ? answer["context"] : undefined;
+}
+function same(left, right) {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+}
+function sameExcept(left, right, keys) {
+  if (!isFields(left) || !isFields(right))
+    return same(left, right);
+  const without = (fields) => Object.fromEntries(Object.entries(fields).filter(([key]) => !keys.includes(key)));
+  return same(without(left), without(right));
+}
+function isFields(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function programOf(argv) {
+  const command = argv[0] ?? "";
+  return command.slice(command.lastIndexOf("/") + 1);
+}
+function hostOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+function expanded(path, home) {
+  return path.startsWith("~/") && home !== undefined ? `${home}${path.slice(1)}` : path;
+}
+
+// node_modules/@cmodjs/core/utils/metadata.js
+class MetadataError extends Error {
+  line;
+  constructor(line, message) {
+    super(`line ${line}: ${message}`);
+    this.line = line;
+  }
+}
+var markdown = ["md", "markdown", "mdx"];
+var hashComments = ["sh", "bash", "zsh", "fish", "py", "rb", "pl", "r", "yaml", "yml", "toml", "ps1", "nu", "tcl", "mk", "conf", "cfg", "env"];
+var slashComments = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "go", "rs", "swift", "kt", "kts", "java", "c", "h", "cc", "cpp", "hpp", "cs", "scala", "dart", "zig", "jsonc", "json5"];
+var dashComments = ["lua", "sql", "hs", "elm"];
+var hashCommentNames = ["Makefile", "Dockerfile", "Brewfile", "Gemfile", "Rakefile", "Justfile", "justfile"];
+var sidecarSuffix = ".meta";
+function formatOf(path, firstLine) {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  const extension = dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
+  if (markdown.includes(extension))
+    return { kind: "frontmatter" };
+  if (hashComments.includes(extension) || hashCommentNames.includes(name))
+    return { kind: "comment", prefix: "#" };
+  if (slashComments.includes(extension))
+    return { kind: "comment", prefix: "//" };
+  if (dashComments.includes(extension))
+    return { kind: "comment", prefix: "--" };
+  if (extension === "" && firstLine?.startsWith("#!") === true)
+    return { kind: "comment", prefix: "#" };
+  return { kind: "sidecar" };
+}
+function readMetadata(text, format2) {
+  const lines = text.split(`
+`);
+  if (format2.kind === "comment") {
+    const region2 = commentRegion(lines, format2.prefix);
+    return { metadata: region2 === undefined ? {} : asRecord(mapEntries(region2.lines, region2.start + 2, 0)) };
+  }
+  const region = format2.kind === "frontmatter" ? frontmatterRegion(lines) : { start: -1, end: lines.length, lines };
+  if (region === undefined)
+    return { metadata: {} };
+  const block = metadataBlock(region);
+  const name = format2.kind === "frontmatter" ? topLevelScalar(region, "name") : undefined;
+  return { metadata: block === undefined ? {} : asRecord(block.entries), ...name === undefined ? {} : { name } };
+}
+function writeMetadata(text, format2, metadata) {
+  const lines = text.split(`
+`);
+  const entries = Object.entries(metadata);
+  if (format2.kind === "comment") {
+    const { prefix } = format2;
+    const block2 = entries.length === 0 ? [] : [`${prefix} /// metadata`, ...entries.map(([key, value]) => `${prefix} ${scalar(key)}: ${scalar(value)}`), `${prefix} ///`];
+    const region2 = commentRegion(lines, prefix);
+    if (region2 !== undefined)
+      return [...lines.slice(0, region2.start), ...block2, ...lines.slice(region2.end + 1)].join(`
+`);
+    if (block2.length === 0)
+      return text;
+    const at = lines[0]?.startsWith("#!") === true ? 1 : 0;
+    return [...lines.slice(0, at), ...block2, ...lines.slice(at)].join(`
+`);
+  }
+  const map = entries.length === 0 ? [] : ["metadata:", ...entries.map(([key, value]) => `  ${scalar(key)}: ${scalar(value)}`)];
+  if (format2.kind === "sidecar") {
+    const block2 = metadataBlock({ start: -1, end: lines.length, lines });
+    const rest = block2 === undefined ? lines : [...lines.slice(0, block2.start), ...lines.slice(block2.end)];
+    const kept = rest.join(`
+`).trim();
+    return [...kept === "" ? [] : [kept], ...map].join(`
+`) + (map.length === 0 && kept === "" ? "" : `
+`);
+  }
+  const region = frontmatterRegion(lines);
+  if (region === undefined)
+    return map.length === 0 ? text : ["---", ...map, "---", ...lines].join(`
+`);
+  const block = metadataBlock(region);
+  const inner = block === undefined ? [...region.lines, ...map] : [...lines.slice(region.start + 1, block.start), ...map, ...lines.slice(block.end, region.end)];
+  if (inner.every((line) => line.trim() === ""))
+    return lines.slice(region.end + 1).join(`
+`);
+  return [...lines.slice(0, region.start + 1), ...inner, ...lines.slice(region.end)].join(`
+`);
+}
+function frontmatterRegion(lines) {
+  if (lines[0]?.replace(/^\uFEFF/, "").trimEnd() !== "---")
+    return;
+  const end = lines.findIndex((line, index) => index > 0 && line.trimEnd() === "---");
+  if (end === -1)
+    throw new MetadataError(1, "the frontmatter starts with --- and never ends. Close it with a --- line.");
+  return { start: 0, end, lines: lines.slice(1, end) };
+}
+function commentRegion(lines, prefix) {
+  const start = lines.findIndex((line) => line.trimEnd() === `${prefix} /// metadata`);
+  if (start === -1)
+    return;
+  const content = [];
+  for (let index = start + 1;index < lines.length; index += 1) {
+    const line = (lines[index] ?? "").trimEnd();
+    if (line === `${prefix} ///`)
+      return { start, end: index, lines: content };
+    if (line !== prefix && !line.startsWith(`${prefix} `))
+      break;
+    content.push(line.slice(prefix.length + 1));
+  }
+  throw new MetadataError(start + 1, `the metadata block never ends. Close it with a "${prefix} ///" line.`);
+}
+function metadataBlock(region) {
+  const at = region.lines.findIndex((line) => /^metadata\s*:/.test(line));
+  if (at === -1)
+    return;
+  const lineNumber = region.start + 2 + at;
+  const rest = withoutComment((region.lines[at] ?? "").replace(/^metadata\s*:/, "")).trim();
+  const start = region.start + 1 + at;
+  if (rest.startsWith("{"))
+    return { start, end: start + 1, entries: flowEntries(rest, lineNumber) };
+  if (rest !== "")
+    throw new MetadataError(lineNumber, "metadata holds a single value. Write a map of names to text, such as metadata: { mymod.key: value }.");
+  let index = at + 1;
+  while (index < region.lines.length && (/^\s/.test(region.lines[index] ?? "") || (region.lines[index] ?? "").trim() === ""))
+    index += 1;
+  while (index > at + 1 && (region.lines[index - 1] ?? "").trim() === "")
+    index -= 1;
+  const children = region.lines.slice(at + 1, index);
+  return { start, end: region.start + 1 + index, entries: mapEntries(children, lineNumber + 1, indentOf(children)) };
+}
+function indentOf(lines) {
+  const first = lines.find((line) => line.trim() !== "" && !line.trim().startsWith("#"));
+  return first === undefined ? 0 : /^\s*/.exec(first)?.[0].length ?? 0;
+}
+function mapEntries(lines, firstLine, indent) {
+  const entries = [];
+  lines.forEach((raw, index) => {
+    const lineNumber = firstLine + index;
+    const line = withoutComment(raw);
+    if (line.trim() === "")
+      return;
+    const depth = /^\s*/.exec(line)?.[0].length ?? 0;
+    if (depth !== indent)
+      throw new MetadataError(lineNumber, "a metadata value holds a list or a map. Each value is one line of text, and a list is one space-separated text.");
+    const body = line.trim();
+    if (body.startsWith("- "))
+      throw new MetadataError(lineNumber, "metadata holds a list. Write a map of names to text, and a list as one space-separated text.");
+    entries.push(entryOf(body, lineNumber));
+  });
+  return entries;
+}
+function flowEntries(text, lineNumber) {
+  if (!text.endsWith("}"))
+    throw new MetadataError(lineNumber, "the metadata map starts with { and does not end on the same line. Close it with }, or write one entry per line.");
+  const body = text.slice(1, -1).trim();
+  if (body === "")
+    return [];
+  return splitOutsideQuotes(body, ",", lineNumber).map((part) => part.trim()).filter((part) => part !== "").map((part) => entryOf(part, lineNumber));
+}
+function entryOf(text, lineNumber) {
+  const [keyText, ...rest] = splitOutsideQuotes(text, ":", lineNumber, true);
+  if (keyText === undefined || rest.length === 0)
+    throw new MetadataError(lineNumber, `"${text}" has no ":". Write each entry as name: value.`);
+  const valueText = rest.join(":").trim();
+  if (valueText.startsWith("{") || valueText.startsWith("[") || valueText === "|" || valueText === ">")
+    throw new MetadataError(lineNumber, `${keyText.trim()} holds a list or a map. Each value is one line of text, and a list is one space-separated text.`);
+  return { key: unquoted(keyText.trim(), lineNumber), value: unquoted(valueText, lineNumber) };
+}
+function splitOutsideQuotes(text, separator, lineNumber, needsSpace = false) {
+  const parts = [];
+  let quote;
+  let current = "";
+  for (let index = 0;index < text.length; index += 1) {
+    const char = text[index];
+    if (quote !== undefined) {
+      current += char;
+      if (char === "\\" && quote === '"') {
+        current += text[index + 1] ?? "";
+        index += 1;
+      } else if (char === quote)
+        quote = undefined;
+      continue;
+    }
+    const before = current.trimEnd().at(-1);
+    if ((char === '"' || char === "'") && (before === undefined || before === ":"))
+      quote = char;
+    const next = text[index + 1];
+    if (char === separator && (!needsSpace || next === undefined || next === " " || next === "\t")) {
+      parts.push(current);
+      current = "";
+      if (needsSpace) {
+        parts.push(text.slice(index + 1));
+        return parts;
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (quote !== undefined)
+    throw new MetadataError(lineNumber, `a ${quote === '"' ? "double" : "single"} quote never closes.`);
+  parts.push(current);
+  return parts;
+}
+function withoutComment(line) {
+  let quote;
+  for (let index = 0;index < line.length; index += 1) {
+    const char = line[index];
+    if (quote !== undefined) {
+      if (char === "\\" && quote === '"')
+        index += 1;
+      else if (char === quote)
+        quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'")
+      quote = char;
+    if (char === "#" && (index === 0 || /\s/.test(line[index - 1] ?? "")))
+      return line.slice(0, index);
+  }
+  return line;
+}
+function unquoted(text, lineNumber) {
+  if (text.startsWith('"')) {
+    if (!text.endsWith('"') || text.length < 2)
+      throw new MetadataError(lineNumber, `${text} opens a double quote that never closes.`);
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new MetadataError(lineNumber, `${text} is not a double-quoted text. Escape a " inside it as \\".`);
+    }
+  }
+  if (text.startsWith("'")) {
+    if (!text.endsWith("'") || text.length < 2)
+      throw new MetadataError(lineNumber, `${text} opens a single quote that never closes.`);
+    return text.slice(1, -1).replaceAll("''", "'");
+  }
+  return text;
+}
+function topLevelScalar(region, key) {
+  const at = region.lines.findIndex((line) => line.startsWith(`${key}:`));
+  if (at === -1)
+    return;
+  const text = withoutComment((region.lines[at] ?? "").slice(key.length + 1)).trim();
+  if (text === "")
+    return;
+  try {
+    return unquoted(text, region.start + 2 + at);
+  } catch {
+    return;
+  }
+}
+function asRecord(entries) {
+  return Object.freeze(Object.fromEntries(entries.map(({ key, value }) => [key, value])));
+}
+var plain = /^[A-Za-z0-9_./+~$%^()=\\][^#]*$/;
+var special = /^(true|false|yes|no|on|off|null|~|[-+]?(\d[\d_]*)?\.?\d+([eE][-+]?\d+)?|0x[0-9a-fA-F]+|\.inf|\.nan)$/i;
+function scalar(text) {
+  const isPlain = plain.test(text) && text === text.trim() && !text.includes(": ") && !text.endsWith(":") && !text.includes(" #") && !special.test(text) && !/["',{}[\]]/.test(text);
+  return isPlain ? text : JSON.stringify(text);
+}
+
+// node_modules/@cmodjs/core/runtime/metadata.js
+var skippedFolders = [".git", "node_modules"];
+var ownKey = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+function resolvedPath(path, places) {
+  const configured = /^~\/\.claude(?=\/|$)/.exec(path);
+  if (configured !== null && places.configRoot !== undefined)
+    return resolve(`${places.configRoot}${path.slice(configured[0].length)}`);
+  if (path === "~" || path.startsWith("~/")) {
+    if (places.home === undefined)
+      throw new Error(`${path} starts with ~, and HOME is not set. Start Claude Code with HOME set.`);
+    return resolve(`${places.home}${path.slice(1)}`);
+  }
+  return path.startsWith("/") ? resolve(path) : resolve(places.projectRoot(), path);
+}
+function createModFiles({ name, claude, places, checkWrite: checkWrite2 }) {
+  const prefix = `${name}.`;
+  const cache = new Map;
+  const logged = new Set;
+  const own = (all) => Object.freeze(Object.fromEntries(Object.entries(all).flatMap(([key, value]) => key.startsWith(prefix) ? [[key.slice(prefix.length), value]] : [])));
+  const locate = async (path) => {
+    const stat = await claude.fs.stat(path, { resolve: true });
+    if (stat.kind !== "file")
+      throw new Error(`${path} is not a file, so it holds no metadata.`);
+    const realPath = stat.realPath ?? path;
+    const extensionless = !realPath.slice(realPath.lastIndexOf("/") + 1).includes(".");
+    const firstLine = extensionless ? (await claude.fs.read(realPath)).split(`
+`, 1)[0] : undefined;
+    const format2 = formatOf(realPath, firstLine);
+    const holder = format2.kind === "sidecar" ? `${realPath}${sidecarSuffix}` : realPath;
+    const sidecar = format2.kind === "sidecar" ? await claude.fs.stat(holder).catch(() => {
+      return;
+    }) : undefined;
+    return { realPath, format: format2, holder, signature: `${stat.mtimeMs}:${stat.size}:${sidecar?.kind === "file" ? `${sidecar.mtimeMs}:${sidecar.size}` : ""}` };
+  };
+  const textOf = async (holder) => (await claude.fs.stat(holder).catch(() => {
+    return;
+  }))?.kind === "file" ? claude.fs.read(holder) : "";
+  const readEntry = async (path) => {
+    const located = await locate(path);
+    const cached = cache.get(path);
+    if (cached?.signature === located.signature)
+      return cached.read;
+    let read;
+    try {
+      const { metadata, name: declared } = readMetadata(await textOf(located.holder), located.format);
+      read = { metadata, ...declared === undefined ? {} : { name: declared } };
+    } catch (error) {
+      if (!(error instanceof MetadataError))
+        throw error;
+      const failure = `${located.holder} ${error.message}`;
+      read = { metadata: {}, error: failure };
+      if (!logged.has(failure))
+        claude.ui.log(`${name}: ${failure}`);
+      logged.add(failure);
+    }
+    cache.set(path, { signature: located.signature, read });
+    return read;
+  };
+  const matchesOf = async (pattern) => {
+    const absolute = resolvedPath(pattern, places);
+    const scanned = export_picomatch.scan(absolute);
+    if (!scanned.isGlob)
+      return (await claude.fs.stat(absolute).catch(() => {
+        return;
+      }))?.kind === "file" ? [absolute] : [];
+    const isMatch = export_picomatch(absolute, { dot: true });
+    const entersSkipped = skippedFolders.filter((folder) => scanned.glob.split("/").includes(folder));
+    const maxDepth = scanned.glob.includes("**") ? Number.POSITIVE_INFINITY : scanned.glob.split("/").length;
+    const found = [];
+    const visited = new Set;
+    const walk2 = async (folder, depth) => {
+      const real = (await claude.fs.stat(folder, { resolve: true }).catch(() => {
+        return;
+      }))?.realPath ?? folder;
+      if (visited.has(real))
+        return;
+      visited.add(real);
+      const entries = await claude.fs.list(folder).catch(() => []);
+      await Promise.all(entries.map(async (entry) => {
+        const path = `${folder}/${entry.name}`;
+        const kind = entry.isLink === true ? (await claude.fs.stat(path).catch(() => {
+          return;
+        }))?.kind : entry.kind;
+        if (kind === "file" && isMatch(path))
+          found.push(path);
+        if (kind !== "dir" || depth + 1 >= maxDepth)
+          return;
+        if (skippedFolders.includes(entry.name) && !entersSkipped.includes(entry.name))
+          return;
+        await walk2(path, depth + 1);
+      }));
+    };
+    const base = scanned.base === "" ? "/" : scanned.base;
+    if ((await claude.fs.stat(base).catch(() => {
+      return;
+    }))?.kind === "dir")
+      await walk2(base, 0);
+    return found;
+  };
+  return {
+    async find(glob) {
+      const patterns = typeof glob === "string" ? [glob] : glob;
+      const paths = [...new Set((await Promise.all(patterns.map(matchesOf))).flat())].sort();
+      const kept = paths.filter((path) => !(path.endsWith(sidecarSuffix) && paths.includes(path.slice(0, -sidecarSuffix.length))));
+      return Promise.all(kept.map(async (path) => {
+        const read = await readEntry(path);
+        return { path, ...read.name === undefined ? {} : { name: read.name }, metadata: own(read.metadata), ...read.error === undefined ? {} : { error: read.error } };
+      }));
+    },
+    async read(path) {
+      const read = await readEntry(resolvedPath(path, places));
+      if (read.error !== undefined)
+        throw new Error(`${name}: ${read.error}`);
+      return own(read.metadata);
+    },
+    async update(path, change) {
+      const given = resolvedPath(path, places);
+      await checkWrite2(given);
+      const located = await locate(given);
+      const text = await textOf(located.holder);
+      let all;
+      try {
+        all = readMetadata(text, located.format).metadata;
+      } catch (error) {
+        throw new Error(`${name}: ${located.holder} ${messageOf(error)}`, { cause: error });
+      }
+      const edited = { ...own(all) };
+      change(edited);
+      for (const [key, value] of Object.entries(edited)) {
+        if (!ownKey.test(key))
+          throw new Error(`${name}: the metadata key "${key}" is not a name. Use letters, digits, "_", ".", and "-".`);
+        if (typeof value !== "string")
+          throw new Error(`${name}: the metadata key "${key}" holds ${JSON.stringify(value)}. Each value is text, and a list is one space-separated text.`);
+        if (value.includes(`
+`))
+          throw new Error(`${name}: the metadata key "${key}" holds a line break. Each value is one line of text.`);
+      }
+      const next = {};
+      for (const [key, value] of Object.entries(all)) {
+        if (!key.startsWith(prefix))
+          next[key] = value;
+        else if (Object.hasOwn(edited, key.slice(prefix.length)))
+          next[key] = edited[key.slice(prefix.length)];
+      }
+      for (const [key, value] of Object.entries(edited))
+        next[`${prefix}${key}`] = value;
+      if (JSON.stringify(next) === JSON.stringify(all))
+        return;
+      await claude.fs.write(located.holder, writeMetadata(text, located.format, next));
+      cache.delete(given);
+    }
+  };
+}
+
+// node_modules/@cmodjs/core/ui/elements.js
+var drawing;
+function drawWith(table, draw, markdown2) {
+  const outer = drawing;
+  drawing = { table, markdown: markdown2 };
+  try {
+    return draw();
+  } finally {
+    drawing = outer;
+  }
+}
+function element(name) {
+  const construct = (props) => {
+    if (drawing === undefined)
+      throw new Error(`${name} was called outside a render. Use it inside a pane's render or a slot's component.`);
+    if (name === "Markdown" && drawing.markdown !== undefined)
+      return drawing.markdown(props);
+    return drawing.table[name](props);
+  };
+  return construct;
+}
+var Box = element("Box");
+var Text = element("Text");
+var Button = element("Button");
+var Link = element("Link");
+var Code = element("Code");
+var Markdown = element("Markdown");
+var Input = element("Input");
+var Select = element("Select");
+var Image = element("Image");
+
+// node_modules/@cmodjs/core/runtime/installer.js
+var installerPaneId = "cmod-installer";
+function createInstaller(name, claude) {
+  let page;
+  let isOpen = false;
+  const show = async (build, cancelled) => {
+    page?.cancel();
+    const answer = new Promise((resolve2) => {
+      const done = (value) => {
+        if (page === shown)
+          page = undefined;
+        resolve2(value);
+      };
+      const shown = { ...build(done), cancel: () => done(cancelled) };
+      page = shown;
+    });
+    if (!isOpen) {
+      isOpen = true;
+      await claude().ui.open({ id: installerPaneId, title: `Install ${name}`, focus: true, holdToasts: true, closeOnEscape: true });
+    }
+    claude().ui.invalidate("ui.render");
+    return answer;
+  };
+  const frame = (title, body, actions) => Box({ flexDirection: "column", gap: 1, paddingX: 1, children: [Text({ bold: true, children: title }), ...body, Box({ gap: 3, children: actions })] });
+  const bullet = (text) => Text({ children: [Text({ color: "claude", children: "◆ " }), text] });
+  return {
+    draws: (e) => e.component === "Pane" && e.requestId === installerPaneId,
+    draw(e) {
+      return drawWith(claude().ui.resolve(e), () => page?.draw(e.props) ?? Text({ dimColor: true, children: `${name} is installing.` }));
+    },
+    closed(id) {
+      if (id !== installerPaneId)
+        return;
+      isOpen = false;
+      page?.cancel();
+    },
+    consent({ install, uninstall, keys, permissions }) {
+      const changes = [...install === "" ? [] : [`Run ${install} now${uninstall === "" ? "" : `, and ${uninstall} when you remove it`}`], ...install === "" && uninstall !== "" ? [`Run ${uninstall} when you remove it`] : [], ...keys === "" ? [] : [`Bind ${keys}`]];
+      return show((answer) => ({
+        draw: () => frame(`${name} wants to:`, [
+          ...permissions.length === 0 ? [] : [Box({ flexDirection: "column", children: permissions.map((item) => bullet(permissionWords(item))) })],
+          ...changes.length === 0 ? [] : [Text({ children: permissions.length === 0 ? "Change your computer:" : "and change your computer:" }), Box({ flexDirection: "column", children: changes.map(bullet) })],
+          Text({ dimColor: true, children: "You can turn each permission off later in /mods." })
+        ], [Button({ key: "not-now", hotkey: "n", label: "Not now", onPress: () => answer(false) }), Button({ key: "accept", hotkey: "a", label: "Accept", onPress: () => answer(true) })])
+      }), false);
+    },
+    options(missing, save) {
+      const saved = new Map;
+      const failures = new Map;
+      return show((answer) => ({
+        draw: () => frame(`${name} needs ${missing.length === 1 ? "one setting" : `${missing.length} settings`}:`, missing.map(([key, option]) => {
+          const label = Text({ children: [Text({ bold: true, children: option.title }), option.description === "" ? "" : Text({ dimColor: true, children: `  ${option.description}` })] });
+          if (option.kind === "secret")
+            return Box({ flexDirection: "column", children: [label, Text({ dimColor: true, children: `Set it in /config, where Claude Code keeps it in your keychain, then press Next.` })] });
+          const failure = failures.get(key);
+          const field = Input({
+            key: `option:${key}`,
+            label: "› ",
+            placeholder: option.kind === "choice" ? (option.choices ?? []).join(", ") : option.kind === "toggle" ? "true or false" : option.kind === "list" ? "comma-separated" : "",
+            value: saved.get(key) ?? "",
+            submitLabel: "save",
+            onSubmit: (value) => void save(key, value).then((refused) => {
+              if (refused === undefined) {
+                saved.set(key, value);
+                failures.delete(key);
+              } else
+                failures.set(key, refused);
+            }).catch((error) => failures.set(key, messageOf(error))).finally(() => claude().ui.invalidate("ui.render"))
+          });
+          const status = failure !== undefined ? Text({ color: "error", children: failure }) : saved.has(key) ? Text({ color: "success", children: "✔ saved" }) : Text({ children: "" });
+          return Box({ flexDirection: "column", children: [label, field, status] });
+        }), [Button({ key: "not-now", hotkey: "n", label: "Not now", onPress: () => answer(false) }), Button({ key: "next", hotkey: "x", label: "Next", onPress: () => answer(true) })])
+      }), false);
+    },
+    step(mod, step, index, total) {
+      let notice;
+      return show((answer) => ({
+        draw: (props) => {
+          let body;
+          try {
+            body = step.render(mod, props);
+          } catch (error) {
+            body = Text({ color: "error", children: `The ${step.title} step could not draw: ${messageOf(error)}` });
+          }
+          const next = async () => {
+            const isDone = await Promise.resolve(step.isDone(mod)).catch(() => false);
+            if (isDone)
+              answer(true);
+            else {
+              notice = `Finish ${step.title} first.`;
+              claude().ui.invalidate("ui.render");
+            }
+          };
+          return frame(`${step.title}  (${index} of ${total})`, [body, ...notice === undefined ? [] : [Text({ color: "warning", children: notice })]], [Button({ key: "not-now", hotkey: "n", label: "Not now", onPress: () => answer(false) }), Button({ key: "next", hotkey: "x", label: index === total ? "Finish" : "Next", onPress: () => void next() })]);
+        }
+      }), false);
+    },
+    async close() {
+      page = undefined;
+      if (!isOpen)
+        return;
+      isOpen = false;
+      await claude().ui.close({ id: installerPaneId });
+    }
+  };
+}
+
+// node_modules/@cmodjs/core/runtime/options.js
+class MissingOptions extends Error {
+  keys;
+  titles;
+  constructor(keys, titles) {
+    super(`it needs ${listed(titles)}`);
+    this.keys = keys;
+    this.titles = titles;
+  }
+}
+function createOptions({ name, declared, fromClaude, claude, changed }) {
+  let values = merged(declared, fromClaude, {}, new Set);
+  let locked;
+  let loadedRoot;
+  const readLocked = async () => {
+    if (Object.keys(declared).length === 0)
+      return new Set;
+    const rows = await claude.config.list().catch((error) => {
+      claude.ui.log(`${name} could not read /config, so a project's options.json may override a value your organization set: ${messageOf(error)}`, { to: "debug" });
+      return [];
+    });
+    return new Set(rows.filter((row) => row.isLocked && row.key.startsWith(`${name}.`)).map((row) => row.key.slice(name.length + 1)));
+  };
+  const readProject = async (root) => {
+    const env = { HOME: await claude.env.home(), CLAUDE_CONFIG_DIR: await claude.env.configHome() };
+    const project = configFolders(env, name, root).find(({ tier }) => tier === "project");
+    if (project === undefined)
+      return {};
+    const path = `${project.folder}/options.json`;
+    if (!await claude.fs.exists(path))
+      return {};
+    const ignore = (reason) => claude.ui.log(`${path} ${reason}`);
+    let file;
+    try {
+      file = JSON.parse(await claude.fs.read(path));
+    } catch (error) {
+      ignore(`is not JSON (${messageOf(error)}). Fix the file; ${name} uses its other options until then.`);
+      return {};
+    }
+    if (typeof file !== "object" || file === null || Array.isArray(file)) {
+      ignore('is not a JSON object. Write one, such as { "branch": "main" }.');
+      return {};
+    }
+    const kept = {};
+    for (const [key, value] of Object.entries(file)) {
+      const option = declared[key];
+      if (option === undefined)
+        ignore(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? "Remove it." : `Remove it, or use one of: ${Object.keys(declared).join(", ")}.`}`);
+      else if (option.kind === "secret")
+        ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.`);
+      else {
+        const misfit = fitsOption(option, value);
+        if (misfit === undefined)
+          kept[key] = value;
+        else
+          ignore(`sets ${key} to ${JSON.stringify(value)}, and ${option.title} ${misfit}.`);
+      }
+    }
+    return kept;
+  };
+  return {
+    get values() {
+      return values;
+    },
+    get missing() {
+      return Object.entries(declared).filter(([key, option]) => option.default === undefined && isUnset(values[key])).map(([key]) => key);
+    },
+    async load(root) {
+      if (Object.keys(declared).length === 0)
+        return;
+      locked ??= await readLocked();
+      const project = await readProject(root);
+      const isFirst = loadedRoot === undefined;
+      loadedRoot = root;
+      const next = merged(declared, fromClaude, project, locked);
+      if (!isFirst && JSON.stringify(next) === JSON.stringify(values))
+        return;
+      values = next;
+      if (!isFirst)
+        changed();
+    }
+  };
+}
+function merged(declared, fromClaude, project, locked) {
+  return Object.freeze(Object.fromEntries(Object.entries(declared).map(([key, option]) => [key, valueOf(key, option, fromClaude[key], project, locked)])));
+}
+function valueOf(key, option, own, project, locked) {
+  if (locked.has(key))
+    return own;
+  if (Object.hasOwn(project, key))
+    return project[key];
+  if (!isUnset(own) && fitsOption(option, own) === undefined)
+    return Array.isArray(own) ? Object.freeze([...own]) : own;
+  return option.default ?? (option.kind === "list" ? Object.freeze([]) : option.kind === "number" ? undefined : "");
+}
+
 // node_modules/@cmodjs/core/runtime/router.js
 function createRouter() {
   const hooks = new Map;
@@ -3926,7 +5001,6 @@ function createRouter() {
 
 // node_modules/@cmodjs/core/runtime/state.js
 var lifetimes = ["memory", "session", "project", "global"];
-var savedLifetimes = ["session", "project", "global"];
 var keptPerValue = 20;
 var listeners = new WeakMap;
 function createState({ name, initial, session, root, claude, changed: redraw }) {
@@ -3937,7 +5011,6 @@ function createState({ name, initial, session, root, claude, changed: redraw }) 
   };
   const declared = declaredGroups(name, initial);
   const current = copied(declared);
-  let defaults = declared;
   let projectRoot = root;
   let sessionId = session;
   let turn = Promise.resolve();
@@ -3960,61 +5033,6 @@ function createState({ name, initial, session, root, claude, changed: redraw }) 
     for (const oldest of owners.slice(0, -keptPerValue))
       await claude.store.delete(oldest);
   };
-  const fileValues = (path, tier, text, systemPath) => {
-    const values = [];
-    const ignore = (reason) => claude.ui.log(`${path} ${reason}`);
-    let file;
-    try {
-      file = JSON.parse(text);
-    } catch (error) {
-      ignore(`is not JSON (${messageOf(error)}). Fix the file, then run /reload-plugins.`);
-      return values;
-    }
-    if (!isPlainObject(file)) {
-      ignore('is not a JSON object. Write one, such as { "global": { "key": "value" } }.');
-      return values;
-    }
-    for (const [group2, entries] of Object.entries(file)) {
-      if (!isLifetime(group2)) {
-        ignore(`sets ${group2}, which ${name} does not declare. Remove it, or use one of: ${savedLifetimes.join(", ")}.`);
-        continue;
-      }
-      if (group2 === "memory") {
-        ignore("sets memory, and memory values are never saved, so a file cannot set them. Remove it.");
-        continue;
-      }
-      if (!isPlainObject(entries)) {
-        ignore(`sets ${group2} to ${typeOf(entries)}. Write an object of values, such as { "${group2}": { "key": "value" } }.`);
-        continue;
-      }
-      for (const [key, value] of Object.entries(entries)) {
-        const choices = Object.keys(declared[group2]);
-        const wanted = typeOf(declared[group2][key]);
-        if (!Object.hasOwn(declared[group2], key))
-          ignore(`sets ${group2}.${key}, which ${name} does not declare. ${choices.length === 0 ? "Remove it." : `Remove it, or use one of: ${choices.join(", ")}.`}`);
-        else if (tier === "project" && group2 === "global")
-          ignore(`sets ${group2}.${key}, and one repository cannot change a value for every project. Move it to ${systemPath}.`);
-        else if (typeOf(value) !== wanted)
-          ignore(`sets ${group2}.${key} to ${typeOf(value)}, and ${name} keeps ${wanted} there. Write ${wanted}, or remove it.`);
-        else
-          values.push([group2, key, frozen(name, `${group2}.${key}`, value)]);
-      }
-    }
-    return values;
-  };
-  const readDefaults = async (nextRoot) => {
-    const env = { HOME: await claude.env.home(), CLAUDE_CONFIG_DIR: await claude.env.configHome() };
-    const systemPath = `${configFolder(env, name)}/state.json`;
-    const next = copied(declared);
-    for (const { tier, folder } of configFolders(env, name, nextRoot)) {
-      const path = `${folder}/state.json`;
-      if (!await claude.fs.exists(path))
-        continue;
-      for (const [lifetime, key, value] of fileValues(path, tier, await claude.fs.read(path), systemPath))
-        next[lifetime][key] = value;
-    }
-    return next;
-  };
   const loadGroups = async (only, next) => {
     const loaded = [];
     for (const lifetime of only) {
@@ -4023,9 +5041,8 @@ function createState({ name, initial, session, root, claude, changed: redraw }) 
     }
     projectRoot = next.root;
     sessionId = next.session;
-    defaults = next.defaults;
     for (const [lifetime, key, saved] of loaded)
-      current[lifetime][key] = saved === undefined ? defaults[lifetime][key] : frozen(name, `${lifetime}.${key}`, saved);
+      current[lifetime][key] = saved === undefined ? declared[lifetime][key] : frozen(name, `${lifetime}.${key}`, saved);
     changed();
   };
   const copySession = async (nextSession) => {
@@ -4060,14 +5077,15 @@ function createState({ name, initial, session, root, claude, changed: redraw }) 
     get root() {
       return projectRoot;
     },
-    load: () => inTurn(async () => loadGroups(lifetimes, { root: projectRoot, session: sessionId, defaults: await readDefaults(projectRoot) })),
-    moveTo: (nextRoot) => inTurn(async () => nextRoot === projectRoot ? undefined : loadGroups(["project"], { root: nextRoot, session: sessionId, defaults: await readDefaults(nextRoot) })),
+    changed,
+    load: () => inTurn(() => loadGroups(lifetimes, { root: projectRoot, session: sessionId })),
+    moveTo: (nextRoot) => inTurn(async () => nextRoot === projectRoot ? undefined : loadGroups(["project"], { root: nextRoot, session: sessionId })),
     switchSession: (nextSession, source) => inTurn(async () => {
       if (nextSession === sessionId)
         return;
       if (source === "fork")
         await copySession(nextSession);
-      return loadGroups(["memory", "session"], { root: projectRoot, session: nextSession, defaults });
+      return loadGroups(["memory", "session"], { root: projectRoot, session: nextSession });
     })
   };
 }
@@ -4089,17 +5107,6 @@ function copied(groups) {
 function isLifetime(group) {
   return lifetimes.includes(group);
 }
-function typeOf(value) {
-  if (value === null)
-    return "null";
-  if (Array.isArray(value))
-    return "an array";
-  if (typeof value === "object")
-    return "an object";
-  if (value === undefined)
-    return "nothing";
-  return `a ${typeof value}`;
-}
 function frozen(name, path, value) {
   const isArray = Array.isArray(value);
   if (!isArray && !isPlainObject(value))
@@ -4118,38 +5125,14 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-// node_modules/@cmodjs/core/ui/elements.js
-var drawing;
-function drawWith(table, draw, markdown) {
-  const outer = drawing;
-  drawing = { table, markdown };
-  try {
-    return draw();
-  } finally {
-    drawing = outer;
-  }
-}
-function element(name) {
-  const construct = (props) => {
-    if (drawing === undefined)
-      throw new Error(`${name} was called outside a render. Use it inside a pane's render or a slot's component.`);
-    if (name === "Markdown" && drawing.markdown !== undefined)
-      return drawing.markdown(props);
-    return drawing.table[name](props);
-  };
-  return construct;
-}
-var Box = element("Box");
-var Text = element("Text");
-var Button = element("Button");
-var Link = element("Link");
-var Code = element("Code");
-var Markdown = element("Markdown");
-var Input = element("Input");
-var Select = element("Select");
-var Image = element("Image");
-
 // node_modules/@cmodjs/core/ui/components.js
+function Tabs({ tabs, selected, onSelect, children }) {
+  const row = tabs.map((tab, index) => {
+    const hotkey = index < 9 ? `${index + 1}` : undefined;
+    return tab.key === selected ? Text({ children: [...hotkey === undefined ? [] : [Text({ color: "claude", children: hotkey }), ": "], Text({ bold: true, underline: true, children: tab.label })] }) : Button({ plain: true, dimColor: true, key: `tab:${tab.key}`, ...hotkey === undefined ? {} : { hotkey }, label: tab.label, onPress: () => onSelect(tab.key) });
+  });
+  return Box({ flexDirection: "column", gap: 1, children: [Box({ gap: 3, children: row }), children] });
+}
 function ProgressBar({ done, total, width = 24 }) {
   const filled = total > 0 ? Math.round(Math.min(done / total, 1) * width) : 0;
   return Text({ children: [Text({ color: "claude", children: "█".repeat(filled) }), Text({ color: "subtle", children: "░".repeat(width - filled) }), "  ", Text({ dimColor: true, children: `${done}/${total}` })] });
@@ -4259,8 +5242,8 @@ function times(count) {
   return count === 1 ? "1 time" : `${count} times`;
 }
 function pieceProps(props, given, isFirst) {
-  const merged = { ...props, ...given };
-  return isFirst || !("isFirstOfReply" in merged) ? merged : { ...merged, isFirstOfReply: false };
+  const merged2 = { ...props, ...given };
+  return isFirst || !("isFirstOfReply" in merged2) ? merged2 : { ...merged2, isFirstOfReply: false };
 }
 function threw(error) {
   return `threw, so Claude Code draws its own: ${messageOf(error)}`;
@@ -4543,12 +5526,14 @@ async function readPlugin(claude) {
   const manifest = await readJson(read, `${root}/.claude-plugin/plugin.json`);
   const version = typeof manifest?.version === "string" ? manifest.version : undefined;
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
+  const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {};
+  const declared = steps.permissions ?? [];
   if (name === cmodPluginName) {
     const installed = await cmodVersion(claude);
-    return { name, root, version, store, keys: {}, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
+    return { name, root, version, store, steps, granted: declared, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
   }
-  const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {};
-  const plugin = { name, root, version, store, keys: steps.keys ?? {} };
+  const approved = parseConsent(await readJson(read, consentPath(store)), consentPath(store))[name] ?? [];
+  const plugin = { name, root, version, store, steps, granted: declared.filter((item) => approved.includes(item)) };
   const record = await readRecord(read, store, name);
   if (Object.keys(steps).length === 0)
     return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version };
@@ -4591,15 +5576,18 @@ async function cmodVersion(claude) {
     throw new Error(`cmod --version ${formatExit(result.exitCode, lastLineOf(result.stderr) ?? "")}`);
   return result.stdout.trim().split(/\s+/).at(-1);
 }
-function createLifecycle(definition, checksPermissions = () => true) {
+function createLifecycle(definition, checksPermissions = () => true, options = {}, asksPerson = true) {
   let router = createRouter();
   let phase = "starting";
   let runtime;
   let plugin;
+  const granted = new Set;
   let line;
   let activation;
   let mod;
   let failure;
+  let pluginOptions = options;
+  const installer = createInstaller(definition.name, () => claude());
   let shouldRecord = false;
   let recording;
   let missedSessionStart;
@@ -4609,7 +5597,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
   const startSettled = new Promise((resolve2) => settleStart = resolve2);
   const claude = () => {
     if (runtime === undefined)
-      throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod) starts it at session.start.`);
+      throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod, options) starts it at session.start.`);
     return runtime.claude;
   };
   const showLine = () => {
@@ -4644,20 +5632,71 @@ function createLifecycle(definition, checksPermissions = () => true) {
       recording = undefined;
     });
   };
+  const saveOption = async (key, text) => {
+    const option = definition.options?.[key];
+    if (option === undefined || plugin === undefined)
+      return `${definition.name} has no option ${key}.`;
+    const value = option.kind === "number" ? Number(text) : option.kind === "toggle" ? text.trim() === "true" : option.kind === "list" ? text.split(",").map((item) => item.trim()).filter((item) => item !== "") : text;
+    const misfit = option.kind === "toggle" && !["true", "false"].includes(text.trim()) ? "takes true or false" : fitsOption(option, value);
+    if (misfit !== undefined)
+      return `${option.title} ${misfit}.`;
+    const saved = await claude().config.set({ key: `${plugin.name}.${key}`, value });
+    return saved.deny;
+  };
+  const askOptions = async (missing) => {
+    if (!asksPerson || plugin === undefined || (await claude().session.surfaces()).length === 0)
+      return false;
+    const declared = definition.options ?? {};
+    const asked = missing.keys.flatMap((key) => {
+      const option = declared[key];
+      return option === undefined ? [] : [[key, option]];
+    });
+    if (!await installer.options(asked, saveOption))
+      return false;
+    const prefix = `${plugin.name}.`;
+    const rows = await claude().config.list();
+    pluginOptions = { ...pluginOptions, ...Object.fromEntries(rows.filter((row) => row.key.startsWith(prefix)).map((row) => [row.key.slice(prefix.length), row.value])) };
+    return true;
+  };
+  const pendingSteps = async (active) => {
+    const pending = [];
+    for (const step of definition.installer ?? [])
+      if (!await Promise.resolve(step.isDone(active)).catch(() => false))
+        pending.push(step.title);
+    return pending;
+  };
+  const runSteps = async (active) => {
+    const steps = asksPerson ? definition.installer ?? [] : [];
+    for (const [index, step] of steps.entries()) {
+      if (await Promise.resolve(step.isDone(active)).catch(() => false))
+        continue;
+      const isAnswered = (await claude().session.surfaces()).length > 0 && await installer.step(active, step, index + 1, steps.length);
+      if (!isAnswered) {
+        claude().ui.log(`${definition.name} needs ${steps.length - index === 1 ? "one more step" : `${steps.length - index} more steps`}, starting with ${step.title}. Run /mods ${definition.name} to finish.`);
+        break;
+      }
+    }
+    await installer.close();
+  };
   const activate = async () => {
     if (runtime === undefined || plugin === undefined)
       return;
     const activeRouter = createRouter();
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), keys: plugin.keys, checksPermissions }).catch((error) => {
-      fail(messageOf(error), "Fix it, then run /reload-plugins.");
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), steps: plugin.steps, granted, refreshGrants, checksPermissions, options: pluginOptions }).catch(async (error) => {
+      if (error instanceof MissingOptions && await askOptions(error))
+        return;
+      fail(messageOf(error), error instanceof MissingOptions ? `Set ${error.keys.length === 1 ? "it" : "them"} in /config.` : "Fix it, then run /reload-plugins.");
       throw error;
     });
+    if (active === undefined)
+      return activate();
     const { added } = active;
     mod = active.mod;
     router = activeRouter;
     phase = "active";
     runtime.claude.ui.invalidate("ui.render");
     endLine();
+    runSteps(active.mod).catch((error) => claude().ui.log(`${definition.name}: its installer stopped: ${messageOf(error)}`));
     const missed = missedSessionStart;
     missedSessionStart = undefined;
     const lateAnswer = missed === undefined ? {} : await activeRouter.dispatch("classic.SessionStart", missed, async () => ({})).catch((error) => {
@@ -4683,14 +5722,9 @@ function createLifecycle(definition, checksPermissions = () => true) {
       return;
     }
     showLine().wait("Waiting for your answer");
-    const actions = [
-      ...event.install === "" ? [] : [`runs ${event.install} to install`],
-      ...event.uninstall === "" ? [] : [`runs ${event.uninstall} when you remove it`],
-      ...event.keys === "" ? [] : [`binds ${event.keys}`]
-    ];
-    const answer = await claude().ui.ask(`${name} ${listed(actions)}. Install it now?`, { options: ["Install", "Not now"], header: "Install" });
-    if (answer === "Install")
+    if (await installer.consent(event))
       return install(event.sha256);
+    await installer.close();
     phase = "declined";
     endLine();
     claude().ui.log(`${name} is not installed. Run cmod install ${name} to install it.`);
@@ -4715,14 +5749,17 @@ function createLifecycle(definition, checksPermissions = () => true) {
       if (event.kind === "done" || event.kind === "failed" || event.kind === "needs-consent")
         outcome = event;
     });
-    if (outcome?.kind === "done")
+    if (outcome?.kind === "done") {
+      for (const item of plugin.steps.permissions ?? [])
+        granted.add(item);
       return finish2();
+    }
     if (outcome?.kind === "needs-consent")
       return askConsent(outcome);
     const reason = outcome?.kind === "failed" ? outcome.message : `cmod setup ${formatExit(code, lastError)}`;
     fail(reason, `Fix the cause, then run: cmod install ${definition.name}`);
   };
-  const fits = (found) => found !== undefined && isAtLeast(found, oldestCmodFor(plugin?.keys ?? {}));
+  const fits = (found) => found !== undefined && isAtLeast(found, oldestCmodFor(plugin?.steps ?? {}));
   const waitForcmod = (found) => {
     phase = "waiting";
     showLine().wait("Waiting for cmod");
@@ -4745,7 +5782,7 @@ function createLifecycle(definition, checksPermissions = () => true) {
         report(error);
       });
     });
-    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait(latest === undefined ? "Still waiting for cmod to download cmod. See cmod's own line." : `PATH finds cmod ${latest}, and ${definition.name} needs cmod ${oldestCmodFor(plugin?.keys ?? {})} or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.`));
+    const longWait = claude().clock.after(cmodWaitMs, () => showLine().wait(latest === undefined ? "Still waiting for cmod to download cmod. See cmod's own line." : `PATH finds cmod ${latest}, and ${definition.name} needs cmod ${oldestCmodFor(plugin?.steps ?? {})} or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.`));
   };
   const bootstrap = async (root) => {
     const progress = showLine();
@@ -4763,6 +5800,49 @@ function createLifecycle(definition, checksPermissions = () => true) {
     failure = error;
     if (phase !== "failed")
       fail(messageOf(error), `Run cmod install ${definition.name} in a terminal to see the whole log.`);
+  };
+  let consentMs = 0;
+  const consentStamp = async (path) => {
+    const stat = await claude().fs.stat(path).catch(() => {
+      return;
+    });
+    return stat?.kind === "file" ? stat.mtimeMs : 0;
+  };
+  const refreshGrants = async () => {
+    if (plugin === undefined || plugin.name === cmodPluginName)
+      return;
+    const path = consentPath(plugin.store);
+    const modifiedMs = await consentStamp(path);
+    if (modifiedMs === consentMs)
+      return;
+    consentMs = modifiedMs;
+    const approved = modifiedMs === 0 ? [] : parseConsent(JSON.parse(await claude().fs.read(path)), path)[plugin.name] ?? [];
+    granted.clear();
+    for (const item of plugin.steps.permissions ?? []) {
+      if (approved.includes(item))
+        granted.add(item);
+    }
+  };
+  const droppedParts = new Set;
+  const answerCheck = {
+    get plugin() {
+      return plugin?.name ?? definition.name;
+    },
+    isGranted: (item) => isCovered(granted, item, undefined),
+    dropped(item, part) {
+      if (droppedParts.has(item))
+        return;
+      droppedParts.add(item);
+      const declared = plugin?.steps.permissions ?? [];
+      const fix = declared.includes(item) ? `Turn it on in /mods ${definition.name}.` : `It needs "permissions": { "${item}": true } in package.json "cmod".`;
+      claude().ui.log(`${definition.name} answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it. ${fix}`);
+    }
+  };
+  const checkedRoute = async (event, e, next) => {
+    let below;
+    const passOn = (passed) => below ??= next(passedDown(event, e, passed, answerCheck));
+    const answer = await router.dispatch(event, e, passOn);
+    return await checkedAnswer(event, e, answer, () => passOn(e), answerCheck);
   };
   const whenActive = async () => {
     if (phase === "ready")
@@ -4799,6 +5879,9 @@ function createLifecycle(definition, checksPermissions = () => true) {
         if (started === undefined)
           return;
         plugin = started;
+        for (const item of started.granted)
+          granted.add(item);
+        consentMs = await consentStamp(consentPath(started.store));
         if (started.isInstalled) {
           shouldRecord = started.shouldRecord;
           if (shouldRecord)
@@ -4813,6 +5896,10 @@ function createLifecycle(definition, checksPermissions = () => true) {
       }
     },
     async route(event, e, next) {
+      if (event === "ui.render" && installer.draws(e))
+        return installer.draw(e);
+      if (event === "ui.close")
+        installer.closed(e.id);
       if (event === "classic.SessionStart")
         missedSessionStart = undefined;
       if (event === "classic.SessionStart" && runtime === undefined) {
@@ -4828,6 +5915,17 @@ function createLifecycle(definition, checksPermissions = () => true) {
         const isStopped = phase === "declined" || phase === "failed";
         return { deny: isStopped ? notInstalled(definition.name) : `${definition.name} is installing. Try again when it's ready.` };
       }
+      const call = e;
+      if (event === "cmod.call" && call.to === definition.name && mod !== undefined) {
+        if (call.method === pendingStepsMethod)
+          return { value: await pendingSteps(mod) };
+        if (call.method === finishStepsMethod)
+          return await runSteps(mod), { value: null };
+      }
+      if (event === "classic.UserPromptSubmit" || event === "classic.SessionStart")
+        await refreshGrants().catch((error) => claude().ui.log(`${definition.name} keeps its grants from before: ${messageOf(error)}`, { to: "debug" }));
+      if (checksAnswers(event) && phase === "active")
+        return checkedRoute(event, e, next);
       const answer = router.dispatch(event, e, next);
       const render = e;
       if (event !== "ui.render" || render.component !== "AbovePrompt" || runtime === undefined || !runtime.progress.isShown)
@@ -4838,22 +5936,63 @@ function createLifecycle(definition, checksPermissions = () => true) {
 }
 async function createMod(definition, runtime) {
   const { router, progress } = runtime;
-  const claude = checkingKeys(runtime.claude, definition.name, runtime.keys);
+  const claude = checkingKeys(runtime.claude, definition.name, runtime.steps.keys ?? {});
   const added = [];
   const hookEvents = [];
   const announce = (feature) => {
     added.push(feature);
   };
-  const [session, root, startCwd] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd()]);
+  const [session, root, startCwd, home, configHome] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd(), claude.env.home(), claude.env.configHome()]);
+  const { granted } = runtime;
+  const configRoot = configHome ?? (home === undefined ? undefined : `${home}/.claude`);
+  const grants = {
+    name: definition.name,
+    declared: runtime.steps.permissions ?? [],
+    granted: () => granted,
+    refresh: runtime.refreshGrants,
+    home,
+    configRoot,
+    projectRoot: () => modState.root,
+    freeFolders: () => [modState.root, runtime.dataFolder]
+  };
+  const checked = checkingGrants(claude, grants);
+  const files = createModFiles({
+    name: definition.name,
+    claude,
+    places: { home, configRoot, projectRoot: () => modState.root },
+    checkWrite: (path) => checkWrite(grants, `metadata.update(${path})`, path)
+  });
+  const pages = new Map;
+  const settingsPages = {
+    page(page) {
+      if (pages.has(page.id))
+        throw new Error(`${definition.name}: the settings page "${page.id}" is already added. Give each page its own id.`);
+      pages.set(page.id, { title: page.title, handle: area.ui.pane(page) });
+    },
+    async open(pageId) {
+      if (pageId === undefined) {
+        await claude.cmod.call({ to: cmodPluginName, method: "openSettings", input: { mod: definition.name } });
+        return;
+      }
+      const page = pages.get(pageId);
+      if (page === undefined)
+        throw new Error(`${definition.name} has no settings page "${pageId}". It has: ${[...pages.keys()].join(", ") || "none"}.`);
+      await page.handle.open({ focus: true });
+    }
+  };
   let cwd2 = startCwd;
   let loadedCwd = startCwd;
   let staleCwd;
   const area = createUi({ name: definition.name, claude, router, progress, announce, mod: () => mod });
   const modState = createState({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed });
+  const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, changed: modState.changed });
   const held = runtime.checksPermissions() ? new Map : undefined;
   const mod = {
     name: definition.name,
     state: modState.state,
+    get options() {
+      return modOptions.values;
+    },
     dataFolder: runtime.dataFolder,
     on(event, hook, options) {
       const bounded = options?.timeoutMs === undefined ? hook : timedHook(definition.name, event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude);
@@ -4864,7 +6003,7 @@ async function createMod(definition, runtime) {
       else
         router.add(`classic.${event}`, classicHook(definition.name, event, bounded, claude, agents));
     },
-    use: (job) => job({ mod, claude, on: (event, hook) => router.add(event, hook), announce, reserveName, toolCalls: agents }),
+    use: (job) => job({ mod, announce, reserveName, toolCalls: agents }),
     every(ms, hook) {
       let isRunning = false;
       return claude.clock.every(checkedMs(definition.name, "mod.every", ms), () => {
@@ -4878,33 +6017,42 @@ async function createMod(definition, runtime) {
     },
     ui: area.ui,
     process: {
-      run: (argv, init) => claude.process.run(argv, init),
-      spawn: (argv, init) => claude.process.spawn({ ...init, argv })
+      run: (argv, init) => checked.process.run(argv, init),
+      spawn: (argv, init) => checked.process.spawn({ ...init, argv })
     },
     fs: {
-      read: (path) => claude.fs.read(path),
-      write: (path, text) => claude.fs.write(path, text),
-      list: (path) => claude.fs.list(path),
-      exists: (path) => claude.fs.exists(path),
-      stat: (path, options) => claude.fs.stat(path, options)
+      read: (path) => checked.fs.read(path),
+      write: (path, text) => checked.fs.write(path, text),
+      list: (path) => checked.fs.list(path),
+      exists: (path) => checked.fs.exists(path),
+      stat: (path, options) => checked.fs.stat(path, options),
+      find: (glob) => files.find(glob)
     },
-    http: { fetch: (url, init) => claude.http.fetch(url, init) },
-    settings: { read: (args) => claude.settings.read(args) },
+    metadata: {
+      read: (path) => files.read(path),
+      update: (path, change) => files.update(path, change)
+    },
+    http: { fetch: (url, init) => checked.http.fetch(url, init) },
+    settings: settingsPages,
     session: {
-      messages: claude.session.messages,
+      messages: (args) => args === undefined ? checked.session.messages() : checked.session.messages({ agentId: args.agentId }),
       async append(text) {
-        const added2 = await claude.session.append({ message: { type: "user", content: [{ type: "text", text }] } });
+        const added2 = await checked.session.append({ message: { type: "user", content: [{ type: "text", text }] } });
         if (added2.deny !== undefined)
           throw new Error(`${definition.name}: Claude Code refused the note: ${added2.deny}`);
       },
       async submit(text) {
-        const submitted = await claude.prompt.submit({ text });
+        const submitted = await checked.prompt.submit({ text });
         if ("drop" in submitted && typeof submitted.drop === "string")
           throw new Error(`${definition.name}: Claude Code dropped the prompt: ${submitted.drop}`);
       }
     },
-    agent: { spawn: (args) => claude.agent.spawn(args) },
-    model: { complete: (request, options) => claude.model.complete(request, options) },
+    agent: { spawn: (args) => checked.agent.spawn(args) },
+    model: { complete: (completion, options) => checked.model.complete(completion, options) },
+    permissions: {
+      has: (name, value) => isCovered(granted, itemOf(name, value), home)
+    },
+    claude: { ...checked, on: (event, hook) => router.add(event, hook) },
     get projectRoot() {
       return modState.root;
     },
@@ -4931,6 +6079,8 @@ async function createMod(definition, runtime) {
           cwd2 = loadedCwd;
         throw error;
       });
+      if (hasMovedRoot)
+        await modOptions.load(nextRoot);
       loadedCwd = nextCwd;
       if (!hasMovedRoot)
         area.changed();
@@ -4968,7 +6118,17 @@ async function createMod(definition, runtime) {
   });
   router.add("skill.prompt", userSkillHook(claude));
   const api = Object.fromEntries(Object.entries(definition.api ?? {}).map(([method, run]) => [method, (input) => run(input, mod)]));
-  router.add("cmod.call", (e, next) => e.to === definition.name ? answerCall(definition.name, api, e) : next(e));
+  router.add("cmod.call", async (e, next) => {
+    if (e.to !== definition.name)
+      return next(e);
+    if (e.method === settingsPagesMethod)
+      return { value: [...pages].map(([id, { title }]) => ({ id, title })) };
+    if (e.method === openPageMethod) {
+      await settingsPages.open(String(e.input));
+      return { value: null };
+    }
+    return answerCall(definition.name, api, e);
+  });
   const agents = toolCalls(claude, router);
   const names = new Set;
   const reserveName = (kind, name, taken) => {
@@ -4978,6 +6138,10 @@ async function createMod(definition, runtime) {
     names.add(key);
   };
   await failsAs("its state did not load", () => modState.load());
+  await failsAs("its options did not load", () => modOptions.load(root));
+  const missing = modOptions.missing;
+  if (missing.length > 0)
+    throw new MissingOptions(missing, missing.map((key) => definition.options?.[key]?.title ?? key));
   await failsAs("its setup function threw", () => definition.setup(mod));
   const permissionHooks = permissionEvents.filter((event) => router.has(event));
   if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
@@ -5061,6 +6225,7 @@ function lastLineOf(text) {
 // node_modules/@cmodjs/core/register.js
 var lifecycle;
 var checksPermissions = false;
+var registered;
 async function startMod($, eventInput, passOn) {
   const claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
@@ -5090,6 +6255,7 @@ async function startMod($, eventInput, passOn) {
     },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     settings: { read: (args) => $.settings.read(args) },
+    config: { list: () => $.config.list(), set: (args) => $.config.set(args) },
     store: {
       get: (key) => $.store.get(key),
       set: (key, value) => $.store.set(key, value),
@@ -5132,9 +6298,10 @@ async function startMod($, eventInput, passOn) {
 function routeToMod(_$, eventInput, passOn) {
   return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed));
 }
-function registerMod(addHook, definition) {
+function registerMod(addHook, definition, options) {
   checksPermissions = false;
-  lifecycle = createLifecycle(definition, () => checksPermissions);
+  registered = definition;
+  lifecycle = createLifecycle(definition, () => checksPermissions, options);
   addHook("session.start", startMod);
   addHook("classic.SessionStart", routeToMod);
   addHook("classic.SessionEnd", routeToMod);
@@ -5164,12 +6331,312 @@ function registerMod(addHook, definition) {
   addHook("cmod.call", routeToMod);
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-UwEEft/release/src/mod.ts
+// node_modules/@cmodjs/core/jobs/context.js
+function modWithin({ mod }, deadline, workTree = async () => {
+  return;
+}) {
+  const { claude } = mod;
+  const within = (call, task) => beforeDeadline(claude, deadline, call, task);
+  const folderOf2 = async (cwd2) => {
+    const folder = cwd2 ?? await workTree();
+    return folder === undefined ? {} : { cwd: folder };
+  };
+  const overrides = {
+    process: {
+      async run(argv, init) {
+        const folder = await folderOf2(init?.cwd);
+        const timeoutMs = Math.min(init?.timeoutMs ?? deadline.ms, deadline.longestMs ?? deadline.ms);
+        return beforeDeadline(claude, { ...deadline, ms: timeoutMs }, "mod.process.run", mod.process.run(argv, { ...init, ...folder, timeoutMs }));
+      },
+      spawn: (argv, init) => spawnWithin(claude, deadline, folderOf2(init?.cwd).then((folder) => mod.process.spawn(argv, { ...init, ...folder })))
+    },
+    fs: {
+      read: (path) => within("mod.fs.read", mod.fs.read(path)),
+      write: (path, text) => within("mod.fs.write", mod.fs.write(path, text)),
+      list: (path) => within("mod.fs.list", mod.fs.list(path)),
+      exists: (path) => within("mod.fs.exists", mod.fs.exists(path)),
+      stat: (path, options) => within("mod.fs.stat", mod.fs.stat(path, options)),
+      find: (glob) => within("mod.fs.find", mod.fs.find(glob))
+    },
+    http: { fetch: (url, init) => within("mod.http.fetch", mod.http.fetch(url, init)) },
+    dependencies: dependencyCalls(claude, within)
+  };
+  return Object.assign(Object.create(mod), overrides);
+}
+function spawnWithin(claude, deadline, started) {
+  async function* pieces() {
+    const stream = await started;
+    let finish2 = () => {
+      return;
+    };
+    const running = beforeDeadline(claude, deadline, "mod.process.spawn", new Promise((resolve2) => finish2 = resolve2));
+    const passed = running.then(() => new Promise(() => {
+      return;
+    }));
+    try {
+      for (;; ) {
+        const piece = await Promise.race([stream.next(), passed]);
+        if (piece.done === true)
+          return piece.value;
+        yield piece.value;
+      }
+    } finally {
+      finish2();
+      stream.return?.();
+    }
+  }
+  const result = started.then((stream) => stream.result);
+  result.catch(() => {
+    return;
+  });
+  return Object.assign(pieces(), { result });
+}
+
+// node_modules/@cmodjs/core/jobs/slash-command.js
+var deadline = { ms: 30000, longestMs, job: "slashCommand" };
+var commandName = /^[A-Za-z0-9_-]{1,64}$/;
+function slashCommand(options) {
+  const { name, description, argumentHint, immediate, reply } = options;
+  return (job) => {
+    const { mod, announce, reserveName } = job;
+    const { claude } = mod;
+    if (!commandName.test(name))
+      throw new Error(`${mod.name}: "${name}" is not a slash command name. Use 1 to 64 letters, digits, "_", or "-", without the slash.`);
+    reserveName("slashCommand", name, `${mod.name}: the slash command /${name} is already added. Give each slashCommand its own name.`);
+    let registered2;
+    claude.command.register({ name, description, ...argumentHint === undefined ? {} : { argumentHint }, ...immediate === undefined ? {} : { immediate } }).then(({ command }) => {
+      registered2 = command;
+    }, (error) => {
+      claude.ui.log(`${mod.name}: /${name} is not added: ${oneLine(error)}`);
+    });
+    announce(`/${name}`);
+    const replyMod = modWithin(job, deadline);
+    claude.on("command.run", async (e, next) => {
+      if (e.command !== registered2)
+        return next(e);
+      try {
+        return answerOf(await reply({ args: e.args, positionals: splitWords(e.args) }, replyMod));
+      } catch (error) {
+        return { text: `/${name} failed: ${oneLine(error)}` };
+      }
+    });
+  };
+}
+function answerOf(reply) {
+  if (reply === undefined)
+    return {};
+  if (typeof reply === "string")
+    return { text: reply };
+  return { ...reply.text === undefined ? {} : { text: reply.text }, ...reply.context === undefined ? {} : { context: [reply.context] } };
+}
+function splitWords(args) {
+  return $parse(args, (key) => `$${key}`).flatMap((entry) => {
+    if (typeof entry === "string")
+      return [entry];
+    if ("comment" in entry)
+      return [];
+    if (entry.op === "glob")
+      return [entry.pattern];
+    return [entry.op];
+  });
+}
+function oneLine(error) {
+  return messageOf(error).replace(/\s*\n\s*/g, " ");
+}
+
+// node_modules/@cmodjs/core/ui/define-pane.js
+var paneId = /^[A-Za-z0-9_-]{1,64}$/;
+var sizeKeys2 = ["columns", "rows"];
+function definePane(pane) {
+  if (!paneId.test(pane.id))
+    throw new Error(`definePane: "${pane.id}" is not a pane id. Use 1 to 64 letters, digits, "_", or "-".`);
+  for (const key of sizeKeys2) {
+    const size = pane[key];
+    if (typeof size !== "function" && size !== undefined && (!Number.isInteger(size) || size <= 0))
+      throw new Error(`definePane: the pane "${pane.id}" has ${key} ${size}. Use a whole number above 0, or leave it out.`);
+  }
+  return pane;
+}
+
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-hszNlB/release/src/mods.ts
+var modsMemory = { selected: null, tab: "options", notice: null, views: [] };
+var tabs = [
+  { key: "options", label: "Options" },
+  { key: "permissions", label: "Permissions" },
+  { key: "keys", label: "Keys" },
+  { key: "pages", label: "Pages" }
+];
+function modsPanel(mod) {
+  const load = async () => {
+    const store = storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() });
+    const consent = await mod.fs.exists(consentPath(store)) ? parseConsent(JSON.parse(await mod.fs.read(consentPath(store))), consentPath(store)) : {};
+    const rows = await mod.claude.config.list();
+    const names = await mod.fs.exists(`${store}/records`) ? (await mod.fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith(".json")).map((entry) => entry.name.slice(0, -".json".length)) : [];
+    const read = (path) => mod.fs.read(path).catch(() => {
+      return;
+    });
+    const records = (await Promise.all(names.map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined);
+    const views = await Promise.all(records.map(async (record) => {
+      const manifest = await mod.fs.read(`${record.root}/package.json`).then(JSON.parse, () => {
+        return;
+      });
+      const declared = (isObject(manifest) ? readSteps(manifest)?.permissions : undefined) ?? [];
+      const granted = consent[record.name] ?? [];
+      const ask = async (method) => {
+        const answer = await mod.claude.cmod.call({ to: record.name, method, input: null }).catch(() => {
+          return;
+        });
+        return isObject(answer) && Array.isArray(answer["value"]) ? answer["value"] : [];
+      };
+      const pages = await ask(settingsPagesMethod);
+      const pendingSteps = await ask(pendingStepsMethod);
+      return {
+        name: record.name,
+        version: record.version,
+        permissions: declared.map((item) => ({ item, isOn: granted.includes(item) })),
+        keys: Object.entries(record.keys ?? {}).map(([key, command]) => [key, `/${command}`]),
+        options: rows.filter((row) => row.key.startsWith(`${record.name}.`)),
+        pages,
+        pendingSteps
+      };
+    }));
+    return views.sort((left, right) => left.name.localeCompare(right.name));
+  };
+  const refresh = async () => {
+    try {
+      mod.state.memory.views = await load();
+    } catch (error) {
+      mod.state.memory.notice = `The mods did not load: ${messageOf(error)}`;
+    }
+  };
+  const act = (task) => void task().then((notice) => {
+    mod.state.memory.notice = notice ?? null;
+    return refresh();
+  }).catch((error) => void (mod.state.memory.notice = messageOf(error)));
+  const toggle = (name, { item, isOn }) => act(async () => {
+    const split = item.indexOf(":");
+    const words = split === -1 ? [item] : [item.slice(0, split), item.slice(split + 1)];
+    const { exitCode, stdout, stderr } = await mod.process.run(["cmod", "permission", name, ...words, isOn ? "off" : "on"]);
+    return exitCode === 0 ? stdout.trim() : stderr.trim();
+  });
+  const setOption = (row, text) => act(async () => {
+    const listed2 = text.split(",").map((item) => item.trim()).filter((item) => item !== "");
+    const value = row.kind === "number" ? Number(text) : row.kind === "boolean" ? text.trim() === "true" : Array.isArray(row.value) ? listed2 : text;
+    const saved = await mod.claude.config.set({ key: row.key, value });
+    return saved.deny ?? `Saved ${row.label}.`;
+  });
+  const drawTab = (view, tab) => {
+    if (tab === "options") {
+      if (view.options.length === 0)
+        return Text({ dimColor: true, children: `${view.name} has no options.` });
+      return Box({
+        flexDirection: "column",
+        gap: 1,
+        children: view.options.map((row) => Box({
+          flexDirection: "column",
+          children: [
+            Text({ children: [Text({ bold: true, children: row.label }), row.isLocked ? Text({ dimColor: true, children: "  set by your organization" }) : ""] }),
+            row.isLocked ? Text({ children: String(row.value) }) : Input({ key: `option:${row.key}`, label: "› ", value: Array.isArray(row.value) ? row.value.join(", ") : String(row.value), submitLabel: "save", onSubmit: (text) => setOption(row, text) })
+          ]
+        }))
+      });
+    }
+    if (tab === "permissions") {
+      if (view.permissions.length === 0)
+        return Text({ dimColor: true, children: `${view.name} asks for no permissions.` });
+      return Box({ flexDirection: "column", children: view.permissions.map((permission) => Button({ plain: true, key: `permission:${permission.item}`, label: `${permission.isOn ? "[x]" : "[ ]"} ${permissionWords(permission.item)}`, onPress: () => toggle(view.name, permission) })) });
+    }
+    if (tab === "keys") {
+      if (view.keys.length === 0)
+        return Text({ dimColor: true, children: `${view.name} binds no keys.` });
+      return Box({ flexDirection: "column", children: view.keys.map(([key, command]) => Text({ children: `${key.padEnd(12)}${command}` })) });
+    }
+    if (view.pages.length === 0)
+      return Text({ dimColor: true, children: `${view.name} adds no pages.` });
+    return Box({ gap: 2, children: view.pages.map((page) => Button({ key: `page:${page.id}`, label: page.title, onPress: () => act(async () => (await mod.claude.cmod.call({ to: view.name, method: openPageMethod, input: page.id }), undefined)) })) });
+  };
+  const pane = definePane({
+    id: "mods",
+    title: "Mods",
+    closeOnEscape: true,
+    render(current) {
+      const { selected, tab, notice, views } = current.state.memory;
+      const view = views.find((each) => each.name === selected) ?? views[0];
+      if (view === undefined)
+        return Text({ dimColor: true, children: "No mod is set up yet. Run cmod install <owner/repo> to add one." });
+      const list = Box({
+        flexDirection: "column",
+        minWidth: 18,
+        children: views.map((each) => each === view ? Text({ bold: true, children: `▸ ${each.name}` }) : Button({ plain: true, key: `mod:${each.name}`, label: `  ${each.name}`, onPress: () => void (current.state.memory.selected = each.name) }))
+      });
+      const details = Box({
+        flexDirection: "column",
+        gap: 1,
+        children: [
+          Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
+          ...view.pendingSteps.length === 0 ? [] : [
+            Box({
+              gap: 2,
+              children: [
+                Text({ color: "warning", children: `Needs setup: ${view.pendingSteps.join(", ")}` }),
+                Button({ key: "finish", label: "Finish setup", onPress: () => act(async () => (await mod.claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null }), undefined)) })
+              ]
+            })
+          ],
+          Tabs({ tabs, selected: tab, onSelect: (key) => void (current.state.memory.tab = key), children: drawTab(view, tab) }),
+          ...notice === null ? [] : [Text({ dimColor: true, children: notice })]
+        ]
+      });
+      return Box({ gap: 2, children: [list, details] });
+    }
+  });
+  const handle = mod.ui.pane(pane);
+  return {
+    async open(name, page) {
+      await refresh();
+      if (name !== undefined) {
+        if (!mod.state.memory.views.some((view) => view.name === name))
+          throw new Error(`${name} is not a mod cmod set up. cmod list shows the mods.`);
+        mod.state.memory.selected = name;
+        mod.state.memory.tab = "options";
+      }
+      if (name !== undefined && page !== undefined) {
+        await mod.claude.cmod.call({ to: name, method: openPageMethod, input: page });
+        return;
+      }
+      await handle.open({ focus: true });
+    }
+  };
+}
+
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-hszNlB/release/src/mod.ts
+var panels = new WeakMap;
 var cmodPlugin = defineMod({
   name: "cmod",
-  state: { global: { installedPlugins: null } },
+  state: { global: { installedPlugins: null }, memory: modsMemory },
+  api: {
+    async openSettings(input, mod) {
+      const panel = panels.get(mod);
+      if (panel === undefined)
+        throw new Error("cmod has not started its /mods panel yet.");
+      await panel.open(input.mod, input.page);
+      return null;
+    }
+  },
   setup(mod) {
     const triedRemovals = new Set;
+    const mods = modsPanel(mod);
+    panels.set(mod, mods);
+    mod.use(slashCommand({
+      name: "mods",
+      description: "See and change your mods: options, permissions, keys, and pages",
+      argumentHint: "[mod] [page]",
+      immediate: true,
+      async reply({ positionals }) {
+        const [name, page] = positionals;
+        await mods.open(name, page);
+      }
+    }));
     const tearDown = async (name) => {
       const { exitCode, stdout, stderr } = await mod.process.run(["cmod", "teardown", name, "--events"], { timeoutMs: longestMs });
       const outcome = parseEvent(stdout.trim().split(`
@@ -5186,7 +6653,7 @@ var cmodPlugin = defineMod({
 `).at(-1)}`);
     };
     const watchRemovals = async () => {
-      const enabledPlugins = (await mod.settings.read({ source: "user" }))["enabledPlugins"];
+      const enabledPlugins = (await mod.claude.settings.read({ source: "user" }))["enabledPlugins"];
       const current = [...new Set(Object.keys(enabledPlugins ?? {}).map((key) => key.replace(/@[^@]*$/, "")))];
       const previous = mod.state.global.installedPlugins;
       const removed = (previous ?? []).filter((name) => !current.includes(name));
@@ -5207,8 +6674,8 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-UwEEft/release/hooks/register.ts
-function register(addHook) {
+// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-hszNlB/release/hooks/register.ts
+function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
     const cmod = {
@@ -5218,7 +6685,7 @@ function register(addHook) {
     };
     return { ...built, cmod };
   });
-  registerMod(addHook, cmodPlugin);
+  registerMod(addHook, cmodPlugin, options);
 }
 export {
   register
