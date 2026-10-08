@@ -3,7 +3,7 @@
 `testMod` runs a mod against a fake Claude Code in `bun test`, so a test drives the mod the way a person and Claude do and reads what they would see. It needs no running Claude Code.
 
 ```ts
-testMod<State>(definition: ModDefinition<State>, options?: TestOptions<State>): TestedMod<State>
+testMod<State, Options>(definition: ModDefinition<State, string, Options>, options?: TestOptions<State, Options>): TestedMod<State>
 ```
 
 ```ts
@@ -24,8 +24,9 @@ Assert what a person or Claude sees: `tested.lines(...)`, `tested.shown`, `teste
 ## TestOptions
 
 ```ts
-type TestOptions<State> = {
+type TestOptions<State, Options> = {
   readonly state?: { [Lifetime in keyof State]?: Partial<State[Lifetime]> }
+  readonly options?: Partial<OptionValues<Options>>
   readonly scope?: 'user' | 'project'
   readonly projectRoot?: string
   readonly cwd?: string
@@ -37,6 +38,7 @@ type TestOptions<State> = {
 | Option | What it sets | Default |
 | --- | --- | --- |
 | `state` | Values over the declared starting state | The declared state |
+| `options` | The option values Claude Code passes, as a person set them ([options.md](options.md)) | none: each option gets its default |
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `mod.projectRoot` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `mod.cwd` | `projectRoot` |
@@ -213,6 +215,7 @@ type Fakes = {
   fs: { read?, write?, list?, exists?, stat? }
   http: { fetch? }
   settings: { read? }
+  config: { list?, set? }
   ui: { ask?, open?, scroll? }
   session: { messages?, append? }
   prompt: { submit? }
@@ -234,6 +237,7 @@ Set a fake to answer a call:
 - `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
 - `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
+- `config.list` answers no `/config` rows by default, and `config.set` answers every change with `{ value }`. A `config.list` fake that answers a row with `isLocked: true` locks that option as managed settings do.
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 
 ```ts

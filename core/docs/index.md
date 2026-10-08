@@ -15,7 +15,7 @@ my-mod/
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
 ├── hooks/hooks.json                    names hooks/register.ts as the hooks module
-├── hooks/register.ts                   registerMod(addHook, myMod), and nothing else
+├── hooks/register.ts                   registerMod(addHook, myMod, options), and nothing else
 ├── src/mod.tsx                         defineMod: the state, the setup, the hooks, the panes
 ├── src/state.ts                        the starting state
 ├── src/panes/prompts.tsx               one definePane per file
@@ -59,7 +59,8 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | How do I define a mod, and what can `mod` call? | [mod.md](mod.md) |
 | How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every) |
 | How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
-| How do I keep values across prompts, sessions, and projects? How does a person change them? | [state.md](state.md) |
+| How do I keep values across prompts, sessions, and projects? | [state.md](state.md) |
+| How does a person set a token, a URL, or a setting for my mod, for themselves or their team? | [options.md](options.md) |
 | How do I react to a Claude Code event, and what can a hook answer? | [hooks.md](hooks.md) |
 | How do I draw a pane, change a row Claude Code draws, or ask the person something? | [ui.md](ui.md) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, a status line, or a background program? | [jobs.md](jobs.md) |
@@ -78,7 +79,8 @@ A mod imports from the files below, and every other file in this package is inte
 | `mod.js` | `Claude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
 | `mod.js` | `ModEvent`, `ModHook`, `HookOptions`, `HookInput`, `HookAnswer` | [hooks.md](hooks.md) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
-| `register.js` | `registerMod`, `registerPermissionCheck` | [mod.md](mod.md) |
+| `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod` | [mod.md](mod.md) |
+| `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionKind`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [hooks.md](hooks.md) |
 | `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [hooks.md](hooks.md) |
 | `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `TestCall` | [testing.md](testing.md) |

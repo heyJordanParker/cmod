@@ -49,13 +49,13 @@ Your changes to a mod live in its config folders, outside the mod's code. Each m
 
 A file in the project folder wins over the same file in yours. `CLAUDE_CONFIG_DIR` moves `~/.claude`, and removing the mod keeps both folders.
 
-To change what a mod's values start as, write a `state.json` that lists only the values to change:
+A mod's options, such as a token or a branch to watch, are yours to set in `/config`. To set them for your whole team, commit an `options.json` in the project folder that lists only the options to change:
 
 ```json
-{ "global": { "defaultCommitPolicy": "never" } }
+{ "branch": "release" }
 ```
 
-A `session` value is what each conversation starts with, a `project` value is what each project starts with, and a `global` value is the same in every project. A value the mod saved wins over the file. A project `state.json` cannot set `global` values. The mod ignores a key it does not have and a value of the wrong type, and logs one line naming the file, the key, and the fix. cmod reads both files when the mod starts, and the project's file again after a `/cd`.
+The project's value wins over yours, and a value your organization set in managed settings wins over both. A secret never goes in the project file. The mod ignores an option it does not have and a value that does not fit, and logs one line naming the file, the option, and the fix. cmod reads the project's file when the mod starts, and again after a `/cd`.
 
 To replace the text of a Skill a mod ships, put your own file at the same path in a config folder:
 
@@ -146,7 +146,8 @@ The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@c
 
 - [index.md](core/docs/index.md): what a mod is, and which file answers which question
 - [mod.md](core/docs/mod.md): `defineMod`, `setup`, and what `mod` can call
-- [state.md](core/docs/state.md): state groups, `state.json`, and Skill overrides
+- [state.md](core/docs/state.md): state groups and Skill overrides
+- [options.md](core/docs/options.md): options a person sets, typed in code, stored by Claude Code
 - [hooks.md](core/docs/hooks.md): `mod.on`, every event, and what a hook can answer
 - [ui.md](core/docs/ui.md): panes, slots, markdown slots, elements, toasts, progress, and questions
 - [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, status lines, and programs

@@ -90,7 +90,7 @@ const files = {
 test('registerMod registers each Claude Code event once, and no permission check', () => {
   const fake = fakeOn()
 
-  registerMod(fake.on, demo)
+  registerMod(fake.on, demo, {})
 
   expect(fake.registrations.map((registration) => registration.pattern)).toEqual([
     'session.start',
@@ -126,7 +126,7 @@ test('registerMod registers each Claude Code event once, and no permission check
 test('registerPermissionCheck registers tool.check and PermissionRequest once each', () => {
   const fake = fakeOn()
 
-  registerMod(fake.on, demo)
+  registerMod(fake.on, demo, {})
   registerPermissionCheck(fake.on)
 
   expect(fake.registrations.map((registration) => registration.pattern).slice(-2)).toEqual(['tool.check', 'classic.PermissionRequest'])
@@ -141,7 +141,7 @@ test('a PreToolUse hook denies through tool.call, with no permission check regis
       mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'No edits here.' } }))
     },
   })
-  registerMod(fake.on, guard)
+  registerMod(fake.on, guard, {})
   await fake.dispatch('session.start', $, {}, {})
 
   const answer = await fake.dispatch('tool.call', $, { tool: 'Edit', tool_use_id: 't', file_path: 'a.ts' }, { result: '' })
@@ -153,7 +153,7 @@ test('a PreToolUse hook denies through tool.call, with no permission check regis
 test('session.start through the engine chain reads the plugin, runs setup, and announces the mod once', async () => {
   const fake = fakeOn()
   const { $, shown } = engine(files)
-  registerMod(fake.on,demo)
+  registerMod(fake.on, demo, {})
 
   await fake.dispatch('session.start', $, {}, {})
   const answer = await fake.dispatch('classic.PostToolUse', $, { hook_event_name: 'PostToolUse', cwd: '/work/app', tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }, {})
@@ -182,7 +182,7 @@ test('a pane opened during setup is drawn again once the mod is active', async (
       await mod.ui.pane({ id: 'files', title: 'Files', render: () => Text({ children: 'src/' }) }).open()
     },
   })
-  registerMod(fake.on,opensPane)
+  registerMod(fake.on, opensPane, {})
 
   await fake.dispatch('session.start', $, {}, {})
 
@@ -193,7 +193,7 @@ test('a pane opened during setup is drawn again once the mod is active', async (
 test('a mod that draws nothing hands the claude drawing back unchanged', async () => {
   const fake = fakeOn()
   const { $ } = engine(files)
-  registerMod(fake.on,demo)
+  registerMod(fake.on, demo, {})
   await fake.dispatch('session.start', $, {}, {})
   const drawing = { type: 'Box', children: [] }
 
@@ -210,7 +210,7 @@ async function registeredDemo(skillFiles: Record<string, string>, env?: Record<s
   const fake = fakeOn()
   const all: Record<string, string> = { ...files, ...skillFiles }
   const { $ } = engine(all, env)
-  registerMod(fake.on,demo)
+  registerMod(fake.on, demo, {})
   await fake.dispatch('session.start', $, {}, {})
   const expand = (skill: string, below: { text: string } = { text: `${baseLine}The mod text.\n` }) => fake.dispatch('skill.prompt', $, { skill, text: below.text }, below)
   return { expand, files: all }

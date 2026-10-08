@@ -42,7 +42,7 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(register|mod|records|testing|path|shell)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
+              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(register|mod|records|options|testing|path|shell)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
           }

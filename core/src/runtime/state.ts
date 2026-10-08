@@ -1,5 +1,4 @@
 import type { ClassicHookInputs } from 'claude-code'
-import { configFolder, configFolders } from '../records.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 
@@ -21,14 +20,13 @@ export type StateOptions = {
 export type ModState<State extends object> = {
   readonly state: State
   readonly root: string
+  changed(): void
   load(): Promise<void>
   moveTo(root: string): Promise<void>
   switchSession(session: string, source: ClassicHookInputs['SessionStart']['source']): Promise<void>
 }
 
 const lifetimes: readonly Lifetime[] = ['memory', 'session', 'project', 'global']
-
-const savedLifetimes: readonly SavedLifetime[] = ['session', 'project', 'global']
 
 const keptPerValue = 20
 
@@ -47,7 +45,6 @@ export function createState<State extends object>({ name, initial, session, root
   }
   const declared = declaredGroups(name, initial)
   const current = copied(declared)
-  let defaults = declared
   let projectRoot = root
   let sessionId = session
   let turn: Promise<unknown> = Promise.resolve()
@@ -72,66 +69,14 @@ export function createState<State extends object>({ name, initial, session, root
     for (const oldest of owners.slice(0, -keptPerValue)) await claude.store.delete(oldest)
   }
 
-  const fileValues = (path: string, tier: 'system' | 'project', text: string, systemPath: string) => {
-    const values: [SavedLifetime, string, unknown][] = []
-    const ignore = (reason: string) => claude.ui.log(`${path} ${reason}`)
-    let file: unknown
-    try {
-      file = JSON.parse(text)
-    } catch (error) {
-      ignore(`is not JSON (${messageOf(error)}). Fix the file, then run /reload-plugins.`)
-      return values
-    }
-    if (!isPlainObject(file)) {
-      ignore('is not a JSON object. Write one, such as { "global": { "key": "value" } }.')
-      return values
-    }
-    for (const [group, entries] of Object.entries(file)) {
-      if (!isLifetime(group)) {
-        ignore(`sets ${group}, which ${name} does not declare. Remove it, or use one of: ${savedLifetimes.join(', ')}.`)
-        continue
-      }
-      if (group === 'memory') {
-        ignore('sets memory, and memory values are never saved, so a file cannot set them. Remove it.')
-        continue
-      }
-      if (!isPlainObject(entries)) {
-        ignore(`sets ${group} to ${typeOf(entries)}. Write an object of values, such as { "${group}": { "key": "value" } }.`)
-        continue
-      }
-      for (const [key, value] of Object.entries(entries)) {
-        const choices = Object.keys(declared[group])
-        const wanted = typeOf(declared[group][key])
-        if (!Object.hasOwn(declared[group], key)) ignore(`sets ${group}.${key}, which ${name} does not declare. ${choices.length === 0 ? 'Remove it.' : `Remove it, or use one of: ${choices.join(', ')}.`}`)
-        else if (tier === 'project' && group === 'global') ignore(`sets ${group}.${key}, and one repository cannot change a value for every project. Move it to ${systemPath}.`)
-        else if (typeOf(value) !== wanted) ignore(`sets ${group}.${key} to ${typeOf(value)}, and ${name} keeps ${wanted} there. Write ${wanted}, or remove it.`)
-        else values.push([group, key, frozen(name, `${group}.${key}`, value)])
-      }
-    }
-    return values
-  }
-
-  const readDefaults = async (nextRoot: string): Promise<Groups> => {
-    const env = { HOME: await claude.env.home(), CLAUDE_CONFIG_DIR: await claude.env.configHome() }
-    const systemPath = `${configFolder(env, name)}/state.json`
-    const next = copied(declared)
-    for (const { tier, folder } of configFolders(env, name, nextRoot)) {
-      const path = `${folder}/state.json`
-      if (!(await claude.fs.exists(path))) continue
-      for (const [lifetime, key, value] of fileValues(path, tier, await claude.fs.read(path), systemPath)) next[lifetime][key] = value
-    }
-    return next
-  }
-
-  const loadGroups = async (only: readonly Lifetime[], next: { readonly root: string; readonly session: string; readonly defaults: Groups }) => {
+  const loadGroups = async (only: readonly Lifetime[], next: { readonly root: string; readonly session: string }) => {
     const loaded: [Lifetime, string, unknown][] = []
     for (const lifetime of only) {
       for (const key of Object.keys(declared[lifetime])) loaded.push([lifetime, key, lifetime === 'memory' ? undefined : await read(lifetime, key, lifetime === 'project' ? next.root : next.session)])
     }
     projectRoot = next.root
     sessionId = next.session
-    defaults = next.defaults
-    for (const [lifetime, key, saved] of loaded) current[lifetime][key] = saved === undefined ? defaults[lifetime][key] : frozen(name, `${lifetime}.${key}`, saved)
+    for (const [lifetime, key, saved] of loaded) current[lifetime][key] = saved === undefined ? declared[lifetime][key] : frozen(name, `${lifetime}.${key}`, saved)
     changed()
   }
 
@@ -167,14 +112,14 @@ export function createState<State extends object>({ name, initial, session, root
     get root() {
       return projectRoot
     },
-    load: () => inTurn(async () => loadGroups(lifetimes, { root: projectRoot, session: sessionId, defaults: await readDefaults(projectRoot) })),
-    moveTo: (nextRoot) =>
-      inTurn(async () => (nextRoot === projectRoot ? undefined : loadGroups(['project'], { root: nextRoot, session: sessionId, defaults: await readDefaults(nextRoot) }))),
+    changed,
+    load: () => inTurn(() => loadGroups(lifetimes, { root: projectRoot, session: sessionId })),
+    moveTo: (nextRoot) => inTurn(async () => (nextRoot === projectRoot ? undefined : loadGroups(['project'], { root: nextRoot, session: sessionId }))),
     switchSession: (nextSession, source) =>
       inTurn(async () => {
         if (nextSession === sessionId) return
         if (source === 'fork') await copySession(nextSession)
-        return loadGroups(['memory', 'session'], { root: projectRoot, session: nextSession, defaults })
+        return loadGroups(['memory', 'session'], { root: projectRoot, session: nextSession })
       }),
   }
 }
@@ -195,14 +140,6 @@ function copied(groups: Groups): Groups {
 
 function isLifetime(group: string): group is Lifetime {
   return (lifetimes as readonly string[]).includes(group)
-}
-
-function typeOf(value: unknown): string {
-  if (value === null) return 'null'
-  if (Array.isArray(value)) return 'an array'
-  if (typeof value === 'object') return 'an object'
-  if (value === undefined) return 'nothing'
-  return `a ${typeof value}`
 }
 
 function frozen(name: string, path: string, value: unknown): unknown {

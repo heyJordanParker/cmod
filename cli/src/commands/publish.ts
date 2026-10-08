@@ -7,8 +7,8 @@ import { version as coreVersion } from '@cmodjs/core/package.json'
 import { isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../../package.json'
-import { tilde, writeAtomically } from '../files.js'
-import { readPlugin } from '../plugin.js'
+import { readJson, tilde, writeAtomically } from '../files.js'
+import { declaredOptions, readPlugin } from '../plugin.js'
 import { run as runCommand } from '../process.js'
 import { buildProgram, machines, readProgram, releaseDownloads } from '../program.js'
 import { startProgress } from '../progress.js'
@@ -71,6 +71,11 @@ export async function run(argv: string[]): Promise<number> {
   const isDirty = (await git('status', '--porcelain')).trim() !== ''
   if (!dryRun && isDirty) throw new Error('The working tree has uncommitted changes. Commit them, then run cmod publish again.')
   if (!dryRun && (await git('tag', '--list', tag)).trim() !== '') throw new Error(`The tag ${tag} exists. Raise "version" in .claude-plugin/plugin.json, then run cmod publish again.`)
+  const declared = await declaredOptions(plugin.root)
+  const written = (await readJson(`${plugin.root}/.claude-plugin/plugin.json`)) as Record<string, unknown>
+  if (declared.kind === 'declared' && JSON.stringify(written['userConfig'] ?? {}) !== JSON.stringify(declared.userConfig)) {
+    throw new Error('.claude-plugin/plugin.json userConfig differs from the options defineMod declares, so Claude Code would ask for and store the wrong options. Run cmod check, which writes them, commit .claude-plugin/plugin.json, then run cmod publish again.')
+  }
 
   const listed = plugin.packageJson?.['files']
   if (listed !== undefined && !(Array.isArray(listed) && listed.every((path) => typeof path === 'string'))) {

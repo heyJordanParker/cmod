@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { defineMod, type Mod } from '../../src/mod.js'
+import { option } from '../../src/options.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { scriptsSha256 } from '../../src/records.js'
@@ -429,6 +430,16 @@ test('a mod whose state fails to load says its state did not load', async () => 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'broken', isInstalled: true }))
 
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing broken  its state did not load: the store file is locked\n  Fix it, then run /reload-plugins.')
+})
+
+test('a mod missing an option with no default says to set it in /config, with no reload to run', async () => {
+  const fake = fakeClaude({ name: 'ci-watch', root })
+  const token = option.secret({ title: 'GitHub token', description: 'Reads your CI runs' })
+  const lifecycle = createLifecycle(defineMod({ name: 'ci-watch', options: { githubToken: token }, setup() {} }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✗ Installing ci-watch  it needs GitHub token\n  Set it in /config.')
 })
 
 test('a mod that decides permissions without registerPermissionCheck does not start, and names the line to add', async () => {

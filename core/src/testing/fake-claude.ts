@@ -12,6 +12,7 @@ export type Fakes = {
   fs: { read?: Claude['fs']['read']; write?: Claude['fs']['write']; list?: Claude['fs']['list']; exists?: Claude['fs']['exists']; stat?: Claude['fs']['stat'] }
   http: { fetch?: Claude['http']['fetch'] }
   settings: { read?: Claude['settings']['read'] }
+  config: { list?: Claude['config']['list']; set?: Claude['config']['set'] }
   ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll'] }
   session: { messages?: Claude['session']['messages']; append?: Claude['session']['append'] }
   prompt: { submit?: Claude['prompt']['submit'] }
@@ -48,7 +49,7 @@ export type FakeClaude = {
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
   const shown: Shown = { toasts: [], notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
@@ -148,6 +149,10 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     },
     http: { fetch: rejected('http.fetch', () => fakes.http.fetch) },
     settings: { read: rejected('settings.read', () => fakes.settings.read) },
+    config: {
+      list: rejected('config.list', () => fakes.config.list ?? (async () => [])),
+      set: rejected('config.set', () => fakes.config.set ?? (async ({ value }) => ({ value }))) as Claude['config']['set'],
+    },
     agent: {
       list: rejected('agent.list', () => fakes.agent.list),
       spawn: rejected('agent.spawn', () => fakes.agent.spawn),

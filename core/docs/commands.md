@@ -48,15 +48,16 @@ Runs every check this machine can run on the mod at `path` (default: the current
 1. Installs its packages.
 2. Checks its layout.
 3. Checks that each step runs a script.
-4. Checks its imports.
-5. Looks for prebuilt binaries outside `cli/`.
-6. Bundles the hooks module as `cmod publish` does, and names each reason a bundle fails.
-7. Validates it with Claude Code, `claude plugin validate --strict`.
-8. Type-checks it with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
-9. Lints it with `oxlint`.
-10. Runs, with `bun test`, every test file that does not import `claude-code/testing`.
-11. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
-12. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
+4. Writes the options `defineMod` declares into `.claude-plugin/plugin.json` `userConfig`, keeping the file's own formatting, so Claude Code shows them in `/config` ([options.md](options.md)). It loads `hooks/register.ts` to read them, without starting the mod.
+5. Checks its imports.
+6. Looks for prebuilt binaries outside `cli/`.
+7. Bundles the hooks module as `cmod publish` does, and names each reason a bundle fails.
+8. Validates it with Claude Code, `claude plugin validate --strict`.
+9. Type-checks it with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
+10. Lints it with `oxlint`.
+11. Runs, with `bun test`, every test file that does not import `claude-code/testing`.
+12. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
+13. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
 
 `cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the cmod store the first time. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
 
@@ -87,7 +88,7 @@ Starts one throwaway Claude Code session with mods set up, for trying a mod by h
 cmod publish [path] [--dry-run]
 ```
 
-Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`:
+Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`. It refuses a `plugin.json` whose `userConfig` differs from the options `defineMod` declares, and says to run `cmod check` and commit `.claude-plugin/plugin.json`.
 
 1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, `tsconfig.json`, the README, and the license, the way `npm publish` reads it. `tsconfig.json` holds the JSX settings the bundle in step 2 needs. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
 2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, writes each control character in it as a `\u` escape, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file.

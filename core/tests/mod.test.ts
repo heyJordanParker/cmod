@@ -770,107 +770,18 @@ const commits = defineMod({
   setup() {},
 })
 
-const systemFile = '/test/home/.claude/cmods/commits/state.json'
-
-test("a value in the system state.json replaces the mod's default", async () => {
-  const tested = testMod(commits, { files: { [systemFile]: '{ "global": { "retries": 5 } }' } })
-  await tested.start()
-
-  expect(tested.state).toEqual({ session: { greeting: 'hello' }, project: { policy: 'ask' }, global: { retries: 5 } })
-  expect(tested.shown.logs).toEqual([])
-})
-
-test('a value the mod saved wins over the system state.json', async () => {
-  const tested = testMod(commits, { files: { [systemFile]: '{ "project": { "policy": "never" } }' }, projectRoot: '/work/a' })
+test('a project value the mod saved comes back in that project, and another project starts from the declared value', async () => {
+  const tested = testMod(commits, { projectRoot: '/work/a' })
   await tested.start()
   tested.state.project.policy = 'always'
 
   await tested.moveTo('/work/b')
 
-  expect(tested.state.project.policy).toBe('never')
-
-  await tested.moveTo('/work/a')
-
-  expect(tested.state.project.policy).toBe('always')
-})
-
-test('a key the mod does not declare in state.json is ignored with a log line naming it', async () => {
-  const tested = testMod(commits, { files: { [systemFile]: '{ "global": { "retry": 5 }, "globl": { "retries": 5 } }' } })
-  await tested.start()
-
-  expect(tested.state.global.retries).toBe(3)
-  expect(tested.shown.logs).toEqual([
-    `${systemFile} sets global.retry, which commits does not declare. Remove it, or use one of: retries.`,
-    `${systemFile} sets globl, which commits does not declare. Remove it, or use one of: session, project, global.`,
-  ])
-})
-
-test('a value of the wrong type in state.json is ignored with a log line', async () => {
-  const tested = testMod(commits, { files: { [systemFile]: '{ "global": { "retries": "five" } }' } })
-  await tested.start()
-
-  expect(tested.state.global.retries).toBe(3)
-  expect(tested.shown.logs).toEqual([`${systemFile} sets global.retries to a string, and commits keeps a number there. Write a number, or remove it.`])
-})
-
-test('a session default in state.json is what a new conversation starts with', async () => {
-  const tested = testMod(commits, { files: { [systemFile]: '{ "session": { "greeting": "hi" } }' } })
-  await tested.start()
-  expect(tested.state.session.greeting).toBe('hi')
-  tested.state.session.greeting = 'good morning'
-
-  await tested.fire('SessionStart', { source: 'clear', session_id: 'second' })
-
-  expect(tested.state.session.greeting).toBe('hi')
-})
-
-test('the project state.json overrides the system state.json', async () => {
-  const tested = testMod(commits, {
-    files: {
-      [systemFile]: '{ "project": { "policy": "never" }, "global": { "retries": 5 } }',
-      '/work/app/.claude/cmods/commits/state.json': '{ "project": { "policy": "always" } }',
-    },
-    projectRoot: '/work/app',
-  })
-  await tested.start()
-
-  expect(tested.state).toEqual({ session: { greeting: 'hello' }, project: { policy: 'always' }, global: { retries: 5 } })
-})
-
-test('a global value in a project state.json is ignored with a log line', async () => {
-  const projectFile = '/work/app/.claude/cmods/commits/state.json'
-  const tested = testMod(commits, { files: { [projectFile]: '{ "global": { "retries": 9 } }' }, projectRoot: '/work/app' })
-  await tested.start()
-
-  expect(tested.state.global.retries).toBe(3)
-  expect(tested.shown.logs).toEqual([`${projectFile} sets global.retries, and one repository cannot change a value for every project. Move it to ${systemFile}.`])
-})
-
-test('a memory key in state.json is ignored with a log line', async () => {
-  const userFile = '/test/home/.claude/cmods/file-tree/state.json'
-  const projectFile = '/work/app/.claude/cmods/file-tree/state.json'
-  const files = { [userFile]: '{ "memory": { "changed": ["a.ts"] } }', [projectFile]: '{ "memory": { "changed": ["b.ts"] } }' }
-  const tested = testMod(gitChanges, { projectRoot: '/work/app', files })
-  await tested.start()
-
-  expect(tested.state.memory.changed).toEqual([])
-  expect(tested.shown.logs).toEqual([
-    `${userFile} sets memory, and memory values are never saved, so a file cannot set them. Remove it.`,
-    `${projectFile} sets memory, and memory values are never saved, so a file cannot set them. Remove it.`,
-  ])
-})
-
-test("after a /cd the new project's state.json applies", async () => {
-  const tested = testMod(commits, { files: { '/work/b/.claude/cmods/commits/state.json': '{ "project": { "policy": "always" } }' }, projectRoot: '/work/a' })
-  await tested.start()
-
-  await tested.moveTo('/work/b')
-
-  expect(tested.state.project.policy).toBe('always')
-
-  await tested.moveTo('/work/a')
-
   expect(tested.state.project.policy).toBe('ask')
+
+  await tested.moveTo('/work/a')
+
+  expect(tested.state.project.policy).toBe('always')
 })
 
 test('pushing into a state array throws and names assignment', async () => {

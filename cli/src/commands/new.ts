@@ -77,12 +77,12 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
     '.gitignore': 'node_modules/\n.claude-plugin/types/\n',
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
-    'hooks/register.ts': `import type { On } from 'claude-code'
+    'hooks/register.ts': `import type { On, PluginOptions } from 'claude-code'
 import { registerMod } from '../node_modules/@cmodjs/core/register.js'
 import { ${definition} } from '../src/mod.js'
 
-export function register(addHook: On): void {
-  registerMod(addHook, ${definition})
+export function register(addHook: On, options: PluginOptions): void {
+  registerMod(addHook, ${definition}, options)
 }
 `,
     'src/mod.tsx': `import { defineMod } from '../node_modules/@cmodjs/core/mod.js'

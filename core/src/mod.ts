@@ -28,6 +28,7 @@ import type {
   UiScrollArgs,
   UiScrollResult,
 } from 'claude-code'
+import { checkOptions, type Option, type Options, type OptionValues } from './options.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import type { RoutedHook } from './runtime/router.js'
@@ -125,9 +126,10 @@ export type HookOptions = {
   readonly timeoutMs?: number
 }
 
-export type Mod<State extends object = Record<never, never>> = {
+export type Mod<State extends object = Record<never, never>, Declared extends Options = Options> = {
   readonly name: string
   readonly state: Readonly<State>
+  readonly options: OptionValues<Declared>
   readonly dataFolder: string
   on<E extends ModEvent>(event: E, hook: ModHook<E>, options?: HookOptions): void
   use<Handle>(job: Job<Handle, State>): Handle
@@ -184,11 +186,12 @@ type Api<Contract, State extends object> = {
   readonly [Method in keyof Contract]: Contract[Method] extends (input: infer Input) => infer Result ? (input: Input, mod: Mod<State>) => Result | Awaited<Result> : never
 }
 
-export type ModDefinition<State extends StateGroups = Record<never, never>, Name extends string = string> = {
+export type ModDefinition<State extends StateGroups = Record<never, never>, Name extends string = string, Declared extends Options = Record<never, Option>> = {
   readonly name: Name
   readonly state?: State
+  readonly options?: Declared
   readonly api?: Name extends keyof CmodDependencies ? Api<CmodDependencies[Name], State> : { readonly [method: string]: (input: never, mod: Mod<State>) => unknown }
-  setup(mod: Mod<State>): void | Promise<void>
+  setup(mod: Mod<State, Declared>): void | Promise<void>
 }
 
 export type JobContext<State extends object = Record<never, never>> = {
@@ -202,7 +205,8 @@ export type JobContext<State extends object = Record<never, never>> = {
 
 export type Job<Handle, State extends object = Record<never, never>> = (context: JobContext<State>) => Handle
 
-export function defineMod<State extends StateGroups = Record<never, never>, Name extends string = string>(definition: ModDefinition<State, Name>): ModDefinition<State, Name> {
+export function defineMod<State extends StateGroups = Record<never, never>, Name extends string = string, const Declared extends Options = Record<never, Option>>(definition: ModDefinition<State, Name, Declared>): ModDefinition<State, Name, Declared> {
   if (definition.name.trim() === '') throw new Error('defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.')
+  if (definition.options !== undefined) checkOptions(definition.name, definition.options)
   return definition
 }

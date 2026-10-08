@@ -178,7 +178,7 @@ async function writeEntries(path: string, text: string, entries: string[]): Prom
   await writeAtomically(path, next)
 }
 
-function indentation(text: string): { insertSpaces: boolean; tabSize: number; eol: string } {
+export function indentation(text: string): { insertSpaces: boolean; tabSize: number; eol: string } {
   const indent = /^([ \t]+)"/m.exec(text)?.[1] ?? '  '
   return { insertSpaces: !indent.startsWith('\t'), tabSize: indent.startsWith('\t') ? 1 : indent.length, eol: text.includes('\r\n') ? '\r\n' : '\n' }
 }

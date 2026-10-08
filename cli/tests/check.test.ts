@@ -76,6 +76,31 @@ test('cmod check has Claude Code write .claude-plugin/types/ again when a link i
   expect(result.stdout).toContain('✔ tsc 7.0.2 found no type errors with tsconfig.json\n')
 })
 
+const declaringCore = {
+  'node_modules/@cmodjs/core/register.js': 'let registered\nexport const registerMod = (_addHook, definition) => { registered = definition }\nexport const registeredMod = () => registered\n',
+  'node_modules/@cmodjs/core/options.js': 'export const userConfigOf = (options) => Object.fromEntries(Object.entries(options).map(([key, option]) => [key, { type: "string", title: option.title, description: "" }]))\n',
+  'hooks/hooks.json': JSON.stringify({ modules: ['./register.ts'] }),
+  'hooks/register.ts': "import { registerMod } from '../node_modules/@cmodjs/core/register.js'\nexport function register(addHook, options) {\n  registerMod(addHook, { name: 'demo', options: { branch: { title: 'Branch' } }, setup() {} }, options)\n}\n",
+}
+
+test('cmod check writes the options defineMod declares into plugin.json userConfig, keeping the file as it was written', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, { ...declaringCore, '.claude-plugin/plugin.json': '{\n    "name": "demo",\n    "version": "0.1.0"\n}\n', 'package.json': JSON.stringify({ name: 'demo' }) })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Writing the options into plugin.json…\n✔ Wrote the option defineMod declares into plugin.json userConfig: branch\n')
+  expect(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).toBe(
+    '{\n    "name": "demo",\n    "version": "0.1.0",\n    "userConfig": {\n        "branch": {\n            "type": "string",\n            "title": "Branch",\n            "description": ""\n        }\n    }\n}\n',
+  )
+
+  const again = await cmod(home, 'check', root)
+
+  expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n')
+})
+
 test('cmod check type-checks tests/ with tests/tsconfig.json beside the root config', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')

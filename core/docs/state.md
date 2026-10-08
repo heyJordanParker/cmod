@@ -80,16 +80,11 @@ export const reads = defineMod({
 
 ## Where the values come from
 
-When the mod starts, each value is, in order of precedence:
+When the mod starts, each value is the value the mod saved for this session, this project, or globally, or else the starting value in `defineMod`. After a `/cd` to another project, cmod loads that project's `project` values.
 
-1. The value the mod saved for this session, this project, or globally.
-2. The value in the project's `state.json`.
-3. The value in the person's own `state.json`.
-4. The starting value in `defineMod`.
+`mod.state` holds what the mod owns and changes as it runs. What a person sets, such as a token or a branch to watch, is an option ([options.md](options.md)).
 
-After a `/cd` to another project, cmod loads that project's `project` values and reads its `state.json` again.
-
-## Let a person change the starting values
+## Let a person replace a Skill's text
 
 Each mod has two config folders, outside its code:
 
@@ -98,29 +93,7 @@ Each mod has two config folders, outside its code:
 <project>/.claude/cmods/<mod>/      the team's, committed with the repository
 ```
 
-`CLAUDE_CONFIG_DIR` moves `~/.claude`. Removing the mod keeps both folders.
-
-A `state.json` in either folder lists only the values to change:
-
-```json
-{ "global": { "defaultCommitPolicy": "never" }, "session": { "prompts": 10 } }
-```
-
-- A `session` value is what each new conversation starts with. A `project` value is what each project starts with.
-- A file in the project folder wins over the same value in the person's folder.
-- A project `state.json` cannot set `global` values, because one repository cannot change a value for every project.
-- A file cannot set `memory` values.
-
-cmod ignores each entry it cannot use and logs one line naming the file, the entry, and the fix:
-
-- a file that is not JSON, or not a JSON object
-- a group the mod does not declare
-- a key the mod does not declare
-- a value whose type differs from the starting value's
-- a `global` value in a project file
-- a `memory` value
-
-## Let a person replace a Skill's text
+`CLAUDE_CONFIG_DIR` moves `~/.claude`. Removing the mod keeps both folders. The project folder also holds the team's options, in `options.json` ([options.md](options.md)).
 
 A person replaces the text of a Skill the mod ships by putting a file at the same path in a config folder:
 

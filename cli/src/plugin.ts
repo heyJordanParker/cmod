@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isObject, readRecord, readSteps, storeFolder, type Steps } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { readJson, readText } from './files.js'
-import { bunArgv, run } from './process.js'
+import { applyEdits, modify, parse } from 'jsonc-parser'
+import { readJson, readText, writeAtomically } from './files.js'
+import { bunArgv, capture, run } from './process.js'
+import { indentation } from './settings.js'
 
 export type Plugin = {
   root: string
@@ -55,6 +57,51 @@ export function sourceOf(text: string): { kind: 'path' | 'github'; text: string 
 export async function usesCmod(root: string, name: string): Promise<boolean> {
   const steps = stepsIn(root, await readJson(`${root}/package.json`))
   return Object.keys(steps).length > 0 || (await readRecord(readText, storeFolder(process.env), name)) !== undefined
+}
+
+export type DeclaredOptions = { readonly kind: 'declared'; readonly userConfig: Record<string, unknown> } | { readonly kind: 'no-hooks' } | { readonly kind: 'no-core' } | { readonly kind: 'old-core' }
+
+const readDeclared = `
+const root = process.env.CMOD_ROOT
+globalThis.h ??= () => ({})
+globalThis.Fragment ??= () => ({})
+const hooks = await Bun.file(root + '/hooks/hooks.json').json().catch(() => undefined)
+const module = Array.isArray(hooks?.modules) ? hooks.modules[0] : undefined
+if (typeof module !== 'string') {
+  console.log(JSON.stringify({ kind: 'no-hooks' }))
+} else {
+  const core = await import(root + '/node_modules/@cmodjs/core/register.js')
+  if (typeof core.registeredMod !== 'function') {
+    console.log(JSON.stringify({ kind: 'old-core' }))
+  } else {
+    const { userConfigOf } = await import(root + '/node_modules/@cmodjs/core/options.js')
+    const { register } = await import(root + '/hooks/' + module)
+    register(() => undefined, {})
+    const options = core.registeredMod()?.options
+    console.log(JSON.stringify({ kind: 'declared', userConfig: options === undefined ? {} : userConfigOf(options) }))
+  }
+}
+`
+
+export async function declaredOptions(root: string): Promise<DeclaredOptions> {
+  if (!existsSync(join(root, 'node_modules/@cmodjs/core/register.js'))) return { kind: 'no-core' }
+  const bun = bunArgv('-e', readDeclared)
+  const { exitCode, stdout, stderr } = await capture(bun.argv, { cwd: root, env: { ...bun.env, CMOD_ROOT: root } })
+  if (exitCode !== 0) {
+    const reason = stderr.split('\n').find((line) => /^(error|TypeError|SyntaxError|ReferenceError)\b/.test(line.trim())) ?? `bun exited ${exitCode}`
+    throw new Error(`Loading hooks/ to read the options defineMod declares failed: ${reason.trim()}`)
+  }
+  return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as DeclaredOptions
+}
+
+export async function writeUserConfig(root: string, userConfig: Record<string, unknown>): Promise<boolean> {
+  const path = `${root}/.claude-plugin/plugin.json`
+  const text = (await readText(path)) ?? '{}\n'
+  const current = parse(text) as Record<string, unknown> | undefined
+  if (JSON.stringify(current?.['userConfig'] ?? {}) === JSON.stringify(userConfig)) return false
+  const next = applyEdits(text, modify(text, ['userConfig'], Object.keys(userConfig).length === 0 ? undefined : userConfig, { formattingOptions: indentation(text) }))
+  await writeAtomically(path, next)
+  return true
 }
 
 export async function preparePackages(plugin: Plugin): Promise<boolean> {

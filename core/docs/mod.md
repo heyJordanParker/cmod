@@ -5,20 +5,22 @@
 ## defineMod
 
 ```ts
-defineMod<State, Name>(definition: ModDefinition<State, Name>): ModDefinition<State, Name>
+defineMod<State, Name, Options>(definition: ModDefinition<State, Name, Options>): ModDefinition<State, Name, Options>
 ```
 
 ```ts
-type ModDefinition<State, Name> = {
+type ModDefinition<State, Name, Options> = {
   readonly name: Name
   readonly state?: State
+  readonly options?: Options
   readonly api?: { … }
-  setup(mod: Mod<State>): void | Promise<void>
+  setup(mod: Mod<State, Options>): void | Promise<void>
 }
 ```
 
-- `name` is the mod's name. Use the `name` in `.claude-plugin/plugin.json`. Claude Mod Manager (cmod) keys the saved state and the `state.json` files by this name, and the data folder and the Skill overrides by the plugin's name, so the two must match. `defineMod` throws `defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.` for a blank name.
+- `name` is the mod's name. Use the `name` in `.claude-plugin/plugin.json`. Claude Mod Manager (cmod) keys the saved state and the options by this name, and the data folder and the Skill overrides by the plugin's name, so the two must match. `defineMod` throws `defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.` for a blank name.
 - `state` holds the starting values, grouped by how long they last. [state.md](state.md) explains the groups.
+- `options` declares what a person sets, such as a token, and types `mod.options`. [options.md](options.md) explains them.
 - `api` holds the methods other mods call. [dependencies.md](dependencies.md) explains it.
 - `setup` runs once when the mod starts. It adds hooks, panes, slot renders, and jobs. It may be `async`.
 
@@ -48,7 +50,8 @@ The first time a version starts, cmod shows the toast `<name> is ready` and logs
 When a step fails, the mod does not start. Its progress line above the prompt names the failure and the fix:
 
 - `<mod>: state.<group> is not a lifetime. …` or `<mod>: state.<group> is not an object of values. …` when the declared state is not valid ([state.md](state.md)).
-- `its state did not load: <error>` when reading the saved values or a `state.json` fails.
+- `its state did not load: <error>` when reading the saved values fails.
+- `it needs <titles>` when an option with no default has no value ([options.md](options.md)). This one says `Set it in /config.` instead, and Claude Code reloads the mod once the value is set.
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
@@ -60,27 +63,28 @@ Each of these says `Fix it, then run /reload-plugins.`
 `hooks/hooks.json` names `hooks/register.ts` as the plugin's hooks module. `register.ts` calls `registerMod` and does nothing else:
 
 ```ts
-import type { On } from 'claude-code'
+import type { On, PluginOptions } from 'claude-code'
 import { registerMod } from '../node_modules/@cmodjs/core/register.js'
 import { greeter } from '../src/mod.js'
 
-export function register(addHook: On): void {
-  registerMod(addHook, greeter)
+export function register(addHook: On, options: PluginOptions): void {
+  registerMod(addHook, greeter, options)
 }
 ```
 
 ```ts
-registerMod<State>(addHook: On, definition: ModDefinition<State>): void
+registerMod<State, Options>(addHook: On, definition: ModDefinition<State, string, Options>, options: PluginOptions): void
 registerPermissionCheck(addHook: On): void
+registeredMod(): ModDefinition | undefined
 ```
 
-`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. A `PreToolUse` hook runs on `tool.call`, which `registerMod` registers ([hooks.md](hooks.md)). It leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
+`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. `options` is what Claude Code passes `register`: the values of the mod's options ([options.md](options.md)). `registeredMod` returns the definition `registerMod` got, for `cmod check` to read the mod's options without starting it. A `PreToolUse` hook runs on `tool.call`, which `registerMod` registers ([hooks.md](hooks.md)). It leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
 
 A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers a `PreToolUse` hook that answers `permissionDecision: 'allow'` or `'ask'`, a hook on `PermissionRequest`, the `permissions` job, and a job of your own on `tool.check`:
 
 ```ts
-export function register(addHook: On): void {
-  registerMod(addHook, guard)
+export function register(addHook: On, options: PluginOptions): void {
+  registerMod(addHook, guard, options)
   registerPermissionCheck(addHook)
 }
 ```
@@ -91,12 +95,13 @@ Keep `register.ts` this small. Claude Code checks a hooks module before it loads
 
 ## What `mod` can call
 
-`setup` gets `mod`, of type `Mod<State>`. Every hook, render, and job gets the same `mod`.
+`setup` gets `mod`, of type `Mod<State, Options>`. Every hook, render, and job gets the same `mod`.
 
 ```ts
-type Mod<State> = {
+type Mod<State, Options> = {
   readonly name: string
   readonly state: Readonly<State>
+  readonly options: OptionValues<Options>
   readonly dataFolder: string
   readonly projectRoot: string
   readonly cwd: string
@@ -119,6 +124,7 @@ type Mod<State> = {
 | --- | --- | --- |
 | `name` | The mod's name from `defineMod`. | |
 | `state` | The mod's values. Assign to a key to change it. | [state.md](state.md) |
+| `options` | The values a person set for the mod's options, typed from their declaration. Read-only. | [options.md](options.md) |
 | `dataFolder` | The mod's own folder in the cmod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. cmod deletes it when the mod is removed. | [install-steps.md](install-steps.md) |
 | `projectRoot` | The project the session works in. It follows `/cd`. | |
 | `cwd` | The session's working folder. It follows a `cd` in a Bash or PowerShell call, and `/cd`. | |

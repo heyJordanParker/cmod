@@ -9,7 +9,7 @@ import { version as cmodVersion } from '../../package.json'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listPlugins } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
-import { preparePackages, readPlugin, type Plugin } from '../plugin.js'
+import { declaredOptions, preparePackages, readPlugin, writeUserConfig, type DeclaredOptions, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand, spawn } from '../process.js'
 import { startProgress } from '../progress.js'
 import { bundledHooks } from './publish.js'
@@ -24,7 +24,8 @@ ${summary}
 
 Runs every check this machine can run on the mod at path (default: the current
 folder): installs its packages, checks its layout and that each step runs a
-script, bundles its hooks module as cmod publish does, validates it with Claude
+script, writes the options defineMod declares into plugin.json userConfig,
+bundles its hooks module as cmod publish does, validates it with Claude
 Code, type-checks it with tsconfig.json and, when it exists, tests/tsconfig.json,
 lints it, runs its tests with bun test and with claude plugin test, and checks
 its name. Each failure names its fix.`
@@ -42,6 +43,7 @@ const checks: Check[] = [
   { heading: 'Installing packages', run: checkPackages },
   { heading: 'Checking the layout', run: checkLayout },
   { heading: 'Checking the steps', run: checkSteps },
+  { heading: 'Writing the options into plugin.json', run: checkOptions },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
   { heading: 'Bundling the hooks', run: checkBundle },
@@ -99,6 +101,22 @@ async function checkSteps(plugin: Plugin): Promise<Result> {
     return { status: 'fail', text: 'The steps have a problem', fix: messageOf(error) }
   }
   return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
+}
+
+async function checkOptions(plugin: Plugin): Promise<Result> {
+  let declared: DeclaredOptions
+  try {
+    declared = await declaredOptions(plugin.root)
+  } catch (error) {
+    return { status: 'fail', text: messageOf(error), fix: 'Fix the error, then run cmod check again.' }
+  }
+  if (declared.kind === 'no-hooks') return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so no options to read' }
+  if (declared.kind === 'no-core') return { status: 'skip', text: 'No @cmodjs/core in node_modules, so no options to read' }
+  if (declared.kind === 'old-core') return { status: 'skip', text: 'The @cmodjs/core in node_modules has no options. Raise it in package.json to read them' }
+  const keys = Object.keys(declared.userConfig)
+  const isWritten = await writeUserConfig(plugin.root, declared.userConfig)
+  if (keys.length === 0) return isWritten ? { status: 'pass', text: 'Removed userConfig from plugin.json, as defineMod declares no options' } : { status: 'skip', text: 'defineMod declares no options' }
+  return { status: 'pass', text: `${isWritten ? 'Wrote' : 'plugin.json userConfig holds'} the ${keys.length === 1 ? 'option' : `${keys.length} options`} defineMod declares${isWritten ? ' into plugin.json userConfig' : ''}: ${keys.join(', ')}` }
 }
 
 async function checkImports(plugin: Plugin): Promise<Result> {

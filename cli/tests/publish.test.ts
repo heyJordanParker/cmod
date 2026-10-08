@@ -171,6 +171,22 @@ test('a "files" list that leaves out the install step still releases its folder,
   expect(entries).toContain('setup/install.sh')
 })
 
+test('publish refuses a plugin.json whose userConfig differs from the options defineMod declares', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, {
+    'node_modules/@cmodjs/core/register.js': 'let registered\nexport const registerMod = (_addHook, definition) => { registered = definition }\nexport const registeredMod = () => registered\n',
+    'node_modules/@cmodjs/core/options.js': 'export const userConfigOf = (options) => Object.fromEntries(Object.keys(options).map((key) => [key, { type: "string", title: key, description: "" }]))\n',
+    'hooks/register.ts': "import { registerMod } from '../node_modules/@cmodjs/core/register.js'\nexport function register(addHook, options) {\n  registerMod(addHook, { name: 'cmod', options: { branch: {} }, setup() {} }, options)\n}\n",
+  })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe(
+    'cmod publish: .claude-plugin/plugin.json userConfig differs from the options defineMod declares, so Claude Code would ask for and store the wrong options. Run cmod check, which writes them, commit .claude-plugin/plugin.json, then run cmod publish again.\n',
+  )
+})
+
 test('publish refuses a "files" path that matches no committed file', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, { 'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'skills'] }) })

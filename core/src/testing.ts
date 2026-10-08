@@ -7,6 +7,7 @@ import type {
   EventResult,
   Frozen,
   PaneOpenArgs,
+  PluginOptions,
   PressedLink,
   RenderChildren,
   RenderComponent,
@@ -18,21 +19,25 @@ import type {
 } from 'claude-code'
 import type { Reply } from './jobs/slash-command.js'
 import type { ModDefinition, ModEvent } from './mod.js'
+import type { Options, OptionValues } from './options.js'
 import { storeFolder } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, notInstalled } from './runtime/dependencies.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
+import { MissingOptions } from './runtime/options.js'
 import { fakeClaude, type Fakes, type Shown, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
+import { listed } from './utils/text.js'
 import type { Slot, SlotProps } from './ui/slots.js'
 
 export type { Fakes, Shown, TestCall } from './testing/fake-claude.js'
 
-export type TestOptions<State extends object> = {
+export type TestOptions<State extends object, Declared extends Options = Options> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
+  readonly options?: Partial<OptionValues<Declared>>
   readonly scope?: 'user' | 'project'
   readonly projectRoot?: string
   readonly cwd?: string
@@ -71,7 +76,7 @@ const presentation: CommandPresentation = { isFullscreen: false, columns: defaul
 
 const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] satisfies readonly ModEvent[]
 
-export function testMod<State extends object>(definition: ModDefinition<State>, options: TestOptions<State> = {}): TestedMod<State> {
+export function testMod<State extends object, Declared extends Options = Options>(definition: ModDefinition<State, string, Declared>, options: TestOptions<State, Declared> = {}): TestedMod<State> {
   installJsx()
   const name = definition.name
   const isProjectPlugin = options.scope === 'project'
@@ -97,7 +102,7 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
   const starting = options.state as Record<string, object> | undefined
   const declared = Object.entries(definition.state ?? {}) as [string, object][]
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
-  const lifecycle = createLifecycle<State>({ ...definition, state })
+  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => true, (options.options ?? {}) as PluginOptions)
   let started: Promise<void> | undefined
 
   const start = async () => {
@@ -111,7 +116,12 @@ export function testMod<State extends object>(definition: ModDefinition<State>, 
       keys: {},
     }))
     await started
-    if (lifecycle.phase !== 'active') throw lifecycle.failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)
+    const { failure } = lifecycle
+    if (failure instanceof MissingOptions) {
+      const given = failure.keys.map((key) => `${key}: …`).join(', ')
+      throw new Error(`${name} needs ${listed(failure.titles)}, which a person sets in /config. Give ${failure.keys.length === 1 ? 'it' : 'them'} to the tested mod: testMod(mod, { options: { ${given} } }).`)
+    }
+    if (lifecycle.phase !== 'active') throw failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)
   }
 
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {

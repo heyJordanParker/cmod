@@ -1,5 +1,6 @@
-import type { Args, EventResult, Frozen, HookBudget, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { HookInput, Mod, ModDefinition, ModEvent, ModHook } from '../mod.js'
+import type { Options, OptionValues } from '../options.js'
 import { dataFolder, isAtLeast, oldestCmodFor, parseEvent, readRecord, readSteps, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
@@ -7,6 +8,7 @@ import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
 import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
 import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
+import { createOptions, MissingOptions } from './options.js'
 import { createRouter, type Router, type RouterNext } from './router.js'
 import { createState } from './state.js'
 import { toolCalls } from './tool-calls.js'
@@ -39,10 +41,11 @@ type ModRuntime = {
   readonly dataFolder: string
   readonly keys: Readonly<Record<string, string>>
   readonly checksPermissions: () => boolean
+  readonly options: PluginOptions
 }
 
-type ActiveMod<State extends object> = {
-  readonly mod: Mod<State>
+type ActiveMod<State extends object, Declared extends Options> = {
+  readonly mod: Mod<State, Declared>
   readonly added: readonly string[]
 }
 
@@ -123,7 +126,11 @@ async function cmodVersion(claude: Claude): Promise<string | undefined> {
   return result.stdout.trim().split(/\s+/).at(-1)
 }
 
-export function createLifecycle<State extends object>(definition: ModDefinition<State>, checksPermissions: () => boolean = () => true): Lifecycle<State> {
+export function createLifecycle<State extends object, Declared extends Options = Options>(
+  definition: ModDefinition<State, string, Declared>,
+  checksPermissions: () => boolean = () => true,
+  options: PluginOptions = {},
+): Lifecycle<State> {
   let router: Router = createRouter()
   let phase: Phase = 'starting'
   let runtime: Pick<ModRuntime, 'claude' | 'progress'> | undefined
@@ -139,7 +146,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
 
   const claude = () => {
-    if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod) starts it at session.start.`)
+    if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod, options) starts it at session.start.`)
     return runtime.claude
   }
 
@@ -183,8 +190,8 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   const activate = async () => {
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), keys: plugin.keys, checksPermissions }).catch((error: unknown) => {
-      fail(messageOf(error), 'Fix it, then run /reload-plugins.')
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), keys: plugin.keys, checksPermissions, options }).catch((error: unknown) => {
+      fail(messageOf(error), error instanceof MissingOptions ? `Set ${error.keys.length === 1 ? 'it' : 'them'} in /config.` : 'Fix it, then run /reload-plugins.')
       throw error
     })
     const { added } = active
@@ -366,7 +373,7 @@ export function createLifecycle<State extends object>(definition: ModDefinition<
   }
 }
 
-async function createMod<State extends object>(definition: ModDefinition<State>, runtime: ModRuntime): Promise<ActiveMod<State>> {
+async function createMod<State extends object, Declared extends Options>(definition: ModDefinition<State, string, Declared>, runtime: ModRuntime): Promise<ActiveMod<State, Declared>> {
   const { router, progress } = runtime
   const claude = checkingKeys(runtime.claude, definition.name, runtime.keys)
   const added: string[] = []
@@ -380,10 +387,14 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
   let staleCwd: string | undefined
   const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
+  const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, changed: modState.changed })
   const held: HeldDecisions | undefined = runtime.checksPermissions() ? new Map() : undefined
-  const mod: Mod<State> = {
+  const mod: Mod<State, Declared> = {
     name: definition.name,
     state: modState.state,
+    get options() {
+      return modOptions.values as OptionValues<Declared>
+    },
     dataFolder: runtime.dataFolder,
     on(event, hook, options) {
       const bounded = options?.timeoutMs === undefined ? hook : timedHook(definition.name, event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude)
@@ -454,6 +465,7 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
         if (cwd === nextCwd) cwd = loadedCwd
         throw error
       })
+      if (hasMovedRoot) await modOptions.load(nextRoot)
       loadedCwd = nextCwd
       if (!hasMovedRoot) area.changed()
       if (nextCwd === oldCwd) return
@@ -496,6 +508,9 @@ async function createMod<State extends object>(definition: ModDefinition<State>,
     names.add(key)
   }
   await failsAs('its state did not load', () => modState.load())
+  await failsAs('its options did not load', () => modOptions.load(root))
+  const missing = modOptions.missing
+  if (missing.length > 0) throw new MissingOptions(missing, missing.map((key) => definition.options?.[key]?.title ?? key))
   await failsAs('its setup function threw', () => definition.setup(mod))
   const permissionHooks = permissionEvents.filter((event) => router.has(event))
   if (permissionHooks.length > 0 && !runtime.checksPermissions()) {

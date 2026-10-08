@@ -1,5 +1,6 @@
-import type { Args, EngineInterface, EventResult, Frozen, Next, On, ToolCallArgs } from 'claude-code'
+import type { Args, EngineInterface, EventResult, Frozen, Next, On, PluginOptions, ToolCallArgs } from 'claude-code'
 import type { ModDefinition } from './mod.js'
+import type { Options } from './options.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle.js'
@@ -7,6 +8,12 @@ import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle
 let lifecycle: Lifecycle<object>
 
 let checksPermissions = false
+
+let registered: ModDefinition<object> | undefined
+
+export function registeredMod(): ModDefinition<object> | undefined {
+  return registered
+}
 
 async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.start'>>, passOn: Next<'session.start'>): Promise<EventResult<'session.start'>> {
   const claude: Claude = {
@@ -37,6 +44,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     settings: { read: (args) => $.settings.read(args) },
+    config: { list: () => $.config.list(), set: (args) => $.config.set(args) },
     store: {
       get: (key) => $.store.get(key),
       set: (key, value) => $.store.set(key, value),
@@ -81,9 +89,10 @@ function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Froz
   return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>)
 }
 
-export function registerMod<State extends object>(addHook: On, definition: ModDefinition<State>): void {
+export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
   checksPermissions = false
-  lifecycle = createLifecycle(definition, () => checksPermissions)
+  registered = definition as ModDefinition<object>
+  lifecycle = createLifecycle(definition, () => checksPermissions, options)
   addHook('session.start', startMod)
   addHook('classic.SessionStart', routeToMod)
   addHook('classic.SessionEnd', routeToMod)
