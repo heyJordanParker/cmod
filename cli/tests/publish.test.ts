@@ -92,6 +92,18 @@ test('publish opens the release notes with every breaking change since the last 
   expect(result.stdout).toContain('Its release notes would open with:\n\n## Breaking changes\n\n- the greeter speaks only on session start\n- greet() takes the name to greet. Pass it as greet(name).\n- wave() is gone. Call greet(name).\n')
 })
 
+test("a mod's marketplace lists the cmod plugin from cmod's release branch, so its cmod dependency follows each cmod release", async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'greeter' }) })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const listed = JSON.parse(await readFile(join(dirname(archive), 'marketplace.json'), 'utf8')).plugins
+  expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' } })
+})
+
 test('publish adds no breaking changes section when no commit since the last v tag has one', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home)

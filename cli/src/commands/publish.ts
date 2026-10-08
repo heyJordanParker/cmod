@@ -6,11 +6,10 @@ import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { version as cmodVersion } from '../../package.json'
 import { readJson, tilde, writeAtomically } from '../files.js'
 import { declaredOptions, readPlugin } from '../plugin.js'
 import { run as runCommand } from '../process.js'
-import { buildProgram, machines, readProgram, releaseDownloads } from '../program.js'
+import { buildProgram, machines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 
 export const summary = 'Build a mod\'s release, tag it, and publish it on GitHub.'
@@ -48,6 +47,12 @@ const leftOut = ['cli', '.github', '.claude']
 const alwaysReleased = ['.claude-plugin', 'package.json', 'tsconfig.json', 'README*', 'LICENSE*']
 
 const releaseBranch = 'release'
+
+const cmodPluginEntry = {
+  name: 'cmod',
+  description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes',
+  source: { source: 'github', repo: 'heyJordanParker/cmod', ref: releaseBranch },
+}
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { 'dry-run': { type: 'boolean', default: false } } })
@@ -121,9 +126,8 @@ export async function run(argv: string[]): Promise<number> {
     { name: plugin.name, description: plugin.description ?? `${plugin.name}, a Claude Code mod`, source: { source: 'archive', url: `https://github.com/${repository}/releases/download/${tag}/${plugin.name}-${plugin.version}.zip`, sha256 } },
   ]
   if (plugin.name !== 'cmod') {
-    progress.step(`Hashing the cmod plugin ${cmodVersion}`)
-    plugins.push(await cmodPluginEntry())
-    progress.succeed(`Listed the cmod plugin ${cmodVersion}, so the cmod dependency resolves in this marketplace`)
+    plugins.push(cmodPluginEntry)
+    progress.succeed(`Listed the cmod plugin from the ${releaseBranch} branch of heyJordanParker/cmod, so the cmod dependency resolves in this marketplace and follows each cmod release`)
   }
   const marketplacePath = dryRun ? join(output, 'marketplace.json') : join(plugin.root, '.claude-plugin', 'marketplace.json')
   const marketplace = { name: plugin.name, owner: { name: repository.split('/')[0] }, description: plugin.description ?? `${plugin.name}, a Claude Code mod`, plugins }
@@ -242,14 +246,6 @@ function githubRepository(remote: string): string {
   const match = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote.trim())
   if (!match) throw new Error(`The origin remote ${remote.trim() ? `(${remote.trim()}) is not a GitHub repository` : 'is missing'}. Run git remote add origin https://github.com/<owner>/<repo>.git.`)
   return match[1] as string
-}
-
-async function cmodPluginEntry(): Promise<unknown> {
-  const url = `${releaseDownloads('https://github.com/heyJordanParker/cmod')}/v${cmodVersion}/cmod-${cmodVersion}.zip`
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`Downloading the cmod plugin from ${url} returned ${response.status}. Check the network, then run cmod publish again.`)
-  const sha256 = new Bun.CryptoHasher('sha256').update(await response.arrayBuffer()).digest('hex')
-  return { name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'archive', url, sha256 } }
 }
 
 async function fileSha256(path: string): Promise<string> {

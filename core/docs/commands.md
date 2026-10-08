@@ -97,7 +97,7 @@ Releases the mod at `path` (default: the current folder) at the version in its `
 3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
-6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin.
+6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin. The cmod entry points at the `release` branch of `heyJordanParker/cmod`, so the mod's `"cmod"` dependency resolves in this marketplace and follows each cmod release with no new publish of the mod.
 7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release. Its notes open with `## Breaking changes`, listing each `BREAKING CHANGE:` footer of a commit since the last `v` tag and the subject of each commit typed with `!`, such as `feat!: mod.claude replaces job.claude`, so the people who use the mod know what to change before they update. `--dry-run` prints that list.
 8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
 
@@ -113,7 +113,6 @@ It needs, and refuses to start without:
 - a `package.json` with no dependency on a `file:` or `link:` path, which no user has
 - a `"files"` list, when `package.json` has one, whose every path matches a committed file
 - a `"program"` in the `cmod` key of `package.json` that names the program `cli/` declares, when `cli/` declares one
-- the network, to hash the cmod plugin release it lists, unless the mod is cmod itself
 - for a real publish, a working tree with no uncommitted changes, a `v<version>` tag that does not exist yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
 `--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
@@ -184,7 +183,7 @@ cmod runs these itself. A person runs them to see a step's whole log, to finish 
 cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
 ```
 
-Downloads the program the mod's `package.json` `cmod.program` names into `~/.local/bin`, runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's progress line in Claude Code reads them.
+Downloads the program the mod's `package.json` `cmod.program` names into `~/.local/bin`, runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's progress line in Claude Code reads them.
 
 ### cmod teardown
 

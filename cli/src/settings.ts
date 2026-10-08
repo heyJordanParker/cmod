@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { isObject } from '@cmodjs/core/src/records.js'
+import { isObject, marketplaceOf, updatesToTurnOn } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse } from 'jsonc-parser'
 import { home, readText, tilde, writeAtomically } from './files.js'
 
@@ -20,6 +20,29 @@ export function keybindingsPath(): string {
 
 export function configRoot(): string {
   return process.env['CLAUDE_CONFIG_DIR'] || join(home(), '.claude')
+}
+
+export function knownMarketplacesPath(): string {
+  return join(process.env['CLAUDE_CODE_PLUGIN_CACHE_DIR'] || join(configRoot(), 'plugins'), 'known_marketplaces.json')
+}
+
+export async function updatesToTurnOnFor(root: string, name: string): Promise<string | undefined> {
+  const known = await readConfig(knownMarketplacesPath())
+  return updatesToTurnOn(marketplaceOf(root, name), settingsObject((await readSettings()).text), configObject(known.text, known.path))
+}
+
+export async function turnOnUpdates(marketplace: string): Promise<void> {
+  const { path, text } = await readSettings()
+  const known = await readConfig(knownMarketplacesPath())
+  const declared = settingsObject(text)['extraKnownMarketplaces']
+  const entry = isObject(declared) ? declared[marketplace] : undefined
+  const fetched = configObject(known.text, known.path)[marketplace]
+  const source = isObject(entry) && isObject(entry['source']) ? entry['source'] : isObject(fetched) ? fetched['source'] : undefined
+  const base = text.trim() === '' ? '{}\n' : text
+  const formattingOptions = indentation(base)
+  const value = isObject(entry) ? true : { source, autoUpdate: true }
+  const key = isObject(entry) ? ['extraKnownMarketplaces', marketplace, 'autoUpdate'] : ['extraKnownMarketplaces', marketplace]
+  await writeAtomically(path, applyEdits(base, modify(base, key, value, { formattingOptions })))
 }
 
 function statePath(): string {

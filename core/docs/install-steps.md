@@ -43,6 +43,12 @@ Before a step runs for the first time, cmod shows the person the commands, the k
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
 
+## Automatic updates
+
+Claude Code updates a plugin by itself only when its marketplace has automatic updates on, and they are off for every marketplace that is not Anthropic's. So the setup of a mod installed from a marketplace turns them on, through `"autoUpdate": true` on that marketplace's `extraKnownMarketplaces` entry in `settings.json`. The consent lists it as `Update <mod> automatically from the <marketplace> marketplace`, and a mod with nothing to consent to logs it. The setup never changes a choice the person made, in `settings.json` or with the toggle under `/plugin` Marketplaces, and leaves a linked mod alone.
+
+Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update whose scripts, keys, or permissions changed waits for consent again, so an update never runs a new install step unasked.
+
 In Claude Code, the mod sets itself up through the `cmod` that PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys, and a mod with `permissions` waits for cmod 0.2.0 or later, because an older cmod grants none of them. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
 
 ## Steps in Claude Code

@@ -1,7 +1,7 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { HookInput, Mod, ModDefinition, ModEvent, ModHook, PaneHandle } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { consentPath, dataFolder, finishStepsMethod, isAtLeast, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -275,6 +275,13 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (added.length > 0) runtime.claude.ui.log(`${definition.name} added ${listed(added)}.`)
   }
 
+  const updatesToShow = async () => {
+    const [home, configHome] = await Promise.all([claude().env.home(), claude().env.configHome()])
+    const configRoot = configHome ?? `${home ?? ''}/.claude`
+    const known = await claude().fs.read(`${configRoot}/plugins/known_marketplaces.json`).then((text): unknown => JSON.parse(text), () => undefined)
+    return updatesToTurnOn(marketplaceOf(claude().plugin.root, claude().plugin.name), await claude().settings.read({ source: 'user' }), known)
+  }
+
   const askConsent = async (event: Extract<RunnerEvent, { kind: 'needs-consent' }>) => {
     const name = definition.name
     if ((await claude().session.surfaces()).length === 0) {
@@ -283,7 +290,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       return
     }
     showLine().wait('Waiting for your answer')
-    if (await installer.consent(event)) return install(event.sha256)
+    if (await installer.consent({ ...event, updates: await updatesToShow().catch(() => undefined) })) return install(event.sha256)
     await installer.close()
     phase = 'declined'
     endLine()

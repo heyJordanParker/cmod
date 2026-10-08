@@ -52,6 +52,14 @@ A mod that calls tracer lists it in its own `.claude-plugin/plugin.json`, and Cl
 "dependencies": ["cmod", "tracer"]
 ```
 
+A provider that changes or removes a method breaks every mod that calls it, and with automatic updates the provider can update first. Name the versions you tested with a range, and Claude Code turns your mod off with a clear error instead of letting its calls fail one by one:
+
+```json
+"dependencies": ["cmod", { "name": "tracer", "version": "^1.0" }]
+```
+
+Claude Code checks the range against the `version` in the provider's `plugin.json` when it loads your mod ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)).
+
 Claude Code then lays tracer's types file beside the mod's own types, so the call is typed:
 
 ```ts

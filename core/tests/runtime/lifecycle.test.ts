@@ -221,6 +221,23 @@ test('a mod that only binds keys asks about the keys alone', async () => {
   expect(shown).not.toContain('Run ')
 })
 
+test('a mod installed from a marketplace with no update choice says it will update automatically, and one the person chose for says nothing', async () => {
+  const cached = '/test/home/.claude/plugins/cache/safe-market/safe-delete/0.2.0'
+  const shownFor = async (autoUpdate: boolean | undefined) => {
+    const fake = fakeClaude({ name: 'safe-delete', root: cached })
+    fake.fakes.process.run = cmodOnPath
+    fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
+    fake.fakes.settings.read = async () => ({ extraKnownMarketplaces: { 'safe-market': { source: { source: 'github', repo: 'owner/safe' }, ...(autoUpdate === undefined ? {} : { autoUpdate }) } } })
+    const lifecycle = createLifecycle(trackedMod().definition)
+    await lifecycle.start(fake.claude, given({ ...pending, root: cached }))
+    await fake.settle()
+    return installerText(lifecycle)
+  }
+
+  expect(await shownFor(undefined)).toContain('Update safe-delete automatically from the safe-market marketplace')
+  expect(await shownFor(false)).not.toContain('automatically')
+})
+
 test('a mod that asks for permissions names each one in the words the person reads', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodOnPath

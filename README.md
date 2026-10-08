@@ -19,6 +19,8 @@ Claude Code installs the cmod plugin with the mod. cmod then fetches the cmod pr
 
 `/mods` lists every mod with its settings, its permissions, its keys, and its own pages. Turn a permission off there and the mod loses it before its next call.
 
+A mod keeps itself up to date. Its setup turns on Claude Code's automatic updates for the marketplace it came from, unless you already chose, and the install question says so. Turn them off under `/plugin` Marketplaces. An update that changes what the mod runs asks you again before it runs.
+
 When you remove a mod with `/plugin uninstall`, cmod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
 
 In a terminal, one command does the same, for a mod or any other Claude Code plugin:

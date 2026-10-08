@@ -14,6 +14,7 @@ export type Consent = {
   readonly uninstall: string
   readonly keys: string
   readonly permissions: readonly string[]
+  readonly updates?: string | undefined
 }
 
 type Page = {
@@ -68,8 +69,13 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
       isOpen = false
       page?.cancel()
     },
-    consent({ install, uninstall, keys, permissions }) {
-      const changes = [...(install === '' ? [] : [`Run ${install} now${uninstall === '' ? '' : `, and ${uninstall} when you remove it`}`]), ...(install === '' && uninstall !== '' ? [`Run ${uninstall} when you remove it`] : []), ...(keys === '' ? [] : [`Bind ${keys}`])]
+    consent({ install, uninstall, keys, permissions, updates }) {
+      const changes = [
+        ...(install === '' ? [] : [`Run ${install} now${uninstall === '' ? '' : `, and ${uninstall} when you remove it`}`]),
+        ...(install === '' && uninstall !== '' ? [`Run ${uninstall} when you remove it`] : []),
+        ...(keys === '' ? [] : [`Bind ${keys}`]),
+        ...(updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]),
+      ]
       return show<boolean>(
         (answer) => ({
           draw: () =>

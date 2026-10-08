@@ -1355,6 +1355,65 @@ test('the consent question lists each permission in the words the person reads',
   expect(result.stdout).toContain('  It asks to:\n    Connect to api.github.com\n    Run gh on your computer\n')
 })
 
+async function createMarketplaceMod(home: string, settings: Record<string, unknown>, known: Record<string, unknown> = { 'demo-market': { source: { source: 'github', repo: 'owner/demo' } } }): Promise<string> {
+  const root = join(home, '.claude/plugins/cache/demo-market/demo/0.1.0')
+  await writeFiles(home, {
+    '.claude/plugins/cache/demo-market/demo/0.1.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    '.claude/plugins/cache/demo-market/demo/0.1.0/package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh' } }),
+    '.claude/plugins/cache/demo-market/demo/0.1.0/setup/install.sh': '#!/bin/sh\n',
+    '.claude/plugins/known_marketplaces.json': JSON.stringify(known),
+    '.claude/settings.json': `${JSON.stringify(settings, null, 2)}\n`,
+  })
+  return root
+}
+
+test('setup turns on automatic updates for the marketplace a mod came from, says so in the consent question, and keeps the rest of settings.json', async () => {
+  const home = await temporaryHome()
+  const root = await createMarketplaceMod(home, { model: 'opus', extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' } } } })
+
+  const asked = await cmod(home, 'setup', root)
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(asked.stdout).toContain('  It updates automatically from the demo-market marketplace, set in ~/.claude/settings.json.\n')
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('demo now updates automatically from the demo-market marketplace. Turn it off in /plugin, Marketplaces.')
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ model: 'opus', extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: true } } })
+})
+
+test('setup declares a marketplace only known_marketplaces.json lists, with its source and automatic updates', async () => {
+  const home = await temporaryHome()
+  const root = await createMarketplaceMod(home, {})
+
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: true } } })
+})
+
+test('setup keeps automatic updates off when the person turned them off, in settings.json or in /plugin', async () => {
+  const home = await temporaryHome()
+  const offInSettings = { extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: false } } }
+  const root = await createMarketplaceMod(home, offInSettings)
+  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual(offInSettings)
+
+  const other = await temporaryHome()
+  const offInPlugin = await createMarketplaceMod(other, {}, { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: false } })
+  const result = await cmod(other, 'setup', offInPlugin, '--yes')
+  expect(result.stdout).not.toContain('updates automatically')
+  expect(JSON.parse(await readFile(join(other, '.claude/settings.json'), 'utf8'))).toEqual({})
+})
+
+test('a linked mod, outside the plugin cache, leaves automatic updates alone', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+
+  const result = await cmod(home, 'setup', root, '--yes')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).not.toContain('updates automatically')
+  expect(existsSync(join(home, '.claude/settings.json'))).toBe(false)
+})
+
 test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)

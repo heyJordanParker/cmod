@@ -202,6 +202,20 @@ export const pendingStepsMethod = 'cmod:pendingSteps'
 
 export const finishStepsMethod = 'cmod:finishSteps'
 
+export function marketplaceOf(root: string, name: string): string | undefined {
+  const installed = /\/cache\/([^/]+)\/([^/]+)\/[^/]+\/?$/.exec(root)
+  return installed?.[2] === name ? installed[1] : undefined
+}
+
+export function updatesToTurnOn(marketplace: string | undefined, settings: unknown, known: unknown): string | undefined {
+  if (marketplace === undefined) return undefined
+  const declared = isObject(settings) && isObject(settings['extraKnownMarketplaces']) ? settings['extraKnownMarketplaces'][marketplace] : undefined
+  const fetched = isObject(known) ? known[marketplace] : undefined
+  const isDecided = [declared, fetched].some((entry) => isObject(entry) && typeof entry['autoUpdate'] === 'boolean')
+  const hasSource = [declared, fetched].some((entry) => isObject(entry) && isObject(entry['source']))
+  return isDecided || !hasSource ? undefined : marketplace
+}
+
 export function consentPath(store: string): string {
   return `${store}/consent.json`
 }

@@ -10,7 +10,7 @@ import { runStep } from '../process.js'
 import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
-import { bindKeys, keybindingsPath, unbindKeys } from '../settings.js'
+import { bindKeys, keybindingsPath, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
 import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
@@ -44,7 +44,7 @@ Options:
   --consent <sha256>  Approve the scripts whose hash a needs-consent event named
   --yes               Approve the scripts without asking`
 
-type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean; missing: readonly string[] }
+type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean; missing: readonly string[]; updates: string | undefined }
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -88,8 +88,8 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
   const failure = { code: 0, message: '' }
   let code = 10
   while (code === 10) {
-    const { sha256, needsConsent, missing } = await checkSetup(plugin)
-    const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, missing, hold.abortSignal))
+    const { sha256, needsConsent, missing, updates } = await checkSetup(plugin)
+    const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, missing, updates, hold.abortSignal))
     if (answer !== true) {
       progress.fail(answer === false ? `${plugin.name} is not set up: it needs your consent. Run the command again with --yes after reading what it does.` : `Cancelled: ${plugin.name} is not set up.`)
       return 10
@@ -151,7 +151,7 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   const approved = await approvals(plugin.name)
   const missing = (plugin.steps.permissions ?? []).filter((item) => !approved.includes(item))
   const needsConsent = !isCurrent && Object.keys(plugin.steps).length > 0 && !approved.includes(sha256)
-  return { sha256, isCurrent, needsConsent, missing }
+  return { sha256, isCurrent, needsConsent, missing, updates: await updatesToTurnOnFor(plugin.root, plugin.name) }
 }
 
 async function runSetup(plugin: Plugin, consent: string | undefined, emit: (event: RunnerEvent) => void): Promise<number> {
@@ -230,6 +230,10 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       keys: bound,
     })
     isRecorded = true
+    if (state.updates !== undefined) {
+      await turnOnUpdates(state.updates)
+      emit({ kind: 'log', text: `${plugin.name} now updates automatically from the ${state.updates} marketplace. Turn it off in /plugin, Marketplaces.` })
+    }
   } finally {
     if (!isRecorded) {
       await unbindKeys(bound)
@@ -272,7 +276,7 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
   return true
 }
 
-async function askConsent(plugin: Plugin, missing: readonly string[], cancel: AbortSignal): Promise<boolean | undefined> {
+async function askConsent(plugin: Plugin, missing: readonly string[], updates: string | undefined, cancel: AbortSignal): Promise<boolean | undefined> {
   const style = paint()
   const { install, uninstall, program, keys } = plugin.steps
   const lines = [
@@ -290,6 +294,7 @@ async function askConsent(plugin: Plugin, missing: readonly string[], cancel: Ab
     ...(program === undefined ? [] : [`  It puts the program ${style.cyan(program)} into ~/.local/bin.`]),
     ...(keys === undefined ? [] : [`  It binds keys in ${tilde(keybindingsPath())}:`, ...Object.entries(keys).map(([key, command]) => `    ${key.padEnd(10)} ${style.cyan(`/${command}`)}`)]),
     ...(missing.length === 0 ? [] : ['  It asks to:', ...missing.map((item) => `    ${style.cyan(permissionWords(item))}`)]),
+    ...(updates === undefined ? [] : [`  It updates automatically from the ${style.cyan(updates)} marketplace, set in ${tilde(settingsPath())}.`]),
     '',
   ]
   process.stdout.write(`${lines.join('\n')}\n`)
