@@ -3,7 +3,7 @@ import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pluginName } from '@cmodjs/core/src/records.js'
 import { run as runCommand } from '../process.js'
-import { download, machine } from '../program.js'
+import { download, linkDownloaded, machine } from '../program.js'
 import { printEvent } from './setup.js'
 
 export const summary = 'Download a program for an install script: fetch, check, unpack.'
@@ -80,6 +80,7 @@ export async function run(argv: string[]): Promise<number> {
   } finally {
     await rm(work, { recursive: true, force: true })
   }
+  await linkDownloaded(program, join(bin, program))
   emit(steps, `${program} is installed`)
   return 0
 }

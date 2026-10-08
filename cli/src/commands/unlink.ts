@@ -17,7 +17,7 @@ ${summary}
 Stops loading the checkout at path (default: the current folder) in new Claude
 Code sessions. Removes the folder from CLAUDE_CODE_PLUGIN_DIRS in Claude Code's
 settings.json, runs the checkout's uninstall step, and removes the program
-cmod link built into ~/.local/bin.`
+cmod link built, with its links.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
@@ -34,7 +34,7 @@ export async function run(argv: string[]): Promise<number> {
     const exitCode = record === undefined || record.root !== plugin.root ? 0 : await teardownInTerminal(plugin.name, progress)
 
     const program = await readProgram(plugin)
-    if (program !== undefined && (await removeProgram(program.name))) progress.succeed(`Removed ${program.name} from ~/.local/bin`)
+    if (program !== undefined && (await removeProgram(program.name))) progress.succeed(`Removed the program ${program.name}`)
     return exitCode
   } finally {
     hold[Symbol.dispose]()

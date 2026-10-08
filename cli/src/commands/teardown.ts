@@ -1,11 +1,11 @@
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { dataFolder, readRecord, recordPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { readRecord, recordPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit } from '@cmodjs/core/src/utils/text.js'
 import { readText, tilde } from '../files.js'
 import { runStep } from '../process.js'
-import { removeProgram } from '../program.js'
+import { removeData, removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
 import { unbindKeys } from '../settings.js'
 import { modLock, revokeApprovals, storePath, takeLock } from '../store.js'
@@ -19,7 +19,7 @@ ${summary}
 
 Runs the mod's saved uninstall step, then removes the key bindings it added
 that still run its commands, and deletes its install record, the saved step,
-every version of its program from ~/.local/bin and the store, and its data
+every version of its program with its links, and its data
 folder, and forgets the scripts you approved for it, so installing it again asks
 again. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
 the files there are yours. Claude Code has already deleted the plugin's folder by then. A mod with
@@ -70,7 +70,7 @@ async function tearDown(name: string, emit: (event: RunnerEvent) => void): Promi
   const store = storeFolder(process.env)
   const record = await readRecord(readText, store, name)
   if (record === undefined) {
-    await rm(dataFolder(store, name), { recursive: true, force: true })
+    await removeData(name)
     await revokeApprovals(name)
     emit({ kind: 'missing', name })
     return 0
@@ -92,7 +92,7 @@ async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => 
   }
   await unbindKeys(record.keys)
   if (record.program !== null) await removeProgram(record.program)
-  await rm(dataFolder(store, record.name), { recursive: true, force: true })
+  await removeData(record.name)
   await revokeApprovals(record.name)
   await rm(recordPath(store, record.name))
   await rm(folder, { recursive: true, force: true })

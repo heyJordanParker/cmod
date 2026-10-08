@@ -16,7 +16,8 @@ ${summary}
 Loads the checkout at path (default: the current folder) in every new Claude
 Code session, in place of the installed mod. Installs the cmod plugin when
 Claude Code lacks it, unless the checkout is cmod itself. Then installs the
-checkout's packages, builds the program cli/ declares into ~/.local/bin, writes
+checkout's packages, builds the program cli/ declares and links it into cmod's
+programs folder and ~/.local/bin, writes
 the folder into CLAUDE_CODE_PLUGIN_DIRS in the env block of Claude Code's
 settings.json, and runs the checkout's install step.
 

@@ -9,6 +9,7 @@ import { beforeDeadline } from './deadline.js'
 import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
 import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
 import { checkedAnswer, checkingGrants, checksAnswers, checkWrite, isCovered, itemOf, passedDown, type AnswerCheck, type Grants } from './grants.js'
+import { locatingPrograms, type Programs } from './programs.js'
 import { createModFiles } from './metadata.js'
 import { fitsOption } from '../options.js'
 import { createInstaller } from './installer.js'
@@ -144,6 +145,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   let router: Router = createRouter()
   let phase: Phase = 'starting'
   let runtime: Pick<ModRuntime, 'claude' | 'progress'> | undefined
+  let programs: Programs | undefined
   let plugin: Plugin | undefined
   const granted = new Set<string>()
   let line: ProgressLine | undefined
@@ -179,7 +181,8 @@ export function createLifecycle<State extends object, Declared extends Options =
     showLine().fail(reason, fix)
   }
 
-  const finish = () => {
+  const finish = async () => {
+    await programs?.refresh()
     phase = 'ready'
     claude().ui.invalidate('ui.render')
   }
@@ -437,8 +440,10 @@ export function createLifecycle<State extends object, Declared extends Options =
     },
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
-      runtime = { claude: claudeCalls, progress: createProgress(claudeCalls) }
+      programs = locatingPrograms(claudeCalls)
+      runtime = { claude: programs.claude, progress: createProgress(claudeCalls) }
       try {
+        await programs.refresh()
         const started = await read(claudeCalls).catch((error: unknown) => {
           report(error)
           return undefined

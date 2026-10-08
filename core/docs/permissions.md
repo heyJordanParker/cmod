@@ -17,7 +17,7 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 | Permission | The person reads | cmod checks |
 | --- | --- | --- |
 | `"network": ["api.github.com"]` | Connect to api.github.com | `mod.http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"` |
-| `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `mod.process.run`, `mod.process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` |
+| `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `mod.process.run`, `mod.process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` and the copy in cmod's programs folder |
 | `"files": ["~/.zshrc"]` | Change ~/.zshrc | `mod.fs.write` and `mod.metadata.update` outside the project and the mod's data folder. A folder covers every file below it |
 | `"conversation": true` | Read this conversation | `mod.session.messages`, and reading Claude Code's transcript files |
 | `"prompt": true` | Add text Claude reads and start turns | `mod.session.append`, `mod.session.submit`, the `prompt` and `schedule` jobs, and the hook answers listed below |

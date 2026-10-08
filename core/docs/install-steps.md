@@ -19,7 +19,7 @@ Each key is optional.
 
 - `install` is one shell command that sets the mod up.
 - `uninstall` is one shell command that undoes it.
-- `program` is the name of a program cmod downloads from the mod's GitHub release into `~/.local/bin`. [Ship a program](#ship-a-program) explains it.
+- `program` is the name of a program cmod downloads from the mod's GitHub release, and Claude Code then runs by its name. [Ship a program](#ship-a-program) explains it.
 - `keys` binds keys in Claude Code to the mod's slash commands. [Key bindings](#key-bindings) explains it.
 
 cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
@@ -49,7 +49,7 @@ Claude Code updates a plugin by itself only when its marketplace has automatic u
 
 Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update whose scripts, keys, or permissions changed waits for consent again, so an update never runs a new install step unasked.
 
-In Claude Code, the mod sets itself up through the `cmod` that PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys, and a mod with `permissions` waits for cmod 0.2.0 or later, because an older cmod grants none of them. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
+In Claude Code, the mod sets itself up through the `cmod` in cmod's programs folder, or else the one PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys, and a mod with `permissions` waits for cmod 0.2.0 or later, because an older cmod grants none of them. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
 
 ## Steps in Claude Code
 
@@ -101,7 +101,7 @@ The step gets these environment variables:
 | `CMOD_PLUGIN_ROOT` | The mod's folder |
 | `CMOD_DATA` | The mod's data folder, which cmod creates first. It is the folder `mod.dataFolder` names. |
 | `CMOD_VERSION` | The mod's version from `plugin.json` |
-| `PATH` | The person's `PATH`, with the cmod program's own folder first, so the step can run `cmod download` |
+| `PATH` | The person's `PATH`, with the cmod program's own folder first, so the step can run `cmod download`, then cmod's programs folder |
 
 - A line `progress <done> <total> <label>` on standard output moves the progress bar.
 - Every other line goes to the log.
@@ -160,7 +160,7 @@ cmod deletes `$CMOD_DATA` itself after the uninstall step.
 cmod download <program> <machine> <url> <sha256> [<machine> <url> <sha256> …]
 ```
 
-An install script runs `cmod download` to fetch a program built by someone else. It picks the download for this machine, checks its SHA-256, unpacks a `.tar.gz` or a `.zip` or takes the file as it is, and moves the file named `<program>` to `$CMOD_DATA/bin/<program>`. A download whose SHA-256 differs installs nothing. Machines are `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
+An install script runs `cmod download` to fetch a program built by someone else. It picks the download for this machine, checks its SHA-256, unpacks a `.tar.gz` or a `.zip` or takes the file as it is, and moves the file named `<program>` to `$CMOD_DATA/bin/<program>`, which Claude Code then runs by its name. A download whose SHA-256 differs installs nothing. Machines are `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
 
 `$CMOD_DATA/bin/<program>` is `${mod.dataFolder}/bin/<program>` in mod code. That folder is not on `PATH`, so mod code names the program by that full path, such as `` mod.process.run([`${mod.dataFolder}/bin/mermaid-ascii`, '--help']) ``, and so does the `command` of a `program` job.
 
@@ -186,16 +186,39 @@ A mod that builds its own command-line program keeps its source in `cli/`, and c
 
    The program's name is the one `bin` command, or else `name`. A Rust program declares the same keys under `[package.metadata.cmod]` in `cli/Cargo.toml`, and its name is the one `[[bin]]` `name`, or else the `[package]` `name`.
 
-2. The build writes one file per machine into `output`, each named `<program>-<os>-<arch>`, such as `hello-darwin-arm64`. cmod runs it with `CMOD_MACHINES` set to the machines it needs, separated by spaces: `cmod link` names this machine alone, and `cmod publish` names all four. A build that ignores `CMOD_MACHINES` and builds every machine works too, only slower to link. cmod takes only the files the build wrote in that run, so a build left from an earlier run is never released.
+2. The build writes one file per machine into `output`, each named `<program>-<os>-<arch>`, such as `hello-darwin-arm64`. cmod runs it with `CMOD_MACHINES` set to the machines it needs, separated by spaces: `cmod link` names this machine alone, and `cmod publish` names every machine the mod runs on ([Machines](#machines)), and fails when the build skips one. A build that ignores `CMOD_MACHINES` and builds every machine works too, only slower to link. cmod takes only the files the build wrote in that run, so a build left from an earlier run is never released.
 
 3. The mod's own `package.json` names the program: `"cmod": { "program": "hello" }`. `.claude-plugin/plugin.json` names the GitHub `repository`.
 
 Then:
 
-- `cmod link` builds the program and links this machine's build to `~/.local/bin/<program>`.
+- `cmod link` builds the program and links this machine's build into cmod's programs folder and `~/.local/bin`.
 - `cmod publish` builds every machine's file and attaches each to the GitHub release `v<version>`, with a `SHA256SUMS` file. It refuses a `cli/` program that the `package.json` `program` key does not name.
-- On install, cmod downloads `<repository>/releases/download/v<version>/<program>-<machine>`, checks it against `SHA256SUMS`, runs `<program> --version`, and links it to `~/.local/bin/<program>`.
-- cmod refuses to replace a `~/.local/bin/<program>` it did not make, and a program `PATH` finds in a folder ahead of `~/.local/bin`.
-- `cmod unlink` and the uninstall remove the program.
+- On install, cmod downloads `<repository>/releases/download/v<version>/<program>-<machine>`, checks it against `SHA256SUMS`, runs `<program> --version`, and links it into cmod's programs folder and `~/.local/bin`.
+- `cmod unlink` and the uninstall remove the program and both links.
+
+## Run a program by its name
+
+cmod links every program it installs into its programs folder, `~/.local/share/cmod/programs/<program>` (under `$XDG_DATA_HOME` when it is set): the program `cmod.program` names, each program `cmod download` installs, and `cmod` itself. Claude Code runs the one there by its name, whatever else `PATH` holds, so a mod's `trace` wins over `/usr/bin/trace`:
+
+- The cmod plugin's `SessionStart` hook puts the programs folder first on `PATH` for every Bash command Claude runs.
+- `mod.process.run` and `mod.process.spawn` run `[name, ...args]` from the programs folder when it holds `name`. A path such as `/usr/bin/trace` runs as given.
+- Install and uninstall steps find the programs folder on `PATH` after cmod's own `bun`.
+
+cmod also links the program into `~/.local/bin/<program>` so a terminal runs it, unless a file there is not cmod's. Setup then logs which program a terminal runs, and changes nothing outside cmod's folders.
+
+## Machines
+
+A mod runs on macOS and Linux, on arm64 and x64, unless the `os` and `cpu` keys of its `package.json` say less. They read as npm reads them, and a `!` in front leaves a value out:
+
+```json
+{ "name": "safe-delete", "os": ["darwin"], "cpu": ["arm64"] }
+```
+
+- Setup refuses a machine the mod leaves out before any script runs, with `safe-delete runs on macOS on arm64, and this is Linux, so cmod set up nothing.`, in the terminal and in the mod's progress line in Claude Code.
+- `cmod publish` builds the program for each machine the mod runs on.
+- `cmod check` fails when a `cmod download` line in the install step has no download for one of those machines, and when `os` or `cpu` names a value cmod does not run mods on, such as `win32`.
+
+Claude Code itself has no field for this, and installs the mod on any machine.
 
 The cmod repository ships the `cmod` program this way. Its `package.json` holds `"cmod": { "program": "cmod" }`, and its `cli/package.json` holds `"cmod": { "build": "bun run build", "output": "dist" }`.

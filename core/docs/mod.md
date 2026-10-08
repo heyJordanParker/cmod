@@ -173,7 +173,7 @@ mod.process.run(argv: readonly string[], init?: ProcessRunInit): Promise<Process
 mod.process.spawn(argv: readonly string[], init?: { cwd?, env?, input? }): HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 ```
 
-Both run a program without a shell. `argv[0]` is the program and the rest are its arguments.
+Both run a program without a shell. `argv[0]` is the program and the rest are its arguments. A bare name that cmod installed, such as `trace`, runs from cmod's programs folder ([install-steps.md](install-steps.md#run-a-program-by-its-name)), and any other name runs through Claude Code's `PATH`.
 
 - `init.cwd` is the program's folder, absolute or relative to the session's working folder. Without it the program runs in the session's working folder.
 - `init.env` sets variables over Claude Code's own environment.

@@ -7,7 +7,7 @@ import { dataFolder, formatEvent, keyWords, permissionWords, readRecord, recordP
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
-import { fetchProgram, programSteps, removeProgram, restoreProgram } from '../program.js'
+import { fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
 import { listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
 import { bindKeys, keybindingsPath, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
@@ -19,8 +19,10 @@ export const help = `Usage: cmod setup <plugin-root> [--events] [--consent <sha2
 
 ${summary}
 
-Downloads the program its package.json "cmod.program" names into
-~/.local/bin, runs the mod's install step from its package.json "cmod" key,
+Refuses a machine its package.json "os" and "cpu" leave out. Downloads
+the program its package.json "cmod.program" names, which Claude Code
+then runs by its name, and links it into ~/.local/bin for a terminal,
+runs the mod's install step from its package.json "cmod" key,
 saves its uninstall step, binds the keys its "cmod.keys" names in Claude
 Code's keybindings.json, and records the mod as set up. A key you already
 bound to something else stays yours, and the setup prints the line to add. An unchanged mod runs
@@ -145,6 +147,7 @@ export function uninterruptible(argv: string[]): string[] {
 }
 
 async function checkSetup(plugin: Plugin): Promise<SetupState> {
+  refuseThisMachine(plugin)
   const sha256 = await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
   const record = await readRecord(readText, storeFolder(process.env), plugin.name)
   const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256
@@ -171,7 +174,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
     return code
   } finally {
     if (code !== 0 && state.needsConsent) await revokeApprovals(plugin.name, [state.sha256, ...state.missing])
-    if (code !== 0 && !existsSync(recordPath(store, plugin.name))) await rm(dataFolder(store, plugin.name), { recursive: true, force: true })
+    if (code !== 0 && !existsSync(recordPath(store, plugin.name))) await removeData(plugin.name)
   }
 }
 
@@ -252,7 +255,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
 export async function stepEnvironment(root: string, name: string, version: string): Promise<Record<string, string | undefined>> {
   const data = dataFolder(storeFolder(process.env), name)
   await mkdir(data, { recursive: true })
-  const path = [dirname(process.execPath), process.env['PATH']].filter(Boolean).join(':')
+  const path = [dirname(process.execPath), programsFolder(), process.env['PATH']].filter(Boolean).join(':')
   return { ...process.env, PATH: path, CMOD_PLUGIN_ROOT: root, CMOD_DATA: data, CMOD_VERSION: version }
 }
 
@@ -291,7 +294,7 @@ async function askConsent(plugin: Plugin, missing: readonly string[], updates: s
           `    install    ${install === undefined ? style.dim('none') : style.cyan(install)}`,
           `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
         ]),
-    ...(program === undefined ? [] : [`  It puts the program ${style.cyan(program)} into ~/.local/bin.`]),
+    ...(program === undefined ? [] : [`  It installs the program ${style.cyan(program)}, which Claude runs by its name.`]),
     ...(keys === undefined ? [] : [`  It binds keys in ${tilde(keybindingsPath())}:`, ...Object.entries(keys).map(([key, command]) => `    ${key.padEnd(10)} ${style.cyan(`/${command}`)}`)]),
     ...(missing.length === 0 ? [] : ['  It asks to:', ...missing.map((item) => `    ${style.cyan(permissionWords(item))}`)]),
     ...(updates === undefined ? [] : [`  It updates automatically from the ${style.cyan(updates)} marketplace, set in ${tilde(settingsPath())}.`]),

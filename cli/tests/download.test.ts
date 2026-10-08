@@ -74,6 +74,20 @@ test('download installs the program for this machine into CMOD_DATA/bin', async 
   expect(await output(data(home, 'bin/hello'))).toBe('hello 1.0.0\n')
   expect(await readdir(data(home))).toEqual(['bin'])
   expect(await readdir(data(home, 'bin'))).toEqual(['hello'])
+  expect(await output(join(home, '.local/share/cmod/programs/hello'))).toBe('hello 1.0.0\n')
+})
+
+test("a downloaded program runs by its name in Claude Code through cmod's programs folder, until its mod is removed", async () => {
+  const home = await temporaryHome()
+  const { tarGz } = await archives(home)
+  using server = await serve({ 'hello.tar.gz': tarGz })
+  await writeFiles(home, { '.local/share/cmod/programs/kept': '#!/bin/sh\n' })
+  expect((await setUp(home, `cmod download hello ${machine} ${server.origin}/hello.tar.gz ${sha256(tarGz)}`)).exitCode).toBe(0)
+
+  const result = await cmod(home, 'teardown', 'demo', '--events')
+
+  expect(result.stdout).toBe('done demo\n')
+  expect(await readdir(join(home, '.local/share/cmod/programs'))).toEqual(['kept'])
 })
 
 test('a SHA-256 that differs in an update installs nothing and keeps the program the mod had', async () => {

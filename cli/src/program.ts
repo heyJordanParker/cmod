@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
-import { isObject, pluginName, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, isObject, pluginName, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, readJson, readText, tilde } from './files.js'
 import type { Plugin } from './plugin.js'
@@ -17,7 +17,44 @@ export const machine = `${process.platform}-${process.arch}`
 
 export const machines: readonly string[] = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 
-const systemFolders: readonly string[] = ['/bin', '/sbin', '/usr/bin', '/usr/sbin']
+const systemNames: Readonly<Record<string, string>> = { darwin: 'macOS', linux: 'Linux' }
+
+export function declaredMachines(packageJson: Record<string, unknown> | undefined): string[] {
+  return machines.filter((each) => {
+    const [system, cpu] = each.split('-') as [string, string]
+    return allows(packageJson?.['os'], system) && allows(packageJson?.['cpu'], cpu)
+  })
+}
+
+export function unsupportedSystems(packageJson: Record<string, unknown> | undefined): string[] {
+  const listed = (key: string) => (Array.isArray(packageJson?.[key]) ? (packageJson[key] as unknown[]) : []).map((entry) => String(entry).replace(/^!/, ''))
+  const systems = new Set(machines.map((each) => each.split('-')[0]))
+  const cpus = new Set(machines.map((each) => each.split('-')[1]))
+  return [...listed('os').filter((system) => !systems.has(system)), ...listed('cpu').filter((cpu) => !cpus.has(cpu))]
+}
+
+export function machineWords(listed: readonly string[]): string {
+  const systems = [...new Set(listed.map((each) => each.split('-')[0] as string))]
+  const cpus = [...new Set(listed.map((each) => each.split('-')[1] as string))]
+  const isEveryCpu = cpus.length === new Set(machines.map((each) => each.split('-')[1])).size
+  return `${systems.map((system) => systemNames[system] ?? system).join(' and ')}${isEveryCpu ? '' : ` on ${cpus.join(' and ')}`}`
+}
+
+export function refuseThisMachine(plugin: Plugin): void {
+  const declared = declaredMachines(plugin.packageJson)
+  if (declared.includes(machine)) return
+  const system = systemNames[process.platform] ?? process.platform
+  const here = declared.some((each) => each.startsWith(`${process.platform}-`)) ? `${system} on ${process.arch}` : system
+  throw new Error(`${plugin.name} runs on ${machineWords(declared)}, and this is ${here}, so cmod set up nothing.`)
+}
+
+function allows(list: unknown, value: string): boolean {
+  if (!Array.isArray(list)) return true
+  const entries = list.filter((entry): entry is string => typeof entry === 'string')
+  if (entries.includes(`!${value}`)) return false
+  const allowed = entries.filter((entry) => !entry.startsWith('!'))
+  return allowed.length === 0 || allowed.includes(value)
+}
 
 export function releaseDownloads(repository: string): string {
   return `${repository.replace(/\/$/, '')}/releases/download`
@@ -65,12 +102,13 @@ export async function buildProgram(program: Program, wanted: readonly string[], 
   if (misnamed.length > 0) throw new Error(`The build of ${program.name} wrote ${misnamed.join(', ')}, which no machine downloads. Name each build <program>-<os>-<arch>: ${names.join(', ')}.`)
   const builds = written.filter((entry) => wanted.some((each) => entry === `${program.name}-${each}`)).map((entry) => join(folder, entry))
   if (builds.length === 0) throw new Error(`The build of ${program.name} wrote no ${wanted.map((each) => `${program.name}-${each}`).join(', ')} in ${tilde(folder)}. Point "output" at the folder the build writes, and build each machine CMOD_MACHINES names.`)
+  const missing = wanted.filter((each) => !written.includes(`${program.name}-${each}`))
+  if (missing.length > 0) throw new Error(`The build of ${program.name} wrote no ${missing.map((each) => `${program.name}-${each}`).join(', ')}, but the mod runs on ${machineWords(wanted)}. Build each machine CMOD_MACHINES names, or list only the machines it builds in the "os" and "cpu" keys of the mod's package.json, such as "os": ["darwin"].`)
   progress.succeed(`Built ${program.name}: ${builds.map((build) => basename(build)).join(', ')}`)
   return builds
 }
 
 export async function installProgram(program: Program, version: string, progress: Progress): Promise<void> {
-  await refuseTakenCommand(program.name)
   const built = (await buildProgram(program, [machine], progress))[0] as string
 
   const target = storePath('bin', program.name, version, program.name)
@@ -80,12 +118,13 @@ export async function installProgram(program: Program, version: string, progress
   await rename(`${target}.${process.pid}.tmp`, target)
 
   const entry = await linkProgram(program.name, target)
-  progress.succeed(`Installed ${program.name} ${version}: ${tilde(entry)} runs ${tilde(target)}`)
-  if (!(process.env['PATH'] ?? '').split(':').includes(dirname(entry))) progress.note(`Add ~/.local/bin to PATH to run ${program.name} in a terminal.`)
+  progress.succeed(`Installed ${program.name} ${version}: Claude Code runs ${tilde(join(programsFolder(), program.name))}, which runs ${tilde(target)}`)
+  const note = terminalNote(program.name, entry)
+  if (note !== undefined) progress.note(note)
+  else if (entry !== undefined && !(process.env['PATH'] ?? '').split(':').includes(dirname(entry))) progress.note(`Add ~/.local/bin to PATH to run ${program.name} in a terminal.`)
 }
 
 export async function fetchProgram(plugin: Plugin, name: string, emit: (event: RunnerEvent) => void): Promise<void> {
-  await refuseTakenCommand(name)
   const target = storePath('bin', name, plugin.version, name)
   if (!existsSync(target)) {
     if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so cmod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
@@ -115,17 +154,37 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
       await rm(partial, { force: true })
     }
   }
-  emit({ kind: 'progress', done: 2, total: programSteps, label: `Linking ~/.local/bin/${name}` })
-  await linkProgram(name, target)
+  emit({ kind: 'progress', done: 2, total: programSteps, label: `Linking ${name}` })
+  const entry = await linkProgram(name, target)
+  const note = terminalNote(name, entry)
+  if (note !== undefined) emit({ kind: 'log', text: note })
   emit({ kind: 'progress', done: programSteps, total: programSteps, label: `${name} ${plugin.version} is installed` })
 }
 
 export async function removeProgram(name: string): Promise<boolean> {
-  const entry = commandEntry(name)
-  const isLinked = await isLinkedFromStore(entry, name)
-  if (isLinked) await rm(entry)
+  const entries = [join(programsFolder(), name), commandEntry(name)]
+  const linked = []
+  for (const entry of entries) if (await isLinkedFromStore(entry, name)) linked.push(entry)
+  for (const entry of linked) await rm(entry)
   await rm(storePath('bin', name), { recursive: true, force: true })
-  return isLinked
+  return linked.length > 0
+}
+
+export function programsFolder(): string {
+  return storePath('programs')
+}
+
+export async function linkDownloaded(name: string, path: string): Promise<void> {
+  await placeLink(join(programsFolder(), name), path)
+}
+
+export async function removeData(name: string): Promise<void> {
+  const folder = dataFolder(storeFolder(process.env), name)
+  for (const entry of await readdir(programsFolder()).catch(() => [])) {
+    const target = await readlink(join(programsFolder(), entry)).catch(() => undefined)
+    if (target?.startsWith(`${folder}/`)) await rm(join(programsFolder(), entry))
+  }
+  await rm(folder, { recursive: true, force: true })
 }
 
 export async function restoreProgram(name: string, record: InstallRecord | undefined): Promise<void> {
@@ -133,18 +192,11 @@ export async function restoreProgram(name: string, record: InstallRecord | undef
   else await removeProgram(name)
 }
 
-async function refuseTakenCommand(name: string): Promise<void> {
-  const entry = commandEntry(name)
-  if ((await lstat(entry).catch(() => undefined)) !== undefined && !(await isLinkedFromStore(entry, name))) {
-    throw new Error(`${tilde(entry)} exists and cmod did not make it, so cmod will not replace it with the ${name} program. Move it out of ~/.local/bin, then run the command again.`)
-  }
-  for (const folder of (process.env['PATH'] ?? '').split(':').filter((folder) => folder !== '')) {
-    if (resolve(folder) === dirname(entry)) return
-    const found = Bun.which(name, { PATH: folder })
-    if (found === null) continue
-    const fix = systemFolders.includes(resolve(folder)) ? `${found} is part of the system, so put ~/.local/bin before ${folder} in PATH` : `Remove that ${name}, or put ~/.local/bin before ${tilde(folder)} in PATH`
-    throw new Error(`PATH finds ${name} at ${tilde(found)} ahead of ~/.local/bin, so the ${name} program cmod installs would never run. ${fix}, then run the command again.`)
-  }
+function terminalNote(name: string, entry: string | undefined): string | undefined {
+  if (entry === undefined) return `${tilde(commandEntry(name))} is not cmod's, so a terminal runs that ${name}. Claude Code runs cmod's.`
+  const found = Bun.which(name, { PATH: process.env['PATH'] ?? '' })
+  if (found !== null && resolve(found) !== entry) return `A terminal runs ${tilde(found)}, which PATH finds before ~/.local/bin. Claude Code runs cmod's ${name}.`
+  return undefined
 }
 
 async function isLinkedFromStore(entry: string, name: string): Promise<boolean> {
@@ -170,12 +222,18 @@ export async function download(url: string, fix: string, onProgress: (received: 
   return Bun.concatArrayBuffers(chunks)
 }
 
-async function linkProgram(name: string, target: string): Promise<string> {
+async function linkProgram(name: string, target: string): Promise<string | undefined> {
+  await placeLink(join(programsFolder(), name), target)
   const entry = commandEntry(name)
+  if ((await lstat(entry).catch(() => undefined)) !== undefined && !(await isLinkedFromStore(entry, name))) return undefined
+  await placeLink(entry, target)
+  return entry
+}
+
+async function placeLink(entry: string, target: string): Promise<void> {
   const partial = `${entry}.${process.pid}.tmp`
   await mkdir(dirname(entry), { recursive: true })
   await rm(partial, { force: true })
   await symlink(target, partial)
   await rename(partial, entry)
-  return entry
 }

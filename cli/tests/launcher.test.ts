@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readlinkSync } from 'node:fs'
-import { chmod, copyFile, mkdir } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
@@ -102,6 +102,39 @@ test('the cmod launcher installs nothing when the download does not match SHA256
   expect(existsSync(join(storeOf(home), '0.1.1/cmod'))).toBe(false)
 })
 
+test("the cmod plugin's SessionStart hook puts cmod's programs folder first in Claude's Bash, so a mod's program wins over a system command of the same name", async () => {
+  const home = await temporaryHome()
+  const envFile = join(home, 'sessionstart-hook-0.sh')
+  await writeFiles(home, { '.local/share/cmod/programs/ls': '#!/bin/sh\necho "cmod\'s ls"\n' })
+  await chmod(join(home, '.local/share/cmod/programs/ls'), 0o755)
+  const hooks = JSON.parse(await readFile(join(checkout, 'hooks/hooks.json'), 'utf8'))
+  const command = (hooks.hooks.SessionStart[0].hooks[0].command as string).replace('${CLAUDE_PLUGIN_ROOT}', checkout)
+
+  const hook = Bun.spawnSync(['sh', '-c', command], { env: { HOME: home, PATH: '/usr/bin:/bin', CLAUDE_ENV_FILE: envFile } })
+  const bash = Bun.spawnSync(['sh', '-c', `export PATH=/usr/bin:/bin; . "${envFile}"; ls`], { stdout: 'pipe' })
+
+  expect(hook.exitCode).toBe(0)
+  expect(bash.stdout.toString()).toBe("cmod's ls\n")
+})
+
+test("the bootstrap keeps a ~/.local/bin/cmod it did not make, and still links cmod into the programs folder Claude Code runs", async () => {
+  const home = await temporaryHome()
+  using release = serveRelease('0.1.1')
+  const plugin = join(home, 'plugins/cmod')
+  await writeFiles(plugin, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.1.1' }) })
+  await writeFiles(home, { '.local/bin/cmod': '#!/bin/sh\necho "the person\'s own cmod"\n' })
+  await mkdir(join(plugin, 'setup'), { recursive: true })
+  await copyFile(join(checkout, 'setup', 'bootstrap.sh'), join(plugin, 'setup', 'bootstrap.sh'))
+  await installPackage(join(plugin, 'node_modules/@cmodjs/cli'), '0.1.1')
+
+  const bootstrap = await run(['sh', join(plugin, 'setup/bootstrap.sh')], home, release.origin, '/usr/bin:/bin')
+
+  expect(bootstrap.exitCode).toBe(0)
+  expect(bootstrap.stdout).toContain(`${join(home, '.local/bin/cmod')} is not cmod's, so a terminal runs that cmod. Claude Code runs ${join(home, '.local/share/cmod/programs/cmod')}.`)
+  expect(await readFile(join(home, '.local/bin/cmod'), 'utf8')).toBe('#!/bin/sh\necho "the person\'s own cmod"\n')
+  expect(readlinkSync(join(home, '.local/share/cmod/programs/cmod'))).toBe(join(storeOf(home), 'cmod'))
+})
+
 test("the cmod plugin's bootstrap installs the plugin's cmod and links ~/.local/bin/cmod to the store, beside a cmod npm put on PATH", async () => {
   const home = await temporaryHome()
   using release = serveRelease('0.1.1')
@@ -118,9 +151,10 @@ test("the cmod plugin's bootstrap installs the plugin's cmod and links ~/.local/
 
   const bootstrap = await run(['sh', join(plugin, 'setup/bootstrap.sh')], home, release.origin, path)
 
-  expect(bootstrap.stdout).toBe(`progress 0 2 Downloading cmod 0.1.1\nprogress 1 2 Linking ${join(home, '.local/bin/cmod')}\nprogress 2 2 cmod 0.1.1 is installed\n`)
+  expect(bootstrap.stdout).toBe('progress 0 2 Downloading cmod 0.1.1\nprogress 1 2 Linking cmod\nprogress 2 2 cmod 0.1.1 is installed\n')
   expect(bootstrap.exitCode).toBe(0)
   expect(readlinkSync(join(home, '.local/bin/cmod'))).toBe(join(storeOf(home), 'cmod'))
+  expect(readlinkSync(join(home, '.local/share/cmod/programs/cmod'))).toBe(join(storeOf(home), 'cmod'))
 
   await writeFiles(storeOf(home), { '0.2.0/cmod': program('0.2.0') })
   await chmod(join(storeOf(home), '0.2.0/cmod'), 0o755)

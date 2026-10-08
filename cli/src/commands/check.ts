@@ -4,7 +4,7 @@ import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
-import { isObject, permissionWords, scriptsSha256 } from '@cmodjs/core/src/records.js'
+import { isObject, permissionWords, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
 import { version as cmodVersion } from '../../package.json'
 import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/metadata.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
@@ -12,6 +12,7 @@ import { listPlugins } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
 import { declaredOptions, preparePackages, readPlugin, writeUserConfig, type DeclaredOptions, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand, spawn } from '../process.js'
+import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
 import { startProgress } from '../progress.js'
 import { bundledHooks } from './publish.js'
 import { linkedFolders } from '../settings.js'
@@ -25,7 +26,8 @@ ${summary}
 
 Runs every check this machine can run on the mod at path (default: the current
 folder): installs its packages, checks its layout and that each step runs a
-script, writes the options defineMod declares into plugin.json userConfig,
+script, checks each download covers the machines its "os" and "cpu" list,
+writes the options defineMod declares into plugin.json userConfig,
 bundles its hooks module as cmod publish does, validates it with Claude
 Code, type-checks it with tsconfig.json and, when it exists, tests/tsconfig.json,
 lints it, runs its tests with bun test and with claude plugin test, and checks
@@ -44,6 +46,7 @@ const checks: Check[] = [
   { heading: 'Installing packages', run: checkPackages },
   { heading: 'Checking the layout', run: checkLayout },
   { heading: 'Checking the steps', run: checkSteps },
+  { heading: 'Checking the machines', run: checkMachines },
   { heading: 'Reading the permissions', run: checkPermissions },
   { heading: 'Reading the metadata', run: checkMetadata },
   { heading: 'Writing the options into plugin.json', run: checkOptions },
@@ -104,6 +107,25 @@ async function checkSteps(plugin: Plugin): Promise<Result> {
     return { status: 'fail', text: 'The steps have a problem', fix: messageOf(error) }
   }
   return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
+}
+
+async function checkMachines(plugin: Plugin): Promise<Result> {
+  const unsupported = unsupportedSystems(plugin.packageJson)
+  const fix = 'cmod runs mods on "darwin" and "linux", on "arm64" and "x64". List only those in the "os" and "cpu" keys of package.json.'
+  if (unsupported.length > 0) return { status: 'fail', text: `package.json "os" and "cpu" list ${unsupported.join(', ')}, which cmod does not run mods on`, fix }
+  const declared = declaredMachines(plugin.packageJson)
+  if (declared.length === 0) return { status: 'fail', text: 'package.json "os" and "cpu" leave no machine for the mod to run on', fix }
+  const install = plugin.steps.install === undefined ? '' : (await Promise.all(scriptPaths(plugin.steps.install).map((path) => readText(join(plugin.root, path))))).join('\n')
+  const problems = downloadsIn(install).flatMap(({ program, listed }) => declared.filter((each) => !listed.includes(each)).map((each) => `${program} has no download for ${each}`))
+  if (problems.length > 0) return { status: 'fail', text: `The install step misses a download the mod needs on ${machineWords(declared)}`, fix: `${problems.join(', ')}. Add a <machine> <url> <sha256> line for each, or list only the machines it downloads for in the "os" and "cpu" keys of package.json.` }
+  return { status: 'pass', text: `${plugin.name} runs on ${machineWords(declared)}${install === '' ? '' : ', and the install step downloads a program for each'}` }
+}
+
+function downloadsIn(script: string): { program: string; listed: string[] }[] {
+  return [...script.replace(/\\\n/g, ' ').matchAll(/\bcmod download\s+(\S+)((?:[ \t]+\S+)*)/g)].map((match) => {
+    const words = (match[2] ?? '').trim().split(/\s+/)
+    return { program: match[1] as string, listed: words.filter((_, index) => index % 3 === 0) }
+  })
 }
 
 async function checkPermissions(plugin: Plugin): Promise<Result> {

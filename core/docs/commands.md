@@ -25,7 +25,7 @@ Creates a mod in `./<name>`: a `defineMod` with one hook, one pane, and one rend
 cmod link [path] [--yes] [--option key=value]...
 ```
 
-Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares into `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
+Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
 
 - `--yes` approves the mod's install and uninstall commands without asking.
 - `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
@@ -36,7 +36,7 @@ Loads the checkout at `path` (default: the current folder) in every new Claude C
 cmod unlink [path]
 ```
 
-Stops loading the checkout at `path` (default: the current folder) in new Claude Code sessions. Removes the folder from `CLAUDE_CODE_PLUGIN_DIRS` in Claude Code's `settings.json`, runs the checkout's uninstall step, and removes the program `cmod link` built into `~/.local/bin`.
+Stops loading the checkout at `path` (default: the current folder) in new Claude Code sessions. Removes the folder from `CLAUDE_CODE_PLUGIN_DIRS` in Claude Code's `settings.json`, runs the checkout's uninstall step, and removes the program `cmod link` built, with its links.
 
 ### cmod check
 
@@ -183,7 +183,7 @@ cmod runs these itself. A person runs them to see a step's whole log, to finish 
 cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
 ```
 
-Downloads the program the mod's `package.json` `cmod.program` names into `~/.local/bin`, runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's progress line in Claude Code reads them.
+Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's progress line in Claude Code reads them.
 
 ### cmod teardown
 

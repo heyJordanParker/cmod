@@ -29,19 +29,20 @@ In a terminal, one command does the same, for a mod or any other Claude Code plu
 cmod install <owner>/<repo>
 ```
 
-A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The cmod plugin puts `cmod` in `~/.local/bin` the first time it runs. `cmod list` shows every plugin Claude Code has, and whether cmod set up each mod.
+A plugin that is not a mod installs through Claude Code alone, with no consent question. `cmod update` and `cmod remove` work on any plugin the same way. The cmod plugin puts `cmod` in `~/.local/bin` the first time it runs. A mod that ships a program, such as `trace`, runs it by its name in Claude Code even when your system has a command of the same name, and a mod built only for some machines says so before it runs anything. `cmod list` shows every plugin Claude Code has, and whether cmod set up each mod.
 
 ## What the cmod plugin runs
 
-The cmod plugin runs three programs, and sends no data anywhere:
+The cmod plugin runs four programs, and sends no data anywhere:
 
-- **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/bin/cmod` to it. That download is its only network request.
+- **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod` to it. It leaves a `~/.local/bin/cmod` it did not make in place. That download is its only network request.
+- **`setup/path.sh`**, at each session start. It writes one line to the file Claude Code reads into every Bash command's environment, `export PATH="~/.local/share/cmod/programs:$PATH"`, so Claude runs each program a mod installs by its name.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
 - **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`.
 
 A setting you change in `/mods` goes to Claude Code's `/config`, the same place Claude Code keeps it when you change it there.
 
-It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its link at `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
+It writes files in two places only: the `cmod` program in `~/.local/share/cmod/` with its links at `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
 
 Every mod built with cmod, the cmod plugin included, adds one hook on each Claude Code event a mod can use, and only a mod that decides permissions hooks Claude Code's permission check. So the cmod plugin hooks tool calls, prompts, and what Claude Code draws, and no permission check. On a tool call, the cmod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
 

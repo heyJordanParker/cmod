@@ -654,7 +654,7 @@ test('setup downloads the named program for this platform, checks it against SHA
     [
       'progress 0 3 Downloading hello 0.2.0',
       'progress 1 3 Checking hello 0.2.0',
-      'progress 2 3 Linking ~/.local/bin/hello',
+      'progress 2 3 Linking hello',
       'progress 3 3 hello 0.2.0 is installed',
       'progress 4 5 Adding the alias',
       'progress 5 5 Finishing',
@@ -1335,14 +1335,14 @@ test('the consent question lists the keys it binds', async () => {
   expect(result.stdout).toContain('modes is not set up: it needs your consent. Run the command again with --yes after reading what it does.')
 })
 
-test('the consent question says it puts the program into ~/.local/bin', async () => {
+test('the consent question names the program it installs for Claude to run', async () => {
   const home = await temporaryHome()
   const root = await createProgramMod(home, 'http://127.0.0.1:9/owner/hello-mod')
 
   const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(10)
-  expect(result.stdout).toContain('  It puts the program hello into ~/.local/bin.\n')
+  expect(result.stdout).toContain('  It installs the program hello, which Claude runs by its name.\n')
 })
 
 test('the consent question lists each permission in the words the person reads', async () => {
@@ -1505,7 +1505,7 @@ test('setup --events prints failed with the fix when the release holds no build 
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
 
-test('setup refuses to replace a file in ~/.local/bin that cmod did not make', async () => {
+test('setup keeps a ~/.local/bin file cmod did not make, links the program into the programs folder Claude Code runs, and says which one a terminal runs', async () => {
   const home = await temporaryHome()
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
@@ -1513,13 +1513,13 @@ test('setup refuses to replace a file in ~/.local/bin that cmod did not make', a
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('failed 1\t~/.local/bin/hello exists and cmod did not make it, so cmod will not replace it with the hello program. Move it out of ~/.local/bin, then run the command again.\n')
-  expect(result.exitCode).toBe(1)
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain("log ~/.local/bin/hello is not cmod's, so a terminal runs that hello. Claude Code runs cmod's.\n")
   expect(await readFile(join(home, '.local/bin/hello'), 'utf8')).toBe('#!/bin/sh\necho "my own hello"\n')
-  expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
+  expect(await readlink(join(home, '.local/share/cmod/programs/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
 })
 
-test('setup refuses a program name PATH already finds elsewhere', async () => {
+test('setup installs a program whose name PATH finds elsewhere, links it into the programs folder, and says a terminal runs the other one', async () => {
   const home = await temporaryHome()
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
@@ -1527,10 +1527,45 @@ test('setup refuses a program name PATH already finds elsewhere', async () => {
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('failed 1\tPATH finds hello at ~/bin/hello ahead of ~/.local/bin, so the hello program cmod installs would never run. Remove that hello, or put ~/.local/bin before ~/bin in PATH, then run the command again.\n')
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain("log A terminal runs ~/bin/hello, which PATH finds before ~/.local/bin. Claude Code runs cmod's hello.\n")
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
+  expect(await new Response(Bun.spawn([join(home, '.local/share/cmod/programs/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello 0.2.0\n')
+})
+
+test('setup refuses a mod whose package.json "os" leaves out this system, before any script runs', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'safe-delete')
+  const other = process.platform === 'darwin' ? 'linux' : 'darwin'
+  const names: Record<string, string> = { darwin: 'macOS', linux: 'Linux' }
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'safe-delete', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'safe-delete', os: [other], cmod: { install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho ran > "$CMOD_DATA/ran"\n',
+  })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toBe(`failed 1\tsafe-delete runs on ${names[other]}, and this is ${names[process.platform]}, so cmod set up nothing.\n`)
   expect(result.exitCode).toBe(1)
-  expect(existsSync(join(home, '.local/bin/hello'))).toBe(false)
-  expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
+  expect(existsSync(join(home, '.local/share/cmod/data/safe-delete'))).toBe(false)
+})
+
+test("an install step's PATH puts cmod's programs folder ahead of a system command of the same name", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'env-mod')
+  await writeFiles(home, { '.local/share/cmod/bin/env/0.2.0/env': '#!/bin/sh\necho "cmod\'s env"\n' })
+  await chmod(join(home, '.local/share/cmod/bin/env/0.2.0/env'), 0o755)
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'env-mod', version: '0.2.0', repository: 'http://127.0.0.1:9/owner/env-mod' }),
+    'package.json': JSON.stringify({ name: 'env-mod', cmod: { program: 'env', install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\nenv > "$CMOD_DATA/ran"\n',
+  })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, '.local/share/cmod/data/env-mod/ran'), 'utf8')).toBe("cmod's env\n")
 })
 
 test('setup installs a program when ~/.local/bin comes before the other folder PATH finds it in', async () => {
@@ -1546,20 +1581,6 @@ test('setup installs a program when ~/.local/bin comes before the other folder P
   expect(existsSync(join(home, '.local/bin/hello'))).toBe(true)
 })
 
-test('setup names a system command PATH finds first, and asks for ~/.local/bin before its folder', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'env-mod')
-  await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'env-mod', version: '0.2.0', repository: 'http://127.0.0.1:9/owner/env-mod' }),
-    'package.json': JSON.stringify({ name: 'env-mod', cmod: { program: 'env' } }),
-  })
-
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-
-  expect(result.stdout).toMatch(/^failed 1\tPATH finds env at (\/usr)?\/bin\/env ahead of ~\/\.local\/bin, so the env program cmod installs would never run\. (\/usr)?\/bin\/env is part of the system, so put ~\/\.local\/bin before (\/usr)?\/bin in PATH, then run the command again\.\n$/)
-  expect(result.exitCode).toBe(1)
-})
-
 test('setup links a program version already in the store, such as one the cmod bootstrap placed, without downloading it', async () => {
   const home = await temporaryHome()
   using server = serveRelease({})
@@ -1569,7 +1590,7 @@ test('setup links a program version already in the store, such as one the cmod b
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe('progress 2 3 Linking ~/.local/bin/hello\nprogress 3 3 hello 0.2.0 is installed\nprogress 4 5 Adding the alias\nprogress 5 5 Finishing\ndone hello-mod 0.2.0\n')
+  expect(result.stdout).toBe('progress 2 3 Linking hello\nprogress 3 3 hello 0.2.0 is installed\nprogress 4 5 Adding the alias\nprogress 5 5 Finishing\ndone hello-mod 0.2.0\n')
   expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('placed by the bootstrap\n')
 })
 
@@ -1598,7 +1619,7 @@ test('teardown removes every installed version of the program', async () => {
 
   expect(result.stdout).toBe('done hello-mod\n')
   expect(result.exitCode).toBe(0)
-  for (const path of [join(home, '.local/bin/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(store, 'uninstall/hello-mod')]) {
+  for (const path of [join(home, '.local/bin/hello'), join(store, 'programs/hello'), join(store, 'bin/hello'), join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(store, 'uninstall/hello-mod')]) {
     expect({ path, isGone: await isGone(path) }).toEqual({ path, isGone: true })
   }
 })

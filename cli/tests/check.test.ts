@@ -101,6 +101,34 @@ test('cmod check writes the options defineMod declares into plugin.json userConf
   expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n')
 })
 
+test('cmod check names each machine package.json "os" and "cpu" allow that a cmod download line has no build for', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'trash-mod')
+  const sha = 'a'.repeat(64)
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'trash-mod', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'trash-mod', os: ['darwin'], cmod: { install: './setup/install.sh' } }),
+    'setup/install.sh': `#!/bin/sh\ncmod download trash \\\n  darwin-arm64 https://example.com/trash-arm64.zip ${sha}\n`,
+  })
+
+  const missing = await cmod(home, 'check', root)
+
+  expect(missing.stdout).toContain(
+    'Checking the machines…\n✘ The install step misses a download the mod needs on macOS\n    fix: trash has no download for darwin-x64. Add a <machine> <url> <sha256> line for each, or list only the machines it downloads for in the "os" and "cpu" keys of package.json.\n',
+  )
+
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'trash-mod', os: ['darwin'], cpu: ['arm64'], cmod: { install: './setup/install.sh' } }) })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain('Checking the machines…\n✔ trash-mod runs on macOS on arm64, and the install step downloads a program for each\n')
+
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'trash-mod', os: ['darwin', 'win32'], cmod: { install: './setup/install.sh' } }) })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain(
+    '✘ package.json "os" and "cpu" list win32, which cmod does not run mods on\n    fix: cmod runs mods on "darwin" and "linux", on "arm64" and "x64". List only those in the "os" and "cpu" keys of package.json.\n',
+  )
+})
+
 test('cmod check shows what the person grants at install, and adds approve when register.ts calls registerPermissionCheck', async () => {
   const home = await temporaryHome()
   const root = join(home, 'guard')

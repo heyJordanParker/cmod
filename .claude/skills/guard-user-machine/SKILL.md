@@ -13,7 +13,8 @@ A mod runs its steps on the User's machine with the User's consent, and cmod cle
 - `readSteps` in `core/src/records.ts` is the one parser of the `package.json` `cmod` key, permissions included.
 - `parseConsent` in `core/src/records.ts` is the one reader of `consent.json`, which maps each mod to its approved hashes and granted permissions, for the cmod program (`cli/src/store.ts`) and the SDK (`readPlugin`) alike.
 - `isCovered` in `core/src/runtime/grants.ts` decides whether a grant covers a call, and `checkingGrants` there is the one gate every gated `mod` call passes.
-- `restoreProgram` in `cli/src/program.ts` decides which program version `~/.local/bin/<program>` points at.
+- `restoreProgram` in `cli/src/program.ts` decides which program version the program's links point at, in cmod's programs folder and `~/.local/bin`. `linkProgram` there never replaces a `~/.local/bin` file cmod did not make.
+- `refuseThisMachine` in `cli/src/program.ts` decides whether setup runs on this machine, from the `os` and `cpu` keys of the mod's `package.json`.
 - `takeLock` in `cli/src/store.ts` decides which cmod command changes a mod. Setup and teardown take one lock per mod, `records/<name>.json.lock/<pid>` in the cmod store (`modLock` in `cli/src/store.ts`), and approvals change under `consent.json.lock/<pid>`. A lock whose holder's process is gone, or whose process ID now belongs to another process (its start time differs), is taken over at once.
 
 ### Change the decider, never a copy of it

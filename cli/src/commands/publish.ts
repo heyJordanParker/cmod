@@ -9,7 +9,7 @@ import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
 import { declaredOptions, readPlugin } from '../plugin.js'
 import { run as runCommand } from '../process.js'
-import { buildProgram, machines, readProgram } from '../program.js'
+import { buildProgram, declaredMachines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 
 export const summary = 'Build a mod\'s release, tag it, and publish it on GitHub.'
@@ -113,7 +113,7 @@ export async function run(argv: string[]): Promise<number> {
 
   let programs: string[] = []
   if (program !== undefined) {
-    programs = await buildProgram(program, machines, progress)
+    programs = await buildProgram(program, declaredMachines(plugin.packageJson), progress)
   }
 
   const sums = join(output, 'SHA256SUMS')

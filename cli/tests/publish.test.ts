@@ -267,15 +267,28 @@ test('publish refuses a build that is not named <program>-<os>-<arch>', async ()
   expect(result.stderr).toBe(`cmod publish: The build of hello wrote hello, which no machine downloads. Name each build <program>-<os>-<arch>: ${platforms.map((platform) => `hello-${platform}`).join(', ')}.\n`)
 })
 
-test('publish asks the build for every machine in CMOD_MACHINES, and releases no build an earlier run left in the output folder', async () => {
+test('publish asks the build for every machine in CMOD_MACHINES, and refuses a release missing one, even when an earlier run left it in the output folder', async () => {
   const home = await temporaryHome()
-  const root = await committedMod(home, 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in darwin-arm64 linux-x64; do echo hello > dist/hello-$machine; done')
+  const root = await committedMod(home, 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in darwin-arm64 darwin-x64 linux-x64; do echo hello > dist/hello-$machine; done')
   await writeFiles(root, { 'cli/dist/hello-linux-arm64': 'built by an earlier run\n' })
   await Bun.spawn(['touch', '-t', '202001010000', join(root, 'cli/dist/hello-linux-arm64')]).exited
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
-  expect(result.exitCode).toBe(0)
+  expect(result.exitCode).toBe(1)
   expect(await readFile(join(home, 'machines'), 'utf8')).toBe(`${platforms.join(' ')}\n`)
-  expect(result.stdout).toContain('Built hello: hello-darwin-arm64, hello-linux-x64\n')
+  expect(result.stderr).toBe('cmod publish: The build of hello wrote no hello-linux-arm64, but the mod runs on macOS and Linux. Build each machine CMOD_MACHINES names, or list only the machines it builds in the "os" and "cpu" keys of the mod\'s package.json, such as "os": ["darwin"].\n')
+})
+
+test('publish builds only the machines the "os" and "cpu" keys of package.json list', async () => {
+  const home = await temporaryHome()
+  const root = await committedMod(home, 'mkdir -p dist && echo "$CMOD_MACHINES" > "$HOME/machines" && for machine in $CMOD_MACHINES; do echo hello > dist/hello-$machine; done')
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'cmod', os: ['darwin'], cpu: ['arm64'], cmod: { program: 'hello' } }) })
+  await Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', 'macOS on arm64']).exited
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'machines'), 'utf8')).toBe('darwin-arm64\n')
+  expect(result.stdout).toContain('Built hello: hello-darwin-arm64\n')
 })
