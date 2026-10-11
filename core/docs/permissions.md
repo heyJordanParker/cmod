@@ -16,18 +16,18 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 
 | Permission | The person reads | cmod checks |
 | --- | --- | --- |
-| `"network": ["api.github.com"]` | Connect to api.github.com | `mod.http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"` |
+| `"network": ["api.github.com"]` | Connect to api.github.com | `mod.http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"`. The address of the mod's own running `program` job needs none |
 | `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `mod.process.run`, `mod.process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` and the copy in cmod's programs folder |
 | `"files": ["~/.zshrc"]` | Change ~/.zshrc | `mod.fs.write` and `mod.metadata.update` outside the project and the mod's data folder. A folder covers every file below it |
-| `"conversation": true` | Read this conversation | `mod.session.messages`, and reading Claude Code's transcript files |
+| `"conversation": true` | Read your Claude Code conversations | `mod.history`, `mod.claude.session.messages`, and reading Claude Code's transcript files |
 | `"prompt": true` | Add text Claude reads and start turns | `mod.session.append`, `mod.session.submit`, the `prompt` and `schedule` jobs, and the hook answers listed below |
 | `"model": true` | Ask a model, which uses your plan | `mod.model.complete` |
 | `"agents": true` | Start agents | `mod.agent.spawn` |
 | `"tools": true` | Use and change Claude's tool calls | `mod.claude.tool.call`, and a hook that changes a tool call's input |
-| `"config": true` | Change your Claude Code settings | writes to `.claude/settings.json`, `.claude/settings.local.json`, and `.mcp.json` |
+| `"config": ["cleanupPeriodDays"]` | Change cleanupPeriodDays in your Claude Code settings | `mod.claude.settings.update` of that setting, in any source. `mcpServers` covers the project's `.mcp.json` |
 | `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A deny needs no permission |
 
-Reading files, drawing panes and slot renders, toasts, slash commands, tools of the mod's own, and hooks need no permission.
+Reading files, drawing panes and slot renders, toasts, slash commands, tools of the mod's own, and hooks need no permission. Writing a Claude Code settings file with `mod.fs.write` is refused with every permission, and names `mod.claude.settings.update` ([mod.md](mod.md#mod-settings)).
 
 `cmod check` adds `"approve": true` to `package.json` when `hooks/register.ts` calls `registerPermissionCheck` and the line is missing, and says so.
 
@@ -46,8 +46,8 @@ The install opens the installer pane in Claude Code and lists every permission i
 ## Check a permission before a feature uses it
 
 ```ts
-mod.permissions.has(name: 'network' | 'run' | 'files', value: string): boolean
-mod.permissions.has(name: 'conversation' | 'prompt' | 'model' | 'agents' | 'tools' | 'config' | 'approve'): boolean
+mod.permissions.has(name: 'network' | 'run' | 'files' | 'config', value: string): boolean
+mod.permissions.has(name: 'conversation' | 'prompt' | 'model' | 'agents' | 'tools' | 'approve'): boolean
 ```
 
 `has` says whether the person has the permission turned on, so a mod hides a feature instead of failing it:

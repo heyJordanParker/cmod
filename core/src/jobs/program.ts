@@ -1,5 +1,5 @@
 import type { Job } from '../mod.js'
-import { PermissionRefused } from '../runtime/grants.js'
+import { PermissionRefused, programAddresses } from '../runtime/grants.js'
 import { messageOf } from '../utils/text.js'
 
 export type Program = {
@@ -22,6 +22,7 @@ export function program(options: { readonly command: readonly string[]; readonly
     let failure: Error | undefined
     let exits = 0
     const waiting: { resolve: (address: Address) => void; reject: (error: Error) => void }[] = []
+    const ownAddresses = programAddresses(mod)
 
     const stop = (reason: string) => {
       state = 'fatal'
@@ -52,12 +53,14 @@ export function program(options: { readonly command: readonly string[]; readonly
           }
           state = 'running'
           exits = 0
+          ownAddresses.add(address.socketPath ?? new URL(address.url).host)
           for (const waiter of waiting.splice(0)) waiter.resolve(address)
         }
       } catch (error) {
         if (error instanceof PermissionRefused) return stop(`${messageOf(error)} Add it, then run /reload-plugins.`)
         lastError = messageOf(error)
       }
+      if (address !== undefined) ownAddresses.delete(address.socketPath ?? new URL(address.url).host)
       address = undefined
       exits += 1
       const wait = backoffSeconds[exits - 1]

@@ -1,7 +1,6 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { longestMs, messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { consentPath, finishStepsMethod, isObject, openPageMethod, parseConsent, pendingStepsMethod, permissionWords, readRecord, readSteps, settingsPagesMethod, storeFolder } from '../node_modules/@cmodjs/core/records.js'
-import { callMod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { Tabs } from '../node_modules/@cmodjs/core/ui/components.js'
 import { definePane } from '../node_modules/@cmodjs/core/ui/define-pane.js'
 import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
@@ -53,7 +52,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
         const declared = (isObject(manifest) ? readSteps(manifest)?.permissions : undefined) ?? []
         const granted = consent[record.name] ?? []
         const ask = async <Value>(method: string): Promise<readonly Value[]> => {
-          const answer = await callMod(mod.claude, { to: record.name, method, input: null }).catch((error: unknown) => {
+          const answer = await mod.claude.cmod.call({ to: record.name, method, input: null }).catch((error: unknown) => {
             mod.claude.ui.log(`cmod: ${record.name} did not answer ${method}: ${messageOf(error)}`, { to: 'debug' })
             return undefined
           })
@@ -152,7 +151,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       return Box({ flexDirection: 'column', children: view.keys.map(([key, command]) => Text({ children: `${key.padEnd(12)}${command}` })) })
     }
     if (view.pages.length === 0) return Text({ dimColor: true, children: `${view.name} adds no pages.` })
-    return Box({ gap: 2, children: view.pages.map((page) => Button({ key: `page:${page.id}`, label: page.title, onPress: () => act(async () => (await callMod(mod.claude, { to: view.name, method: openPageMethod, input: page.id }), undefined)) })) })
+    return Box({ gap: 2, children: view.pages.map((page) => Button({ key: `page:${page.id}`, label: page.title, onPress: () => act(async () => (await mod.claude.cmod.call({ to: view.name, method: openPageMethod, input: page.id }), undefined)) })) })
   }
 
   const pane = definePane<State>({
@@ -219,7 +218,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
                   gap: 2,
                   children: [
                     Text({ color: 'warning', children: `Needs setup: ${view.pendingSteps.join(', ')}` }),
-                    Button({ key: 'finish', label: 'Finish setup', onPress: () => act(async () => (await callMod(mod.claude, { to: view.name, method: finishStepsMethod, input: null }), undefined)) }),
+                    Button({ key: 'finish', label: 'Finish setup', onPress: () => act(async () => (await mod.claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null }), undefined)) }),
                   ],
                 }),
               ]),
@@ -242,7 +241,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
         mod.state.memory.tab = 'options'
       }
       if (name !== undefined && page !== undefined) {
-        await callMod(mod.claude, { to: name, method: openPageMethod, input: page })
+        await mod.claude.cmod.call({ to: name, method: openPageMethod, input: page })
         return
       }
       await handle.open({ focus: true })

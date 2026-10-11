@@ -7,7 +7,7 @@ import { option } from '../../src/options.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { scriptsSha256 } from '../../src/records.js'
-import { fakeClaude } from '../../src/testing/fake-claude.js'
+import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
 import { findElement, rowsOf, textOf } from '../../src/testing/fake-elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
 import { Text } from '../../src/ui/elements.js'
@@ -160,6 +160,32 @@ test('a call to a mod still installing fails with when to retry', async () => {
     deny: "safe-delete is installing. Try again when it's ready.",
   })
   expect(await fire(lifecycle, 'cmod.call', { to: 'tracer', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
+})
+
+test('a call to a mod that is still starting waits for it, then answers', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', api: { restore: () => ['a.ts'] }, setup() {} }))
+  const plugins: ((plugin: Plugin) => void)[] = []
+  const starting = lifecycle.start(fake.claude, () => new Promise<Plugin>((resolve) => void plugins.push(resolve)))
+
+  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })
+  await fake.settle()
+  plugins.shift()?.({ ...pending, isInstalled: true })
+  await starting
+
+  expect(await answer).toEqual({ value: ['a.ts'] })
+})
+
+test("a call that comes before the mod's session.start waits for the start, then answers", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', api: { restore: () => ['a.ts'] }, setup() {} }))
+
+  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+
+  expect(await answer).toEqual({ value: ['a.ts'] })
 })
 
 test('a call to a mod whose install was declined fails with the install command', async () => {
@@ -1052,7 +1078,7 @@ test('a conversation forked into a new Claude Code process starts with the sessi
   const parent = await notes.session()
   parent.state.session.draft = 'call mum'
   await notes.settle()
-  notes.fakes.cmod.call = async (input) => (input.to === 'cmod' && input.method === 'forkParent' ? { value: 'parent' } : { deny: `no ${input.method}` })
+  notes.fakes.cmod.call = async (input) => calledAnswer('notes', input.to === 'cmod' && input.method === 'forkParent' ? { value: 'parent' } : { deny: `no ${input.method}` })
 
   notes.startConversation('fork')
   const fork = await notes.session()
@@ -1067,7 +1093,7 @@ test('a conversation with saved session values keeps them and never asks cmod fo
   first.state.session.draft = 'call mum'
   await notes.settle()
   const asked: string[] = []
-  notes.fakes.cmod.call = async (input) => (asked.push(input.method), { value: 'another' })
+  notes.fakes.cmod.call = async (input) => (asked.push(input.method), 'another')
 
   const reloaded = await notes.session()
 

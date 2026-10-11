@@ -128,7 +128,7 @@ test('testMod answers a call to a mod it does not fake with the install command'
     },
   })
 
-  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
+  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: outline: $.cmod.call: tracer is not installed. Run cmod install tracer.' })
 })
 
 const project = '/work/dent'

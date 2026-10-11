@@ -1,6 +1,8 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, longestMs, messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
+import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
+import type { HistoryRequest } from '../node_modules/@cmodjs/core/runtime/history.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { modsMemory, modsPanel, type ModsState } from './mods.js'
 
@@ -13,13 +15,36 @@ const cmodSession: CmodPluginState['session'] = { tip: null }
 const newestMessages = 8
 
 async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
-  const messages = await mod.session.messages()
+  const messages = await mod.claude.session.messages()
   if (messages.length === 0) return null
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([messages.length, messages.slice(-newestMessages)])))
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 const panels = new WeakMap<object, ReturnType<typeof modsPanel<CmodPluginState>>>()
+
+function historyArguments(request: HistoryRequest): string[] {
+  const scope = (since: string | undefined, everyProject: boolean | undefined) => [...(since === undefined ? [] : ['--since', since]), ...(everyProject === true ? ['--all'] : [])]
+  const common = ['--json', '--project', request.project]
+  if (request.command === 'sessions') return ['history', 'sessions', ...common, ...scope(request.since, request.everyProject)]
+  if (request.command === 'search') return ['history', 'search', request.text, ...common, ...scope(request.since, request.everyProject)]
+  const { session, agent, after, last, limit } = request
+  return ['history', 'messages', session, ...common, ...(agent === undefined ? [] : ['--agent', agent]), ...(after === undefined ? [] : ['--after', after]), ...(last === undefined ? [] : ['--last', String(last)]), '--limit', String(limit)]
+}
+
+async function runCmod(mod: Mod<CmodPluginState>, args: readonly string[]): Promise<string> {
+  const stream = mod.process.spawn(['cmod', ...args], { env: { CLAUDE_CODE_SESSION_ID: await mod.claude.session.id() } })
+  let stdout = ''
+  let stderr = ''
+  for await (const piece of stream) {
+    if (piece.stream === 'stdout') stdout += piece.text
+    else stderr += piece.text
+  }
+  const { code } = await stream.result
+  const lastError = stderr.trim().split('\n').at(-1) ?? ''
+  if (code !== 0) throw new Error(lastError === '' ? `${args.slice(0, 2).join(' ')} ${formatExit(code, '')}.` : lastError)
+  return stdout
+}
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
@@ -36,6 +61,13 @@ export const cmodPlugin = defineMod({
       const panel = panels.get(mod)
       if (panel === undefined) throw new Error('cmod has not started its /mods panel yet.')
       await panel.open(input.mod, input.page)
+      return null
+    },
+    async history(request: HistoryRequest, mod) {
+      return JSON.parse(await runCmod(mod, historyArguments(request))) as unknown
+    },
+    async updateSettings(input: { readonly mod: string; readonly source: string; readonly project: string; readonly values: Readonly<Record<string, unknown>> }, mod) {
+      await runCmod(mod,['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project])
       return null
     },
   },
@@ -57,6 +89,8 @@ export const cmodPlugin = defineMod({
         },
       }),
     )
+
+    void runCmod(mod, ['history', 'index']).catch((error: unknown) => mod.claude.ui.log(`cmod: ${messageOf(error)}`, { to: 'debug' }))
 
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })

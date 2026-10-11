@@ -1,4 +1,5 @@
-import type { Timer } from 'claude-code'
+import type { EventResult, Timer } from 'claude-code'
+import { isObject } from '../records.js'
 import type { Claude } from '../runtime/claude.js'
 import { elements } from './fake-elements.js'
 import { fakeFiles } from './fake-files.js'
@@ -46,6 +47,11 @@ export type FakeClaude = {
   readonly shown: Shown
   readonly store: Map<string, unknown>
   settle(): Promise<void>
+}
+
+export function calledAnswer(caller: string, answer: EventResult<'cmod.call'>): unknown {
+  if (isObject(answer) && typeof answer['deny'] === 'string') throw new Error(`${caller}: $.cmod.call: ${answer['deny']}`)
+  return isObject(answer) ? answer['value'] : undefined
 }
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {

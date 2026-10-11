@@ -419,6 +419,12 @@ mod.ui.scroll(args: { to: 'start' | 'end' | { key: string } | { requestId: strin
 <Button label="Latest" onPress={() => mod.ui.scroll({ to: 'end', in: 'log' })} />
 ```
 
+A [Message](mod.md#mod-history)'s `id` is the row Claude Code draws it under, and each of its tool calls' `id` is that call's row, so a history pane brings the conversation to the message a person presses:
+
+```tsx
+<Button label={message.text} onPress={() => mod.ui.scroll({ to: { requestId: message.id } })} />
+```
+
 ## Test the UI
 
 `tested.lines(paneId)` reads an open pane as rows of text. `tested.lines(slot, props)` draws a slot render. `tested.press(paneId, key)` presses a button. `tested.shown.toasts` lists the toasts. [testing.md](testing.md) covers each.

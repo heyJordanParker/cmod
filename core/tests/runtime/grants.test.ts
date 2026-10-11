@@ -8,9 +8,9 @@ import { testMod } from '../../src/testing.js'
 const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
 test('readSteps turns package.json "cmod" permissions into one item each', () => {
-  const steps = readSteps({ cmod: { permissions: { network: ['api.github.com', '/var/run/docker.sock'], run: ['gh'], files: ['~/.zshrc'], prompt: true, tools: true, config: true } } })
+  const steps = readSteps({ cmod: { permissions: { network: ['api.github.com', '/var/run/docker.sock'], run: ['gh'], files: ['~/.zshrc'], prompt: true, tools: true, config: ['cleanupPeriodDays', 'statusLine'], conversation: true } } })
 
-  expect(steps).toEqual({ permissions: ['network:api.github.com', 'network:/var/run/docker.sock', 'run:gh', 'files:~/.zshrc', 'prompt', 'tools', 'config'] })
+  expect(steps).toEqual({ permissions: ['network:api.github.com', 'network:/var/run/docker.sock', 'run:gh', 'files:~/.zshrc', 'prompt', 'tools', 'config:cleanupPeriodDays', 'config:statusLine', 'conversation'] })
   expect(steps?.permissions?.map(permissionWords)).toEqual([
     'Connect to api.github.com',
     'Connect to /var/run/docker.sock',
@@ -18,7 +18,9 @@ test('readSteps turns package.json "cmod" permissions into one item each', () =>
     'Change ~/.zshrc',
     'Add text Claude reads and start turns',
     "Use and change Claude's tool calls",
-    'Change your Claude Code settings',
+    'Change cleanupPeriodDays in your Claude Code settings',
+    'Change statusLine in your Claude Code settings',
+    'Read your Claude Code conversations',
   ])
 })
 
@@ -29,6 +31,8 @@ test('readSteps names the fix for each permission it cannot use', () => {
   expect(read({ model: 'yes' })).toThrow('package.json "cmod.permissions" sets "model" to "yes". Write "model": true, or leave it out.')
   expect(read({ network: ['https://api.github.com/repos'] })).toThrow('lists "https://api.github.com/repos" under "network". Write a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock".')
   expect(read({ files: ['notes.md'] })).toThrow('lists "notes.md" under "files". Write a path that starts with ~/ or /, such as "~/.zshrc".')
+  expect(read({ config: true })).toThrow('sets "config" to true. Write a list, such as "config": ["cleanupPeriodDays"].')
+  expect(read({ config: ['permissions.allow'] })).toThrow('lists "permissions.allow" under "config". Write a Claude Code setting\'s name, such as "cleanupPeriodDays".')
 })
 
 test('a call the mod does not declare fails with the line to add to package.json', async () => {
@@ -67,13 +71,13 @@ test('a fetch over a socket needs the socket path, and has names a permission th
   expect(mod?.permissions.has('agents')).toBe(false)
 })
 
-test('a write inside the project or the data folder needs no grant, one to Claude Code settings needs config, and one elsewhere needs files', async () => {
+test('a write inside the project or the data folder needs no grant, one to a Claude Code settings file is refused for settings.update, and one elsewhere needs files', async () => {
   const writes: string[] = []
   const notes = defineMod({
     name: 'notes',
     setup: (mod) =>
       mod.on('SessionStart', async () => {
-        for (const path of [`${mod.projectRoot}/notes.md`, `${mod.dataFolder}/cache.json`, `${mod.projectRoot}/.claude/settings.json`, '/test/home/.zshrc', '/test/home/.config/notes/rc']) {
+        for (const path of [`${mod.projectRoot}/notes.md`, `${mod.dataFolder}/cache.json`, `${mod.projectRoot}/.claude/settings.json`, '/test/home/.claude/settings.json', '/test/home/.zshrc', '/test/home/.config/notes/rc']) {
           await mod.fs.write(path, 'x').then(
             () => writes.push(`wrote ${path}`),
             (error: Error) => writes.push(error.message),
@@ -81,14 +85,15 @@ test('a write inside the project or the data folder needs no grant, one to Claud
         }
       }),
   })
-  const tested = testMod(notes, { projectRoot: '/work/app', permissions: ['files:~/.config/notes'] })
+  const tested = testMod(notes, { projectRoot: '/work/app', permissions: ['files:~/.config/notes', 'files:~/.claude'] })
 
   await tested.fire('SessionStart', { source: 'startup' })
 
   expect(writes).toEqual([
     'wrote /work/app/notes.md',
     'wrote /test/home/.local/share/cmod/data/notes/cache.json',
-    'notes calls fs.write(/work/app/.claude/settings.json), which needs "permissions": { "config": true } in package.json "cmod".',
+    "notes writes /work/app/.claude/settings.json by hand. Change Claude Code's settings with mod.claude.settings.update, which keeps the person's own edits and takes the mod's values out when it is removed.",
+    "notes writes /test/home/.claude/settings.json by hand. Change Claude Code's settings with mod.claude.settings.update, which keeps the person's own edits and takes the mod's values out when it is removed.",
     'notes calls fs.write(/test/home/.zshrc), which needs "permissions": { "files": ["~/.zshrc"] } in package.json "cmod".',
     'wrote /test/home/.config/notes/rc',
   ])
@@ -154,6 +159,29 @@ test('a program run without its grant names the line to add', async () => {
   await tested.fire('SessionStart', { source: 'startup' })
 
   expect(failure).toBe('preview calls process.run(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod".')
+})
+
+test('settings.update sends each listed setting to the cmod plugin and refuses one the mod does not list', async () => {
+  let mod: Mod | undefined
+  const sent: unknown[] = []
+  const tested = testMod(defineMod({ name: 'keeper', setup: (started) => void (mod = started) }), {
+    projectRoot: '/work/app',
+    permissions: ['config:cleanupPeriodDays'],
+    dependencies: {
+      cmod: {
+        updateSettings(input: unknown) {
+          sent.push(input)
+          return null
+        },
+      },
+    } as never,
+  })
+  await tested.start()
+
+  await mod!.claude.settings.update({ source: 'user' }, { cleanupPeriodDays: 365 })
+  await expect(mod!.claude.settings.update({ source: 'project' }, { statusLine: null })).rejects.toThrow('keeper calls settings.update(statusLine), which needs "permissions": { "config": ["statusLine"] } in package.json "cmod".')
+
+  expect(sent).toEqual([{ mod: 'keeper', source: 'user', project: '/work/app', values: { cleanupPeriodDays: 365 } }])
 })
 
 test('a hook answer part with its grant reaches Claude Code', async () => {

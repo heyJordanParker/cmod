@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import { program, type Program } from '../../src/jobs/program.js'
-import { defineMod } from '../../src/mod.js'
+import { defineMod, type Mod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 function written(chunks: readonly ProcessSpawnChunk[], exits: boolean, closed: () => void = () => undefined): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -162,4 +162,26 @@ test('a program the mod has no grant to run stops at once and names the line to 
     'preview calls process.spawn(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod". Add it, then run /reload-plugins.',
   )
   expect(tested.calls.filter((call) => call.call === 'clock.after')).toEqual([])
+})
+
+test("a mod fetches its own program's address with no network grant, and any other address still needs one", async () => {
+  let handle: Program | undefined
+  let mod: Mod | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      setup(started) {
+        mod = started
+        handle = started.use(program({ command: ['claude-modes'] }))
+      },
+    }),
+    { permissions: ['run:claude-modes'] },
+  )
+  tested.fakes.process.spawn = () => written([{ stream: 'stdout', text: 'unix:/tmp/modes-4242.sock\n' }], false)
+  tested.fakes.http.fetch = async () => ({ status: 200, headers: {}, body: '{}' }) as never
+  await tested.start()
+  const { url, socketPath } = await (handle as Program).ready()
+
+  expect((await mod!.http.fetch(`${url}/history`, socketPath === undefined ? {} : { socketPath })).status).toBe(200)
+  await expect(mod!.http.fetch(`${url}/history`, { socketPath: '/tmp/modes-1.sock' })).rejects.toThrow('"network": ["/tmp/modes-1.sock"]')
 })

@@ -21,7 +21,6 @@ import type {
   ProcessSpawnRequest,
   ProcessSpawnResult,
   RenderElement,
-  SessionMessage,
   Timer,
   ToastOptions,
   UiScrollArgs,
@@ -34,6 +33,7 @@ import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import type { RoutedHook } from './runtime/router.js'
 import type { ToolCalls } from './runtime/tool-calls.js'
+import type { Message, Session } from './history.js'
 import type { Pane } from './ui/define-pane.js'
 import type { Slot, SlotProps } from './ui/slots.js'
 
@@ -51,6 +51,7 @@ export type PaneHandle = {
 }
 
 export type { Claude, RoutedEvent, RoutedHook, ToolCalls }
+export type { Message, Sender, Session } from './history.js'
 export { longestMs } from './runtime/deadline.js'
 export { notInstalled } from './runtime/dependencies.js'
 export { messageOf } from './utils/text.js'
@@ -127,10 +128,11 @@ export type HookOptions = {
   readonly timeoutMs?: number
 }
 
-export type ScrollArgs = Omit<UiScrollArgs, 'to'> & { readonly to: Exclude<UiScrollArgs['to'], { requestId: string }> }
-
 export type ModClaude = Claude & {
   on<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): void
+  readonly settings: {
+    update(args: { readonly source: 'user' | 'project' | 'local' }, values: Readonly<Record<string, unknown>>): Promise<void>
+  }
 }
 
 export type Metadata = Readonly<Record<string, string>>
@@ -140,11 +142,6 @@ export type FileMatch = {
   readonly name?: string
   readonly metadata: Metadata
   readonly error?: string
-}
-
-type SessionMessages = {
-  (): Promise<SessionMessage[]>
-  (args: { readonly agentId: string }): Promise<SessionMessage[] | { readonly deny: string }>
 }
 
 export type Mod<State extends object = Record<never, never>, Declared extends Options = Options> = {
@@ -161,7 +158,7 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
     toast(text: string, options?: ToastOptions): void
     progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
     ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
-    scroll(args: ScrollArgs): Promise<UiScrollResult>
+    scroll(args: UiScrollArgs): Promise<UiScrollResult>
   }
   readonly process: {
     run(argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult>
@@ -187,9 +184,13 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
     open(pageId?: string): Promise<void>
   }
   readonly session: {
-    messages: SessionMessages
     append(text: string): Promise<void>
     submit(text: string): Promise<void>
+  }
+  readonly history: {
+    sessions(options?: { readonly since?: string; readonly everyProject?: boolean }): Promise<Session[]>
+    messages(options?: { readonly session?: string; readonly agent?: string; readonly after?: string; readonly last?: number; readonly follow?: boolean }): AsyncIterable<Message>
+    search(text: string, options?: { readonly since?: string; readonly everyProject?: boolean }): Promise<Message[]>
   }
   readonly agent: {
     spawn(args: AgentSpawnArgs): Promise<AgentSpawnResult>

@@ -368,7 +368,7 @@ type Program = {
 `program` runs a background program, such as a preview server, and hands the mod its address.
 
 - `command` is the program on `PATH` and its arguments. `environment` sets variables for it. An empty `command` throws.
-- The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `mod.http.fetch`.
+- The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `mod.http.fetch`, which reaches that address with no `network` permission while the program runs.
 - In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()`.
 - When the program exits, cmod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and cmod logs `<mod>: the <program> program stopped: <reason>`.
 - A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` is not on `PATH`, so `command` names it by its full path, `${mod.dataFolder}/bin/<program>`.
@@ -448,7 +448,7 @@ export const timer = defineMod({
 
 Each member calls the member of the same name in Claude Code's hooks API, `$`, with the same arguments. The `env` members read `$.env.get` instead. `mod.claude.on` adds a handler, as [Write a job of your own](#write-a-job-of-your-own) shows.
 
-A member that does what a permission covers checks it first and rejects with the fix: `process` needs `run`, `http.fetch` needs `network`, `fs.write` outside the project and the data folder needs `files` or, for Claude Code's own settings files, `config`, `fs.read` of a transcript needs `conversation`, `session.messages` needs `conversation`, `session.append` and `prompt.submit` need `prompt`, `model.complete` needs `model`, `agent.spawn` needs `agents`, and `tool.call` needs `tools`, except `CronCreate`, which needs `prompt`, and `CronList` and `CronDelete`, which need nothing ([permissions.md](permissions.md)).
+A member that does what a permission covers checks it first and rejects with the fix: `process` needs `run`, `http.fetch` needs `network` except to the mod's own program, `fs.write` outside the project and the data folder needs `files` and refuses Claude Code's own settings files, `settings.update` needs `config` for each key, `fs.read` of a transcript needs `conversation`, `session.messages` needs `conversation`, `session.append` and `prompt.submit` need `prompt`, `model.complete` needs `model`, `agent.spawn` needs `agents`, and `tool.call` needs `tools`, except `CronCreate`, which needs `prompt`, and `CronList` and `CronDelete`, which need nothing ([permissions.md](permissions.md)).
 
 | Member | What it does |
 | --- | --- |
@@ -470,6 +470,7 @@ A member that does what a permission covers checks it first and rejects with the
 | `fs.read`, `fs.write`, `fs.list`, `fs.exists`, `fs.stat` | What `mod.fs` calls. A relative path is under the session's working folder. |
 | `http.fetch(url, init?)` | What `mod.http.fetch` calls. |
 | `settings.read(args?)` | Reads Claude Code's own `settings.json` files. Without `{ source }` it answers every source merged. `user`, `project`, `local`, `flag`, and `policy` each answer one. |
+| `settings.update({ source }, values)` | Changes keys in the `user`, `project`, or `local` settings through the cmod program, which keeps the person's own edits and takes the mod's values out when it is removed ([mod.md](mod.md#mod-settings)). |
 | `config.list()` | Lists the rows `/config` shows, such as `<mod>.<option>`. A mod sets an option through `cmod option <mod> <key> <value>`, as `/mods` does. |
 | `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where cmod also keeps `mod.state`. |
 | `clock.now()` | Resolves milliseconds since the epoch. |
@@ -481,7 +482,7 @@ A member that does what a permission covers checks it first and rejects with the
 | `session.model()` | The main conversation's model, as `/model` shows it. |
 | `session.usage()` | When the session began, the context window's fill, the rate-limit windows, and the cost, as the status line has them. |
 | `session.surfaces()` | Every surface the session draws on, `terminal` first. Empty in a plain `-p` run. |
-| `session.messages(args?)` | What `mod.session.messages` calls. |
+| `session.messages(args?)` | Claude Code's own read of the newest 4096 messages of this conversation, or of a subagent's with `{ agentId }`, each `{ role, text, toolUses, toolResults }`. `mod.history` reads every conversation whole, as messages with ids and senders ([mod.md](mod.md#mod-history)). |
 | `session.append({ message, agentId? })` | Adds a message Claude reads to the conversation, or to a subagent's, and resolves `{ message, uuid }` or `{ deny }`. `mod.session.append` is built on it. |
 | `prompt.submit({ text, asUser? })` | Sends a prompt Claude answers as a turn once the session is idle. `mod.session.submit` is built on it. |
 | `model.complete(request, options?)` | What `mod.model.complete` calls. |
@@ -493,7 +494,7 @@ A member that does what a permission covers checks it first and rejects with the
 | `env.home()` | The `HOME` variable, or `undefined` when it is unset. |
 | `env.dataHome()` | The `XDG_DATA_HOME` variable, or `undefined`. |
 | `env.configHome()` | The `CLAUDE_CONFIG_DIR` variable, or `undefined`. |
-| `cmod.call({ to, method, input })` | Calls `method` of the mod named `to`. `mod.dependencies` is built on it. |
+| `cmod.call({ to, method, input })` | Calls `method` of the mod named `to`, and resolves what the method returned, or rejects with the reason it failed. The mod's own `cmod.call` handler answers `{ value }` or `{ deny }`, and Claude Code turns that into the result. `mod.dependencies` is built on it. |
 
 ### The building blocks
 

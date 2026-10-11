@@ -7,7 +7,7 @@ import { readText, tilde } from '../files.js'
 import { runStep } from '../process.js'
 import { removeData, removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
-import { unbindKeys } from '../settings.js'
+import { restoreSettings, unbindKeys } from '../settings.js'
 import { modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 import { holdSignals, printEvent, printFailure, stepEnvironment, uninterruptible } from './setup.js'
 
@@ -18,7 +18,8 @@ export const help = `Usage: cmod teardown <plugin-name> [--events]
 ${summary}
 
 Runs the mod's saved uninstall step, then removes the key bindings it added
-that still run its commands, and deletes its install record, the saved step,
+that still run its commands and the Claude Code settings it set that still
+hold its values, and deletes its install record, the saved step,
 every version of its program with its links, and its data
 folder, and forgets the scripts you approved for it, so installing it again asks
 again. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
@@ -91,6 +92,7 @@ async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => 
     }
   }
   await unbindKeys(record.keys)
+  await restoreSettings(record.name)
   if (record.program !== null) await removeProgram(record.program)
   await removeData(record.name)
   await revokeApprovals(record.name)

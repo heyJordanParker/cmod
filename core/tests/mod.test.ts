@@ -2,11 +2,11 @@ import { expect, expectTypeOf, test } from 'bun:test'
 import type { AgentInfo, ClassicHookInputs, EventResult, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod, type HookInput, type Job, type Mod, type ModHook, type PaneHandle } from '../src/mod.js'
+import { defineMod, type HookInput, type Job, type Message, type Mod, type ModHook, type PaneHandle, type Session } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
 import { testMod, type TestedMod } from '../src/testing.js'
-import { fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
+import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
 import { textOf } from '../src/testing/fake-elements.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Text } from '../src/ui/elements.js'
@@ -862,24 +862,100 @@ test('mod.fs.exists and mod.fs.stat answer for files and folders', async () => {
   expect(answers).toEqual({ file: true, folder: true, missing: false, kind: 'dir' })
 })
 
-test("mod.session.messages reads the main conversation, or a subagent's by agentId", async () => {
-  const read: unknown[] = []
-  const tested = testMod(
-    defineMod({
-      name: 'history',
-      setup(mod) {
-        mod.on('SubagentStop', async (input) => {
-          read.push(await mod.session.messages(), await mod.session.messages({ agentId: input.agent_id }))
-        })
-      },
-    }),
-    { permissions: ['conversation'] },
-  )
-  tested.fakes.session.messages = (async (args?: { agentId?: string }) => [{ role: 'user', text: args?.agentId ?? 'main' }]) as unknown as Claude['session']['messages']
+const conversation: Message[] = [
+  { id: 'm1', session: 'test-session', at: '2026-10-11T10:00:00.000Z', from: { kind: 'person' }, text: 'Rename the tree pane', tools: [] },
+  { id: 'm2', session: 'test-session', at: '2026-10-11T10:00:05.000Z', from: { kind: 'claude' }, text: '', tools: [{ tool: 'Agent', input: { prompt: 'find the pane' }, id: 'toolu_1', result: 'found it', subagent: 'agent-3' }] },
+  { id: 'a1', session: 'test-session', agent: 'agent-3', at: '2026-10-11T10:00:06.000Z', from: { kind: 'agent' }, text: 'find the pane', tools: [] },
+  { id: 'o1', session: 'older', at: '2026-10-10T09:00:00.000Z', from: { kind: 'mod', name: 'modes' }, text: 'Switch to build mode, then rename the pane', tools: [] },
+]
 
-  await tested.fire('SubagentStop', { agent_id: 'agent-3', agent_type: 'explorer', agent_transcript_path: '/t.jsonl', stop_hook_active: false, last_assistant_message: '' } as never)
+const sessions: Session[] = [
+  { id: 'test-session', title: 'Rename the tree pane', project: '/test/plugins/history', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:00:06.000Z' },
+  { id: 'older', title: 'Switch to build mode', project: '/test/plugins/history', startedAt: '2026-10-10T09:00:00.000Z', lastAt: '2026-10-10T09:00:00.000Z' },
+]
 
-  expect(read).toEqual([[{ role: 'user', text: 'main' }], [{ role: 'user', text: 'agent-3' }]])
+async function readAll(messages: AsyncIterable<Message>): Promise<string[]> {
+  const ids: string[] = []
+  for await (const message of messages) ids.push(message.id)
+  return ids
+}
+
+test("mod.history.messages reads this conversation, or a subagent's by its id", async () => {
+  let mod: Mod | undefined
+  const tested = testMod(defineMod({ name: 'history', setup: (started) => void (mod = started) }), { permissions: ['conversation'], history: { sessions, messages: conversation } })
+  await tested.start()
+
+  expect(await readAll(mod!.history.messages())).toEqual(['m1', 'm2'])
+  expect(await readAll(mod!.history.messages({ agent: 'agent-3' }))).toEqual(['a1'])
+  expect(await readAll(mod!.history.messages({ session: 'older' }))).toEqual(['o1'])
+  expect(await readAll(mod!.history.messages({ last: 1 }))).toEqual(['m2'])
+})
+
+test('mod.history.messages with follow yields each message saved after the event that adds it', async () => {
+  let mod: Mod | undefined
+  const saved = conversation.slice(0, 1)
+  const tested = testMod(defineMod({ name: 'history', setup: (started) => void (mod = started) }), { permissions: ['conversation'], history: { sessions, messages: saved } })
+  await tested.start()
+  const seen: string[] = []
+  const following = (async () => {
+    for await (const message of mod!.history.messages({ follow: true })) {
+      seen.push(message.id)
+      if (seen.length === 2) return
+    }
+  })()
+  await tested.settle()
+  expect(seen).toEqual(['m1'])
+
+  saved.push(conversation[1] as Message)
+  await tested.fire('Stop', { stop_hook_active: false, last_assistant_message: '' } as never)
+  await following
+
+  expect(seen).toEqual(['m1', 'm2'])
+})
+
+test("mod.history.messages with follow on another session's conversation reads it again each second", async () => {
+  let mod: Mod | undefined
+  const saved = conversation.slice(3)
+  const tested = testMod(defineMod({ name: 'history', setup: (started) => void (mod = started) }), { permissions: ['conversation'], history: { sessions, messages: saved } })
+  const ticks: (() => void)[] = []
+  tested.fakes.clock.after = (ms, fn) => {
+    if (ms === 1000) ticks.push(fn)
+    return { cancel: () => undefined }
+  }
+  await tested.start()
+  const seen: string[] = []
+  const following = (async () => {
+    for await (const message of mod!.history.messages({ session: 'older', follow: true })) {
+      seen.push(message.id)
+      if (seen.length === 2) return
+    }
+  })()
+  await tested.settle()
+  expect(seen).toEqual(['o1'])
+
+  saved.push({ id: 'o2', session: 'older', at: '2026-10-10T09:00:05.000Z', from: { kind: 'claude' }, text: 'Build mode is on.', tools: [] })
+  ticks.shift()?.()
+  await following
+
+  expect(seen).toEqual(['o1', 'o2'])
+})
+
+test('mod.history.search returns every message of the project containing the text, newest first, and sessions lists the project', async () => {
+  let mod: Mod | undefined
+  const tested = testMod(defineMod({ name: 'history', setup: (started) => void (mod = started) }), { permissions: ['conversation'], history: { sessions, messages: conversation } })
+  await tested.start()
+
+  expect((await mod!.history.search('RENAME')).map((message) => message.id)).toEqual(['m1', 'o1'])
+  expect((await mod!.history.search('find the pane')).map((message) => message.id)).toEqual(['a1', 'm2'])
+  expect((await mod!.history.sessions({ since: '2026-10-11T00:00:00.000Z' })).map((session) => session.id)).toEqual(['test-session'])
+})
+
+test('mod.history refuses a mod without the conversation permission and names the fix', async () => {
+  let mod: Mod | undefined
+  const tested = testMod(defineMod({ name: 'history', setup: (started) => void (mod = started) }), { permissions: [], history: { sessions, messages: conversation } })
+  await tested.start()
+
+  await expect(mod!.history.sessions()).rejects.toThrow('history calls history, which needs "permissions": { "conversation": true } in package.json "cmod".')
 })
 
 test('mod.agent.spawn starts a subagent and returns its agentId', async () => {
@@ -1232,7 +1308,7 @@ const outline = defineMod({
 })
 
 function relayTo(provider: Pick<TestedMod<object>, 'fire'>): Claude['cmod']['call'] {
-  return (call) => provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Run cmod install ${call.to}.` })
+  return async (call) => calledAnswer('outline', await provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Run cmod install ${call.to}.` }))
 }
 
 test("a mod calls another mod's api and gets its result", async () => {
@@ -1249,7 +1325,7 @@ test('a call to a mod that is not installed fails with the install command', asy
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'file-tree', setup() {} })))
 
-  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
+  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: outline: $.cmod.call: tracer is not installed. Run cmod install tracer.' })
 })
 
 test('an unknown method fails naming it', async () => {
@@ -1268,7 +1344,7 @@ test("a provider method that throws reaches the caller with the provider's name"
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(provider)
 
-  expect(await consumer.type('/outline src/gone.ts')).toEqual({ text: '/outline failed: tracer: ENOENT: no such file src/gone.ts' })
+  expect(await consumer.type('/outline src/gone.ts')).toEqual({ text: '/outline failed: outline: $.cmod.call: tracer: ENOENT: no such file src/gone.ts' })
 })
 
 test('a mod passes on a call addressed to another mod', async () => {
@@ -1334,7 +1410,7 @@ test("a mod's settings pages are listed to /mods and open by id, and open() with
     }),
   )
   const asked: unknown[] = []
-  tested.fakes.cmod.call = async (input) => (asked.push(input), { value: null })
+  tested.fakes.cmod.call = async (input) => (asked.push(input), null)
   await tested.start()
 
   expect(await tested.fire('cmod.call', { to: 'ci-watch', method: 'cmod:settingsPages', input: null })).toEqual({ value: [{ id: 'runs', title: 'Runs' }] })

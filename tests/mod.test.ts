@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { EngineCreateResult, On } from 'claude-code'
+import type { EngineCreateResult, HookStream, On, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
@@ -153,9 +153,9 @@ function testPanel() {
   const called: string[] = []
   tested.fakes.cmod.call = async (input) => {
     called.push(`${input.to} ${input.method}`)
-    if (input.method === 'cmod:settingsPages') return { value: [{ id: 'runs', title: 'Runs' }] }
-    if (input.method === 'cmod:pendingSteps') return { value: called.includes('ci-watch cmod:finishSteps') ? [] : ['Sign in to GitHub'] }
-    return { value: null }
+    if (input.method === 'cmod:settingsPages') return [{ id: 'runs', title: 'Runs' }]
+    if (input.method === 'cmod:pendingSteps') return called.includes('ci-watch cmod:finishSteps') ? [] : ['Sign in to GitHub']
+    return null
   }
   return { tested, ran, called }
 }
@@ -265,6 +265,53 @@ test('cmod.call denies a call no mod takes with the install command', async () =
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
 
   expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Run cmod install tracer.' })
+})
+
+function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>) {
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'] } } })
+  const spawned: string[][] = []
+  const sessions: (string | undefined)[] = []
+  tested.fakes.process.spawn = (request) => {
+    spawned.push([...request.argv])
+    sessions.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
+    const { code, stdout = '', stderr = '' } = answers[request.argv.slice(1, 3).join(' ')] ?? { code: 0 }
+    const chunks: ProcessSpawnChunk[] = [...(stdout === '' ? [] : [{ stream: 'stdout' as const, text: stdout }]), ...(stderr === '' ? [] : [{ stream: 'stderr' as const, text: stderr }])]
+    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+      yield* chunks
+      return { code, signal: null }
+    }
+    return Object.assign(read(), { result: Promise.resolve({ code, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  }
+  return { tested, spawned, sessions }
+}
+
+test('the history call runs cmod history in this session with the request as flags and answers its JSON, and the session start indexes in the background', async () => {
+  const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z' }
+  const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' } })
+  const history = (input: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'history', input })
+
+  expect(await history({ command: 'sessions', project: '/work/app', since: '2d', everyProject: true })).toEqual({ value: [session] })
+  expect(await history({ command: 'messages', project: '/work/app', session: 's1', agent: 'a7', after: 'm9', limit: 100 })).toEqual({ value: [] })
+
+  expect(spawned).toEqual([
+    ['cmod', 'history', 'index'],
+    ['cmod', 'history', 'sessions', '--json', '--project', '/work/app', '--since', '2d', '--all'],
+    ['cmod', 'history', 'messages', 's1', '--json', '--project', '/work/app', '--agent', 'a7', '--after', 'm9', '--limit', '100'],
+  ])
+  expect(sessions).toEqual(['test-session', 'test-session', 'test-session'])
+})
+
+test("the updateSettings call runs cmod settings for the mod, and a refusal comes back as the deny with cmod's last error line", async () => {
+  const { tested, spawned } = cmodAnswering({ 'settings keeper': { code: 1, stderr: 'keeper has no grant to change statusLine.\n' } })
+  const update = (mod: string, values: Record<string, unknown>) => tested.fire('cmod.call', { to: 'cmod', method: 'updateSettings', input: { mod, source: 'project', project: '/work/app', values } })
+
+  expect(await update('notes', { cleanupPeriodDays: 365 })).toEqual({ value: null })
+  expect(await update('keeper', { statusLine: null })).toEqual({ deny: 'cmod: keeper has no grant to change statusLine.' })
+
+  expect(spawned.slice(1)).toEqual([
+    ['cmod', 'settings', 'notes', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
+    ['cmod', 'settings', 'keeper', 'project', '{"statusLine":null}', '--project', '/work/app'],
+  ])
 })
 
 test('forkParent names the session whose last turn ended on this conversation, and null for a new conversation', async () => {

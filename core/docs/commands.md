@@ -172,6 +172,25 @@ Lists every plugin Claude Code has installed or linked, with its version. A mod 
 
 - The `cmod` commands count a plugin as a mod only when its `package.json` has a `cmod` step key or cmod holds an install record for it. A mod made with `cmod new` has neither until its first Claude Code session sets it up, so until then `cmod list` shows it as `enabled`, like any other plugin.
 
+## Read your conversations
+
+### cmod history
+
+```text
+cmod history sessions [--all] [--since 2d] [--project <folder>] [--json]
+cmod history messages [<session>] [--agent <id>] [--last <n>] [--after <id>] [--limit <n>] [--follow] [--json]
+cmod history search <text> [--all] [--since 2d] [--project <folder>] [--json]
+cmod history index
+```
+
+Reads every conversation Claude Code saved, as the sessions and messages `mod.history` answers ([mod.md](mod.md#mod-history)), so a person or an agent reads them in a terminal without parsing a transcript.
+
+- `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, and `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`.
+- `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--agent` reads one of its subagents' conversations, `--last` starts that many messages from the end, `--after` starts after a message id, `--limit` stops after that many, and `--follow` keeps printing new messages as they are saved.
+- `search` prints every message whose text or tool input contains the text, any case, newest first, with its time and session.
+- `--json` prints the sessions or messages as JSON instead of one line each.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history.sqlite`. The cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+
 ## Run in an install script
 
 ### cmod download
@@ -200,7 +219,7 @@ Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out.
 cmod teardown <plugin-name> [--events]
 ```
 
-Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, and its data folder, and forgets the scripts and the permissions the person approved for it. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
+Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, and its data folder, takes out each Claude Code setting it changed that still has the value it set, and forgets the scripts and the permissions the person approved for it. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
 
 ### cmod permission
 
@@ -209,6 +228,14 @@ cmod permission <mod> <name> [value] on|off
 ```
 
 Turns one permission of a set-up mod on or off, such as `cmod permission ci-watch model off` or `cmod permission ci-watch network api.github.com on`. A toggle in `/mods` runs it. It refuses a permission the mod's `package.json` `cmod.permissions` does not list, and the mod sees the change before its next call, with no reload ([permissions.md](permissions.md)).
+
+### cmod settings
+
+```text
+cmod settings <mod> <user|project|local> <json> [--project <folder>]
+```
+
+Changes Claude Code settings for a set-up mod, as its `mod.claude.settings.update` does ([mod.md](mod.md#mod-settings)), such as `cmod settings keeper user '{"cleanupPeriodDays":365}'`. It writes each top-level key of the JSON object into the user, project, or local settings, and `null` removes the key. The project and local settings are those of `--project`, the current folder when it is left out, and `mcpServers` in the project settings goes to `.mcp.json`. Each key needs the mod's `config` permission for it. cmod keeps every other key and the file's formatting, and `cmod teardown` takes out each value the mod set that is still the same.
 
 ### cmod option
 

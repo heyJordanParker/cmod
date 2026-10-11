@@ -1,8 +1,11 @@
 import { existsSync, realpathSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { isObject, marketplaceOf, updatesToTurnOn } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse } from 'jsonc-parser'
-import { home, readText, tilde, writeAtomically } from './files.js'
+import { home, readJson, readText, tilde, writeAtomically } from './files.js'
+import { storePath, takeLock } from './store.js'
 
 const pluginFolders = 'CLAUDE_CODE_PLUGIN_DIRS'
 
@@ -84,6 +87,77 @@ async function writeValues(link: string, fresh: string, values: Record<string, u
   let next = base
   for (const [key, value] of Object.entries(values)) next = applyEdits(next, modify(next, [key], value, { formattingOptions }))
   await writeAtomically(path, next)
+}
+
+export type SettingsSource = 'user' | 'project' | 'local'
+
+export type SettingChange = { readonly file: string; readonly key: string; readonly value: unknown }
+
+type ModSettings = Record<string, Record<string, unknown>>
+
+export function settingsFileOf(source: SettingsSource, project: string, key: string): string {
+  if (source === 'user') return settingsPath()
+  if (source === 'local') return join(project, '.claude', 'settings.local.json')
+  return key === 'mcpServers' ? join(project, '.mcp.json') : join(project, '.claude', 'settings.json')
+}
+
+export async function changeSettings(mod: string, changes: readonly SettingChange[]): Promise<void> {
+  await withSettingsLock(async () => {
+    const recordFile = storePath('settings', `${mod}.json`)
+    const set = await readModSettings(recordFile)
+    for (const file of new Set(changes.map((change) => change.file))) {
+      const { path, text } = await readConfig(file)
+      configObject(text, path)
+      const base = text.trim() === '' ? '{}\n' : text
+      const formattingOptions = indentation(base)
+      const ours = set[path] ?? {}
+      let next = base
+      for (const { key, value } of changes.filter((change) => change.file === file)) {
+        next = applyEdits(next, modify(next, [key], value ?? undefined, { formattingOptions }))
+        if (value === null) delete ours[key]
+        else ours[key] = value
+      }
+      if (Object.keys(ours).length > 0) set[path] = ours
+      else delete set[path]
+      await writeAtomically(path, next)
+    }
+    if (Object.keys(set).length > 0) await writeAtomically(recordFile, `${JSON.stringify(set, null, 2)}\n`)
+    else await rm(recordFile, { force: true })
+  })
+}
+
+export async function restoreSettings(mod: string): Promise<void> {
+  await withSettingsLock(async () => {
+    const recordFile = storePath('settings', `${mod}.json`)
+    for (const [file, values] of Object.entries(await readModSettings(recordFile))) {
+      const { path, text } = await readConfig(file)
+      if (text.trim() === '') continue
+      const current = configObject(text, path)
+      const formattingOptions = indentation(text)
+      let next = text
+      for (const [key, value] of Object.entries(values)) {
+        if (isDeepStrictEqual(current[key], value)) next = applyEdits(next, modify(next, [key], undefined, { formattingOptions }))
+      }
+      if (next !== text) await writeAtomically(path, next)
+    }
+    await rm(recordFile, { force: true })
+  })
+}
+
+async function withSettingsLock(change: () => Promise<void>): Promise<void> {
+  const lock = await takeLock(storePath('settings.lock'))
+  try {
+    await change()
+  } finally {
+    await lock[Symbol.asyncDispose]()
+  }
+}
+
+async function readModSettings(path: string): Promise<ModSettings> {
+  const value = await readJson(path)
+  if (value === undefined) return {}
+  if (!isObject(value) || !Object.values(value).every(isObject)) throw new Error(`${path} is not a map of settings files to the values a mod set. Delete it, and cmod stops taking those values out at removal.`)
+  return value as ModSettings
 }
 
 export async function bindKeys(keys: Readonly<Record<string, string>>): Promise<{ bound: Record<string, string>; kept: string[] }> {

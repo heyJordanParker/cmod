@@ -19,13 +19,20 @@ export type Steps = {
   permissions?: readonly string[]
 }
 
-export const listPermissions = ['network', 'run', 'files'] as const
-export const flagPermissions = ['conversation', 'prompt', 'model', 'agents', 'tools', 'config', 'approve'] as const
+export const listPermissions = ['network', 'run', 'files', 'config'] as const
+export const flagPermissions = ['conversation', 'prompt', 'model', 'agents', 'tools', 'approve'] as const
 export type ListPermission = (typeof listPermissions)[number]
 export type FlagPermission = (typeof flagPermissions)[number]
 const permissionNames: readonly string[] = [...listPermissions, ...flagPermissions]
 const hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/
 const programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
+const settingName = /^[A-Za-z][A-Za-z0-9]*$/
+const listItemHint: Readonly<Record<ListPermission, string>> = {
+  network: 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"',
+  run: 'a program\'s command, such as "gh"',
+  files: 'a path that starts with ~/ or /, such as "~/.zshrc"',
+  config: 'a Claude Code setting\'s name, such as "cleanupPeriodDays"',
+}
 
 export type ReadFile = (path: string) => Promise<string | undefined>
 
@@ -153,12 +160,12 @@ function readPermissions(steps: Record<string, unknown>): string[] {
       items.push('run:*')
       continue
     }
-    const example = name === 'network' ? '["api.github.com"]' : name === 'run' ? '["gh"], or "*" for any program' : '["~/.zshrc"]'
+    const example = { network: '["api.github.com"]', run: '["gh"], or "*" for any program', files: '["~/.zshrc"]', config: '["cleanupPeriodDays"]' }[name]
     if (!Array.isArray(value) || value.length === 0 || !value.every((each) => typeof each === 'string')) throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write a list, such as "${name}": ${example}.`)
     for (const each of value) {
       const isPath = /^(~\/|\/)/.test(each) && !each.split('/').includes('..')
-      const isValid = name === 'network' ? hostName.test(each) || isPath : name === 'run' ? programName.test(each) : isPath
-      if (!isValid) throw new Error(`${at} lists "${each}" under "${name}". Write ${name === 'network' ? 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"' : name === 'run' ? 'a program\'s command, such as "gh"' : 'a path that starts with ~/ or /, such as "~/.zshrc"'}.`)
+      const isValid = { network: hostName.test(each) || isPath, run: programName.test(each), files: isPath, config: settingName.test(each) }[name]
+      if (isValid !== true) throw new Error(`${at} lists "${each}" under "${name}". Write ${listItemHint[name as ListPermission]}.`)
       items.push(`${name}:${each}`)
     }
   }
@@ -176,7 +183,7 @@ export function permissionWords(item: string): string {
     case 'files':
       return `Change ${target}`
     case 'conversation':
-      return 'Read this conversation'
+      return 'Read your Claude Code conversations'
     case 'prompt':
       return 'Add text Claude reads and start turns'
     case 'model':
@@ -186,7 +193,7 @@ export function permissionWords(item: string): string {
     case 'tools':
       return "Use and change Claude's tool calls"
     case 'config':
-      return 'Change your Claude Code settings'
+      return `Change ${target} in your Claude Code settings`
     case 'approve':
       return "Approve Claude's tool calls for you"
     default:

@@ -81,8 +81,8 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     },
     cmod: { call: (input) => $.cmod.call(input) },
   }
-  await lifecycle.start(claude, readPlugin)
-  return passOn(eventInput)
+  const [, answer] = await Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)])
+  return answer
 }
 
 function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: Next<N>): Promise<EventResult<N>> {

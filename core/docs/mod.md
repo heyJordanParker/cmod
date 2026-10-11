@@ -116,7 +116,8 @@ type Mod<State, Options> = {
   readonly metadata: { read, update }
   readonly http: { fetch }
   readonly settings: { page, open }
-  readonly session: { messages, append, submit }
+  readonly history: { sessions, messages, search }
+  readonly session: { append, submit }
   readonly agent: { spawn }
   readonly model: { complete }
   readonly permissions: { has }
@@ -142,10 +143,11 @@ type Mod<State, Options> = {
 | `metadata` | Reads and changes the mod's keys in one file's metadata. | below |
 | `http` | Fetches a URL. | below |
 | `settings` | Adds the mod's own pages to `/mods`, and opens them. | below |
-| `session` | Reads the conversation or a subagent's, adds a note Claude reads, and asks Claude for a turn. | below |
+| `history` | Reads every saved Claude Code conversation: this one, a subagent's, or any earlier one, and searches them. | below |
+| `session` | Adds a note Claude reads, and asks Claude for a turn. | below |
 | `agent` | Starts a subagent. | below |
 | `model` | Asks a model one question, outside the conversation. | below |
-| `permissions` | Says whether the person has a permission turned on. `process`, `fs.write`, `metadata.update`, `http`, `session`, `agent`, `model`, and `claude` each check theirs. | [permissions.md](permissions.md) |
+| `permissions` | Says whether the person has a permission turned on. `process`, `fs.write`, `metadata.update`, `http`, `history`, `session`, `agent`, `model`, and `claude` each check theirs. | [permissions.md](permissions.md) |
 | `dependencies` | Calls the methods of other mods. | [dependencies.md](dependencies.md) |
 | `claude` | Claude Code's own calls and events, for what `mod` has no member for. | [jobs.md](jobs.md#the-claude-members) |
 
@@ -289,6 +291,7 @@ mod.http.fetch(url: string, init?: HttpInit): Promise<HttpResponse>
 
 - `init` takes `method` (`GET` by default), `headers`, `body` as text, and `socketPath`, the absolute path of a Unix socket the request goes over.
 - The response is `{ status, ok, headers, text }`. `ok` is true for a 2xx status. Header names are lower case.
+- A fetch to the address the mod's own `program` job answers on needs no `network` permission, while that program runs ([jobs.md](jobs.md#program)).
 
 ### mod.settings
 
@@ -304,24 +307,83 @@ mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: (current) => <
 mod.use(slashCommand({ name: 'ci-runs', description: 'Show the CI runs', reply: () => void mod.settings.open('runs') }))
 ```
 
-Claude Code's own `settings.json` files are read with `mod.claude.settings.read`, such as `(await mod.claude.settings.read({ source: 'user' }))['enabledPlugins']` ([jobs.md](jobs.md#the-claude-members)).
+Claude Code's own `settings.json` files are read with `mod.claude.settings.read`, such as `(await mod.claude.settings.read({ source: 'user' }))['enabledPlugins']`, and changed with `mod.claude.settings.update` ([jobs.md](jobs.md#the-claude-members)):
+
+```ts
+mod.claude.settings.update(args: { source: 'user' | 'project' | 'local' }, values: Readonly<Record<string, unknown>>): Promise<void>
+```
+
+- `update` writes each top-level key of `values` into the person's settings (`user`), the project's `.claude/settings.json` (`project`), or its `.claude/settings.local.json` (`local`). `mcpServers` with the `project` source goes to the project's `.mcp.json`, where Claude Code reads a project's servers.
+- A key replaces its whole value, and `null` removes the key. Every other key, and the file's formatting, stays as it was.
+- Each key needs its own `config` permission, such as `"config": ["cleanupPeriodDays"]` ([permissions.md](permissions.md)), and `update` rejects with the line to add for a key without one.
+- Removing the mod takes out each value it set that still equals what it set, so a value the person changed since stays.
+- `mod.fs.write` to a Claude Code settings file rejects and names `update`, because a whole-file write loses the person's own edits and leaves the mod's values behind when it is removed.
+
+```ts
+await mod.claude.settings.update({ source: 'user' }, { cleanupPeriodDays: 365 })
+```
+
+### mod.history
+
+```ts
+mod.history.sessions(options?: { since?: string; everyProject?: boolean }): Promise<Session[]>
+mod.history.messages(options?: { session?: string; agent?: string; after?: string; last?: number; follow?: boolean }): AsyncIterable<Message>
+mod.history.search(text: string, options?: { since?: string; everyProject?: boolean }): Promise<Message[]>
+```
+
+`history` reads every conversation Claude Code saved, as sessions and messages, so a mod never parses a transcript. Every call needs the `conversation` permission ([permissions.md](permissions.md)).
+
+```ts
+type Session = { id: string; title: string; project: string; startedAt: string; lastAt: string; forkedFrom?: string }
+
+type Message = {
+  id: string
+  session: string
+  agent?: string
+  at: string
+  from: Sender
+  text: string
+  tools: (ToolCall & { id: string; result?: string; isError?: boolean; subagent?: string })[]
+}
+
+type Sender =
+  | { kind: 'person' }
+  | { kind: 'claude' }
+  | { kind: 'mod'; name: string }
+  | { kind: 'agent' }
+  | { kind: 'session' }
+  | { kind: 'schedule' }
+  | { kind: 'channel'; name: string }
+  | { kind: 'sdk' }
+  | { kind: 'claude-code'; reason: 'skill' | 'instructions' | 'compaction' | 'notification'; name?: string }
+  | { kind: 'unknown' }
+```
+
+- A `Session` is one conversation. `title` is the name the person gave it with `/rename`, or its first prompt. `project` is the folder it ran in. `startedAt` and `lastAt` are ISO times. `forkedFrom` names the session a `/branch` or a fork copied it from.
+- A `Message` is one prompt or one reply. `id` is the id Claude Code draws its row under, so `mod.ui.scroll({ to: { requestId: message.id } })` scrolls to it ([ui.md](ui.md#scrolling)). `agent` names the subagent whose conversation it is in, and is left out in the main conversation. `at` is its ISO time.
+- `from` says who sent it: the person, Claude, a mod by name, the agent that started a subagent, another session, a schedule, a channel, a program through the SDK, or Claude Code itself, as a Skill it loaded, a `CLAUDE.md` file it read, a compaction summary, or a background task's notice.
+- Each of `tools` is a tool call in a reply: `tool` and `input` as a hook gets them, `id` as the call's `tool_use_id`, `result` as the text the tool answered, the whole of it even when Claude Code saved a long result to a file, `isError` when the tool failed, and `subagent` as the id of the subagent an Agent call started.
+- `sessions` lists the conversations of the project, newest first. `everyProject` lists every project's, and `since` keeps those active since a time, written as `30m`, `6h`, `2d`, `1w`, or a date such as `2026-10-01`.
+- `messages` yields one conversation's messages in order: this session's, or `session`'s. `agent` reads one of its subagents' conversations, the id a `SubagentStop` hook gets as `agent_id`. `last` starts that many messages from the end, and `after` starts after a message's `id`. With `follow`, the loop keeps yielding each new message until the mod leaves the loop: this session's as soon as its hooks run, and another session's within a second.
+- `search` answers every message whose text or tool input contains `text`, any case, newest first, in the project or with `everyProject` in every project. It reads every conversation it covers first. A tool's result is not searched.
+
+```ts
+for await (const message of mod.history.messages({ follow: true })) {
+  if (message.from.kind === 'person') mod.state.session.prompts += 1
+}
+```
+
+```ts
+const earlier = await mod.history.search('deploy job', { since: '1w' })
+```
+
+The `cmod history` command answers the same calls in a terminal ([commands.md](commands.md#cmod-history)). The cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since.
 
 ### mod.session
 
 ```ts
-mod.session.messages(): Promise<SessionMessage[]>
-mod.session.messages(args: { agentId: string }): Promise<SessionMessage[] | { deny: string }>
 mod.session.append(text: string): Promise<void>
 mod.session.submit(text: string): Promise<void>
-```
-
-`messages` reads the main conversation, one `{ role, text, toolUses, toolResults }` entry per message. A message has no id of its own, and each tool use carries its `tool_use_id`. `{ agentId }` reads that subagent's conversation instead, the id a `SubagentStart` or `SubagentStop` hook gets as `agent_id`, and answers `{ deny }` when the session cannot read it, so `Array.isArray` tells the two apart. The Messages API form, `{ role, content }` with the content blocks whole, is `mod.claude.session.messages({ as: 'api' })`.
-
-```ts
-mod.on('SubagentStop', async ({ agent_id }) => {
-  const read = await mod.session.messages({ agentId: agent_id })
-  if (Array.isArray(read)) mod.ui.toast(read.at(-1)?.text ?? '')
-})
 ```
 
 `append` adds `text` to the conversation as a user message the person does not see, so Claude reads it on its next call to the model. It starts no turn. It rejects with `<mod>: Claude Code refused the note: <reason>` when a plugin's `session.append` handler refuses it.
@@ -343,7 +405,7 @@ mod.every(60_000, async () => {
 mod.agent.spawn(args: { prompt: string; description?; subagentType?; model?; name?; cwd? }): Promise<AgentSpawnResult>
 ```
 
-`spawn` starts a subagent in the background, the way the Agent tool starts one, and resolves `{ agentId, model }` once it started, or `{ deny }` when a hook refused it. It does not wait for the subagent to finish. `subagentType` names an agent type, such as `explorer`. `mod.session.messages({ agentId })` reads the subagent's conversation so far.
+`spawn` starts a subagent in the background, the way the Agent tool starts one, and resolves `{ agentId, model }` once it started, or `{ deny }` when a hook refused it. It does not wait for the subagent to finish. `subagentType` names an agent type, such as `explorer`. `mod.history.messages({ agent: agentId })` reads the subagent's conversation so far.
 
 The subagent's answer arrives on the mod's `SubagentStop` hook once it finishes: the input's `agent_id` is the `agentId` that `spawn` resolved, and its `last_assistant_message` is the subagent's final reply. A hook may wait for it, as this one does:
 

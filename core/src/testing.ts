@@ -27,9 +27,10 @@ import type { RoutedEvent } from './runtime/hooks.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
-import { fakeClaude, type Fakes, type Shown, type TestCall } from './testing/fake-claude.js'
+import { calledAnswer, fakeClaude, type Fakes, type Shown, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
+import { fakeHistory, type FakeHistory } from './testing/fake-history.js'
 import { listed } from './utils/text.js'
 import type { Slot, SlotProps } from './ui/slots.js'
 
@@ -45,6 +46,7 @@ export type TestOptions<State extends object, Declared extends Options = Options
   readonly dependencies?: { readonly [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
   readonly links?: Readonly<Record<string, string>>
+  readonly history?: FakeHistory
 }
 
 type FilledField = 'session_id' | 'transcript_path' | 'cwd' | 'hook_event_name' | 'tool_use_id'
@@ -93,7 +95,7 @@ export function testMod<State extends object, Declared extends Options = Options
   fake.claude.session.id = async () => sessionId
   fake.claude.session.root = async () => projectRoot
   fake.claude.session.cwd = async () => cwd
-  fake.fakes.cmod.call = fakeDependencies(options.dependencies ?? {})
+  fake.fakes.cmod.call = fakeDependencies(name, options.dependencies ?? {}, options.history ?? {})
   const firedAgents = new Map<string, string>()
   const listAgents = fake.claude.agent.list
   fake.claude.agent.list = async () => {
@@ -276,11 +278,12 @@ export function testMod<State extends object, Declared extends Options = Options
   }
 }
 
-function fakeDependencies(dependencies: NonNullable<TestOptions<object>['dependencies']>): Claude['cmod']['call'] {
-  const apis = { cmod: { forkParent: () => null }, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
+function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, history: FakeHistory): Claude['cmod']['call'] {
+  const cmod = { forkParent: () => null, updateSettings: () => null, history: fakeHistory(history) }
+  const apis = { cmod, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
   return async (call) => {
     const api = apis[call.to]
-    return api === undefined ? { deny: notInstalled(call.to) } : answerCall(call.to, api, call)
+    return calledAnswer(caller, api === undefined ? { deny: notInstalled(call.to) } : await answerCall(call.to, api, call))
   }
 }
 

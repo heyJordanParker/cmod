@@ -167,6 +167,19 @@ test('session.start through the engine chain reads the plugin, runs setup, and a
   expect(shown.logs).toEqual(['demo added a hook on PostToolUse.'])
 })
 
+test('a mod starts while the plugins below it start, so its start can wait on one of them', async () => {
+  const fake = fakeOn()
+  const { $, shown } = engine(files)
+  let startBelow = () => undefined as void
+  const isBelowStarted = new Promise<void>((resolve) => (startBelow = resolve))
+  registerMod(fake.on, defineMod({ name: 'demo', setup: () => isBelowStarted }), {})
+  fake.registrations.push({ pattern: 'session.start', hasMatcher: false, hook: (_$: never, e: never, next: (e: unknown) => unknown) => (startBelow(), next(e)) })
+
+  await fake.dispatch('session.start', $, {}, {})
+
+  expect(shown.toasts).toEqual(['demo is ready'])
+})
+
 test('a pane opened during setup is drawn again once the mod is active', async () => {
   const fake = fakeOn()
   const { $ } = engine(files)

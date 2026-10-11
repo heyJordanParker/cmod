@@ -7,9 +7,10 @@ import { ifMissing, relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
-import { answerCall, callMod, dependencyCalls, notInstalled } from './dependencies.js'
+import { answerCall, cmodPluginName, dependencyCalls, notInstalled } from './dependencies.js'
+import { createHistory } from './history.js'
 import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
-import { checkedAnswer, checkingGrants, checksAnswers, checkWrite, isCovered, itemOf, passedDown, type AnswerCheck, type Grants } from './grants.js'
+import { checkedAnswer, checkGrant, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
 import { locatingPrograms, type Programs } from './programs.js'
 import { createModFiles } from './metadata.js'
 import { fitsOption } from '../options.js'
@@ -58,7 +59,6 @@ type ActiveMod<State extends object, Declared extends Options> = {
   readonly added: readonly string[]
 }
 
-const cmodPluginName = 'cmod'
 
 const announcedKey = 'cmod:announced'
 
@@ -66,7 +66,7 @@ const cmodCheckMs = 1000
 
 const cmodWaitMs = 60_000
 
-const sessionStartHoldMs = (10_000 satisfies HookBudget['ms']) - 1_000
+const startHoldMs = (10_000 satisfies HookBudget['ms']) - 1_000
 
 const dependencyCallMs = 30_000
 
@@ -431,14 +431,16 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (activation !== undefined && phase !== 'active') await activation
   }
 
-  const holdSessionStart = () =>
-    new Promise<void>((resolve) => {
-      const limit = claude().clock.after(sessionStartHoldMs, resolve)
-      void startSettled.then(whenActive).then(() => {
-        limit.cancel()
-        resolve()
-      })
-    })
+  const holdUntilStarted = (): Promise<void> =>
+    runtime === undefined
+      ? startSettled.then(whenActive)
+      : new Promise<void>((resolve) => {
+          const limit = claude().clock.after(startHoldMs, resolve)
+          void startSettled.then(whenActive).then(() => {
+            limit.cancel()
+            resolve()
+          })
+        })
 
   return {
     get phase() {
@@ -484,9 +486,10 @@ export function createLifecycle<State extends object, Declared extends Options =
         return next(e)
       }
       if (shouldRecord && event === 'classic.UserPromptSubmit') record()
-      await (event === 'classic.SessionStart' ? holdSessionStart() : whenActive())
+      const isCallToThisMod = event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name
+      await (event === 'classic.SessionStart' || isCallToThisMod ? holdUntilStarted() : whenActive())
       if (event === 'classic.SessionStart' && phase !== 'active') missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
-      if (event === 'cmod.call' && phase !== 'active' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) {
+      if (isCallToThisMod && phase !== 'active') {
         const isStopped = phase === 'declined' || phase === 'failed'
         return { deny: isStopped ? notInstalled(definition.name) : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
       }
@@ -525,6 +528,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     configRoot,
     projectRoot: () => modState.root,
     freeFolders: () => [modState.root, runtime.dataFolder],
+    freeAddresses: () => programAddresses(mod),
   }
   const checked = checkingGrants(claude, grants)
   const files = createModFiles({
@@ -541,7 +545,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     },
     async open(pageId) {
       if (pageId === undefined) {
-        await callMod(claude, { to: cmodPluginName, method: 'openSettings', input: { mod: definition.name } })
+        await claude.cmod.call({ to: cmodPluginName, method: 'openSettings', input: { mod: definition.name } })
         return
       }
       const page = pages.get(pageId)
@@ -556,7 +560,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   const forkParent = async (): Promise<string | undefined> => {
     if (definition.name === cmodPluginName) return undefined
     try {
-      const parent = await callMod(claude, { to: cmodPluginName, method: 'forkParent', input: null })
+      const parent = await claude.cmod.call({ to: cmodPluginName, method: 'forkParent', input: null })
       return typeof parent === 'string' ? parent : undefined
     } catch (error) {
       claude.ui.log(`${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`, { to: 'debug' })
@@ -616,7 +620,6 @@ async function createMod<State extends object, Declared extends Options>(definit
     http: { fetch: (url, init) => checked.http.fetch(url, init) },
     settings: settingsPages,
     session: {
-      messages: ((args?: { readonly agentId: string }) => (args === undefined ? checked.session.messages() : checked.session.messages({ agentId: args.agentId }))) as Mod<State>['session']['messages'],
       async append(text) {
         const added = await checked.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
         if (added.deny !== undefined) throw new Error(`${definition.name}: Claude Code refused the note: ${added.deny}`)
@@ -626,12 +629,23 @@ async function createMod<State extends object, Declared extends Options>(definit
         if ('drop' in submitted && typeof submitted.drop === 'string') throw new Error(`${definition.name}: Claude Code dropped the prompt: ${submitted.drop}`)
       },
     },
+    history: createHistory({ claude, router, checkGrant: () => checkGrant(grants, 'history', 'conversation'), project: () => modState.root }),
     agent: { spawn: (args) => checked.agent.spawn(args) },
     model: { complete: (completion, options) => checked.model.complete(completion, options) },
     permissions: {
       has: (name: string, value?: string) => isCovered(granted, itemOf(name, value), home),
     },
-    claude: { ...checked, on: (event, hook) => router.add(event, hook) },
+    claude: {
+      ...checked,
+      on: (event, hook) => router.add(event, hook),
+      settings: {
+        read: (args) => checked.settings.read(args),
+        async update(args, values) {
+          await checkSettings(grants, Object.keys(values))
+          await claude.cmod.call({ to: cmodPluginName, method: 'updateSettings', input: { mod: definition.name, source: args.source, project: modState.root, values } })
+        },
+      },
+    },
     get projectRoot() {
       return modState.root
     },

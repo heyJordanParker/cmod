@@ -34,6 +34,7 @@ type TestOptions<State, Options> = {
   readonly dependencies?: { [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
   readonly links?: Readonly<Record<string, string>>
+  readonly history?: { readonly sessions?: readonly Session[]; readonly messages?: readonly Message[] }
 }
 ```
 
@@ -45,9 +46,10 @@ type TestOptions<State, Options> = {
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `mod.projectRoot` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `mod.cwd` | `projectRoot` |
-| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Run cmod install <name>.` |
+| `dependencies` | The methods other mods answer with | none: every call fails with `<mod>: $.cmod.call: <name> is not installed. Run cmod install <name>.` |
 | `files` | The fake file system, absolute path to text | no files |
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
+| `history` | The saved conversations `mod.history` reads, in the order they were saved. A session's `project` puts it in the project, and a message's `session` and `agent` put it in a conversation ([mod.md](mod.md#mod-history)) | no conversations |
 
 A project plugin finds its repository through a `.git` entry at `projectRoot`, so a test of one puts it in `files`, such as `files: { '/test/project/.git': '' }`. Without it the project plugin has no repository, and its rules match calls in every folder, as a user mod's do.
 

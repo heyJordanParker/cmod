@@ -4,6 +4,7 @@ import * as check from './commands/check.js'
 import * as disable from './commands/disable.js'
 import * as download from './commands/download.js'
 import * as enable from './commands/enable.js'
+import * as history from './commands/history.js'
 import * as install from './commands/install.js'
 import * as link from './commands/link.js'
 import * as list from './commands/list.js'
@@ -12,6 +13,7 @@ import * as option from './commands/option.js'
 import * as permission from './commands/permission.js'
 import * as publish from './commands/publish.js'
 import * as remove from './commands/remove.js'
+import * as settings from './commands/settings.js'
 import * as setup from './commands/setup.js'
 import * as teardown from './commands/teardown.js'
 import * as tryMod from './commands/try.js'
@@ -38,6 +40,8 @@ const commands: Record<string, Command> = {
   teardown,
   permission,
   option,
+  settings,
+  history,
   download,
 }
 

@@ -12,24 +12,37 @@ export type Grants = {
   readonly configRoot: string | undefined
   readonly projectRoot: () => string
   readonly freeFolders: () => readonly string[]
+  readonly freeAddresses: () => ReadonlySet<string>
 }
 
 export class PermissionRefused extends Error {}
 
-const configFiles: readonly string[] = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json']
+const addressesOfPrograms = new WeakMap<object, Set<string>>()
+
+export function programAddresses(mod: object): Set<string> {
+  const known = addressesOfPrograms.get(mod) ?? new Set<string>()
+  addressesOfPrograms.set(mod, known)
+  return known
+}
+
+const projectSettingsFiles: readonly string[] = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json']
 
 const startsTurns: readonly string[] = ['CronCreate']
 
 const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
 
-async function checkGrant(grants: Grants, call: string, item: string | undefined): Promise<void> {
+export async function checkGrant(grants: Grants, call: string, item: string | undefined): Promise<void> {
   if (item === undefined) return
   await grants.refresh()
   if (!isCovered(grants.granted(), item, grants.home)) throw new PermissionRefused(refusal(grants, call, item))
 }
 
-export function checkWrite(grants: Grants, call: string, path: string): Promise<void> {
-  return checkGrant(grants, call, writeItem(grants, path))
+export async function checkWrite(grants: Grants, call: string, path: string): Promise<void> {
+  await checkGrant(grants, call, writeItem(grants, path))
+}
+
+export async function checkSettings(grants: Grants, keys: readonly string[]): Promise<void> {
+  for (const key of keys) await checkGrant(grants, `settings.update(${key})`, `config:${key}`)
 }
 
 export function checkingGrants(claude: Claude, grants: Grants): Claude {
@@ -59,7 +72,7 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     },
     http: {
       async fetch(url, init) {
-        await gate(`http.fetch(${url})`, `network:${init?.socketPath ?? hostOf(url)}`)
+        if (!grants.freeAddresses().has(init?.socketPath ?? addressOf(url))) await gate(`http.fetch(${url})`, `network:${init?.socketPath ?? hostOf(url)}`)
         return claude.http.fetch(url, init)
       },
     },
@@ -144,7 +157,10 @@ function readItem(grants: Grants, path: string): string | undefined {
 
 function writeItem(grants: Grants, path: string): string | undefined {
   const root = grants.projectRoot()
-  if (configFiles.some((file) => `${root}/${file}` === path)) return 'config'
+  const settingsFiles = [...projectSettingsFiles.map((file) => `${root}/${file}`), ...(grants.configRoot === undefined ? [] : [`${grants.configRoot}/settings.json`])]
+  if (settingsFiles.includes(path)) {
+    throw new PermissionRefused(`${grants.name} writes ${path} by hand. Change Claude Code's settings with mod.claude.settings.update, which keeps the person's own edits and takes the mod's values out when it is removed.`)
+  }
   if (grants.freeFolders().some((folder) => relativePath(folder, path) !== undefined)) return undefined
   return `files:${path}`
 }
@@ -288,6 +304,10 @@ function programOf(argv: readonly string[]): string {
 
 function hostOf(url: string): string {
   return URL.canParse(url) ? new URL(url).hostname : url
+}
+
+function addressOf(url: string): string {
+  return URL.canParse(url) ? new URL(url).host : url
 }
 
 function expanded(path: string, home: string | undefined): string {
