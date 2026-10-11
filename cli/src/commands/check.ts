@@ -259,7 +259,7 @@ async function writeClaudeTypes(plugin: Plugin): Promise<void> {
     const cmodPlugin = join(scratch, 'cmod')
     await writeAtomically(join(cmodPlugin, '.claude-plugin', 'plugin.json'), `${JSON.stringify({ name: 'cmod', version: cmodVersion })}\n`)
     const pluginDirs = plugin.name === 'cmod' ? [plugin.root] : [cmodPlugin, plugin.root]
-    const env = { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, 'config'), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, 'config'), CLAUDE_CODE_PLUGIN_DIR_WATCH: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
     const claude = spawn(['claude', ...pluginDirs.flatMap((folder) => ['--plugin-dir', folder]), '-p', 'ok'], { cwd: plugin.root, env, stdout: 'ignore', stderr: 'ignore' })
     const timeout = setTimeout(() => claude.kill(), 60_000)
     await claude.exited
