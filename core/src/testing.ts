@@ -280,9 +280,7 @@ function fakeDependencies(dependencies: NonNullable<TestOptions<object>['depende
   const apis = { cmod: { forkParent: () => null }, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
   return async (call) => {
     const api = apis[call.to]
-    const answer = api === undefined ? { deny: notInstalled(call.to) } : await answerCall(call.to, api, call)
-    if (answer.deny !== undefined) throw new Error(answer.deny)
-    return answer.value
+    return api === undefined ? { deny: notInstalled(call.to) } : answerCall(call.to, api, call)
   }
 }
 

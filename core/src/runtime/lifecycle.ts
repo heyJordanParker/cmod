@@ -2,12 +2,12 @@ import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, 
 import type { Step } from '../installer.js'
 import type { HookInput, Mod, ModDefinition, ModEvent, ModHook, PaneHandle } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { consentPath, dataFolder, finishStepsMethod, isAtLeast, isObject, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { ifMissing, relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
-import { answerCall, dependencyCalls, notInstalled } from './dependencies.js'
+import { answerCall, callMod, dependencyCalls, notInstalled } from './dependencies.js'
 import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
 import { checkedAnswer, checkingGrants, checksAnswers, checkWrite, isCovered, itemOf, passedDown, type AnswerCheck, type Grants } from './grants.js'
 import { locatingPrograms, type Programs } from './programs.js'
@@ -541,7 +541,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     },
     async open(pageId) {
       if (pageId === undefined) {
-        await claude.cmod.call({ to: cmodPluginName, method: 'openSettings', input: { mod: definition.name } })
+        await callMod(claude, { to: cmodPluginName, method: 'openSettings', input: { mod: definition.name } })
         return
       }
       const page = pages.get(pageId)
@@ -556,9 +556,8 @@ async function createMod<State extends object, Declared extends Options>(definit
   const forkParent = async (): Promise<string | undefined> => {
     if (definition.name === cmodPluginName) return undefined
     try {
-      const answer = await claude.cmod.call({ to: cmodPluginName, method: 'forkParent', input: null })
-      if (isObject(answer) && typeof answer['deny'] === 'string') throw new Error(answer['deny'])
-      return isObject(answer) && typeof answer['value'] === 'string' ? answer['value'] : undefined
+      const parent = await callMod(claude, { to: cmodPluginName, method: 'forkParent', input: null })
+      return typeof parent === 'string' ? parent : undefined
     } catch (error) {
       claude.ui.log(`${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`, { to: 'debug' })
       return undefined

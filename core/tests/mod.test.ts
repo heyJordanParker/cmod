@@ -1232,11 +1232,7 @@ const outline = defineMod({
 })
 
 function relayTo(provider: Pick<TestedMod<object>, 'fire'>): Claude['cmod']['call'] {
-  return async (call) => {
-    const answer = await provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Run cmod install ${call.to}.` })
-    if (answer.deny !== undefined) throw new Error(answer.deny)
-    return answer.value
-  }
+  return (call) => provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Run cmod install ${call.to}.` })
 }
 
 test("a mod calls another mod's api and gets its result", async () => {

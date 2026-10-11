@@ -22,6 +22,7 @@ IF the change adds a folder under `core/src/`:
 `tsc` never deletes the output of a module that was renamed, moved, or deleted, and the pack takes whatever lies in `core/`. The build output is every path `core/package.json` `files` names except `src/` and `docs/`, plus `core/*.tgz`.
 The build reads Claude Code's types from `.claude-plugin/types/`, which git ignores and Claude Code writes when it first loads the checkout. In a checkout without it, such as a new worktree, run `claude --plugin-dir . -p ok` from the repository root first, as CONTRIBUTING.md's "Run cmod from a checkout" does.
 Example: from the repository root, `rm -rf core/jobs core/runtime core/testing core/ui core/utils core/*.js core/*.d.ts core/*.d.ts.map core/*.tgz`, then `bun run --cwd core build`.
+Never: `env -C core rm -rf *.js …`. The shell expands the glob in its own folder before `env -C` moves, so zsh stops at a glob with no match there and deletes nothing. From another folder, write each path absolute.
 
 ## 3. Pack, then read the tarball
 
