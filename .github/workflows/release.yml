@@ -58,14 +58,15 @@ jobs:
       - name: Test and build @cmodjs/core and @cmodjs/cli
         if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
         run: |
+          bun install --cwd lint --frozen-lockfile
           bun install --cwd core --frozen-lockfile
           bun install --cwd cli --frozen-lockfile
+          bun run --cwd lint test
           bun run --cwd core check
           (cd core && bun test)
           bun run --cwd core build
           bun run --cwd cli check
           (cd cli && bun test)
-          core/node_modules/.bin/oxlint --deny-warnings src hooks tests
 
       - name: Publish @cmodjs/core to npm
         if: steps.version.outputs.core != 'done'
@@ -87,6 +88,7 @@ jobs:
           until bun install --no-cache; do sleep 10; done
           bun test
           bun x tsc --noEmit
+          OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
           if ! git diff --quiet bun.lock; then
             git add bun.lock
             git commit -m "chore: the cmod plugin installs @cmodjs/core and @cmodjs/cli $version"

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { listFiles, readText } from '../src/files.js'
+import { ifMissing, listFiles, readText } from '../src/files.js'
 import { cmod, cmodInTerminal, cmodOnPath, cmodWith, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
@@ -81,10 +81,7 @@ const claudeOnDisk = (home: string, plugin: { name: string; root: string }) => (
   },
 })
 
-const isGone = (path: string) => lstat(path).then(
-  () => false,
-  () => true,
-)
+const isGone = (path: string) => lstat(path).then(() => false, ifMissing(true))
 
 async function goneProcessId(): Promise<number> {
   const child = Bun.spawn(['true'])
@@ -520,7 +517,7 @@ test('reading a record while a teardown deletes it and a setup writes it again r
   const store = join(home, '.local/share/cmod')
   const record = recordPath(store, 'demo')
   const text = await readFile(record, 'utf8')
-  let isRewriting = true
+  let isRewriting = true as boolean
   const rewriting = (async () => {
     while (isRewriting) {
       await rm(record)
@@ -918,7 +915,7 @@ test('a record write that fails after the uninstall step is saved deletes the sa
 
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(store, 'records/demo.json'))).toBe(false)
-  expect(await readdir(join(store, 'uninstall')).catch(() => [])).toEqual([])
+  expect(await readdir(join(store, 'uninstall')).catch(ifMissing([]))).toEqual([])
 })
 
 test('a record write that fails in an upgrade keeps the new saved uninstall step, because the new install step ran', async () => {

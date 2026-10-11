@@ -173,7 +173,7 @@ test("a changed tool input without tools runs the call as Claude asked, and the 
     defineMod({
       name: 'rewriter',
       setup(mod) {
-        mod.claude.on('tool.call', (e, next) => (e.tool === 'mcp__rewriter__echo' ? ({ result: 'echoed' } as never) : next({ ...e, command: 'ls -la' } as typeof e)))
+        mod.claude.on('tool.call', (e, next) => (e.tool === 'mcp__rewriter__echo' ? { result: 'echoed' } : next({ ...e, command: 'ls -la' } as typeof e)))
       },
     }),
   )

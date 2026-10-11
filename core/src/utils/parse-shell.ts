@@ -211,7 +211,8 @@ function parseLine(line: string, folder: string, result: ParsedShell): void {
   try {
     const { text, markers } = scan(line, 0, false)
     walk(parse(text, (name) => (name === '' ? undefined : `$${name}`)), markers, folder, result)
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError) && !(error instanceof Error && error.message.startsWith('Bad substitution: '))) throw error
     result.isFullyParsed = false
   }
 }

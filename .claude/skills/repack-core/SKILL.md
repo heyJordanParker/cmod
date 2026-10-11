@@ -51,13 +51,14 @@ IF the work is done with the change:
 The shell's `bun` is a function that turns `bun test` into `bun run test`, and the repository root and the samples have no `test` script. `env -C <folder> bun …` runs Bun itself. `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
 
 From the repository root, every command passes:
+    bun run --cwd lint test
     env -C core bun test
     bun run --cwd core check
     bun run --cwd cli test
     bun run --cwd cli check
     env -C . bun test
     env -C . bun x tsc --noEmit
-    core/node_modules/.bin/oxlint --deny-warnings src hooks tests
+    env OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
     env -C <sample> bun test                                         (each sample)
     env -C <sample> bun x tsc --noEmit                               (each sample)
     env HOME=<scratch home> bun run cli/src/main.ts check <mod>      (a mod on the tarball)

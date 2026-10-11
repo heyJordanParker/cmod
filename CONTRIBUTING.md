@@ -9,6 +9,7 @@ In the clone's folder:
 ```sh
 bun install --cwd cli
 bun install --cwd core
+bun install --cwd lint
 bun cli/src/main.ts link .
 ```
 
@@ -29,14 +30,17 @@ To build a mod against library changes that are not on npm yet, run `bun run --c
 Every command passes, from the repository root:
 
 ```sh
+bun run --cwd lint test
 env -C core bun test
 bun run --cwd core check
 bun run --cwd cli test
 bun run --cwd cli check
 env -C . bun test
 env -C . bun x tsc --noEmit
-core/node_modules/.bin/oxlint --deny-warnings src hooks tests
+env OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
 ```
+
+- `lint/` holds the repository's own lint rules and the pinned `oxlint` that every check runs. Its tests run on Node 22 or newer, because oxlint's rule tester refuses Bun.
 
 Then, for each sample mod checked out beside this repository, `file-tree` and `architecture-diagrams`:
 
@@ -61,7 +65,7 @@ env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 
 1. It fails when the three versions differ.
-2. It installs Claude Code to write `.claude-plugin/types/`, then checks and tests `@cmodjs/core` and `@cmodjs/cli`, and builds `@cmodjs/core`.
+2. It installs Claude Code to write `.claude-plugin/types/`, then tests the lint rules in `lint/`, checks and tests `@cmodjs/core` and `@cmodjs/cli`, and builds `@cmodjs/core`.
 3. It publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.
 4. It releases the cmod plugin on GitHub with `cmod publish`, which builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
 

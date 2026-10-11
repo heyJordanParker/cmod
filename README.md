@@ -146,7 +146,7 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 ```
 
-Start `claude`, and the mod counts every prompt. `cmod check` checks the layout, the imports, and the lint, validates the mod with Claude Code, type-checks it, and runs its tests. A fresh clone has no `.claude-plugin/types/` yet, so `cmod check` has Claude Code write it before the type check. `cmod publish` releases the mod on GitHub, and prints the link that lists it in Anthropic's plugin directory.
+Start `claude`, and the mod counts every prompt. `cmod check` checks the layout, the imports, and the lint, validates the mod with Claude Code, compiles it against Claude Code's API, and runs its tests. A fresh clone has no `.claude-plugin/types/`, Claude Code's description of its API, so `cmod check` has Claude Code write it before compiling. `cmod publish` releases the mod on GitHub, and prints the link that lists it in Anthropic's plugin directory.
 
 ## Docs
 

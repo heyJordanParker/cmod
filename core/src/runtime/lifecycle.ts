@@ -1,8 +1,9 @@
 import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Step } from '../installer.js'
 import type { HookInput, Mod, ModDefinition, ModEvent, ModHook, PaneHandle } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
 import { consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
-import { relativePath } from '../utils/paths.js'
+import { ifMissing, relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
@@ -71,17 +72,12 @@ const dependencyCallMs = 30_000
 
 const cannotStart = /failed to start: /
 
-const missingPath = /(?:^|: )(?:ENOENT|ENOTDIR)\b/
-
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
 
 export async function readPlugin(claude: Claude): Promise<Plugin> {
   const { name, root } = claude.plugin
   const read: ReadFile = async (path) => {
-    const stat = await claude.fs.stat(path).catch((error: unknown) => {
-      if (missingPath.test(messageOf(error))) return undefined
-      throw error
-    })
+    const stat = await claude.fs.stat(path).catch(ifMissing(undefined))
     return stat?.kind === 'file' ? claude.fs.read(path) : undefined
   }
   const manifest = (await readJson(read, `${root}/.claude-plugin/plugin.json`)) as { version?: unknown } | undefined
@@ -227,16 +223,25 @@ export function createLifecycle<State extends object, Declared extends Options =
     return true
   }
 
+  const isStepDone = async (active: Mod<State>, step: Step<State>) => {
+    try {
+      return await step.isDone(active)
+    } catch (error) {
+      claude().ui.log(`${definition.name}: the ${step.title} step's isDone failed: ${messageOf(error)}`)
+      return false
+    }
+  }
+
   const pendingSteps = async (active: Mod<State>) => {
     const pending: string[] = []
-    for (const step of definition.installer ?? []) if (!(await Promise.resolve(step.isDone(active)).catch(() => false))) pending.push(step.title)
+    for (const step of definition.installer ?? []) if (!(await isStepDone(active, step))) pending.push(step.title)
     return pending
   }
 
   const runSteps = async (active: Mod<State>) => {
     const steps = asksPerson ? (definition.installer ?? []) : []
     for (const [index, step] of steps.entries()) {
-      if (await Promise.resolve(step.isDone(active)).catch(() => false)) continue
+      if (await isStepDone(active, step)) continue
       const isAnswered = (await claude().session.surfaces()).length > 0 && (await installer.step(active, step, index + 1, steps.length))
       if (!isAnswered) {
         claude().ui.log(`${definition.name} needs ${steps.length - index === 1 ? 'one more step' : `${steps.length - index} more steps`}, starting with ${step.title}. Run /mods ${definition.name} to finish.`)
@@ -281,7 +286,10 @@ export function createLifecycle<State extends object, Declared extends Options =
   const updatesToShow = async () => {
     const [home, configHome] = await Promise.all([claude().env.home(), claude().env.configHome()])
     const configRoot = configHome ?? `${home ?? ''}/.claude`
-    const known = await claude().fs.read(`${configRoot}/plugins/known_marketplaces.json`).then((text): unknown => JSON.parse(text), () => undefined)
+    const known = await claude()
+      .fs.read(`${configRoot}/plugins/known_marketplaces.json`)
+      .then((text): unknown => JSON.parse(text))
+      .catch(ifMissing(undefined))
     return updatesToTurnOn(marketplaceOf(claude().plugin.root, claude().plugin.name), await claude().settings.read({ source: 'user' }), known)
   }
 
@@ -293,7 +301,11 @@ export function createLifecycle<State extends object, Declared extends Options =
       return
     }
     showLine().wait('Waiting for your answer')
-    if (await installer.consent({ ...event, updates: await updatesToShow().catch(() => undefined) })) return install(event.sha256)
+    const updates = await updatesToShow().catch((error: unknown) => {
+      claude().ui.log(`${name} could not read whether its marketplace updates automatically: ${messageOf(error)}`)
+      return undefined
+    })
+    if (await installer.consent({ ...event, updates })) return install(event.sha256)
     await installer.close()
     phase = 'declined'
     endLine()
@@ -376,7 +388,7 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   let consentMs = 0
   const consentStamp = async (path: string) => {
-    const stat = await claude().fs.stat(path).catch(() => undefined)
+    const stat = await claude().fs.stat(path).catch(ifMissing(undefined))
     return stat?.kind === 'file' ? stat.mtimeMs : 0
   }
   const refreshGrants = async () => {
@@ -487,7 +499,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       if (checksAnswers(event) && phase === 'active') return checkedRoute(event, e, next)
       const answer = router.dispatch(event, e, next)
       const render = e as Frozen<Args<'ui.render'>>
-      if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined || !runtime.progress.isShown) return answer as Promise<EventResult<N>>
+      if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined || !runtime.progress.isShown) return answer
       return runtime.progress.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.viewport?.columns) as EventResult<N>
     },
   }
@@ -555,7 +567,10 @@ async function createMod<State extends object, Declared extends Options>(definit
       const bounded = options?.timeoutMs === undefined ? hook : timedHook(definition.name, event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude)
       if (!hookEvents.includes(event)) hookEvents.push(event)
       if (event === 'PreToolUse') router.add('tool.call', preToolUseHook(definition.name, bounded as ModHook<'PreToolUse'>, claude, agents, held))
-      else router.add(`classic.${event as Exclude<ModEvent, 'PreToolUse'>}`, classicHook(definition.name, event as Exclude<ModEvent, 'PreToolUse'>, bounded as ModHook<Exclude<ModEvent, 'PreToolUse'>>, claude, agents))
+      else {
+        const classic: Exclude<ModEvent, 'PreToolUse'> = event
+        router.add(`classic.${classic}`, classicHook(definition.name, classic, bounded as ModHook<typeof classic>, claude, agents))
+      }
     },
     use: (job) => job({ mod, announce, reserveName, toolCalls: agents }),
     every(ms, hook) {
@@ -640,7 +655,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     }
   }
   router.add('classic.SessionStart', async (e, next) => {
-    await modState.switchSession(e.session_id, e.source).catch((error: unknown) => {
+    await modState.switchSession(e.session_id, e.source, e.transcript_path).catch((error: unknown) => {
       claude.ui.log(`${definition.name} kept its session values from before the ${e.source}: ${messageOf(error)}`)
     })
     return next(e)

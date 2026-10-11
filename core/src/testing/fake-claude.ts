@@ -1,6 +1,7 @@
 import type { Timer } from 'claude-code'
 import type { Claude } from '../runtime/claude.js'
 import { elements } from './fake-elements.js'
+import { fakeFiles } from './fake-files.js'
 
 export type TestCall = {
   readonly call: string
@@ -50,6 +51,7 @@ export type FakeClaude = {
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
   const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
+  const emptyDisk = fakeFiles({})
   const shown: Shown = { toasts: [], notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
@@ -72,7 +74,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
 
   const appendNote: Claude['session']['append'] = async ({ message }) => {
     shown.notes.push(message.content.map((block) => (typeof block['text'] === 'string' ? block['text'] : '')).join(''))
-    return { message, uuid: `note-${shown.notes.length}` } as unknown as Awaited<ReturnType<Claude['session']['append']>>
+    return { message, uuid: `note-${shown.notes.length}` }
   }
   const submitPrompt: Claude['prompt']['submit'] = async ({ text }) => {
     shown.prompts.push(text)
@@ -141,14 +143,14 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       spawn: faked('process.spawn', () => fakes.process.spawn),
     },
     fs: {
-      read: rejected('fs.read', () => fakes.fs.read),
-      write: rejected('fs.write', () => fakes.fs.write),
-      list: rejected('fs.list', () => fakes.fs.list),
-      exists: rejected('fs.exists', () => fakes.fs.exists ?? (async () => false)),
-      stat: rejected('fs.stat', () => fakes.fs.stat),
+      read: rejected('fs.read', () => fakes.fs.read ?? emptyDisk.read),
+      write: rejected('fs.write', () => fakes.fs.write ?? emptyDisk.write),
+      list: rejected('fs.list', () => fakes.fs.list ?? emptyDisk.list),
+      exists: rejected('fs.exists', () => fakes.fs.exists ?? emptyDisk.exists),
+      stat: rejected('fs.stat', () => fakes.fs.stat ?? emptyDisk.stat),
     },
     http: { fetch: rejected('http.fetch', () => fakes.http.fetch) },
-    settings: { read: rejected('settings.read', () => fakes.settings.read) },
+    settings: { read: rejected('settings.read', () => fakes.settings.read ?? (async () => ({}))) },
     config: {
       list: rejected('config.list', () => fakes.config.list ?? (async () => [])),
     },

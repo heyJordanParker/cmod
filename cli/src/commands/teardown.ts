@@ -50,7 +50,7 @@ export async function teardownInTerminal(name: string, progress: Progress): Prom
   const record = await readRecord(readText, storeFolder(process.env), name)
   const heading = `Uninstalling ${name}`
   if (record !== undefined) progress.step(heading)
-  let isAnswered = false
+  let isAnswered = false as boolean
   const code = await tearDown(name, (event) => {
     if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
     if (event.kind === 'log') progress.log(event.text)

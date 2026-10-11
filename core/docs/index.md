@@ -32,9 +32,9 @@ The template is a working example to replace. It counts the prompts of the sessi
 
 A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Types such as `RenderElement` and `On` come from the `claude-code` module.
 
-## Claude Code's types
+## Claude Code's API description
 
-`.claude-plugin/types/` holds the `tsconfig.json` the mod's own extends, the `claude-code` module, and the `h` JSX global. Claude Code writes it when it loads the mod, and git ignores it. `cmod check` has Claude Code write it when it is missing, so a fresh clone and CI type-check too. Until it exists, `tsc` alone fails, so run `cmod check` once first.
+`.claude-plugin/types/` describes Claude Code's API to TypeScript: the `tsconfig.json` the mod's own extends, the `claude-code` module that `@cmodjs/core` imports, and the `h` JSX global. Claude Code writes it when it loads the mod, and git ignores it. `cmod check` has Claude Code write it when it is missing, so a fresh clone and CI compile the mod against Claude Code's API too. Until it exists, `tsc` alone fails, so run `cmod check` once first.
 
 Claude Code links the types of each plugin the mod depends on, such as `cmod`, into the folder where that plugin is installed. `cmod try` installs the cmod plugin into a home it deletes when the session ends, which leaves those links leading nowhere, so `tsc` alone fails with `Cannot find type definition file for 'cmod'`. `cmod check` deletes a types folder with such a link and has Claude Code write it again.
 
@@ -114,4 +114,4 @@ A mod imports from the files below, and every other file in this package is inte
 
 ## Check your work
 
-Run `cmod check` in the mod's folder. It installs the packages, checks the layout and the imports, validates the mod with Claude Code, type-checks it, lints it, and runs its tests. Each failure names its fix. [commands.md](commands.md) lists every step.
+Run `cmod check` in the mod's folder. It installs the packages, checks the layout and the imports, validates the mod with Claude Code, compiles it against Claude Code's API, lints it, and runs its tests. Each failure names its fix. [commands.md](commands.md) lists every step.

@@ -131,7 +131,7 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
       )
     },
     step(mod, step, index, total) {
-      let notice: string | undefined
+      let notice: { readonly color: 'warning' | 'error'; readonly text: string } | undefined
       return show<boolean>(
         (answer) => ({
           draw: (props) => {
@@ -142,16 +142,17 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
               body = Text({ color: 'error', children: `The ${step.title} step could not draw: ${messageOf(error)}` })
             }
             const next = async () => {
-              const isDone = await Promise.resolve(step.isDone(mod)).catch(() => false)
-              if (isDone) answer(true)
-              else {
-                notice = `Finish ${step.title} first.`
-                claude().ui.invalidate('ui.render')
+              try {
+                if (await step.isDone(mod)) return answer(true)
+                notice = { color: 'warning', text: `Finish ${step.title} first.` }
+              } catch (error) {
+                notice = { color: 'error', text: `The ${step.title} step's isDone failed: ${messageOf(error)}` }
               }
+              claude().ui.invalidate('ui.render')
             }
             return frame(
               `${step.title}  (${index} of ${total})`,
-              [body, ...(notice === undefined ? [] : [Text({ color: 'warning', children: notice })])],
+              [body, ...(notice === undefined ? [] : [Text({ color: notice.color, children: notice.text })])],
               [Button({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) }), Button({ key: 'next', hotkey: 'x', label: index === total ? 'Finish' : 'Next', onPress: () => void next() })],
             )
           },

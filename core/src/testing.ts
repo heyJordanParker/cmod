@@ -100,7 +100,8 @@ export function testMod<State extends object, Declared extends Options = Options
     if (fake.fakes.agent.list !== undefined || firedAgents.size === 0) return listAgents()
     return [...firedAgents].map(([id, type]) => ({ id, type, description: '', status: 'running' as const }))
   }
-  Object.assign(fake.fakes.fs, fakeFiles(options.files ?? {}, options.links))
+  const files = fakeFiles(options.files ?? {}, options.links)
+  Object.assign(fake.fakes.fs, files)
   const starting = options.state as Record<string, object> | undefined
   const declared = Object.entries(definition.state ?? {}) as [string, object][]
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
@@ -172,7 +173,9 @@ export function testMod<State extends object, Declared extends Options = Options
       cwdAfterPrompt = undefined
     }
     const toolUse = toolUseEvents.includes(event) ? { tool_use_id: `toolu_${(toolUses += 1)}` } : {}
-    const filled = { session_id: sessionId, transcript_path: '/test/transcript.jsonl', cwd, hook_event_name: event, ...toolUse, ...input }
+    const transcript = `/test/transcripts/${sessionId}.jsonl`
+    const filled = { session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event, ...toolUse, ...input }
+    if (event === 'SessionStart' && !('transcript_path' in input)) return files.write(transcript, '').then(() => route('classic.SessionStart', filled, below))
     if (event !== 'PreToolUse') return route(`classic.${event as Exclude<ModEvent, 'PreToolUse'>}`, filled, below)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
   }) as TestedMod<State>['fire']
@@ -187,7 +190,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const answer = await lifecycle.route('tool.call', envelope, async (e) => {
       reached = e
       check = await lifecycle.route('tool.check', { tool: e.tool, input: toolInputOf(e), tool_use_id: e.tool_use_id, ...(e.agentId === undefined ? {} : { agentId: e.agentId }) }, async () => asks)
-      return (check.decision === 'deny' ? { deny: check.reason ?? '' } : { result: '' }) as EventResult<'tool.call'>
+      return check.decision === 'deny' ? { deny: check.reason ?? '' } : { result: '' }
     })
     const updatedInput = toolInputOf(reached)
     const decided = check === asks ? {} : check.decision === 'allow' ? { allow: true } : check.decision === 'ask' ? { ask: check.reason ?? '' } : {}
@@ -202,10 +205,10 @@ export function testMod<State extends object, Declared extends Options = Options
     start,
     fire,
     settle: fake.settle,
-    lines: (async (target: string | { readonly component: RenderComponent }, props: object = {}, requestId?: string) => {
+    lines: async (target: string | { readonly component: RenderComponent }, props: object = {}, requestId?: string) => {
       const { drawing, columns } = typeof target === 'string' ? await drawPane(target) : await drawSlot(target.component, props, requestId)
       return rowsOf(drawing, columns).map((row) => row.trimEnd())
-    }) as TestedMod<State>['lines'],
+    },
     async type(line) {
       const typed = /^\/(\S+)\s*(.*)$/s.exec(line)
       if (typed === null) throw new Error(`type takes a slash command the way the user types it, such as tested.type('/help'), and "${line}" does not start with /.`)
@@ -230,7 +233,7 @@ export function testMod<State extends object, Declared extends Options = Options
       const props = await drawnElement(paneId, link === undefined ? 'Button' : 'Markdown', key)
       if (link !== undefined && props['onLinkPress'] === undefined) throw new Error(`The Markdown "${key}" in the pane "${paneId}" of ${name} has no onLinkPress, so Claude Code opens its links itself.`)
       const pressed: UiPressArgument = { ...eventIn(paneId, String(props['key'])), ...(link === undefined ? {} : { link: { href: link } }) }
-      await lifecycle.route('ui.press', pressed as Frozen<Args<'ui.press'>>, async (e) => {
+      await lifecycle.route('ui.press', pressed, async (e) => {
         if (e.link === undefined) await (props['onPress'] as (e: UiPressArgument) => unknown)(e)
         else await (props['onLinkPress'] as (link: PressedLink, e: UiPressArgument) => unknown)(e.link, e)
         return { element: e.element }
@@ -302,7 +305,10 @@ async function modSteps(): Promise<Steps> {
   const manifest = '../../../package.json'
   const loaded: unknown = await import(manifest, { with: { type: 'json' } }).then(
     (module: { default: unknown }) => module.default,
-    () => undefined,
+    (error: { readonly code?: unknown }) => {
+      if (error.code === 'ERR_MODULE_NOT_FOUND') return undefined
+      throw error
+    },
   )
   return readSteps(loaded) ?? {}
 }

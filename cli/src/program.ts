@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, readdir, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { dataFolder, isObject, pluginName, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { home, readJson, readText, tilde } from './files.js'
+import { home, ifMissing, readJson, readLink, readText, tilde } from './files.js'
 import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
@@ -180,8 +180,8 @@ export async function linkDownloaded(name: string, path: string): Promise<void> 
 
 export async function removeData(name: string): Promise<void> {
   const folder = dataFolder(storeFolder(process.env), name)
-  for (const entry of await readdir(programsFolder()).catch(() => [])) {
-    const target = await readlink(join(programsFolder(), entry)).catch(() => undefined)
+  for (const entry of await readdir(programsFolder()).catch(ifMissing([]))) {
+    const target = await readLink(join(programsFolder(), entry))
     if (target?.startsWith(`${folder}/`)) await rm(join(programsFolder(), entry))
   }
   await rm(folder, { recursive: true, force: true })
@@ -200,7 +200,7 @@ function terminalNote(name: string, entry: string | undefined): string | undefin
 }
 
 async function isLinkedFromStore(entry: string, name: string): Promise<boolean> {
-  const target = await readlink(entry).catch(() => undefined)
+  const target = await readLink(entry)
   return target?.startsWith(`${storePath('bin', name)}/`) === true
 }
 
@@ -225,7 +225,7 @@ export async function download(url: string, fix: string, onProgress: (received: 
 async function linkProgram(name: string, target: string): Promise<string | undefined> {
   await placeLink(join(programsFolder(), name), target)
   const entry = commandEntry(name)
-  if ((await lstat(entry).catch(() => undefined)) !== undefined && !(await isLinkedFromStore(entry, name))) return undefined
+  if ((await lstat(entry).catch(ifMissing(undefined))) !== undefined && !(await isLinkedFromStore(entry, name))) return undefined
   await placeLink(entry, target)
   return entry
 }

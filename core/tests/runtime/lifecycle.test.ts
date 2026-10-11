@@ -98,11 +98,11 @@ const prompt = { type: 'Text', children: ['>'] } as unknown as RenderElement
 const installerPane = { surface: 'terminal', component: 'Pane', requestId: 'cmod-installer', props: { title: 'Install', isFocused: true, bodyColumns: 80, placement: 'dock' } }
 
 async function installerText(lifecycle: Pick<Lifecycle<object>, 'route'>): Promise<string> {
-  return textOf((await fire(lifecycle, 'ui.render', installerPane, prompt)) as RenderElement)
+  return textOf(await fire(lifecycle, 'ui.render', installerPane, prompt))
 }
 
 async function pressInInstaller(lifecycle: Pick<Lifecycle<object>, 'route'>, key: string): Promise<void> {
-  const button = findElement((await fire(lifecycle, 'ui.render', installerPane, prompt)) as RenderElement, 'Button', key)
+  const button = findElement(await fire(lifecycle, 'ui.render', installerPane, prompt), 'Button', key)
   if (button === undefined) throw new Error(`The installer draws no button ${key}.`)
   await (button['onPress'] as () => unknown)()
 }
@@ -507,7 +507,7 @@ test('a missing text option saved in the installer through cmod option starts th
 
   void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
   await fake.settle()
-  const field = findElement((await fire(lifecycle, 'ui.render', installerPane, prompt)) as RenderElement, 'Input', 'option:branch')
+  const field = findElement(await fire(lifecycle, 'ui.render', installerPane, prompt), 'Input', 'option:branch')
   if (field === undefined) throw new Error('The installer draws no field for branch.')
   ;(field['onSubmit'] as (value: string) => void)('main')
   await fake.settle()
@@ -540,6 +540,24 @@ test("a mod's own installer step opens after it starts, and Finish waits for isD
   await pressInInstaller(lifecycle, 'next')
   await fake.settle()
   expect(fake.calls.filter((call) => call.call === 'ui.close').map((call) => call.args[0])).toEqual([{ id: 'cmod-installer' }])
+})
+
+test("a step whose isDone fails stays pending, logs the failure, and Finish shows it in the installer", async () => {
+  const fake = fakeClaude({ name: 'ci-watch', root })
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'ci-watch',
+      installer: [defineStep({ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => { throw new Error('gh is not installed') } })],
+      setup() {},
+    }),
+  )
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await fake.settle()
+
+  expect(fake.shown.logs).toContain("ci-watch: the Sign in to GitHub step's isDone failed: gh is not installed")
+  await pressInInstaller(lifecycle, 'next')
+  expect(await installerText(lifecycle)).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
 })
 
 test('a step left on Not now is listed to /mods, and finishing from /mods opens the installer on it again', async () => {
@@ -861,7 +879,7 @@ test.each(['ENOENT', 'ENOTDIR'])('a path Claude Code fails to stat with %s reads
   const fake = fakeClaude({ name: 'safe-delete', root })
   const files = fakeFiles(manifestOnly)
   Object.assign(fake.fakes.fs, files)
-  fake.fakes.fs.stat = async (path, options) => files.stat(path, options).catch(() => Promise.reject(new Error(`safe-delete: $.fs.stat(${path}) failed: ${errno}`)))
+  fake.fakes.fs.stat = async (path, options) => files.stat(path, options).catch((error: unknown) => Promise.reject(new Error(`safe-delete: $.fs.stat(${path}) failed: ${errno}`, { cause: error })))
 
   expect(await readPlugin(fake.claude)).toEqual({ ...pending, store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: true })
 })

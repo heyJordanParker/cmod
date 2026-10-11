@@ -1,17 +1,15 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
-import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { isObject, permissionWords, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
-import { version as cmodVersion } from '../../package.json'
 import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/metadata.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { listPlugins } from '../claude.js'
+import { addClaudeApi, listPlugins, testPlugin, validatePlugin } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
-import { declaredOptions, preparePackages, readPlugin, writeUserConfig, type DeclaredOptions, type Plugin } from '../plugin.js'
-import { bunArgv, capture, run as runCommand, spawn } from '../process.js'
+import { declaredOptions, installPackages, readPlugin, writeUserConfig, type DeclaredOptions, type Plugin } from '../plugin.js'
+import { bunArgv, capture, run as runCommand } from '../process.js'
 import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
 import { startProgress } from '../progress.js'
 import { bundledHooks } from './publish.js'
@@ -29,7 +27,8 @@ folder): installs its packages, checks its layout and that each step runs a
 script, checks each download covers the machines its "os" and "cpu" list,
 writes the options defineMod declares into plugin.json userConfig,
 bundles its hooks module as cmod publish does, validates it with Claude
-Code, type-checks it with tsconfig.json and, when it exists, tests/tsconfig.json,
+Code, compiles it against Claude Code's API with tsconfig.json and, when it
+exists, tests/tsconfig.json,
 lints it, runs its tests with bun test and with claude plugin test, and checks
 its name. Each failure names its fix.`
 
@@ -54,7 +53,7 @@ const checks: Check[] = [
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
   { heading: 'Bundling the hooks', run: checkBundle },
   { heading: 'Validating with Claude Code', run: checkValidate },
-  { heading: 'Type-checking', run: checkTypes },
+  { heading: "Compiling against Claude Code's API", run: checkCompiles },
   { heading: 'Linting', run: checkLint },
   { heading: 'Running tests', run: checkTests },
   { heading: "Running tests in Claude Code's test kit", run: checkPluginTests },
@@ -81,7 +80,7 @@ export async function run(argv: string[]): Promise<number> {
 
 async function checkPackages(plugin: Plugin): Promise<Result> {
   try {
-    if (!(await preparePackages(plugin))) return { status: 'skip', text: 'No package.json, so no packages to install' }
+    if (!(await installPackages(plugin))) return { status: 'skip', text: 'No package.json, so no packages to install' }
     return { status: 'pass', text: 'Packages installed from package.json' }
   } catch (error) {
     return { status: 'fail', text: `Installing packages failed: ${messageOf(error)}`, fix: 'Fix the dependencies in package.json, then run cmod check again.' }
@@ -223,19 +222,19 @@ async function checkValidate(plugin: Plugin): Promise<Result> {
   if (existsSync(join(plugin.root, '.claude-plugin', 'marketplace.json'))) targets.push(join(plugin.root, '.claude-plugin', 'marketplace.json'))
   const failures: string[] = []
   for (const target of targets) {
-    const result = await capture(['claude', 'plugin', 'validate', '--strict', target])
+    const result = await validatePlugin(target)
     if (result.exitCode !== 0) failures.push(`${relative(plugin.root, target)}:\n${(result.stdout + result.stderr).trim().split('\n').map((line) => `      ${line}`).join('\n')}`)
   }
   if (failures.length > 0) return { status: 'fail', text: `claude plugin validate --strict failed on ${failures.join('\n')}`, fix: 'Fix each error and warning it names, then run cmod check again.' }
   return { status: 'pass', text: `claude plugin validate --strict passed on ${targets.map((target) => relative(plugin.root, target)).join(' and ')}` }
 }
 
-async function checkTypes(plugin: Plugin): Promise<Result> {
-  if (!existsSync(join(plugin.root, 'tsconfig.json'))) return { status: 'skip', text: 'Type check skipped: the mod has no tsconfig.json' }
+async function checkCompiles(plugin: Plugin): Promise<Result> {
+  if (!existsSync(join(plugin.root, 'tsconfig.json'))) return { status: 'skip', text: 'Compiling skipped: the mod has no tsconfig.json' }
   try {
-    await writeClaudeTypes(plugin)
+    await addClaudeApi(plugin)
   } catch (error) {
-    return { status: 'skip', text: `Type check skipped: ${messageOf(error)}` }
+    return { status: 'skip', text: `Compiling skipped: ${messageOf(error)}` }
   }
   const tool = await fetchTool(typescript)
   if (typeof tool !== 'string') return tool
@@ -247,27 +246,6 @@ async function checkTypes(plugin: Plugin): Promise<Result> {
   }
   if (outputs.length > 0) return { status: 'fail', text: `tsc ${typescript.version} found type errors:\n${indent(outputs.join('\n'))}`, fix: 'Fix each error, then run cmod check again.' }
   return { status: 'pass', text: `tsc ${typescript.version} found no type errors with ${configs.join(' and ')}` }
-}
-
-async function writeClaudeTypes(plugin: Plugin): Promise<void> {
-  const folder = join(plugin.root, '.claude-plugin', 'types')
-  const types = join(folder, 'tsconfig.json')
-  if (existsSync(types) && (await readdir(folder, { recursive: true })).every((entry) => existsSync(join(folder, entry)))) return
-  await rm(folder, { recursive: true, force: true })
-  const scratch = await mkdtemp(join(tmpdir(), 'cmod-claude-'))
-  try {
-    const cmodPlugin = join(scratch, 'cmod')
-    await writeAtomically(join(cmodPlugin, '.claude-plugin', 'plugin.json'), `${JSON.stringify({ name: 'cmod', version: cmodVersion })}\n`)
-    const pluginDirs = plugin.name === 'cmod' ? [plugin.root] : [cmodPlugin, plugin.root]
-    const env = { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, 'config'), CLAUDE_CODE_PLUGIN_DIR_WATCH: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
-    const claude = spawn(['claude', ...pluginDirs.flatMap((folder) => ['--plugin-dir', folder]), '-p', 'ok'], { cwd: plugin.root, env, stdout: 'ignore', stderr: 'ignore' })
-    const timeout = setTimeout(() => claude.kill(), 60_000)
-    await claude.exited
-    clearTimeout(timeout)
-  } finally {
-    await rm(scratch, { recursive: true, force: true })
-  }
-  if (!existsSync(types)) throw new Error(`Claude Code wrote no .claude-plugin/types/ when cmod loaded ${plugin.name} with claude --plugin-dir. Run cmod link, start claude once, then run cmod check again.`)
 }
 
 async function checkLint(plugin: Plugin): Promise<Result> {
@@ -291,17 +269,26 @@ async function checkTests(plugin: Plugin): Promise<Result> {
 
 async function checkPluginTests(plugin: Plugin): Promise<Result> {
   if (!(await testFiles(plugin)).some((test) => test.isKitTest)) return { status: 'skip', text: 'No test imports claude-code/testing, so claude plugin test had nothing to run' }
-  const result = await capture(['claude', 'plugin', 'test', plugin.root])
+  const result = await testPlugin(plugin.root)
   if (result.exitCode !== 0) return { status: 'fail', text: `claude plugin test failed:\n${indent(result.stdout + result.stderr)}`, fix: 'Fix the failing tests, then run cmod check again.' }
   return { status: 'pass', text: 'claude plugin test passed' }
 }
 
 async function testFiles(plugin: Plugin): Promise<{ path: string; isKitTest: boolean }[]> {
   const tests = []
-  for (const path of await walk(plugin.root)) {
+  const root = await testRoot(plugin.root)
+  if (!existsSync(root)) return []
+  for (const path of await walk(root, plugin.root)) {
     if (/\.test\.[jt]sx?$/.test(path)) tests.push({ path, isKitTest: importsOf((await readText(path)) ?? '').includes('claude-code/testing') })
   }
   return tests
+}
+
+async function testRoot(folder: string): Promise<string> {
+  const config = await readText(join(folder, 'bunfig.toml'))
+  const test: unknown = config === undefined ? undefined : Bun.TOML.parse(config)
+  const root = isObject(test) && isObject(test['test']) ? test['test']['root'] : undefined
+  return typeof root === 'string' ? join(folder, root) : folder
 }
 
 async function checkNameConflict(plugin: Plugin): Promise<Result> {

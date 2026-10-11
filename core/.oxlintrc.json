@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "../lint/node_modules/oxlint/configuration_schema.json",
   "extends": ["../.oxlintrc.json"],
   "overrides": [
     {
@@ -19,6 +19,8 @@
     {
       "files": ["src/testing.ts", "src/testing/**"],
       "rules": {
+        "no-restricted-globals": "off",
+        "no-restricted-properties": "off",
         "no-restricted-imports": [
           "error",
           {

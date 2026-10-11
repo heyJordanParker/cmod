@@ -6,6 +6,7 @@ import type { RoutedHook } from './router.js'
 import { reservedKeys, toolInputOf, type ToolCalls } from './tool-calls.js'
 import { callEffects, inputOf, type CallBase, type FileAccess } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
+import { isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 
 export type RoutedEvent =
@@ -171,7 +172,11 @@ async function callFiles(name: string, claude: Claude, use: CallBase, cwd: strin
     if (home === undefined) throw new Error('HOME is not set, so ~ in a path has no meaning.')
     const { shell, reads, writes } = callEffects(use, { cwd, home, fs: claude.fs })
     const known = (accesses: FileAccess[]) => accesses.map(({ path }) => path).filter((path) => shell === undefined || !dynamicPattern.test(path))
-    const read = await Promise.all(known(reads).map(async (path) => ((await claude.fs.stat(path).catch(() => undefined))?.kind === 'file' ? [path] : [])))
+    const unchecked = (path: string) => (error: unknown) => {
+      if (!isMissing(error)) claude.ui.log(`${name}: the ${use.tool} call reads ${path}, which could not be checked: ${messageOf(error)}`, { to: 'debug' })
+      return undefined
+    }
+    const read = await Promise.all(known(reads).map(async (path) => ((await claude.fs.stat(path).catch(unchecked(path)))?.kind === 'file' ? [path] : [])))
     return { read: read.flat(), changed: known(writes) }
   } catch (error) {
     claude.ui.log(`${name}: the ${use.tool} call lists no files: ${messageOf(error)}`, { to: 'debug' })

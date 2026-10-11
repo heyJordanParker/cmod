@@ -69,7 +69,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     prompt: { submit: (args) => $.prompt.submit(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
     command: { register: (command) => $.command.register(command) },
-    tool: { register: (tool) => $.tool.register(tool), call: ((input: ToolCallArgs) => $.tool.call(input)) as Claude['tool']['call'] },
+    tool: { register: (tool) => $.tool.register(tool), call: (input: ToolCallArgs) => $.tool.call(input) },
     agent: {
       list: () => $.agent.list(),
       spawn: (args) => $.agent.spawn(args),

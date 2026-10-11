@@ -1,5 +1,5 @@
 import { expect, expectTypeOf, test } from 'bun:test'
-import type { AgentInfo, Args, ClassicHookInputs, EventResult, Frozen, RenderElement } from 'claude-code'
+import type { AgentInfo, ClassicHookInputs, EventResult, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import { defineMod, type HookInput, type Job, type Mod, type ModHook, type PaneHandle } from '../src/mod.js'
@@ -61,7 +61,7 @@ test('fire fills the session fields a test leaves out of the hook input', async 
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
 
   expect(seen).toEqual([
-    { session_id: 'test-session', transcript_path: '/test/transcript.jsonl', cwd: '/test/plugins/prompt-counter', hook_event_name: 'UserPromptSubmit', prompt: 'hello' },
+    { session_id: 'test-session', transcript_path: '/test/transcripts/test-session.jsonl', cwd: '/test/plugins/prompt-counter', hook_event_name: 'UserPromptSubmit', prompt: 'hello' },
   ])
 })
 
@@ -97,8 +97,8 @@ test("Claude Code's permission check and the tool get the input a PreToolUse hoo
   const reached: unknown[] = []
   const core = async (e: unknown) => (reached.push(e), { result: '' }) as EventResult<'tool.call'>
 
-  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_5', agentId: 'agent-2', command: 'rm -rf build' } as Frozen<Args<'tool.call'>>, core)
-  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_6', command: 'ls' } as Frozen<Args<'tool.call'>>, core)
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_5', agentId: 'agent-2', command: 'rm -rf build' }, core)
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_6', command: 'ls' }, core)
 
   expect(reached).toEqual([
     { tool: 'Bash', tool_use_id: 'toolu_5', agentId: 'agent-2', command: 'trash build' },
@@ -364,7 +364,7 @@ test('a PreToolUse hook in a subagent sees agent_id and agent_type', async () =>
   )
   await lifecycle.start(fake.claude, async () => ({ name: 'input-reader', root: '/test/plugins/input-reader', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
 
-  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls', agentId: 'agent-7' } as Frozen<Args<'tool.call'>>, async () => ({ result: '' }) as EventResult<'tool.call'>)
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 'toolu_9', command: 'ls', agentId: 'agent-7' }, async () => ({ result: '' }))
 
   expect(seen).toEqual([
     {
@@ -722,20 +722,29 @@ test("a branched session starts with its parent's session values", async () => {
   expect(tested.state.session.draft).toBe('call mum')
 })
 
-test('a session value keeps only the 20 sessions used most recently', async () => {
+test('a session value comes back on resume however many sessions ran since', async () => {
   const tested = testMod(notes)
-  for (let session = 0; session <= 20; session += 1) {
+  await tested.fire('SessionStart', { source: 'startup', session_id: 'first' })
+  tested.state.session.draft = 'buy milk'
+  for (let session = 0; session < 25; session += 1) {
     await tested.fire('SessionStart', { source: 'clear', session_id: `session-${session}` })
     tested.state.session.draft = `draft ${session}`
   }
 
-  await tested.fire('SessionStart', { source: 'resume', session_id: 'session-0' })
+  await tested.fire('SessionStart', { source: 'resume', session_id: 'first' })
+
+  expect(tested.state.session.draft).toBe('buy milk')
+})
+
+test('a session value is deleted once Claude Code deletes the session transcript', async () => {
+  const tested = testMod(notes)
+  await tested.fire('SessionStart', { source: 'startup', session_id: 'gone', transcript_path: '/test/transcripts/gone.jsonl' })
+  tested.state.session.draft = 'buy milk'
+  await tested.fire('SessionStart', { source: 'clear', session_id: 'second' })
+
+  await tested.fire('SessionStart', { source: 'resume', session_id: 'gone', transcript_path: '/test/transcripts/gone.jsonl' })
 
   expect(tested.state.session.draft).toBe('')
-
-  await tested.fire('SessionStart', { source: 'resume', session_id: 'session-1' })
-
-  expect(tested.state.session.draft).toBe('draft 1')
 })
 
 const gitChanges = defineMod({ name: 'file-tree', state: { memory: { changed: [] as string[] }, session: { touched: [] as string[] } }, setup() {} })
@@ -886,7 +895,7 @@ test('mod.agent.spawn starts a subagent and returns its agentId', async () => {
     }),
     { permissions: ['agents'] },
   )
-  tested.fakes.agent.spawn = async () => ({ agentId: 'agent-7', model: 'test-model' }) as Awaited<ReturnType<Claude['agent']['spawn']>>
+  tested.fakes.agent.spawn = async () => ({ agentId: 'agent-7', model: 'test-model' })
 
   await tested.fire('UserPromptSubmit', { prompt: 'go' } as never)
 

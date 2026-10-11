@@ -1,4 +1,18 @@
 import { basename, dirname, resolve } from '../vendor.js'
+import { messageOf } from './text.js'
+
+const missingPath = /(?:^|: )(?:ENOENT|ENOTDIR)\b/
+
+export function isMissing(error: unknown): boolean {
+  return missingPath.test(messageOf(error))
+}
+
+export function ifMissing<Value>(value: Value): (error: unknown) => Value {
+  return (error) => {
+    if (isMissing(error)) return value
+    throw error
+  }
+}
 
 export type FileSystem = {
   read: (path: string) => Promise<string>
@@ -18,7 +32,7 @@ export function relativePath(base: string, path: string): string | undefined {
 }
 
 export async function realPathOf(path: string, fs: FileSystem): Promise<string | undefined> {
-  const stat = await fs.stat(path).catch(() => undefined)
+  const stat = await fs.stat(path).catch(ifMissing(undefined))
   if (stat !== undefined || path === '/') return stat?.realPath
   const folder = await realPathOf(dirname(path), fs)
   return folder === undefined ? undefined : resolve(folder, basename(path))

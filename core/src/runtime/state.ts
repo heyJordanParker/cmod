@@ -23,12 +23,12 @@ export type ModState<State extends object> = {
   changed(): void
   load(): Promise<void>
   moveTo(root: string): Promise<void>
-  switchSession(session: string, source: ClassicHookInputs['SessionStart']['source']): Promise<void>
+  switchSession(session: string, source: ClassicHookInputs['SessionStart']['source'], transcript: string): Promise<void>
 }
 
 const lifetimes: readonly Lifetime[] = ['memory', 'session', 'project', 'global']
 
-const keptPerValue = 20
+const keptProjects = 20
 
 const listeners = new WeakMap<object, Set<() => void>>()
 
@@ -51,7 +51,7 @@ export function createState<State extends object>({ name, initial, session, root
 
   const inTurn = <Result>(task: () => Promise<Result>): Promise<Result> => {
     const run = turn.then(task)
-    turn = run.catch(() => undefined)
+    turn = Promise.allSettled([run])
     return run
   }
 
@@ -62,11 +62,25 @@ export function createState<State extends object>({ name, initial, session, root
   const read = (lifetime: SavedLifetime, key: string, owner: string) => claude.store.get(storeKey(lifetime, key, owner))
 
   const write = async (lifetime: SavedLifetime, key: string, value: unknown, owner: string) => {
-    if (lifetime === 'global') return claude.store.set(storeKey(lifetime, key, owner), value)
+    if (lifetime !== 'project') return claude.store.set(storeKey(lifetime, key, owner), value)
     await claude.store.delete(storeKey(lifetime, key, owner))
     await claude.store.set(storeKey(lifetime, key, owner), value)
     const owners = (await claude.store.keys()).filter((stored) => stored.startsWith(ownersKey(lifetime, key)))
-    for (const oldest of owners.slice(0, -keptPerValue)) await claude.store.delete(oldest)
+    for (const oldest of owners.slice(0, -keptProjects)) await claude.store.delete(oldest)
+  }
+
+  const transcriptsKey = `${name}.$transcripts.`
+
+  const forgetEndedSessions = async (current: string) => {
+    const stored = await claude.store.keys()
+    for (const recorded of stored.filter((key) => key.startsWith(transcriptsKey))) {
+      const owner = recorded.slice(transcriptsKey.length)
+      if (owner === current) continue
+      const transcript = await claude.store.get(recorded)
+      if (typeof transcript === 'string' && (await claude.fs.exists(transcript))) continue
+      for (const value of stored.filter((key) => key.startsWith(`${name}.`) && key.endsWith(`.sessions.${owner}`))) await claude.store.delete(value)
+      await claude.store.delete(recorded)
+    }
   }
 
   const loadGroups = async (only: readonly Lifetime[], next: { readonly root: string; readonly session: string }) => {
@@ -115,8 +129,10 @@ export function createState<State extends object>({ name, initial, session, root
     changed,
     load: () => inTurn(() => loadGroups(lifetimes, { root: projectRoot, session: sessionId })),
     moveTo: (nextRoot) => inTurn(async () => (nextRoot === projectRoot ? undefined : loadGroups(['project'], { root: nextRoot, session: sessionId }))),
-    switchSession: (nextSession, source) =>
+    switchSession: (nextSession, source, transcript) =>
       inTurn(async () => {
+        await claude.store.set(`${transcriptsKey}${nextSession}`, transcript)
+        await forgetEndedSessions(nextSession)
         if (nextSession === sessionId) return
         if (source === 'fork') await copySession(nextSession)
         return loadGroups(['memory', 'session'], { root: projectRoot, session: nextSession })

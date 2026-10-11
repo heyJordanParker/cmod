@@ -5,11 +5,13 @@ import { modsMemory, modsPanel, type ModsState } from './mods.js'
 
 export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null } } & ModsState
 
+const cmodGlobal: CmodPluginState['global'] = { installedPlugins: null }
+
 const panels = new WeakMap<object, ReturnType<typeof modsPanel<CmodPluginState>>>()
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
-  state: { global: { installedPlugins: null } as CmodPluginState['global'], memory: modsMemory },
+  state: { global: cmodGlobal, memory: modsMemory },
 
   api: {
     async openSettings(input: { readonly mod: string; readonly page?: string }, mod) {

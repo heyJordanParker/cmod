@@ -24,7 +24,7 @@ function element<Name extends keyof Terminal & ElementName>(name: Name): Termina
     if (name === 'Markdown' && drawing.markdown !== undefined) return drawing.markdown(props as MarkdownProps)
     return drawing.table[name](props)
   }
-  return construct as Terminal[Name]
+  return construct
 }
 
 export const Box = element('Box')

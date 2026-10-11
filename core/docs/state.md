@@ -13,7 +13,7 @@
 | `project` | This project, in every conversation. | Yes |
 | `global` | Every project. | Yes |
 
-cmod keeps each `session` value for the 20 sessions that wrote it last, and each `project` value for the 20 projects that wrote it last. A session or project past those 20 starts that value over from its starting value.
+cmod keeps each `session` value as long as Claude Code keeps the session's transcript, so a session comes back with its values for as long as `--resume` can find it. It keeps each `project` value for the 20 projects that wrote it last, and a project past those 20 starts that value over from its starting value.
 
 Put values the mod works out again on every prompt, such as a git status, in `memory`.
 

@@ -155,7 +155,7 @@ function readPermissions(steps: Record<string, unknown>): string[] {
     }
     const example = name === 'network' ? '["api.github.com"]' : name === 'run' ? '["gh"], or "*" for any program' : '["~/.zshrc"]'
     if (!Array.isArray(value) || value.length === 0 || !value.every((each) => typeof each === 'string')) throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write a list, such as "${name}": ${example}.`)
-    for (const each of value as string[]) {
+    for (const each of value) {
       const isPath = /^(~\/|\/)/.test(each) && !each.split('/').includes('..')
       const isValid = name === 'network' ? hostName.test(each) || isPath : name === 'run' ? programName.test(each) : isPath
       if (!isValid) throw new Error(`${at} lists "${each}" under "${name}". Write ${name === 'network' ? 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"' : name === 'run' ? 'a program\'s command, such as "gh"' : 'a path that starts with ~/ or /, such as "~/.zshrc"'}.`)

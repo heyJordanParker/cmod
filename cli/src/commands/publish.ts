@@ -6,9 +6,10 @@ import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
+import { validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
 import { declaredOptions, readPlugin } from '../plugin.js'
-import { run as runCommand } from '../process.js'
+import { capture, run as runCommand } from '../process.js'
 import { buildProgram, declaredMachines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 
@@ -72,8 +73,9 @@ export async function run(argv: string[]): Promise<number> {
     throw new Error(`${tilde(plugin.root)}/package.json depends on ${local.map(([name, spec]) => `${name} at ${spec}`).join(', ')}, which exist only on this machine, so the published mod would not install. Depend on versions published on npm, such as "@cmodjs/core": "^${coreVersion}", then run cmod publish again.`)
   }
   const git = (...args: string[]) => runCommand(['git', '-C', plugin.root, ...args])
-  if ((await git('rev-parse', '--show-toplevel').catch(() => '')).trim() !== plugin.root) throw new Error(`${plugin.root} is not the root of a git repository. Run git init there and commit the mod.`)
-  const repository = githubRepository(await git('remote', 'get-url', 'origin').catch(() => ''))
+  const answer = (...args: string[]) => gitAnswer(plugin.root, args)
+  if ((await answer('rev-parse', '--show-toplevel')).trim() !== plugin.root) throw new Error(`${plugin.root} is not the root of a git repository. Run git init there and commit the mod.`)
+  const repository = githubRepository(await answer('remote', 'get-url', 'origin'))
   const tag = `v${plugin.version}`
   const isDirty = (await git('status', '--porcelain')).trim() !== ''
   if (!dryRun && isDirty) throw new Error('The working tree has uncommitted changes. Commit them, then run cmod publish again.')
@@ -101,11 +103,13 @@ export async function run(argv: string[]): Promise<number> {
   progress.succeed(`Built ${tree} from ${isDirty ? 'the last commit, without the uncommitted changes' : 'HEAD'}, ${contents}${bundle === undefined ? '' : `, and the hooks module and its packages bundled into hooks/${bundle}`}`)
 
   progress.step('Checking the release with claude plugin validate --strict')
-  await runCommand(['claude', 'plugin', 'validate', tree, '--strict'])
+  const validated = await validatePlugin(tree)
+  if (validated.exitCode !== 0) throw new Error(`claude plugin validate ${tree} --strict exited ${validated.exitCode}:\n${(validated.stderr.trim() || validated.stdout.trim()).split('\n').slice(-5).join('\n')}`)
   progress.succeed('claude plugin validate --strict passed on the release')
 
-  if (!dryRun) await git('fetch', 'origin', releaseBranch).catch(() => '')
-  const release = await commitRelease(output, tree, tag, git)
+  if (!dryRun) await answer('fetch', 'origin', releaseBranch)
+  const parent = (await answer('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${releaseBranch}`)).trim()
+  const release = await commitRelease(output, tree, tag, parent, git)
   const archive = join(output, `${plugin.name}-${plugin.version}.zip`)
   await git('archive', '--format=zip', '--output', archive, release)
   const sha256 = await fileSha256(archive)
@@ -136,7 +140,7 @@ export async function run(argv: string[]): Promise<number> {
 
   const assets = [archive, ...programs, sums]
   const directoryLink = `https://github.com/${repository}/tree/${releaseBranch}`
-  const breaking = breakingNotes(await commitsSinceLastTag(git))
+  const breaking = breakingNotes(await commitsSince((await answer('describe', '--tags', '--abbrev=0', '--match', 'v*')).trim(), git))
   if (dryRun) {
     process.stdout.write(`\nDry run: ${tag} would release these files to https://github.com/${repository}, and ${tree} to its ${releaseBranch} branch. Nothing was pushed:\n${assets.map((asset) => `  ${asset}`).join('\n')}\n`)
     if (breaking !== undefined) process.stdout.write(`\nIts release notes would open with:\n\n${breaking}\n`)
@@ -153,8 +157,12 @@ export async function run(argv: string[]): Promise<number> {
   return 0
 }
 
-async function commitsSinceLastTag(git: (...args: string[]) => Promise<string>): Promise<string[]> {
-  const last = (await git('describe', '--tags', '--abbrev=0', '--match', 'v*').catch(() => '')).trim()
+async function gitAnswer(root: string, args: readonly string[]): Promise<string> {
+  const { exitCode, stdout } = await capture(['git', '-C', root, ...args])
+  return exitCode === 0 ? stdout : ''
+}
+
+async function commitsSince(last: string, git: (...args: string[]) => Promise<string>): Promise<string[]> {
   const log = await git('log', '--format=%B%x00', last === '' ? 'HEAD' : `${last}..HEAD`)
   return log.split('\0').map((message) => message.trim()).filter((message) => message !== '')
 }
@@ -229,7 +237,7 @@ function escapeControlCharacters(code: string): string {
   }).join('')
 }
 
-async function commitRelease(output: string, tree: string, tag: string, git: (...args: string[]) => Promise<string>): Promise<string> {
+async function commitRelease(output: string, tree: string, tag: string, parent: string, git: (...args: string[]) => Promise<string>): Promise<string> {
   const [name = '', email = ''] = (await git('log', '-1', '--format=%an%n%ae')).trim().split('\n')
   const gitFolder = (await git('rev-parse', '--absolute-git-dir')).trim()
   const releaseGit = (...args: string[]) =>
@@ -238,7 +246,6 @@ async function commitRelease(output: string, tree: string, tag: string, git: (..
     })
   await releaseGit('add', '--all', '--force', tree)
   const treeId = (await releaseGit('write-tree')).trim()
-  const parent = (await git('rev-parse', '--verify', '--quiet', `refs/remotes/origin/${releaseBranch}`).catch(() => '')).trim()
   return (await releaseGit('commit-tree', treeId, ...(parent === '' ? [] : ['-p', parent]), '-m', `release ${tag}`)).trim()
 }
 

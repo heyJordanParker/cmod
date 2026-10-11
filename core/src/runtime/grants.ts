@@ -69,22 +69,22 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
         await gate('session.messages', 'conversation')
         return claude.session.messages(...args)
       }) as Claude['session']['messages'],
-      append: (async (args: Parameters<Claude['session']['append']>[0]) => {
+      append: async (args: Parameters<Claude['session']['append']>[0]) => {
         await gate('session.append', 'prompt')
         return claude.session.append(args)
-      }) as Claude['session']['append'],
+      },
     },
     prompt: {
-      submit: (async (args: Parameters<Claude['prompt']['submit']>[0]) => {
+      submit: async (args: Parameters<Claude['prompt']['submit']>[0]) => {
         await gate('session.submit', 'prompt')
         return claude.prompt.submit(args)
-      }) as Claude['prompt']['submit'],
+      },
     },
     model: {
-      complete: (async (...args: Parameters<Claude['model']['complete']>) => {
+      complete: async (...args: Parameters<Claude['model']['complete']>) => {
         await gate('model.complete', 'model')
         return claude.model.complete(...args)
-      }) as Claude['model']['complete'],
+      },
     },
     agent: {
       ...claude.agent,
@@ -95,11 +95,11 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     },
     tool: {
       ...claude.tool,
-      call: (async (input: Parameters<Claude['tool']['call']>[0]) => {
+      call: async (input: Parameters<Claude['tool']['call']>[0]) => {
         const item = startsTurns.includes(input.tool) ? 'prompt' : ownSchedule.includes(input.tool) ? undefined : 'tools'
         await gate(`tool.call(${input.tool})`, item)
         return claude.tool.call(input)
-      }) as Claude['tool']['call'],
+      },
     },
   }
 }
@@ -112,8 +112,8 @@ function spawned(started: Promise<Stream>): Stream {
   const stream = {
     next: async () => (await started).next(),
     async return(value: never) {
-      const running = await started.catch(() => undefined)
-      return (await running?.return?.(value)) ?? { done: true as const, value }
+      const [start] = await Promise.allSettled([started])
+      return start.status === 'fulfilled' ? start.value.return(value) : { done: true as const, value }
     },
     [Symbol.asyncIterator]: () => stream,
     result,
@@ -287,11 +287,7 @@ function programOf(argv: readonly string[]): string {
 }
 
 function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname
-  } catch {
-    return url
-  }
+  return URL.canParse(url) ? new URL(url).hostname : url
 }
 
 function expanded(path: string, home: string | undefined): string {

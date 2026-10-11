@@ -1,14 +1,20 @@
-import { mkdir, readdir, rename } from 'node:fs/promises'
+import { mkdir, readdir, readlink, rename } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 
 export async function readText(path: string): Promise<string | undefined> {
-  return Bun.file(path)
-    .text()
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EISDIR') return undefined
-      throw error
-    })
+  return Bun.file(path).text().catch(ifMissing(undefined))
+}
+
+export async function readLink(path: string): Promise<string | undefined> {
+  return readlink(path).catch((error: NodeJS.ErrnoException) => (error.code === 'EINVAL' ? undefined : ifMissing(undefined)(error)))
+}
+
+export function ifMissing<Value>(value: Value): (error: NodeJS.ErrnoException) => Value {
+  return (error) => {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EISDIR') return value
+    throw error
+  }
 }
 
 export async function listFiles(folder: string): Promise<string[]> {

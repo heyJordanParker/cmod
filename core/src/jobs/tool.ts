@@ -24,7 +24,7 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
     if (reserved.length > 0) throw new Error(`${mod.name}: the ${name} tool's inputSchema has the property ${reserved.join(', ')}, which Claude Code keeps for itself. Rename it.`)
     reserveName('tool', name, `${mod.name}: the tool ${name} is already added. Give each tool its own name.`)
 
-    const validator = new Validator((inputSchema ?? { type: 'object' }) as ConstructorParameters<typeof Validator>[0], '2020-12', false)
+    const validator = new Validator(inputSchema ?? { type: 'object' }, '2020-12', false)
     let registered: string | undefined
     claude.tool.register({ name, description, ...(inputSchema === undefined ? {} : { inputSchema: inputSchema as Record<string, unknown> }) }).then(
       (answer) => {

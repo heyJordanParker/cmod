@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { defineMod, type Mod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { fakeFiles } from '../../src/testing/fake-files.js'
 
 const skill = (name: string, mode: string) => ['---', `name: ${name}`, 'description: A skill', 'metadata:', `  modes.mode: ${mode}`, '---', 'Do it.', ''].join('\n')
 
@@ -96,6 +97,32 @@ test('a file cmod cannot read comes back with the line, read throws it, and cmod
   expect(found).toEqual({ path, metadata: {}, error: `${path} line 4: a metadata value holds a list or a map. Each value is one line of text, and a list is one space-separated text.` })
   await expect(mod.metadata.read(path)).rejects.toThrow(`modes: ${path} line 4:`)
   expect(tested.shown.logs.filter((line) => line.includes('line 4'))).toHaveLength(1)
+})
+
+test('find keeps the files it can read and logs once, at debug level, each folder it could not list', async () => {
+  const files = fakeFiles({ '/work/app/a/one.md': skill('one', 'build'), '/work/app/b/two.md': skill('two', 'review') })
+  const { tested, mod } = await started({ projectRoot: '/work/app' })
+  Object.assign(tested.fakes.fs, files)
+  tested.fakes.fs.list = async (path) => (path === '/work/app/b' ? Promise.reject(new Error("EACCES: permission denied, list '/work/app/b'")) : files.list(path))
+
+  const found = await mod.fs.find('**/*.md')
+  await mod.fs.find('**/*.md')
+
+  expect(found.map(({ path }) => path)).toEqual(['/work/app/a/one.md'])
+  expect(tested.shown.debug.filter((line) => line.includes('/work/app/b'))).toEqual(["modes: mod.fs.find skipped /work/app/b: EACCES: permission denied, list '/work/app/b'"])
+})
+
+test('a file cmod cannot open comes back from find with its error, and read and update reject without writing', async () => {
+  const path = '/work/app/a.md'
+  const files = fakeFiles({ [path]: skill('a', 'build') })
+  const { tested, mod } = await started({ projectRoot: '/work/app' })
+  Object.assign(tested.fakes.fs, files)
+  tested.fakes.fs.read = async (read) => (read === path ? Promise.reject(new Error(`EACCES: permission denied, read '${path}'`)) : files.read(read))
+
+  expect(await mod.fs.find('*.md')).toEqual([{ path, metadata: {}, error: `${path} EACCES: permission denied, read '${path}'` }])
+  await expect(mod.metadata.read(path)).rejects.toThrow(`EACCES: permission denied, read '${path}'`)
+  await expect(mod.metadata.update(path, (metadata) => void (metadata['mode'] = 'review'))).rejects.toThrow(`EACCES: permission denied, read '${path}'`)
+  expect(tested.calls.filter((call) => call.call === 'fs.write')).toEqual([])
 })
 
 test('update outside the project needs the files permission that covers the path', async () => {

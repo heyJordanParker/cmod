@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { fakeFiles } from '../../src/testing/fake-files.js'
 
 function fileWatcher(cwd = '/work', files: string[] = []) {
   const seen: { event: string; files: unknown }[] = []
@@ -116,6 +117,17 @@ test('a Bash cat of a file lists that file in files.read', async () => {
   await tested.fire('PostToolUse', { ...call('Bash', { command: 'cat notes.md' }), tool_response: {} })
 
   expect(seen).toEqual([{ event: 'PostToolUse', files: { read: ['/work/notes.md'], changed: [] } }])
+})
+
+test('a Bash read of a path cmod cannot check keeps the other files and logs that path at debug level', async () => {
+  const { tested, seen } = fileWatcher('/work', ['/work/notes.md', '/work/secret.md'])
+  const { stat } = fakeFiles({ '/work/notes.md': '' })
+  tested.fakes.fs.stat = async (path, options) => (path === '/work/secret.md' ? Promise.reject(new Error("EACCES: permission denied, stat '/work/secret.md'")) : stat(path, options))
+
+  await tested.fire('PostToolUse', { ...call('Bash', { command: 'cat notes.md secret.md' }), tool_response: {} })
+
+  expect(seen).toEqual([{ event: 'PostToolUse', files: { read: ['/work/notes.md'], changed: [] } }])
+  expect(tested.shown.debug).toContain("file-watcher: the Bash call reads /work/secret.md, which could not be checked: EACCES: permission denied, stat '/work/secret.md'")
 })
 
 test('a Bash read of a path that is not there lists nothing in files.read', async () => {

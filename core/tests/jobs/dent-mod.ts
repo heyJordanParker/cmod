@@ -7,7 +7,10 @@ const skipPattern = /\.skip\(|markTestSkipped\(/g
 const addsSkip = (previousContent: string | undefined, content: string) =>
   (content.match(skipPattern) ?? []).length > ((previousContent ?? '').match(skipPattern) ?? []).length
 const hasCodeChanges = ({ stdout }: ProcessRunResult) => stdout.split('\n').some((line) => line.trim() !== '' && !line.endsWith('Domain.md'))
-const tableOf = (path: string) => /create_(\w+?)_table|create_(\w+)\.php$/.exec(path)?.slice(1).find((name) => name !== undefined)
+const tableOf = (path: string) => {
+  const match = /create_(\w+?)_table|create_(\w+)\.php$/.exec(path)
+  return match?.[1] ?? match?.[2]
+}
 const duplicatesTable = async (call: FileCall, mod: Mod) => {
   const table = tableOf(call.path)
   const { stdout } = await mod.process.run(['git', 'status', '--porcelain', '-uall'])

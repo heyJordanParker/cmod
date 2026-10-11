@@ -42,7 +42,7 @@ export function afterCall<State extends object>(
   const readWorkspace = workspaceReader(job)
   job.mod.claude.on('tool.call', async (e, next) => {
     const before = Promise.all([useOf(job, e), readWorkspace()])
-    await before.catch(() => undefined)
+    await Promise.allSettled([before])
     const result = await next(e)
     if (result.deny !== undefined || result.isError === true) return result
     const added = await before.then(([use, workspace]) => contextAfter(use, workspace)).catch(failed)

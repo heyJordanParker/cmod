@@ -4,6 +4,7 @@ import { consentPath, finishStepsMethod, isObject, openPageMethod, parseConsent,
 import { Tabs } from '../node_modules/@cmodjs/core/ui/components.js'
 import { definePane } from '../node_modules/@cmodjs/core/ui/define-pane.js'
 import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 
 export type ModsState = { readonly memory: { selected: string | null; tab: Tab; notice: string | null; removing: string | null; views: readonly ModView[] } }
 
@@ -42,16 +43,19 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       .filter(([, isEnabled]) => isEnabled === false)
       .map(([id]) => id.replace(/@[^@]*$/, ''))
     const names = (await mod.fs.exists(`${store}/records`)) ? (await mod.fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)) : []
-    const read = (path: string) => mod.fs.read(path).catch(() => undefined)
+    const read = (path: string) => mod.fs.read(path).catch(ifMissing(undefined))
     const records = (await Promise.all(names.map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
     const views = await Promise.all(
       records.map(async (record): Promise<ModView> => {
-        const manifest: unknown = await mod.fs.read(`${record.root}/package.json`).then(JSON.parse, () => undefined)
-        const plugin: unknown = await mod.fs.read(`${record.root}/.claude-plugin/plugin.json`).then(JSON.parse, () => undefined)
+        const manifest: unknown = await mod.fs.read(`${record.root}/package.json`).then(JSON.parse, ifMissing(undefined))
+        const plugin: unknown = await mod.fs.read(`${record.root}/.claude-plugin/plugin.json`).then(JSON.parse, ifMissing(undefined))
         const declared = (isObject(manifest) ? readSteps(manifest)?.permissions : undefined) ?? []
         const granted = consent[record.name] ?? []
         const ask = async <Value>(method: string): Promise<readonly Value[]> => {
-          const answer = await mod.claude.cmod.call({ to: record.name, method, input: null }).catch(() => undefined)
+          const answer = await mod.claude.cmod.call({ to: record.name, method, input: null }).catch((error: unknown) => {
+            mod.claude.ui.log(`cmod: ${record.name} did not answer ${method}: ${messageOf(error)}`, { to: 'debug' })
+            return undefined
+          })
           return isObject(answer) && Array.isArray(answer['value']) ? (answer['value'] as Value[]) : []
         }
         const pages = await ask<ModView['pages'][number]>(settingsPagesMethod)

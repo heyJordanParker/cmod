@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import type { ToolCallArgs } from 'claude-code'
 import { schedule } from '../../src/jobs/schedule.js'
 import { defineMod } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
@@ -42,6 +43,23 @@ test('a schedule deletes the cron its mod made before /reload-plugins, so the cr
   }
 
   expect(fake.shown.schedules).toEqual([{ id: 'cron-2', cron: '7 * * * *', prompt: 'Summarize the hour.' }])
+})
+
+test('a schedule whose last cron cannot be deleted logs why and still makes its new cron', async () => {
+  const fake = fakeClaude({ name: 'loop', root: '/plugins/loop' })
+  const definition = defineMod({ name: 'loop', setup: (mod) => mod.use(schedule({ cron: '7 * * * *', prompt: 'Summarize the hour.' })) })
+  const plugin = { name: 'loop', root: '/plugins/loop', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: { permissions: ['prompt'] }, granted: ['prompt'] }
+  const startOnce = async () => {
+    await createLifecycle(definition).start(fake.claude, async () => plugin)
+    await fake.settle()
+  }
+  await startOnce()
+  fake.fakes.tool.call = async (input: ToolCallArgs) => (input.tool === 'CronDelete' ? Promise.reject(new Error('No cron with id cron-1')) : { result: { id: 'cron-9' } })
+
+  await startOnce()
+
+  expect(fake.shown.logs).toContain('loop: the schedule could not delete its last cron cron-1: No cron with id cron-1')
+  expect(fake.calls.filter((call) => call.call === 'tool.call').map((call) => (call.args[0] as { tool: string }).tool)).toEqual(['CronCreate', 'CronDelete', 'CronCreate'])
 })
 
 test('a schedule Claude Code refuses writes one log line naming why', async () => {

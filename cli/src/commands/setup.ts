@@ -8,7 +8,7 @@ import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
-import { listFiles, readText, tilde, writeAtomically } from '../files.js'
+import { ifMissing, listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
 import { bindKeys, keybindingsPath, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
 import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
@@ -167,6 +167,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
     emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys), permissions: state.missing })
     return 10
   }
+  if (hold.signal !== undefined) return 1
   const store = storeFolder(process.env)
   let code = 1
   try {
@@ -179,7 +180,6 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
 }
 
 async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emit: (event: RunnerEvent) => void): Promise<number> {
-  if (hold.signal !== undefined) return 1
   const { install, uninstall, program } = plugin.steps
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
@@ -265,7 +265,7 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
   if (uninstall === undefined) return false
   const scriptFolders = new Set<string>()
   for (const path of scriptPaths(uninstall)) {
-    if ((await stat(join(plugin.root, path)).catch(() => undefined))?.isFile()) scriptFolders.add(dirname(path))
+    if ((await stat(join(plugin.root, path)).catch(ifMissing(undefined)))?.isFile()) scriptFolders.add(dirname(path))
   }
   await mkdir(join(folder, 'root'), { recursive: true })
   for (const scriptFolder of scriptFolders) {

@@ -1,4 +1,4 @@
-import type { FileSystem } from '../../utils/paths.js'
+import { ifMissing, type FileSystem } from '../../utils/paths.js'
 import { basename, dirname, resolve } from '../../vendor.js'
 
 export type ProjectScope = { workTreeOf: (path: string) => Promise<string | undefined> }
@@ -33,19 +33,13 @@ export async function findProjectScope(pluginRoot: string, home: string, fs: Fil
 
 async function readRepository(workTree: string, fs: FileSystem): Promise<string | undefined> {
   const gitPath = resolve(workTree, '.git')
-  const git = await fs.stat(gitPath).catch(() => undefined)
+  const git = await fs.stat(gitPath).catch(ifMissing(undefined))
   if (git === undefined) return undefined
   if (git.kind === 'dir') return git.realPath ?? gitPath
-  try {
-    const gitDirectory = /^gitdir:\s*(.+)$/m.exec(await fs.read(gitPath))?.[1]?.trim()
-    if (gitDirectory === undefined) throw new Error(`${gitPath} has no gitdir line.`)
-    const linkedDirectory = resolve(workTree, gitDirectory)
-    const commonDirectory = await fs.read(resolve(linkedDirectory, 'commondir')).then(
-      (text) => resolve(linkedDirectory, text.trim()),
-      () => linkedDirectory,
-    )
-    return (await fs.stat(commonDirectory)).realPath ?? commonDirectory
-  } catch {
-    return workTree
-  }
+  const gitDirectory = /^gitdir:\s*(.+)$/m.exec(await fs.read(gitPath))?.[1]?.trim()
+  if (gitDirectory === undefined) return workTree
+  const linkedDirectory = resolve(workTree, gitDirectory)
+  const commonDirectory = await fs.read(resolve(linkedDirectory, 'commondir')).then((text) => resolve(linkedDirectory, text.trim()), ifMissing(linkedDirectory))
+  const common = await fs.stat(commonDirectory).catch(ifMissing(undefined))
+  return common === undefined ? workTree : (common.realPath ?? commonDirectory)
 }

@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { writeAtomically } from '../files.js'
-import { preparePackages, readPlugin } from '../plugin.js'
+import { installPackages, readPlugin } from '../plugin.js'
 import { capture } from '../process.js'
 import { startProgress } from '../progress.js'
 
@@ -43,7 +43,7 @@ export async function run(argv: string[]): Promise<number> {
 
   progress.step(`Installing packages for ${name}`)
   try {
-    await preparePackages(await readPlugin(root))
+    await installPackages(await readPlugin(root))
   } catch (error) {
     await rm(root, { recursive: true, force: true })
     const tarball = `CMOD_CORE=file:<cmod checkout>/core/cmodjs-core-${coreVersion}.tgz`
@@ -62,7 +62,7 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function author(): Promise<{ name: string; email?: string }> {
-  const config = async (key: string) => (await capture(['git', 'config', '--get', key]).catch(() => undefined))?.stdout.trim() || undefined
+  const config = async (key: string) => (Bun.which('git') === null ? undefined : (await capture(['git', 'config', '--get', key])).stdout.trim() || undefined)
   const name = (await config('user.name')) ?? process.env['USER']
   if (!name) throw new Error('Neither git config user.name nor USER names an author for plugin.json. Run git config --global user.name "<your name>".')
   const email = await config('user.email')

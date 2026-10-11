@@ -26,7 +26,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser --define process=undefined && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker",
-    "check": "tsc -p tsconfig.json --noEmit && oxlint --deny-warnings",
+    "check": "tsc -p tsconfig.json --noEmit && OXLINT_TSGOLINT_PATH=../lint/node_modules/.bin/tsgolint ../lint/node_modules/.bin/oxlint --type-aware --deny-warnings",
     "test": "bun test"
   },
   "dependencies": {
@@ -42,7 +42,6 @@
     "mdast-util-gfm": "^3.1.0",
     "mdast-util-to-string": "^4.0.0",
     "micromark-extension-gfm": "^3.0.0",
-    "oxlint": "1.86.0",
     "pathe": "^2.0.3",
     "picomatch": "^4.0.7",
     "shell-quote": "^1.12.0",

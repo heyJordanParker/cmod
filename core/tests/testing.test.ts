@@ -184,7 +184,7 @@ const notesPane = definePane<NotesState>({
 
 const notes = defineMod({
   name: 'notes',
-  state: { global: { notes: ['Buy milk', 'Call the plumber about the sink'] } } as NotesState,
+  state: { global: { notes: ['Buy milk', 'Call the plumber about the sink'] } },
   setup(mod) {
     const pane = mod.ui.pane(notesPane)
     mod.use(slashCommand({ name: 'notes', description: 'Show or hide the notes', reply: () => pane.toggle() }))

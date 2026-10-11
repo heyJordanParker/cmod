@@ -1,5 +1,6 @@
 import type { FileMatch, Metadata } from '../mod.js'
 import { formatOf, MetadataError, readMetadata, sidecarSuffix, writeMetadata, type MetadataFormat } from '../utils/metadata.js'
+import { ifMissing, isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import { picomatch, resolve } from '../vendor.js'
 import type { Claude } from './claude.js'
@@ -49,11 +50,19 @@ export function createModFiles({ name, claude, places, checkWrite }: { readonly 
     const firstLine = extensionless ? (await claude.fs.read(realPath)).split('\n', 1)[0] : undefined
     const format = formatOf(realPath, firstLine)
     const holder = format.kind === 'sidecar' ? `${realPath}${sidecarSuffix}` : realPath
-    const sidecar = format.kind === 'sidecar' ? await claude.fs.stat(holder).catch(() => undefined) : undefined
+    const sidecar = format.kind === 'sidecar' ? await claude.fs.stat(holder).catch(ifMissing(undefined)) : undefined
     return { realPath, format, holder, signature: `${stat.mtimeMs}:${stat.size}:${sidecar?.kind === 'file' ? `${sidecar.mtimeMs}:${sidecar.size}` : ''}` }
   }
 
-  const textOf = async (holder: string): Promise<string> => ((await claude.fs.stat(holder).catch(() => undefined))?.kind === 'file' ? claude.fs.read(holder) : '')
+  const textOf = async (holder: string): Promise<string> => ((await claude.fs.stat(holder).catch(ifMissing(undefined)))?.kind === 'file' ? claude.fs.read(holder) : '')
+
+  const skipped = <Value>(path: string, value: Value) => (error: unknown): Value => {
+    if (isMissing(error)) return value
+    const reason = `${name}: mod.fs.find skipped ${path}: ${messageOf(error)}`
+    if (!logged.has(reason)) claude.ui.log(reason, { to: 'debug' })
+    logged.add(reason)
+    return value
+  }
 
   const readEntry = async (path: string): Promise<Read> => {
     const located = await locate(path)
@@ -77,21 +86,21 @@ export function createModFiles({ name, claude, places, checkWrite }: { readonly 
   const matchesOf = async (pattern: string): Promise<string[]> => {
     const absolute = resolvedPath(pattern, places)
     const scanned = picomatch.scan(absolute)
-    if (!scanned.isGlob) return (await claude.fs.stat(absolute).catch(() => undefined))?.kind === 'file' ? [absolute] : []
+    if (!scanned.isGlob) return (await claude.fs.stat(absolute).catch(skipped(absolute, undefined)))?.kind === 'file' ? [absolute] : []
     const isMatch = picomatch(absolute, { dot: true })
     const entersSkipped = skippedFolders.filter((folder) => scanned.glob.split('/').includes(folder))
     const maxDepth = scanned.glob.includes('**') ? Number.POSITIVE_INFINITY : scanned.glob.split('/').length
     const found: string[] = []
     const visited = new Set<string>()
     const walk = async (folder: string, depth: number): Promise<void> => {
-      const real = (await claude.fs.stat(folder, { resolve: true }).catch(() => undefined))?.realPath ?? folder
+      const real = (await claude.fs.stat(folder, { resolve: true }).catch(skipped(folder, undefined)))?.realPath ?? folder
       if (visited.has(real)) return
       visited.add(real)
-      const entries = await claude.fs.list(folder).catch(() => [])
+      const entries = await claude.fs.list(folder).catch(skipped(folder, []))
       await Promise.all(
         entries.map(async (entry) => {
           const path = `${folder}/${entry.name}`
-          const kind = entry.isLink === true ? (await claude.fs.stat(path).catch(() => undefined))?.kind : entry.kind
+          const kind = entry.isLink === true ? (await claude.fs.stat(path).catch(skipped(path, undefined)))?.kind : entry.kind
           if (kind === 'file' && isMatch(path)) found.push(path)
           if (kind !== 'dir' || depth + 1 >= maxDepth) return
           if (skippedFolders.includes(entry.name) && !entersSkipped.includes(entry.name)) return
@@ -100,7 +109,7 @@ export function createModFiles({ name, claude, places, checkWrite }: { readonly 
       )
     }
     const base = scanned.base === '' ? '/' : scanned.base
-    if ((await claude.fs.stat(base).catch(() => undefined))?.kind === 'dir') await walk(base, 0)
+    if ((await claude.fs.stat(base).catch(skipped(base, undefined)))?.kind === 'dir') await walk(base, 0)
     return found
   }
 
@@ -111,7 +120,7 @@ export function createModFiles({ name, claude, places, checkWrite }: { readonly 
       const kept = paths.filter((path) => !(path.endsWith(sidecarSuffix) && paths.includes(path.slice(0, -sidecarSuffix.length))))
       return Promise.all(
         kept.map(async (path): Promise<FileMatch> => {
-          const read = await readEntry(path)
+          const read = await readEntry(path).catch((error: unknown): Read => ({ metadata: {}, error: `${path} ${messageOf(error)}` }))
           return { path, ...(read.name === undefined ? {} : { name: read.name }), metadata: own(read.metadata), ...(read.error === undefined ? {} : { error: read.error }) }
         }),
       )

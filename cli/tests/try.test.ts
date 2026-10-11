@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { readText } from '../src/files.js'
 import { claudeAnswering, cmod, cmodInTerminal, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
@@ -24,7 +25,7 @@ function leftovers(home: string): string[] {
 }
 
 async function approvals(home: string): Promise<unknown> {
-  return JSON.parse((await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8').catch(() => undefined)) ?? '{}')
+  return JSON.parse((await readText(join(home, '.local/share/cmod/consent.json'))) ?? '{}')
 }
 
 const helloMod = {

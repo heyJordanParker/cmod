@@ -97,6 +97,7 @@ The input of `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` has `files: {
 - `Grep` counts its `path`, or the working folder when it names none, and `Glob` counts its `pattern` joined to its `path`. Since `read` lists only files, a `Grep` of a folder and every `Glob` usually leave `read` empty.
 - A `Bash` command reads and changes the files its commands name, such as `cat a.ts > b.ts`. A path that holds a shell expansion, such as `$HOME`, is left out.
 - `read` lists only paths that are files now. `changed` lists every path the call writes, whether it exists or not.
+- A path cmod cannot check, such as one it has no permission to read, is left out of `read`, and cmod writes the path and the reason to Claude Code's debug log.
 - When cmod cannot work the files out, both lists are empty, and the reason goes to Claude Code's debug log.
 
 ## shell.js and path.js: read a command line

@@ -75,6 +75,7 @@ defineStep<State>(step: { id: string; title: string; render(mod, props): RenderE
 - `id` is 1 to 64 letters, digits, `_`, or `-`. `title` is the line above the step, with `(1 of 2)`. `defineStep` throws for either one missing.
 - `render` draws the step's body, the way a pane's `render` does ([ui.md](ui.md)).
 - `isDone` says whether the step is finished. A step that is done is skipped, so the pane opens only for what is left. `Next` checks `isDone`, and shows `Finish <title> first.` while it is false. The last step's button says `Finish`.
+- An `isDone` that throws or rejects counts as not done. At start cmod logs `<mod>: the <title> step's isDone failed: <error>`, and `Next` shows `The <title> step's isDone failed: <error>`.
 - `Not now` closes the pane and logs `<mod> needs one more step, starting with <title>. Run /mods <mod> to finish.` The mod keeps running. `/mods <mod>` shows `Needs setup: <title>` with a `Finish setup` button, which opens the pane on the first step left.
 
 ## Key bindings

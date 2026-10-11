@@ -1,7 +1,15 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "../lint/node_modules/oxlint/configuration_schema.json",
   "extends": ["../.oxlintrc.json"],
   "overrides": [
+    {
+      "files": ["src/**"],
+      "rules": {
+        "no-restricted-globals": "off",
+        "no-restricted-properties": "off",
+        "cmod/program-owner": ["error", { "claude": "cli/src/claude.ts" }]
+      }
+    },
     {
       "files": ["src/progress.ts"],
       "rules": { "no-control-regex": "off" }

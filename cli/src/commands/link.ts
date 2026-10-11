@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { tilde } from '../files.js'
-import { preparePackages, readPlugin } from '../plugin.js'
+import { installPackages, readPlugin } from '../plugin.js'
 import { installProgram, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { addPluginFolder, settingsPath } from '../settings.js'
@@ -33,7 +33,7 @@ export async function run(argv: string[]): Promise<number> {
   if (plugin.name !== 'cmod') await installCmodPlugin(progress)
 
   progress.step(`Installing packages for ${plugin.name}`)
-  if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
+  if (await installPackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
   else progress.succeed(`${plugin.name} has no package.json, so it has no packages to install`)
 
   const program = await readProgram(plugin)

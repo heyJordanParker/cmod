@@ -1,5 +1,5 @@
 import { parseShell, type ShellCommand } from './parse-shell.js'
-import { expandHome, type FileSystem } from './paths.js'
+import { expandHome, ifMissing, type FileSystem } from './paths.js'
 import { resolve } from '../vendor.js'
 
 export type CallBase = { tool: string; input: Readonly<Record<string, unknown>>; agentId?: string; agentType?: string }
@@ -79,7 +79,7 @@ async function editedContents(use: CallBase, path: string, fs: FileSystem): Prom
 }
 
 async function previousContentOf(path: string, fs: FileSystem): Promise<string | undefined> {
-  const stat = await fs.stat(path).catch(() => undefined)
+  const stat = await fs.stat(path).catch(ifMissing(undefined))
   return stat?.kind === 'file' ? fs.read(path) : undefined
 }
 

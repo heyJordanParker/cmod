@@ -1,6 +1,32 @@
 {
-  "$schema": "./core/node_modules/oxlint/configuration_schema.json",
+  "$schema": "./lint/node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": [{ "name": "cmod", "specifier": "./lint/index.ts" }],
   "rules": {
-    "no-unused-vars": ["warn", { "ignoreRestSiblings": true }]
-  }
+    "no-unused-vars": ["warn", { "ignoreRestSiblings": true }],
+    "cmod/no-silent-catch": "error",
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/await-thenable": "off",
+    "typescript/no-base-to-string": "off",
+    "typescript/no-misused-spread": "off",
+    "typescript/require-array-sort-compare": "off",
+    "typescript/restrict-template-expressions": "off",
+    "typescript/unbound-method": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/**"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          { "name": "process", "message": "Code that runs inside Claude Code has no process. Read the environment with mod.claude.env." },
+          { "name": "Bun", "message": "Code that runs inside Claude Code has no Bun. Run a program with mod.process.run." },
+          { "name": "fetch", "message": "Fetch through mod.http.fetch, so the test kit and the mod's permissions see the call." },
+          { "name": "setTimeout", "message": "Wait with mod.claude.clock.after, so the test kit's clock drives it." },
+          { "name": "setInterval", "message": "Repeat with mod.every, so the test kit's clock drives it." }
+        ],
+        "no-restricted-properties": ["error", { "object": "Date", "property": "now", "message": "Read the time with mod.claude.clock.now, so the test kit's clock drives it." }]
+      }
+    }
+  ]
 }

@@ -45,7 +45,8 @@ async function copy(): Promise<void> {
   try {
     await navigator.clipboard.writeText(prompt.value)
     status.value = 'copied'
-  } catch {
+  } catch (error) {
+    if (!(error instanceof DOMException)) throw error
     status.value = 'blocked'
     if (peek.value) peek.value.open = true
   }

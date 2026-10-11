@@ -206,7 +206,8 @@ function unquoted(text: string, lineNumber: number): string {
     if (!text.endsWith('"') || text.length < 2) throw new MetadataError(lineNumber, `${text} opens a double quote that never closes.`)
     try {
       return JSON.parse(text) as string
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
       throw new MetadataError(lineNumber, `${text} is not a double-quoted text. Escape a " inside it as \\".`)
     }
   }
@@ -224,8 +225,9 @@ function topLevelScalar(region: Region, key: string): string | undefined {
   if (text === '') return undefined
   try {
     return unquoted(text, region.start + 2 + at)
-  } catch {
-    return undefined
+  } catch (error) {
+    if (error instanceof MetadataError) return undefined
+    throw error
   }
 }
 

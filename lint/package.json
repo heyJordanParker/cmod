@@ -1,0 +1,14 @@
+{
+  "name": "@cmodjs/lint",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "scripts": {
+    "test": "node --test no-silent-catch.test.ts program-owner.test.ts"
+  },
+  "dependencies": {
+    "@oxlint/plugins": "1.86.0",
+    "oxlint": "1.86.0",
+    "oxlint-tsgolint": "7.0.2003"
+  }
+}

@@ -104,7 +104,7 @@ export async function writeUserConfig(root: string, userConfig: Record<string, u
   return true
 }
 
-export async function preparePackages(plugin: Plugin): Promise<boolean> {
+export async function installPackages(plugin: Plugin): Promise<boolean> {
   if (plugin.packageJson === undefined) return false
   const dependencies = plugin.packageJson['dependencies']
   const hasTarball = Object.values(isObject(dependencies) ? dependencies : {}).some((spec) => typeof spec === 'string' && spec.startsWith('file:') && /\.(tgz|tar\.gz)$/.test(spec))

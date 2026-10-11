@@ -20,7 +20,7 @@ export function schedule<State extends object = Record<never, never>>(entry: Sch
     let isQueued = false
 
     const remove = async (id: string) => {
-      await claude.tool.call({ tool: 'CronDelete', id }).catch(() => undefined)
+      await claude.tool.call({ tool: 'CronDelete', id }).catch((error: unknown) => log(`could not delete its last cron ${id}: ${messageOf(error)}`))
       await claude.store.delete(storeKey)
     }
 
@@ -28,7 +28,7 @@ export function schedule<State extends object = Record<never, never>>(entry: Sch
       isQueued = false
       let next: Schedule | undefined
       try {
-        next = typeof entry === 'function' ? entry(mod.state as State) : entry
+        next = typeof entry === 'function' ? entry(mod.state) : entry
         if (next !== undefined) checked(next)
       } catch (error) {
         log(`kept its last cron: ${messageOf(error)}`)

@@ -87,6 +87,7 @@ fire<N extends RoutedEvent>(event: N, input: Args<N>, below?): Promise<EventResu
 ```
 
 - `fire('UserPromptSubmit', { prompt: 'hello' })` runs the mod's hooks on a `ModEvent`. `TestInput<E>` is the event's input without the fields `fire` fills: `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and a new `tool_use_id` for each tool event.
+- A `SessionStart` that names no `transcript_path` also writes its transcript as an empty file in the test's files, so the session's `session` values last as they do in Claude Code ([state.md](state.md)).
 - For a tool event, `files` is worked out from the call and the test's `files`, as in Claude Code.
 - `fire('PreToolUse', …)` runs the call's `tool.call`, and its `tool.check` inside it, as Claude Code does. `testMod` runs a mod as if `register.ts` calls `registerPermissionCheck`, so it returns `allow: true` or `ask` with the reason when the mod's hooks or `permissions` job decided the permission. A `PreToolUse` with `agent_id` and `agent_type`, such as `fire('PreToolUse', { tool_name: 'Read', tool_input: { file_path: 'a.ts' }, agent_id: 'agent-7', agent_type: 'explorer' })`, runs as that subagent's call. It returns `updatedInput` when the hooks rewrote the input, `additionalContext` as a list, and `deny` when a hook or Claude Code refused the call. Its `below` is `{ deny }` to test a call Claude Code refuses, and Claude Code runs the call otherwise.
 - On every other event, `below` is what the hooks beneath the mod answered. Pass it to test how the mod's answer combines with another. When nothing in the mod answers, `fire` returns `below` as it is.
@@ -241,6 +242,7 @@ Set a fake to answer a call:
 - `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
 - `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
+- `settings.read` answers `{}` by default, as Claude Code does with no `settings.json` files.
 - `config.list` answers no `/config` rows by default. A `config.list` fake that answers a row with `isLocked: true` locks that option as managed settings do.
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 - `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `mod.fs.find` or `mod.metadata.update` follows it as a real file system does.

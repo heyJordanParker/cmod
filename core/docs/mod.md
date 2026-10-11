@@ -230,7 +230,8 @@ type FileMatch = { readonly path: string; readonly name?: string; readonly metad
 - A glob starting with `~/.claude` starts at Claude Code's config folder, `CLAUDE_CONFIG_DIR` when it is set. One starting with `~/` starts at home, one starting with `/` is absolute, and any other starts at the project root. Several globs answer each file once.
 - `path` is absolute. `name` is a Markdown file's frontmatter `name`. `metadata` holds the mod's own keys, bare, as `mod.metadata.read` answers them.
 - `find` follows symbolic links into the folders they point at, once each. It skips `.git` and `node_modules` unless the glob names them.
-- A file whose metadata cmod cannot read comes back with empty `metadata` and an `error` naming the line, and cmod logs it once.
+- A file whose metadata cmod cannot read comes back with empty `metadata` and an `error` naming the line, and cmod logs it once. A file cmod cannot open comes back the same way, with an `error` naming the reason.
+- A folder cmod cannot list, such as one it has no permission to read, is left out, and cmod writes the folder and the reason to Claude Code's debug log once.
 - cmod keeps what it read of each file until the file's modified time or size changes.
 
 ```ts
@@ -269,6 +270,8 @@ metadata:
 - Any other file keeps it in a sidecar, `<file>.meta`.
 
 `update` hands `change` the mod's current keys, and writes what `change` leaves. It changes only the metadata block, keeps other mods' keys, writes nothing when nothing changed, and removes an empty block. It writes through a symbolic link to the file it points at. Writing a file outside the project and the mod's data folder needs the `files` permission, as `mod.fs.write` does ([permissions.md](permissions.md)). A key is letters, digits, `_`, `.`, and `-`, and `update` rejects any other key and a value with a line break.
+
+`read` rejects when cmod cannot open the file or read its metadata, with the reason or the line. `update` rejects the same way and writes nothing, so it never overwrites metadata it could not read.
 
 ```ts
 await mod.metadata.update('.claude/skills/plan/SKILL.md', (metadata) => {

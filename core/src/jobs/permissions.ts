@@ -24,7 +24,7 @@ export function permissions<State extends object = Record<never, never>>(rules: 
     const verdictOf = async (e: Frozen<Args<'tool.check'>>): Promise<Verdict | undefined> => {
       let current: PermissionRules<State>
       try {
-        current = typeof rules === 'function' ? rules(job.mod.state as State) : rules
+        current = typeof rules === 'function' ? rules(job.mod.state) : rules
         checkedCount(current)
       } catch (error) {
         return { decision: 'deny', reason: `The permission rules of ${job.mod.name} failed, so it denies the call: ${messageOf(error)}` }

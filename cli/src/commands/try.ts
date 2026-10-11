@@ -5,8 +5,9 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { readRecord, storeFolder, type InstallRecord } from '@cmodjs/core/src/records.js'
 import { home, readText, tilde } from '../files.js'
-import { preparePackages, readPlugin, sourceOf, type Plugin } from '../plugin.js'
-import { run as runCommand, runAttached } from '../process.js'
+import { tryPlugins } from '../claude.js'
+import { installPackages, readPlugin, sourceOf, type Plugin } from '../plugin.js'
+import { run as runCommand } from '../process.js'
 import { startProgress } from '../progress.js'
 import { configRoot, keepSettings, keptSettings } from '../settings.js'
 import { installCmodPlugin, setOptions } from './install.js'
@@ -85,7 +86,7 @@ export async function run(argv: string[]): Promise<number> {
         throw new Error(`${plugin.name} is set up from ${tilde(record.root)}, so cmod try would replace its record and saved uninstall step. Run cmod remove ${plugin.name}, or cmod unlink ${tilde(record.root)} for a linked checkout, then run cmod try again.`)
       }
       progress.step(`Installing packages for ${plugin.name}`)
-      if (await preparePackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
+      if (await installPackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
       else progress.succeed(`${plugin.name} has no packages to install`)
       tried.push({ plugin, record })
     }
@@ -99,7 +100,7 @@ export async function run(argv: string[]): Promise<number> {
         if (record === undefined) setUp.push(plugin.name)
         if (hold.signal !== undefined) return code
       }
-      const exitCode = await runAttached(['claude', ...tried.flatMap(({ plugin }) => ['--plugin-dir', plugin.root]), ...forwarded])
+      const exitCode = await tryPlugins(tried.map(({ plugin }) => plugin), forwarded)
       hold.signal = undefined
       return exitCode
     } finally {

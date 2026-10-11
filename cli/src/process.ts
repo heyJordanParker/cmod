@@ -20,7 +20,9 @@ async function runLines(argv: string[], options: RunOptions, onLine: (line: Line
   return child.exited
 }
 
-export async function capture(argv: string[], options: RunOptions = {}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+export type Captured = { exitCode: number; stdout: string; stderr: string }
+
+export async function capture(argv: string[], options: RunOptions = {}): Promise<Captured> {
   const child = spawn(argv, { ...options, stdout: 'pipe', stderr: 'pipe' })
   const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   return { exitCode, stdout, stderr }
