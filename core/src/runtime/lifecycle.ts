@@ -2,7 +2,7 @@ import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, 
 import type { Step } from '../installer.js'
 import type { HookInput, Mod, ModDefinition, ModEvent, ModHook, PaneHandle } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { consentPath, dataFolder, finishStepsMethod, isAtLeast, isObject, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { ifMissing, relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -553,7 +553,18 @@ async function createMod<State extends object, Declared extends Options>(definit
   let loadedCwd = startCwd
   let staleCwd: string | undefined
   const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
-  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed })
+  const forkParent = async (): Promise<string | undefined> => {
+    if (definition.name === cmodPluginName) return undefined
+    try {
+      const answer = await claude.cmod.call({ to: cmodPluginName, method: 'forkParent', input: null })
+      if (isObject(answer) && typeof answer['deny'] === 'string') throw new Error(answer['deny'])
+      return isObject(answer) && typeof answer['value'] === 'string' ? answer['value'] : undefined
+    } catch (error) {
+      claude.ui.log(`${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`, { to: 'debug' })
+      return undefined
+    }
+  }
+  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed, forkParent })
   const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, changed: modState.changed })
   const held: HeldDecisions | undefined = runtime.checksPermissions() ? new Map() : undefined
   const mod: Mod<State, Declared> = {

@@ -9,11 +9,15 @@
 | Group | How long a value lasts | Saved |
 | --- | --- | --- |
 | `memory` | Until `/clear`, `--resume`, `/branch`, or a reload of Claude Code or its plugins. A compaction keeps it. | No |
-| `session` | This conversation. It comes back on `--resume`, starts over on `/clear`, and `/branch` copies it. | Yes |
+| `session` | This conversation. It comes back on `--resume`, starts over on `/clear`, and a fork of the conversation starts with it. | Yes |
 | `project` | This project, in every conversation. | Yes |
 | `global` | Every project. | Yes |
 
-cmod keeps each `session` value as long as Claude Code keeps the session's transcript, so a session comes back with its values for as long as `--resume` can find it. It keeps each `project` value for the 20 projects that wrote it last, and a project past those 20 starts that value over from its starting value.
+cmod keeps each `session` value as long as Claude Code keeps the session's transcript, so a session comes back with its values for as long as `--resume` can find it.
+
+A fork of the conversation, by `/branch`, `claude --resume <id> --fork-session`, or a move to the agents view, starts with the `session` values of the conversation it came from. Outside `/branch`, Claude Code does not say which conversation a fork came from, so the cmod plugin matches the fork's copied conversation to the one it came from, which needs its "Read this conversation" permission. A fork starts with the starting values when that permission is off, when it was taken while the conversation it came from was still answering, or in a `-p` run.
+
+cmod keeps each `project` value for the 20 projects that wrote it last, and a project past those 20 starts that value over from its starting value.
 
 Put values the mod works out again on every prompt, such as a git status, in `memory`.
 

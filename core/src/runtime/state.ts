@@ -15,6 +15,7 @@ export type StateOptions = {
   readonly root: string
   readonly claude: Claude
   readonly changed: () => void
+  readonly forkParent: () => Promise<string | undefined>
 }
 
 export type ModState<State extends object> = {
@@ -38,7 +39,16 @@ export function onStateChange(state: object, listener: () => void): void {
   listeners.set(state, own)
 }
 
-export function createState<State extends object>({ name, initial, session, root, claude, changed: redraw }: StateOptions): ModState<State> {
+export async function sessionsWith(claude: Pick<Claude, 'store'>, name: string, key: string, value: unknown): Promise<string[]> {
+  const prefix = `${name}.${key}.sessions.`
+  const found: string[] = []
+  for (const stored of (await claude.store.keys()).filter((each) => each.startsWith(prefix))) {
+    if ((await claude.store.get(stored)) === value) found.push(stored.slice(prefix.length))
+  }
+  return found
+}
+
+export function createState<State extends object>({ name, initial, session, root, claude, changed: redraw, forkParent }: StateOptions): ModState<State> {
   const changed = () => {
     redraw()
     for (const listener of listeners.get(state) ?? []) listener()
@@ -94,12 +104,14 @@ export function createState<State extends object>({ name, initial, session, root
     changed()
   }
 
-  const copySession = async (nextSession: string) => {
+  const copySession = async (from: string, to: string) => {
     for (const key of Object.keys(declared.session)) {
-      const saved = await read('session', key, sessionId)
-      if (saved !== undefined) await write('session', key, saved, nextSession)
+      const saved = await read('session', key, from)
+      if (saved !== undefined) await write('session', key, saved, to)
     }
   }
+
+  const hasSaved = async (owner: string) => (await claude.store.keys()).some((key) => key.startsWith(`${name}.`) && key.endsWith(`.sessions.${owner}`))
 
   const group = (lifetime: Lifetime) =>
     new Proxy(current[lifetime], {
@@ -127,14 +139,21 @@ export function createState<State extends object>({ name, initial, session, root
       return projectRoot
     },
     changed,
-    load: () => inTurn(() => loadGroups(lifetimes, { root: projectRoot, session: sessionId })),
+    load: () =>
+      inTurn(async () => {
+        if (Object.keys(declared.session).length > 0 && !(await hasSaved(sessionId))) {
+          const parent = await forkParent()
+          if (parent !== undefined) await copySession(parent, sessionId)
+        }
+        return loadGroups(lifetimes, { root: projectRoot, session: sessionId })
+      }),
     moveTo: (nextRoot) => inTurn(async () => (nextRoot === projectRoot ? undefined : loadGroups(['project'], { root: nextRoot, session: sessionId }))),
     switchSession: (nextSession, source, transcript) =>
       inTurn(async () => {
         await claude.store.set(`${transcriptsKey}${nextSession}`, transcript)
         await forgetEndedSessions(nextSession)
         if (nextSession === sessionId) return
-        if (source === 'fork') await copySession(nextSession)
+        if (source === 'fork') await copySession(sessionId, nextSession)
         return loadGroups(['memory', 'session'], { root: projectRoot, session: nextSession })
       }),
   }

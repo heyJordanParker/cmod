@@ -1015,7 +1015,7 @@ function notesIn(projectRoot: string) {
   const startConversation = (id: string) => {
     fake.claude.session.id = async () => id
   }
-  return { session, moveTo, startConversation, settle: fake.settle }
+  return { session, moveTo, startConversation, settle: fake.settle, fakes: fake.fakes }
 }
 
 test('a global value is the same in every project', async () => {
@@ -1044,6 +1044,34 @@ test('a session value comes back after a code reload, and a new conversation sta
   const fresh = await notes.session()
 
   expect(fresh.state.session.draft).toBe('')
+})
+
+test('a conversation forked into a new Claude Code process starts with the session values of the conversation cmod names as its parent', async () => {
+  const notes = notesIn('/work/a')
+  notes.startConversation('parent')
+  const parent = await notes.session()
+  parent.state.session.draft = 'call mum'
+  await notes.settle()
+  notes.fakes.cmod.call = async (input) => (input.to === 'cmod' && input.method === 'forkParent' ? { value: 'parent' } : { deny: `no ${input.method}` })
+
+  notes.startConversation('fork')
+  const fork = await notes.session()
+
+  expect(fork.state.session.draft).toBe('call mum')
+})
+
+test('a conversation with saved session values keeps them and never asks cmod for a parent', async () => {
+  const notes = notesIn('/work/a')
+  notes.startConversation('parent')
+  const first = await notes.session()
+  first.state.session.draft = 'call mum'
+  await notes.settle()
+  const asked: string[] = []
+  notes.fakes.cmod.call = async (input) => (asked.push(input.method), { value: 'another' })
+
+  const reloaded = await notes.session()
+
+  expect([reloaded.state.session.draft, asked]).toEqual(['call mum', []])
 })
 
 test('a memory value starts from its default after a code reload, and a session value comes back', async () => {

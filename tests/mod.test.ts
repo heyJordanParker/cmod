@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { EngineCreateResult, On } from 'claude-code'
+import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
 import { cmodPlugin } from '../src/mod.js'
@@ -264,4 +265,22 @@ test('cmod.call denies a call no mod takes with the install command', async () =
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
 
   expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Run cmod install tracer.' })
+})
+
+test('forkParent names the session whose last turn ended on this conversation, and null for a new conversation', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const forkParent = () => tested.fire('cmod.call', { to: 'cmod', method: 'forkParent', input: null })
+  const conversation = [
+    { role: 'user' as const, text: 'fix the failing test', toolUses: [] },
+    { role: 'assistant' as const, text: 'Fixed it.', toolUses: [] },
+  ]
+  tested.fakes.session.messages = async () => []
+  expect(await forkParent()).toEqual({ value: null })
+
+  tested.fakes.session.messages = (async () => conversation) as unknown as Claude['session']['messages']
+  await tested.fire('Stop', { stop_hook_active: false })
+  await settled()
+  await tested.fire('SessionStart', { source: 'fork', session_id: 'forked-elsewhere' })
+
+  expect(await forkParent()).toEqual({ value: 'test-session' })
 })

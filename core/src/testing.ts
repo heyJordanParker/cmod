@@ -277,7 +277,7 @@ export function testMod<State extends object, Declared extends Options = Options
 }
 
 function fakeDependencies(dependencies: NonNullable<TestOptions<object>['dependencies']>): Claude['cmod']['call'] {
-  const apis = dependencies as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
+  const apis = { cmod: { forkParent: () => null }, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
   return async (call) => {
     const api = apis[call.to]
     const answer = api === undefined ? { deny: notInstalled(call.to) } : await answerCall(call.to, api, call)

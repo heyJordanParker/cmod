@@ -1,19 +1,37 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, longestMs, messageOf } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, longestMs, messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
+import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { modsMemory, modsPanel, type ModsState } from './mods.js'
 
-export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null } } & ModsState
+export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null }; readonly session: { tip: string | null } } & ModsState
 
 const cmodGlobal: CmodPluginState['global'] = { installedPlugins: null }
+
+const cmodSession: CmodPluginState['session'] = { tip: null }
+
+const newestMessages = 8
+
+async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
+  const messages = await mod.session.messages()
+  if (messages.length === 0) return null
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([messages.length, messages.slice(-newestMessages)])))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
 
 const panels = new WeakMap<object, ReturnType<typeof modsPanel<CmodPluginState>>>()
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
-  state: { global: cmodGlobal, memory: modsMemory },
+  state: { global: cmodGlobal, session: cmodSession, memory: modsMemory },
 
   api: {
+    async forkParent(_input: null, mod) {
+      const tip = await tipOf(mod)
+      if (tip === null) return null
+      const current = await mod.claude.session.id()
+      return (await sessionsWith(mod.claude, mod.name, 'tip', tip)).find((session) => session !== current) ?? null
+    },
     async openSettings(input: { readonly mod: string; readonly page?: string }, mod) {
       const panel = panels.get(mod)
       if (panel === undefined) throw new Error('cmod has not started its /mods panel yet.')
@@ -68,5 +86,11 @@ export const cmodPlugin = defineMod({
 
     mod.on('SessionStart', watchRemovals)
     mod.on('UserPromptSubmit', watchRemovals)
+
+    const keepTip = async () => {
+      mod.state.session.tip = await tipOf(mod)
+    }
+    mod.on('Stop', keepTip)
+    mod.on('StopFailure', keepTip)
   },
 })
