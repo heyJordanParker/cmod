@@ -24,12 +24,16 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
 
 const settled = () => Bun.sleep(0)
 
+const ready = { type: 'success', message: 'Ready' } as const
+
+const uninstalled = { type: 'success', message: 'four-step is uninstalled', description: 'A session that still runs it stops after /reload-plugins.' } as const
+
 test("a removed enabledPlugins key runs cmod teardown --events with that plugin's name, and the uninstall toast tells the user to reload", async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'progress 1 1 Removing the alias\ndone four-step\n', stderr: '' } })
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
-  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. A session that still runs it stops after /reload-plugins.'])
+  expect(tested.shown.toasts).toEqual([ready, uninstalled])
   expect(tested.state.global.installedPlugins).toEqual(['cmod'])
 })
 
@@ -38,7 +42,7 @@ test('a removal noticed at session start toasts that a session still running it 
   await tested.fire('SessionStart', { source: 'startup' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
-  expect(tested.shown.toasts).toEqual(['cmod is ready', 'four-step is uninstalled. A session that still runs it stops after /reload-plugins.'])
+  expect(tested.shown.toasts).toEqual([ready, uninstalled])
 })
 
 test('the cmod plugin tears down only keys removed from user settings', async () => {
@@ -79,7 +83,7 @@ test('a removed plugin that is not a cmod mod answers missing and shows nothing'
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown other-plugin --events'])
-  expect(tested.shown.toasts).toEqual(['cmod is ready'])
+  expect(tested.shown.toasts).toEqual([ready])
   expect(tested.state.global.installedPlugins).toEqual(['cmod'])
 })
 
@@ -89,13 +93,13 @@ test('a failed removal is not retried in the next session and its toast names th
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, failed)
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
-  expect(tested.shown.toasts).toEqual(['cmod is ready', message])
+  expect(tested.shown.toasts).toEqual([ready, { type: 'error', message: 'Could not uninstall four-step', description: message }])
 
   const next = testRemovals(tested.state.global.installedPlugins, { 'cmod@fixtures': true }, failed)
   await next.tested.fire('SessionStart', { source: 'startup' })
   await settled()
   expect(next.teardowns).toEqual([])
-  expect(next.tested.shown.toasts).toEqual(['cmod is ready'])
+  expect(next.tested.shown.toasts).toEqual([ready])
 })
 
 test('a removal interrupted before its teardown answers is torn down by the next session', async () => {
@@ -128,7 +132,7 @@ test('a teardown that fails before any event shows its last line of standard err
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 1, stdout: '', stderr: 'cmod teardown: records/four-step.json is not JSON\n' } })
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
   await settled()
-  expect(tested.shown.toasts).toEqual(['cmod is ready', 'cmod teardown four-step exited 1: cmod teardown: records/four-step.json is not JSON'])
+  expect(tested.shown.toasts).toEqual([ready, { type: 'error', message: 'Could not uninstall four-step', description: 'cmod teardown exited 1: records/four-step.json is not JSON' }])
 })
 
 const store = '/test/home/.local/share/cmod'

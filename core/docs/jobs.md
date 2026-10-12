@@ -454,7 +454,6 @@ A member that does what a permission covers checks it first and rejects with the
 | --- | --- |
 | `plugin.name` | The plugin's name. |
 | `plugin.root` | The plugin's own folder, absolute, where the files the mod ships live. |
-| `ui.toast(text, options?)` | Shows `text` for a few seconds, 4000 ms unless `options.timeoutMs` says otherwise. |
 | `ui.status(text)` | Pins `text` as the plugin's one status line under the prompt. `undefined` removes it. |
 | `ui.log(text, options?)` | Adds a dim line to the transcript that Claude does not read, or with `{ to: 'debug' }` a line to the debug log only. |
 | `ui.notice(toolUseId, text)` | Shows `text` as a line under the open permission dialog of that call. `undefined` removes it. |
@@ -464,6 +463,7 @@ A member that does what a permission covers checks it first and rejects with the
 | `ui.close(pane)` | Closes the open pane with that `{ id }`. |
 | `ui.panes()` | The plugin's open panes: each one's id, title, and whether it is shown, holds the keyboard, and is placed. |
 | `ui.scroll(args)` | What `mod.ui.scroll` calls. |
+| `ui.copy({ text })` | Puts `text` on the person's clipboard, and resolves `{ isCopied }`, or `{ isCopied: false, reason }`. `mod.ui.copy` is built on it. |
 | `ui.resolve(e)` | The element table of the surface a `ui.render` event draws on. |
 | `process.run(argv, init?)` | Runs a program to its end. `mod.process.run` is built on it. |
 | `process.spawn(request)` | Starts a program and streams its output. `mod.process.spawn` is built on it. |

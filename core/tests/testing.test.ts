@@ -128,7 +128,7 @@ test('testMod answers a call to a mod it does not fake with the install command'
     },
   })
 
-  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: outline: $.cmod.call: tracer is not installed. Run cmod install tracer.' })
+  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
 })
 
 const project = '/work/dent'
@@ -416,7 +416,7 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
   await tested.fire('Stop', { stop_hook_active: false })
   await tested.settle()
 
-  expect(tested.shown.toasts).toContain('/work/shop: M README.md')
+  expect(tested.shown.toasts).toContainEqual({ type: 'default', message: '/work/shop: M README.md' })
 })
 
 test('settle returns while a fake is held open by the test', async () => {
@@ -428,7 +428,7 @@ test('settle returns while a fake is held open by the test', async () => {
   await tested.settle()
 
   expect(answers).toHaveLength(1)
-  expect(tested.shown.toasts).not.toContain('/work/shop: M README.md')
+  expect(tested.shown.toasts).not.toContainEqual({ type: 'default', message: '/work/shop: M README.md' })
 })
 
 function folderWatchIn(projectRoot: string) {

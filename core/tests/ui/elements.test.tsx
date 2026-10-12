@@ -38,13 +38,23 @@ test('a component imports Box and draws without receiving the element table', as
   expect(await tested.lines('counter')).toEqual(['Count: 2'])
 })
 
-test("an element called outside a render throws with the element's name", async () => {
-  expect(() => Text({ children: 'early' })).toThrow("Text was called outside a render. Use it inside a pane's render or a slot's component.")
+test('an element built outside a render draws once a render places it', async () => {
+  const early = (
+    <Box flexDirection="column">
+      <Count count={7} />
+      <Text>built at setup</Text>
+    </Box>
+  )
+  const tested = testMod(
+    defineMod({
+      name: 'early',
+      async setup(mod) {
+        await mod.ui.pane(definePane({ id: 'early', title: 'Early', render: () => early })).open()
+      },
+    }),
+  )
 
-  const tested = testMod(counter)
-  await tested.lines('counter')
-
-  expect(() => Box({})).toThrow("Box was called outside a render. Use it inside a pane's render or a slot's component.")
+  expect(await tested.lines('early')).toEqual(['Count: 7', 'built at setup'])
 })
 
 test('Image draws', async () => {

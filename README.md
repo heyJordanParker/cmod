@@ -160,7 +160,7 @@ The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@c
 - [options.md](core/docs/options.md): options a person sets, typed in code, stored by Claude Code
 - [permissions.md](core/docs/permissions.md): the hosts, programs, and files a mod may reach, granted by the person
 - [hooks.md](core/docs/hooks.md): `mod.on`, every event, and what a hook can answer
-- [ui.md](core/docs/ui.md): panes, slots, markdown slots, elements, toasts, progress, and questions
+- [ui.md](core/docs/ui.md): panes, slots, markdown slots, elements, toasts, the clipboard, and questions
 - [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, status lines, and programs
 - [dependencies.md](core/docs/dependencies.md): calling another mod
 - [install-steps.md](core/docs/install-steps.md): install and uninstall steps, and shipping a program

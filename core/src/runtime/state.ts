@@ -1,6 +1,6 @@
 import type { ClassicHookInputs } from 'claude-code'
-import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import type { Failure } from './toaster.js'
 
 type Lifetime = 'memory' | 'session' | 'project' | 'global'
 
@@ -14,6 +14,7 @@ export type StateOptions = {
   readonly session: string
   readonly root: string
   readonly claude: Claude
+  readonly report: (failure: Failure) => void
   readonly changed: () => void
   readonly forkParent: () => Promise<string | undefined>
 }
@@ -48,7 +49,7 @@ export async function sessionsWith(claude: Pick<Claude, 'store'>, name: string, 
   return found
 }
 
-export function createState<State extends object>({ name, initial, session, root, claude, changed: redraw, forkParent }: StateOptions): ModState<State> {
+export function createState<State extends object>({ name, initial, session, root, claude, report, changed: redraw, forkParent }: StateOptions): ModState<State> {
   const changed = () => {
     redraw()
     for (const listener of listeners.get(state) ?? []) listener()
@@ -123,7 +124,7 @@ export function createState<State extends object>({ name, initial, session, root
         if (lifetime !== 'memory') {
           const owner = lifetime === 'project' ? projectRoot : sessionId
           inTurn(() => write(lifetime, key, value, owner)).catch((error: unknown) => {
-            claude.ui.log(`${name} could not keep state.${lifetime}.${key}: ${messageOf(error)}. Keep only JSON data in mod.state.`)
+            report({ id: `state:${lifetime}.${key}`, message: `Could not keep state.${lifetime}.${key}. Keep only JSON data in mod.state`, error })
           })
         }
         changed()

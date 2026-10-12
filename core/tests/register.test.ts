@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
-import type { EngineInterface, On } from 'claude-code'
+import type { EngineInterface, On, RenderElement } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
 import { defineMod } from '../src/mod.js'
 import { scriptsSha256 } from '../src/records.js'
+import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
 
 type Registration = {
@@ -38,17 +39,16 @@ function fakeOn() {
 }
 
 function engine(files: Record<string, string>, env: Record<string, string> = { HOME: '/home/test' }) {
-  const shown = { toasts: [] as string[], logs: [] as string[] }
+  const shown = { logs: [] as string[] }
   const store = new Map<string, unknown>()
   const under = (folder: string) => Object.keys(files).filter((path) => path.startsWith(`${folder}/`))
   const kindOf = (path: string) => (files[path] !== undefined ? 'file' : 'dir')
   const $ = {
     plugin: { name: 'demo', root: '/plugins/demo' },
     ui: {
-      toast: (text: string) => shown.toasts.push(text),
-      log: (text: string) => shown.logs.push(text),
+      log: (text: string, options?: { to?: string }) => (options?.to === 'debug' ? undefined : shown.logs.push(text)),
       invalidate: () => undefined,
-      resolve: () => ({}),
+      resolve: () => elements,
     },
     fs: {
       exists: async (path: string) => files[path] !== undefined || under(path).length > 0,
@@ -62,7 +62,7 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
     },
     env: { get: async (name: string) => env[name] },
     session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app' },
-    clock: { every: () => ({ cancel: () => undefined }) },
+    clock: { every: () => ({ cancel: () => undefined }), after: () => ({ cancel: () => undefined }) },
   } as unknown as EngineInterface
   return { $, shown }
 }
@@ -163,13 +163,13 @@ test('session.start through the engine chain reads the plugin, runs setup, and a
   const answer = await fake.dispatch('classic.PostToolUse', $, { hook_event_name: 'PostToolUse', cwd: '/work/app', tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }, {})
 
   expect(answer).toEqual({ additionalContext: ['demo saw Edit'] })
-  expect(shown.toasts).toEqual(['demo is ready'])
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toBe('>\n✓  demo  Ready  ✕')
   expect(shown.logs).toEqual(['demo added a hook on PostToolUse.'])
 })
 
 test('a mod starts while the plugins below it start, so its start can wait on one of them', async () => {
   const fake = fakeOn()
-  const { $, shown } = engine(files)
+  const { $ } = engine(files)
   let startBelow = () => undefined as void
   const isBelowStarted = new Promise<void>((resolve) => (startBelow = resolve))
   registerMod(fake.on, defineMod({ name: 'demo', setup: () => isBelowStarted }), {})
@@ -177,7 +177,7 @@ test('a mod starts while the plugins below it start, so its start can wait on on
 
   await fake.dispatch('session.start', $, {}, {})
 
-  expect(shown.toasts).toEqual(['demo is ready'])
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toBe('>\n✓  demo  Ready  ✕')
 })
 
 test('a pane opened during setup is drawn again once the mod is active', async () => {
@@ -204,20 +204,24 @@ test('a pane opened during setup is drawn again once the mod is active', async (
   await fake.dispatch('session.start', $, {}, {})
 
   expect(drawn).toEqual([undefined])
-  expect(redraws).toEqual(['ui.render'])
+  expect(redraws).toContain('ui.render')
 })
 
 test('a mod that draws nothing hands the claude drawing back unchanged', async () => {
   const fake = fakeOn()
   const { $ } = engine(files)
+  await $.store.set('cmod:announced', '1.0.0')
   registerMod(fake.on, demo, {})
   await fake.dispatch('session.start', $, {}, {})
-  const drawing = { type: 'Box', children: [] }
 
-  const drawn = await fake.dispatch('ui.render', $, { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: {} }, drawing)
+  const drawn = await fake.dispatch('ui.render', $, abovePrompt, prompt)
 
-  expect(drawn).toBe(drawing)
+  expect(drawn).toBe(prompt)
 })
+
+const abovePrompt = { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false } }
+
+const prompt = { type: 'Text', children: ['>'] }
 
 const modSkill = { '/plugins/demo/skills/architecture-diagram/SKILL.md': '---\nname: architecture-diagram\n---\nThe mod text.\n' }
 

@@ -116,8 +116,9 @@ function sideBySide(children: readonly RenderNode[], width: number, gap: number)
 
 function minWidthOf(node: RenderNode): number {
   if (typeof node === 'string') return 0
-  const minWidth = insideOf(node).props['minWidth']
-  return typeof minWidth === 'number' ? minWidth : 0
+  const { props } = insideOf(node)
+  if (props['flexShrink'] === 0) return Number.POSITIVE_INFINITY
+  return typeof props['minWidth'] === 'number' ? props['minWidth'] : 0
 }
 
 function blankRows(count: number): string[] {

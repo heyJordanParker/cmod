@@ -1,13 +1,13 @@
-import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Args, EventResult, Frozen, HookBudget, HookStream, PluginOptions, ProcessSpawnChunk, ProcessSpawnResult, RenderElement } from 'claude-code'
 import type { Step } from '../installer.js'
-import type { HookInput, Mod, ModDefinition, ModEvent, ModHook, PaneHandle } from '../mod.js'
+import type { HookInput, Mod, ModDefinition, ModEvent, ModHook, PaneHandle, Toast } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
 import { consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { ifMissing, relativePath } from '../utils/paths.js'
 import { formatExit, listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
-import { answerCall, cmodPluginName, dependencyCalls, notInstalled } from './dependencies.js'
+import { answerCall, cmodPluginName, dependencyCalls, notInstalled, withBareRefusals } from './dependencies.js'
 import { createHistory } from './history.js'
 import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
 import { checkedAnswer, checkGrant, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
@@ -18,8 +18,11 @@ import { createInstaller } from './installer.js'
 import { createOptions, MissingOptions } from './options.js'
 import { createRouter, type Router, type RouterNext } from './router.js'
 import { createState } from './state.js'
+import { createToaster, showFailure, type Failure, type ShownToast, type Toaster } from './toaster.js'
 import { toolCalls } from './tool-calls.js'
-import { createProgress, createUi, type Progress, type ProgressLine } from './ui.js'
+import { createUi } from './ui.js'
+import { Progress } from '../ui/components.js'
+import { Box, Text } from '../ui/elements.js'
 
 export type Plugin = {
   readonly name: string
@@ -38,6 +41,7 @@ export type Lifecycle<State extends object> = {
   readonly phase: Phase
   readonly mod: Mod<State> | undefined
   readonly failure: unknown
+  readonly toasts: readonly ShownToast[]
   start(claude: Claude, read: (claude: Claude) => Promise<Plugin>): Promise<void>
   route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
 }
@@ -45,7 +49,7 @@ export type Lifecycle<State extends object> = {
 type ModRuntime = {
   readonly claude: Claude
   readonly router: Router
-  readonly progress: Progress
+  readonly toaster: Toaster
   readonly dataFolder: string
   readonly steps: Steps
   readonly granted: ReadonlySet<string>
@@ -61,6 +65,8 @@ type ActiveMod<State extends object, Declared extends Options> = {
 
 
 const announcedKey = 'cmod:announced'
+
+const installId = 'cmod:install'
 
 const cmodCheckMs = 1000
 
@@ -140,11 +146,10 @@ export function createLifecycle<State extends object, Declared extends Options =
 ): Lifecycle<State> {
   let router: Router = createRouter()
   let phase: Phase = 'starting'
-  let runtime: Pick<ModRuntime, 'claude' | 'progress'> | undefined
+  let runtime: Pick<ModRuntime, 'claude' | 'toaster'> | undefined
   let programs: Programs | undefined
   let plugin: Plugin | undefined
   const granted = new Set<string>()
-  let line: ProgressLine | undefined
   let activation: Promise<void> | undefined
   let mod: Mod<State> | undefined
   let failure: unknown
@@ -161,20 +166,17 @@ export function createLifecycle<State extends object, Declared extends Options =
     return runtime.claude
   }
 
-  const showLine = () => {
-    line ??= runtime?.progress.start(`Installing ${definition.name}`)
-    return line as ProgressLine
+  const installing = (description?: string | RenderElement) => runtime?.toaster.toast.loading('Installing', { id: installId, ...(description === undefined ? {} : { description }) })
+
+  const toastFailure = (shown: Failure) => {
+    if (runtime !== undefined) showFailure({ name: definition.name, ui: runtime.toaster, claude: runtime.claude }, shown)
   }
 
-  const endLine = () => {
-    line?.end()
-    line = undefined
-  }
-
-  const fail = (reason: string, fix: string) => {
+  const fail = (reason: string, fix: string, retry?: () => Promise<void>) => {
     phase = 'failed'
     failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'} ${fix}`)
-    showLine().fail(reason, fix)
+    const action = retry === undefined ? {} : { action: { label: 'Retry', onClick: () => ((failure = undefined), retry().catch(report)) } }
+    runtime?.toaster.toast.error(reason, { id: installId, description: fix, duration: Infinity, ...action })
   }
 
   const finish = async () => {
@@ -227,7 +229,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     try {
       return await step.isDone(active)
     } catch (error) {
-      claude().ui.log(`${definition.name}: the ${step.title} step's isDone failed: ${messageOf(error)}`)
+      toastFailure({ id: `step:${step.title}`, message: `The ${step.title} step's isDone failed`, error })
       return false
     }
   }
@@ -244,7 +246,12 @@ export function createLifecycle<State extends object, Declared extends Options =
       if (await isStepDone(active, step)) continue
       const isAnswered = (await claude().session.surfaces()).length > 0 && (await installer.step(active, step, index + 1, steps.length))
       if (!isAnswered) {
-        claude().ui.log(`${definition.name} needs ${steps.length - index === 1 ? 'one more step' : `${steps.length - index} more steps`}, starting with ${step.title}. Run /mods ${definition.name} to finish.`)
+        runtime?.toaster.toast.warning(steps.length - index === 1 ? 'Needs one more step' : `Needs ${steps.length - index} more steps`, {
+          id: 'cmod:steps',
+          description: `Starting with ${step.title}. Finish them in /mods ${definition.name}.`,
+          duration: Infinity,
+          action: { label: 'Finish', onClick: () => active.settings.open() },
+        })
         break
       }
     }
@@ -265,21 +272,23 @@ export function createLifecycle<State extends object, Declared extends Options =
     router = activeRouter
     phase = 'active'
     runtime.claude.ui.invalidate('ui.render')
-    endLine()
-    void runSteps(active.mod).catch((error: unknown) => claude().ui.log(`${definition.name}: its installer stopped: ${messageOf(error)}`))
+    void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error }))
     const missed = missedSessionStart
     missedSessionStart = undefined
     const lateAnswer = missed === undefined ? {} : await activeRouter.dispatch('classic.SessionStart', missed, async () => ({})).catch((error: unknown) => {
-      claude().ui.log(`${definition.name}: the SessionStart hook failed: ${messageOf(error)}`)
+      toastFailure({ id: 'classic.SessionStart', message: 'The SessionStart hook failed', error })
       return {}
     })
     if (Object.keys(lateAnswer).length > 0) {
       runtime.claude.ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks.`, { to: 'debug' })
     }
     const version = plugin.version ?? ''
-    if ((await runtime.claude.store.get(announcedKey)) === version) return
+    if ((await runtime.claude.store.get(announcedKey)) === version) {
+      runtime.toaster.toast.dismiss(installId)
+      return
+    }
     await runtime.claude.store.set(announcedKey, version)
-    runtime.claude.ui.toast(`${definition.name} is ready`)
+    runtime.toaster.toast.success('Ready', { id: installId })
     if (added.length > 0) runtime.claude.ui.log(`${definition.name} added ${listed(added)}.`)
   }
 
@@ -296,20 +305,18 @@ export function createLifecycle<State extends object, Declared extends Options =
   const askConsent = async (event: Extract<RunnerEvent, { kind: 'needs-consent' }>) => {
     const name = definition.name
     if ((await claude().session.surfaces()).length === 0) {
-      showLine().wait(`Waiting for consent: run cmod install ${name}`)
       claude().ui.log(`${name} waits for consent to run ${event.install}. Run cmod install ${name} in a terminal.`)
       return
     }
-    showLine().wait('Waiting for your answer')
+    installing('Waiting for your answer')
     const updates = await updatesToShow().catch((error: unknown) => {
-      claude().ui.log(`${name} could not read whether its marketplace updates automatically: ${messageOf(error)}`)
+      toastFailure({ id: 'cmod:updates', message: 'Could not read whether its marketplace updates automatically', error })
       return undefined
     })
     if (await installer.consent({ ...event, updates })) return install(event.sha256)
     await installer.close()
     phase = 'declined'
-    endLine()
-    claude().ui.log(`${name} is not installed. Run cmod install ${name} to install it.`)
+    runtime?.toaster.toast('Not installed', { id: installId, description: `Run cmod install ${name} to install it.` })
   }
 
   const install = async (consent?: string): Promise<void> => {
@@ -318,13 +325,12 @@ export function createLifecycle<State extends object, Declared extends Options =
     phase = 'installing'
     const found = await cmodVersion(claude())
     if (!fits(found)) return waitForcmod(found)
-    endLine()
-    const progress = showLine()
+    installing()
     let outcome: RunnerEvent | undefined
     const argv = ['cmod', 'setup', plugin.root, '--events', ...(consent === undefined ? [] : ['--consent', consent])]
     const { code, lastError } = await readLines(claude().process.spawn({ argv }), (text) => {
       const event = parseEvent(text)
-      if (event.kind === 'progress') progress.report(event)
+      if (event.kind === 'progress') installing(progressOf(event))
       if (event.kind === 'done' || event.kind === 'failed' || event.kind === 'needs-consent') outcome = event
     })
     if (outcome?.kind === 'done') {
@@ -333,14 +339,14 @@ export function createLifecycle<State extends object, Declared extends Options =
     }
     if (outcome?.kind === 'needs-consent') return askConsent(outcome)
     const reason = outcome?.kind === 'failed' ? outcome.message : `cmod setup ${formatExit(code, lastError)}`
-    fail(reason, `Fix the cause, then run: cmod install ${definition.name}`)
+    fail(reason, `Fix the cause, then retry, or run cmod install ${definition.name} in a terminal.`, install)
   }
 
   const fits = (found: string | undefined): found is string => found !== undefined && isAtLeast(found, oldestCmodFor(plugin?.steps ?? {}))
 
   const waitForcmod = (found: string | undefined) => {
     phase = 'waiting'
-    showLine().wait('Waiting for cmod')
+    installing('Waiting for cmod')
     let latest = found
     let check: Promise<void> | undefined
     const stop = () => {
@@ -362,7 +368,7 @@ export function createLifecycle<State extends object, Declared extends Options =
         })
     })
     const longWait = claude().clock.after(cmodWaitMs, () =>
-      showLine().wait(
+      installing(
         latest === undefined
           ? "Still waiting for cmod to download cmod. See cmod's own line."
           : `PATH finds cmod ${latest}, and ${definition.name} needs cmod ${oldestCmodFor(plugin?.steps ?? {})} or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.`,
@@ -371,14 +377,14 @@ export function createLifecycle<State extends object, Declared extends Options =
   }
 
   const bootstrap = async (root: string) => {
-    const progress = showLine()
+    installing()
     phase = 'installing'
     const { code, lastError } = await readLines(claude().process.spawn({ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: root }), (text) => {
       const event = parseEvent(text)
-      if (event.kind === 'progress') progress.report(event)
+      if (event.kind === 'progress') installing(progressOf(event))
     })
     if (code === 0) return finish()
-    fail(`bootstrap ${formatExit(code, lastError)}`, `Run ./setup/bootstrap.sh in ${root} to see the whole log.`)
+    fail(`bootstrap ${formatExit(code, lastError)}`, `Run ./setup/bootstrap.sh in ${root} to see the whole log.`, () => bootstrap(root))
   }
 
   const report = (error: unknown) => {
@@ -415,7 +421,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       droppedParts.add(item)
       const declared = plugin?.steps.permissions ?? []
       const fix = declared.includes(item) ? `Turn it on in /mods ${definition.name}.` : `It needs "permissions": { "${item}": true } in package.json "cmod".`
-      claude().ui.log(`${definition.name} answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it. ${fix}`)
+      runtime?.toaster.toast.warning(`Answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it`, { id: `dropped:${item}`, description: fix, duration: Infinity })
     },
   }
 
@@ -452,10 +458,13 @@ export function createLifecycle<State extends object, Declared extends Options =
     get failure() {
       return failure
     },
+    get toasts() {
+      return runtime?.toaster.shown ?? []
+    },
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
       programs = locatingPrograms(claudeCalls)
-      runtime = { claude: programs.claude, progress: createProgress(claudeCalls) }
+      runtime = { claude: programs.claude, toaster: createToaster(claudeCalls, definition.name) }
       try {
         await programs.refresh()
         const started = await read(claudeCalls).catch((error: unknown) => {
@@ -502,15 +511,16 @@ export function createLifecycle<State extends object, Declared extends Options =
       if (checksAnswers(event) && phase === 'active') return checkedRoute(event, e, next)
       const answer = router.dispatch(event, e, next)
       const render = e as Frozen<Args<'ui.render'>>
-      if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined || !runtime.progress.isShown) return answer
-      return runtime.progress.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.viewport?.columns) as EventResult<N>
+      if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined) return answer
+      return runtime.toaster.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.props) as EventResult<N>
     },
   }
 }
 
 async function createMod<State extends object, Declared extends Options>(definition: ModDefinition<State, string, Declared>, runtime: ModRuntime): Promise<ActiveMod<State, Declared>> {
-  const { router, progress } = runtime
-  const claude = checkingKeys(runtime.claude, definition.name, runtime.steps.keys ?? {})
+  const { router, toaster } = runtime
+  const report = (failure: Failure) => void showFailure({ name: definition.name, ui: toaster, claude: runtime.claude }, failure)
+  const claude = withBareRefusals(checkingKeys(runtime.claude, toaster.toast, runtime.steps.keys ?? {}))
   const added: string[] = []
   const hookEvents: ModEvent[] = []
   const announce = (feature: string) => {
@@ -536,6 +546,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     claude,
     places: { home, configRoot, projectRoot: () => modState.root },
     checkWrite: (path) => checkWrite(grants, `metadata.update(${path})`, path),
+    report,
   })
   const pages = new Map<string, { readonly title: string; readonly handle: PaneHandle }>()
   const settingsPages: Mod<State>['settings'] = {
@@ -556,7 +567,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   let cwd = startCwd
   let loadedCwd = startCwd
   let staleCwd: string | undefined
-  const area = createUi<State>({ name: definition.name, claude, router, progress, announce, mod: () => mod })
+  const area = createUi<State>({ name: definition.name, claude, router, toaster, report, announce, mod: () => mod })
   const forkParent = async (): Promise<string | undefined> => {
     if (definition.name === cmodPluginName) return undefined
     try {
@@ -567,8 +578,8 @@ async function createMod<State extends object, Declared extends Options>(definit
       return undefined
     }
   }
-  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, changed: area.changed, forkParent })
-  const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, changed: modState.changed })
+  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: area.changed, forkParent })
+  const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, report, changed: modState.changed })
   const held: HeldDecisions | undefined = runtime.checksPermissions() ? new Map() : undefined
   const mod: Mod<State, Declared> = {
     name: definition.name,
@@ -578,12 +589,12 @@ async function createMod<State extends object, Declared extends Options>(definit
     },
     dataFolder: runtime.dataFolder,
     on(event, hook, options) {
-      const bounded = options?.timeoutMs === undefined ? hook : timedHook(definition.name, event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude)
+      const bounded = options?.timeoutMs === undefined ? hook : timedHook(event, hook, checkedMs(definition.name, `the ${event} hook's timeoutMs`, options.timeoutMs), claude, toaster.toast)
       if (!hookEvents.includes(event)) hookEvents.push(event)
       if (event === 'PreToolUse') router.add('tool.call', preToolUseHook(definition.name, bounded as ModHook<'PreToolUse'>, claude, agents, held))
       else {
         const classic: Exclude<ModEvent, 'PreToolUse'> = event
-        router.add(`classic.${classic}`, classicHook(definition.name, classic, bounded as ModHook<typeof classic>, claude, agents))
+        router.add(`classic.${classic}`, classicHook(definition.name, classic, bounded as ModHook<typeof classic>, claude, agents, report))
       }
     },
     use: (job) => job({ mod, announce, reserveName, toolCalls: agents }),
@@ -594,7 +605,7 @@ async function createMod<State extends object, Declared extends Options>(definit
         isRunning = true
         void Promise.resolve()
           .then(hook)
-          .catch((error: unknown) => claude.ui.log(`${definition.name}: the every ${ms} ms hook failed: ${messageOf(error)}`))
+          .catch((error: unknown) => report({ id: `every:${ms}`, message: `The every ${ms} ms hook failed`, error }))
           .finally(() => {
             isRunning = false
           })
@@ -675,12 +686,12 @@ async function createMod<State extends object, Declared extends Options>(definit
       const moved: HookInput<'CwdChanged'> = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
       await router.dispatch('classic.CwdChanged', moved as Frozen<Args<'classic.CwdChanged'>>, async () => ({}))
     } catch (error) {
-      claude.ui.log(`${definition.name} keeps the state of ${modState.root} until the next prompt or folder move: ${messageOf(error)}`)
+      report({ id: 'cmod:follow', message: `Keeps the state of ${modState.root} until the next prompt or folder move`, error })
     }
   }
   router.add('classic.SessionStart', async (e, next) => {
     await modState.switchSession(e.session_id, e.source, e.transcript_path).catch((error: unknown) => {
-      claude.ui.log(`${definition.name} kept its session values from before the ${e.source}: ${messageOf(error)}`)
+      report({ id: 'cmod:session', message: `Kept its session values from before the ${e.source}`, error })
     })
     return next(e)
   })
@@ -733,13 +744,13 @@ async function createMod<State extends object, Declared extends Options>(definit
   return { mod, added }
 }
 
-function checkingKeys(claude: Claude, name: string, keys: Readonly<Record<string, string>>): Claude {
+function checkingKeys(claude: Claude, toast: Toast, keys: Readonly<Record<string, string>>): Claude {
   const bound = Object.entries(keys)
   if (bound.length === 0) return claude
   const register: Claude['command']['register'] = (command) => {
     for (const [key, commandName] of bound) {
       if (commandName === command.name && command.immediate !== true) {
-        claude.ui.log(`${name}: ${key} runs /${command.name}, which waits for Claude's turn to end and adds a row to the conversation. Give /${command.name} immediate: true.`)
+        toast.warning(`${key} runs /${command.name}, which waits for Claude's turn to end`, { id: `key:${key}`, description: `It adds a row to the conversation. Give /${command.name} immediate: true.`, duration: Infinity })
       }
     }
     return claude.command.register(command)
@@ -754,11 +765,11 @@ function checkedMs(name: string, subject: string, ms: number): number {
   return ms
 }
 
-function timedHook<E extends ModEvent>(name: string, event: E, hook: ModHook<E>, ms: number, claude: Claude): ModHook<E> {
+function timedHook<E extends ModEvent>(event: E, hook: ModHook<E>, ms: number, claude: Claude, toast: Toast): ModHook<E> {
   return (input) =>
     new Promise((resolve, reject) => {
       const timer = claude.clock.after(ms, () => {
-        claude.ui.log(`${name}: the ${event} hook passed its ${ms / 1000} s timeout`)
+        toast.warning(`The ${event} hook passed its ${ms / 1000} s timeout`, { id: `timeout:${event}` })
         resolve(undefined)
       })
       Promise.resolve()
@@ -800,6 +811,10 @@ async function readLines(stream: HookStream<ProcessSpawnChunk, ProcessSpawnResul
   }
   if (pending !== '') onLine(pending)
   return { code: piece.value.code, lastError }
+}
+
+function progressOf({ done, total, label }: Extract<RunnerEvent, { kind: 'progress' }>): RenderElement {
+  return Box({ gap: 2, children: [Progress({ value: total > 0 ? (done / total) * 100 : 0 }), Text({ dimColor: true, wrap: 'truncate-end', children: label })] })
 }
 
 function lastLineOf(text: string): string | undefined {

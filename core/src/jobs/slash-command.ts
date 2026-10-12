@@ -2,6 +2,7 @@ import type { CommandRunResult } from 'claude-code'
 import type { Job, Mod } from '../mod.js'
 import { parse } from '../vendor.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
+import { showFailure } from '../runtime/toaster.js'
 import { messageOf } from '../utils/text.js'
 import { modWithin } from './context.js'
 
@@ -31,7 +32,7 @@ export function slashCommand<State extends object = Record<never, never>>(option
         registered = command
       },
       (error: unknown) => {
-        claude.ui.log(`${mod.name}: /${name} is not added: ${oneLine(error)}`)
+        showFailure(mod, { id: `command:${name}`, message: `/${name} is not added`, error })
       },
     )
     announce(`/${name}`)

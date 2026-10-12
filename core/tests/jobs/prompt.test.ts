@@ -162,8 +162,12 @@ test('a prompt without the grant to add text Claude reads adds nothing, and says
 
   expect(await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
   expect(await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(tested.shown.logs.filter((line) => line.includes('without your grant'))).toEqual([
-    'notes answered changed context without your grant to "Add text Claude reads and start turns", so cmod dropped it. It needs "permissions": { "prompt": true } in package.json "cmod".',
+  expect(tested.shown.toasts.filter(({ type }) => type === 'warning')).toEqual([
+    {
+      type: 'warning',
+      message: 'Answered changed context without your grant to "Add text Claude reads and start turns", so cmod dropped it',
+      description: 'It needs "permissions": { "prompt": true } in package.json "cmod".',
+    },
   ])
 })
 

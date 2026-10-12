@@ -142,18 +142,17 @@ test('each prompt adds one to the count', async () => {
   expect(tested.state.session.prompts).toBe(1)
 })
 
-test('the band shows the prompt count on its last line', async () => {
+test('the band shows the prompt count', async () => {
   const tested = testMod(${definition})
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
-  expect((await tested.lines(slots.AbovePrompt, band)).at(-1)).toBe('Prompts this session: 1')
+  expect(await tested.lines(slots.AbovePrompt, band)).toContain('Prompts this session: 1')
 })
 
 test('the band leaves the prompt count out during a survey', async () => {
   const tested = testMod(${definition})
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
-  const logs = [...tested.shown.logs]
   expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
-  expect(tested.shown.logs).toEqual(logs)
+  expect(tested.shown.toasts).toEqual([{ type: 'success', message: 'Ready' }])
 })
 `,
     [`skills/${name}/SKILL.md`]: `---

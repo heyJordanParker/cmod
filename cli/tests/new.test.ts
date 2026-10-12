@@ -54,7 +54,7 @@ test('cmod new writes mod.tsx, state.ts, a pane and a component', async () => {
   expect(mod).toContain("import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'")
   expect(mod).toContain('hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)')
   const tests = await read('tests/mod.test.ts')
-  expect(tests).toContain("test('the band shows the prompt count on its last line'")
+  expect(tests).toContain("test('the band shows the prompt count'")
   expect(tests).toContain("test('the band leaves the prompt count out during a survey'")
   expect(tests).not.toContain("'  hasSurvey: false',")
   expect(await read('skills/my-mod/SKILL.md')).toContain('shows the count in its pane and above the prompt.')

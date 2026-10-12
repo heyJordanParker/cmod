@@ -80,7 +80,8 @@ A mod imports from the files below, and every other file in this package is inte
 
 | Import | Exports | Docs |
 | --- | --- | --- |
-| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `ProgressStep`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [ui.md](ui.md) |
+| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md) |
+| `mod.js` | `Toast`, `ToastId`, `ToastType`, `ToastOptions` | [ui.md](ui.md#toasts) |
 | `mod.js` | `Claude`, `ModClaude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
 | `mod.js` | `FileMatch`, `Metadata`, `Session`, `Message`, `Sender` | [mod.md](mod.md) |
 | `installer.js` | `defineStep`, `Step` | [install-steps.md](install-steps.md#steps-in-claude-code) |
@@ -90,10 +91,10 @@ A mod imports from the files below, and every other file in this package is inte
 | `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionKind`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [hooks.md](hooks.md) |
 | `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [hooks.md](hooks.md) |
-| `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `TestCall` | [testing.md](testing.md) |
+| `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `ShownToast`, `TestCall` | [testing.md](testing.md) |
 | `ui/define-pane.js` | `definePane`, `Pane` | [ui.md](ui.md) |
 | `ui/elements.js` | `Box`, `Text`, `Button`, `Link`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `drawWith` | [ui.md](ui.md) |
-| `ui/components.js` | `Tabs`, `Tab`, `Split`, `Panel`, `Toggle`, `Tooltip`, `Help`, `Dialog`, `Pagination`, `ProgressBar` | [ui.md](ui.md) |
+| `ui/components.js` | `Tabs`, `Tab`, `Split`, `Panel`, `Toggle`, `Tooltip`, `Help`, `Dialog`, `Pagination`, `Progress` | [ui.md](ui.md) |
 | `ui/slots.js` | `slots`, `Slot`, `SlotProps` | [ui.md](ui.md) |
 | `ui/markdown.js` | `markdownSlots`, `markdownBlocks`, `MarkdownKind`, `MarkdownReader`, `MarkdownPiece` | [ui.md](ui.md) |
 | `jobs/slash-command.js` | `slashCommand`, `Reply` | [jobs.md](jobs.md) |

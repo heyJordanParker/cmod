@@ -15,7 +15,7 @@ export type Fakes = {
   http: { fetch?: Claude['http']['fetch'] }
   settings: { read?: Claude['settings']['read'] }
   config: { list?: Claude['config']['list'] }
-  ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll'] }
+  ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll']; copy?: Claude['ui']['copy'] }
   session: { messages?: Claude['session']['messages']; append?: Claude['session']['append'] }
   prompt: { submit?: Claude['prompt']['submit'] }
   model: { complete?: Claude['model']['complete'] }
@@ -28,7 +28,6 @@ export type Fakes = {
 export type ShownSchedule = { readonly id: string; readonly cron: string; readonly prompt: string }
 
 export type Shown = {
-  readonly toasts: string[]
   readonly notes: string[]
   readonly prompts: string[]
   readonly logs: string[]
@@ -58,7 +57,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const calls: TestCall[] = []
   const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
   const emptyDisk = fakeFiles({})
-  const shown: Shown = { toasts: [], notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
+  const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
   const store = new Map<string, unknown>()
@@ -106,9 +105,6 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const claude: Claude = {
     plugin,
     ui: {
-      toast: (text) => {
-        shown.toasts.push(text)
-      },
       status: (text) => {
         shown.statuses.push(text)
       },
@@ -142,6 +138,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         ...[...unplacedPanes].map((id) => ({ id, title: id, isShown: false, isFocused: false, isPlaced: false })),
       ],
       scroll: rejected('ui.scroll', () => fakes.ui.scroll ?? (async () => ({}))),
+      copy: rejected('ui.copy', () => fakes.ui.copy ?? (async () => ({ isCopied: true as const }))),
       resolve: () => elements,
     },
     process: {

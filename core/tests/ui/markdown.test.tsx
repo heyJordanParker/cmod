@@ -287,7 +287,8 @@ test("a markdown component that throws keeps Claude's drawing of its block", asy
   )
 
   expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nBody', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "# Plan"', '  isFirstOfReply: true', '  AssistantMessage', '    text: "Body"', '    isFirstOfReply: false'])
-  expect(tested.shown.logs).toEqual(['broken added a render of markdown Heading.', 'broken: the markdown Heading render threw, so Claude Code draws its own: no font'])
+  expect(tested.shown.logs).toEqual(['broken added a render of markdown Heading.'])
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The markdown Heading render failed', description: 'threw, so Claude Code draws its own: no font' })
 })
 
 test('Markdown in a pane applies the mod\'s markdown slots', async () => {

@@ -3,6 +3,7 @@ import { fitsOption, isUnset, type Option, type Options } from '../options.js'
 import { configFolders } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import type { Failure } from './toaster.js'
 
 export class MissingOptions extends Error {
   readonly keys: readonly string[]
@@ -21,7 +22,21 @@ export type ModOptions = {
   load(root: string): Promise<void>
 }
 
-export function createOptions({ name, declared, fromClaude, claude, changed }: { readonly name: string; readonly declared: Options; readonly fromClaude: PluginOptions; readonly claude: Claude; readonly changed: () => void }): ModOptions {
+export function createOptions({
+  name,
+  declared,
+  fromClaude,
+  claude,
+  report,
+  changed,
+}: {
+  readonly name: string
+  readonly declared: Options
+  readonly fromClaude: PluginOptions
+  readonly claude: Claude
+  readonly report: (failure: Failure) => void
+  readonly changed: () => void
+}): ModOptions {
   let values: Readonly<Record<string, unknown>> = merged(declared, fromClaude, {}, new Set())
   let locked: Set<string> | undefined
   let loadedRoot: string | undefined
@@ -41,7 +56,7 @@ export function createOptions({ name, declared, fromClaude, claude, changed }: {
     if (project === undefined) return {}
     const path = `${project.folder}/options.json`
     if (!(await claude.fs.exists(path))) return {}
-    const ignore = (reason: string) => claude.ui.log(`${path} ${reason}`)
+    const ignore = (reason: string) => report({ id: `options:${path} ${reason}`, message: `Ignores part of ${path}`, description: `${path} ${reason}` })
     let file: unknown
     try {
       file = JSON.parse(await claude.fs.read(path))

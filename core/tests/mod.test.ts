@@ -2,12 +2,14 @@ import { expect, expectTypeOf, test } from 'bun:test'
 import type { AgentInfo, ClassicHookInputs, EventResult, RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod, type HookInput, type Job, type Message, type Mod, type ModHook, type PaneHandle, type Session } from '../src/mod.js'
+import corePackage from '../package.json' with { type: 'json' }
+import { defineMod, messageOf, type HookInput, type Job, type Message, type Mod, type ModHook, type PaneHandle, type Session } from '../src/mod.js'
+import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
 import { testMod, type TestedMod } from '../src/testing.js'
 import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
-import { textOf } from '../src/testing/fake-elements.js'
+import { findElement, textOf } from '../src/testing/fake-elements.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Text } from '../src/ui/elements.js'
 import type { TracerSignature } from './tracer.js'
@@ -106,7 +108,7 @@ test("Claude Code's permission check and the tool get the input a PreToolUse hoo
   ])
 })
 
-test('mod.every runs its hook on each tick, skips a tick while the last run is still going, and logs a failure', async () => {
+test('mod.every runs its hook on each tick, skips a tick while the last run is still going, and shows a failure', async () => {
   let tick: () => void = () => undefined
   let finishRun: () => void = () => undefined
   const runs: number[] = []
@@ -138,7 +140,7 @@ test('mod.every runs its hook on each tick, skips a tick while the last run is s
 
   expect(runs).toEqual([1, 2])
   expect(tested.calls.filter(({ call }) => call === 'clock.every').map(({ args }) => args[0])).toEqual([30_000])
-  expect(tested.shown.logs).toContain('ci-watch: the every 30000 ms hook failed: CI is down')
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The every 30000 ms hook failed', description: 'CI is down' })
 })
 
 test('mod.every refuses a time that is not a whole number of milliseconds', async () => {
@@ -204,7 +206,7 @@ test("mod.model.complete passes the request and options to Claude Code's model c
   expect(tested.calls.find(({ call }) => call === 'model.complete')?.args[0]).toEqual({ model: 'haiku', prompt: 'Is this reply a waste of time?', timeoutMs: 8000 })
 })
 
-test('a hook past its timeoutMs answers as if it were absent and logs the timeout', async () => {
+test('a hook past its timeoutMs answers as if it were absent and warns of the timeout', async () => {
   let passTimeout: () => void = () => undefined
   const tested = testMod(
     defineMod({
@@ -224,7 +226,7 @@ test('a hook past its timeoutMs answers as if it were absent and logs the timeou
   passTimeout()
 
   expect(await answer).toEqual({})
-  expect(tested.shown.logs).toContain('babysitter: the Stop hook passed its 8 s timeout')
+  expect(tested.shown.toasts).toContainEqual({ type: 'warning', message: 'The Stop hook passed its 8 s timeout' })
 })
 
 test('a hook that answers before its timeoutMs keeps its answer', async () => {
@@ -239,15 +241,23 @@ test('a hook that answers before its timeoutMs keeps its answer', async () => {
   expect(await tested.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Done.' } as never, {})).toEqual({ block: 'Answer the question directly.' })
 })
 
-test("mod.ui.toast passes Claude Code's timeoutMs on", async () => {
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
-  const toasts: unknown[] = []
-  fake.claude.ui.toast = (text, options) => void toasts.push({ text, options })
-  const lifecycle = createLifecycle(defineMod({ name: 'notes', setup: (mod) => mod.ui.toast('Saved 3 notes', { timeoutMs: 8000 }) }))
+test('mod.ui.toast with an id updates that toast in place', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'notes',
+      setup(mod) {
+        mod.ui.toast.loading('Saving notes', { id: 'save' })
+        mod.ui.toast.success('Saved 3 notes', { id: 'save', description: 'notes.md\nand 2 more' })
+      },
+    }),
+  )
 
-  await lifecycle.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await tested.start()
 
-  expect(toasts).toContainEqual({ text: 'Saved 3 notes', options: { timeoutMs: 8000 } })
+  expect(tested.shown.toasts).toEqual([
+    { type: 'success', message: 'Saved 3 notes', description: 'notes.md\nand 2 more' },
+    { type: 'success', message: 'Ready' },
+  ])
 })
 
 test('a PreToolUse hook that answers additionalContext adds it to the call', async () => {
@@ -283,8 +293,12 @@ test('a PreToolUse allow without the grant to approve tool calls leaves the call
 
   expect(await tested.fire('PreToolUse', preToolUse('ls'))).toEqual({})
   expect(await tested.fire('PreToolUse', preToolUse('pwd'))).toEqual({})
-  expect(tested.shown.logs.filter((line) => line.includes('without your grant'))).toEqual([
-    `auto-approve answered allow on a tool call without your grant to "Approve Claude's tool calls for you", so cmod dropped it. It needs "permissions": { "approve": true } in package.json "cmod".`,
+  expect(tested.shown.toasts.filter(({ type }) => type === 'warning')).toEqual([
+    {
+      type: 'warning',
+      message: `Answered allow on a tool call without your grant to "Approve Claude's tool calls for you", so cmod dropped it`,
+      description: 'It needs "permissions": { "approve": true } in package.json "cmod".',
+    },
   ])
 })
 
@@ -394,9 +408,11 @@ test('an answer field that the event does not read is logged with the field and 
   const answer = await tested.fire('PostToolUse', postToolUse('Read'), { additionalContext: ['from settings'] })
 
   expect(answer).toEqual({ additionalContext: ['from settings'] })
-  expect(tested.shown.logs).toContain(
-    'wrong-field: the PostToolUse hook failed: it answered hookSpecificOutput.sessionTitle, which PostToolUse does not read. Remove it from the answer.',
-  )
+  expect(tested.shown.toasts).toContainEqual({
+    type: 'error',
+    message: 'The PostToolUse hook failed',
+    description: 'it answered hookSpecificOutput.sessionTitle, which PostToolUse does not read. Remove it from the answer.',
+  })
 })
 
 test("a PreToolUse hook that throws denies the call with the mod's name and the error, before the hooks after it", async () => {
@@ -456,7 +472,7 @@ test('a Stop hook that throws is logged and the event passes on', async () => {
   const answer = await tested.fire('Stop', { ...base, hook_event_name: 'Stop', stop_hook_active: false } as ClassicHookInputs['Stop'], { additionalContext: ['from settings'] })
 
   expect(answer).toEqual({ block: 'Run the tests first.', additionalContext: ['from settings'] })
-  expect(tested.shown.logs).toContain('keep-going: the Stop hook failed: the test runner is missing')
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The Stop hook failed', description: 'the test runner is missing' })
 })
 
 test('a PreToolUse answer with a field PreToolUse does not read denies the call', async () => {
@@ -523,29 +539,165 @@ test('a Button press changes mod.state and the pane draws the new state', async 
   expect(await tested.lines('counter')).toEqual(['Count: 1', '[ Add one ]'])
 })
 
-test('mod.ui.progress draws a bar line above the prompt while its task runs', async () => {
-  let finish: () => void = () => undefined
+test('mod.ui.toast.promise draws a loading toast above the prompt that turns to success when its task ends', async () => {
+  let finish: (count: number) => void = () => undefined
+  let unwrapped: Promise<number> | undefined
   const indexer = defineMod({
     name: 'indexer',
     setup(mod) {
-      void mod.ui.progress('Indexing files', async (report) => {
-        report({ done: 2, total: 4, label: 'Reading src' })
-        await new Promise<void>((resolve) => {
-          finish = resolve
-        })
+      const task = new Promise<number>((resolve) => {
+        finish = resolve
       })
+      unwrapped = mod.ui.toast.promise(task, { loading: 'Indexing files', success: (count) => `Indexed ${count} files`, error: 'Indexing failed' }).unwrap()
     },
   })
   const tested = testMod(indexer)
-  const prompt ={ type: 'Text', children: ['>'] } as unknown as RenderElement
-  const abovePrompt = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: {}, viewport: { columns: 80, rows: 24 } }
+  const prompt = { type: 'Text', children: ['>'] } as unknown as RenderElement
+  const abovePrompt = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 80, rows: 24 } }
+  await tested.start()
 
-  const drawn = await tested.fire('ui.render', abovePrompt as never, prompt)
-
-  expect(textOf(drawn)).toBe(`>\n⠋ Indexing files  ${'█'.repeat(15)}${'░'.repeat(15)}  2/4  Reading src`)
-  finish()
+  expect(textOf(await tested.fire('ui.render', abovePrompt as never, prompt))).toBe('>\n⠋  indexer  Indexing files  ✕\n✓  indexer  Ready  ✕')
+  finish(12)
   await tested.settle()
-  expect(await tested.fire('ui.render', abovePrompt as never, prompt)).toBe(prompt)
+
+  expect(await unwrapped).toBe(12)
+  expect(tested.shown.toasts).toEqual([
+    { type: 'success', message: 'Indexed 12 files' },
+    { type: 'success', message: 'Ready' },
+  ])
+})
+
+test('mod.ui.toast.promise rejects only through unwrap, and shows the error toast', async () => {
+  let unwrapped: Promise<unknown> | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'indexer',
+      setup(mod) {
+        mod.ui.toast.promise(Promise.reject(new Error('disk full')), { loading: 'Indexing files', success: 'Indexed', error: (error) => `Indexing failed: ${messageOf(error)}` })
+        unwrapped = mod.ui.toast.promise(() => Promise.reject(new Error('disk full')), { loading: 'Indexing again', success: 'Indexed', error: 'Indexing failed again' }).unwrap()
+      },
+    }),
+  )
+
+  await tested.start()
+  await tested.settle()
+
+  await expect(unwrapped).rejects.toThrow('disk full')
+  expect(tested.shown.toasts.map(({ type, message }) => `${type}: ${message}`)).toEqual(['error: Indexing failed: disk full', 'error: Indexing failed again', 'success: Ready'])
+})
+
+const toastBand = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } }
+
+const belowBand = { type: 'Text', children: ['>'] } as unknown as RenderElement
+
+async function pressInBand(tested: TestedMod<object>, label: string): Promise<void> {
+  const button = findElement(await tested.fire('ui.render', toastBand as never, belowBand), 'Button', label)
+  if (button === undefined) throw new Error(`The band draws no button ${label}.`)
+  await (button['onPress'] as () => unknown)()
+  await tested.settle()
+}
+
+test("a failure toast's Copy copies the mod and core versions, message, description, and stack, then reads Copied", async () => {
+  const root = '/test/plugins/keep-going'
+  const tested = testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on('Stop', () => Promise.reject(new Error('the test runner is missing'))) }), {
+    files: { [`${root}/.claude-plugin/plugin.json`]: '{ "name": "keep-going", "version": "1.4.0" }' },
+  })
+  await tested.fire('Stop', { stop_hook_active: false } as never)
+
+  await pressInBand(tested, 'Copy')
+
+  const [copied] = tested.calls.filter(({ call }) => call === 'ui.copy').map(({ args }) => (args[0] as { text: string }).text)
+  expect(copied).toStartWith(`keep-going 1.4.0, @cmodjs/core ${corePackage.version}\nThe Stop hook failed\nthe test runner is missing\n\nError: the test runner is missing\n    at `)
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('Copied')
+})
+
+test('coreVersion, which a bundled mod reports in Copy, is the version in core/package.json', () => {
+  expect(coreVersion).toBe(corePackage.version)
+})
+
+test('a Copy Claude Code refuses names the reason on the button', async () => {
+  const tested = testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on('Stop', () => Promise.reject(new Error('the test runner is missing'))) }))
+  tested.fakes.ui.copy = async () => ({ isCopied: false, reason: 'no-clipboard' })
+  await tested.fire('Stop', { stop_hook_active: false } as never)
+
+  await pressInBand(tested, 'Copy')
+
+  expect(findElement(await tested.fire('ui.render', toastBand as never, belowBand), 'Button', 'Copy failed: no-clipboard')).toBeDefined()
+})
+
+test("mod.ui.copy rejects with Claude Code's reason", async () => {
+  let copy: Mod['ui']['copy'] | undefined
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void (copy = mod.ui.copy) }))
+  await tested.start()
+  tested.fakes.ui.copy = async () => ({ isCopied: false, reason: 'no-surface' })
+
+  await expect(copy?.('a note')).rejects.toThrow('no-surface')
+})
+
+test('a press on a toast message unfolds its whole description, and a second press folds it', async () => {
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.ui.toast.info('Saved 3 notes', { description: 'notes.md\ntodo.md\nideas.md' }) }))
+  await tested.start()
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).not.toContain('ideas.md')
+
+  await pressInBand(tested, 'Saved 3 notes')
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('ideas.md')
+
+  await pressInBand(tested, 'Saved 3 notes')
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).not.toContain('ideas.md')
+})
+
+test('the band shows the newest three toasts, and +N more shows every toast', async () => {
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => ['a', 'b', 'c', 'd'].forEach((note) => mod.ui.toast(`Note ${note}`)) }))
+  await tested.start()
+  const drawn = () => tested.fire('ui.render', toastBand as never, belowBand).then(textOf)
+
+  expect(await drawn()).toBe('>\n+2 more\n   notes  Note c  ✕\n   notes  Note d  ✕\n✓  notes  Ready  ✕')
+
+  await pressInBand(tested, '+2 more')
+
+  expect((await drawn()).split('\n')).toHaveLength(6)
+})
+
+test('a toast expires after its duration once the band draws it, and waits while Claude Code shows a survey', async () => {
+  const timers: { ms: number; fire: () => void }[] = []
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.ui.toast('Saved', { duration: 2000 }) }))
+  tested.fakes.clock.after = (ms, fire) => {
+    timers.push({ ms, fire })
+    return { cancel: () => undefined }
+  }
+  await tested.start()
+  expect(timers.filter(({ ms }) => ms === 2000)).toEqual([])
+
+  await tested.fire('ui.render', toastBand as never, belowBand)
+  await tested.fire('ui.render', { ...toastBand, props: { hasSurvey: true } } as never, belowBand)
+  timers.find(({ ms }) => ms === 2000)?.fire()
+
+  expect(tested.shown.toasts).toContainEqual({ type: 'default', message: 'Saved' })
+  await tested.fire('ui.render', toastBand as never, belowBand)
+  timers.findLast(({ ms }) => ms === 2000)?.fire()
+  expect(tested.shown.toasts).not.toContainEqual({ type: 'default', message: 'Saved' })
+})
+
+test('an action that throws shows a failure toast instead of losing the error', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'notes',
+      setup: (mod) =>
+        void mod.ui.toast('Saved', {
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              throw new Error('the backup is gone')
+            },
+          },
+        }),
+    }),
+  )
+  await tested.start()
+
+  await pressInBand(tested, 'Undo')
+
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'Saved: the press failed', description: 'the backup is gone' })
 })
 
 const noForcePush: Job<{ readonly denied: string[] }> = (job) => {
@@ -579,7 +731,7 @@ test('a job added with mod.use answers tool.check, reaches Claude Code calls, an
   expect(allowed).toEqual({ decision: 'allow' })
   expect(handle?.denied).toEqual(['git push --force'])
   expect(tested.shown.commands).toEqual(['pushes'])
-  expect(tested.shown.toasts).toEqual(['guard is ready'])
+  expect(tested.shown.toasts).toEqual([{ type: 'success', message: 'Ready' }])
   expect(tested.shown.logs).toEqual(['guard added the /pushes command.'])
 })
 
@@ -1325,7 +1477,15 @@ test('a call to a mod that is not installed fails with the install command', asy
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'file-tree', setup() {} })))
 
-  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: outline: $.cmod.call: tracer is not installed. Run cmod install tracer.' })
+  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
+})
+
+test("a hook whose call is refused shows the refusal once, without Claude Code's prefix", async () => {
+  const consumer = testMod(defineMod({ name: 'outline', setup: (mod) => mod.on('Stop', async () => void (await mod.dependencies.tracer.signatures({ path: 'src/a.ts' }))) }))
+
+  await consumer.fire('Stop', { stop_hook_active: false } as never)
+
+  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The Stop hook failed', description: 'tracer is not installed. Run cmod install tracer.' })
 })
 
 test('an unknown method fails naming it', async () => {
@@ -1344,7 +1504,7 @@ test("a provider method that throws reaches the caller with the provider's name"
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(provider)
 
-  expect(await consumer.type('/outline src/gone.ts')).toEqual({ text: '/outline failed: outline: $.cmod.call: tracer: ENOENT: no such file src/gone.ts' })
+  expect(await consumer.type('/outline src/gone.ts')).toEqual({ text: '/outline failed: tracer: ENOENT: no such file src/gone.ts' })
 })
 
 test('a mod passes on a call addressed to another mod', async () => {
@@ -1374,7 +1534,7 @@ test("a dependency call that never answers fails at the deadline with the provid
 
   expect(await tested.type('/outline src/a.ts')).toEqual({ text: '/outline failed: mod.dependencies.tracer.signatures passed the 30 s deadline of slashCommand' })
   await tested.fire('UserPromptSubmit', { prompt: 'outline src/a.ts' })
-  expect(tested.shown.logs).toContain('outline: the UserPromptSubmit hook failed: mod.dependencies.tracer.signatures passed its 30 s deadline')
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The UserPromptSubmit hook failed', description: 'mod.dependencies.tracer.signatures passed its 30 s deadline' })
   expect(deadlines).toEqual([30000, 30000])
 })
 

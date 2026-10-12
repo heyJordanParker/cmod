@@ -36,7 +36,7 @@ cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 
 Before a step runs for the first time, cmod shows the person the commands, the keys, and the permissions, and asks to run them. cmod hashes the commands, the keys, the permissions, and every file in each script folder, and remembers the hash the person approved with each permission. A change to any of those asks again, and an added permission is the only one it asks about ([permissions.md](permissions.md)).
 
-- In Claude Code, the mod opens the installer pane, `Install <mod>`, focused. It lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it` and `Bind shift+tab to /mode`, naming only what the mod has. `Accept` (a) runs the setup, and a progress line above the prompt shows the install. `Not now` (n) and Escape decline.
+- In Claude Code, the mod opens the installer pane, `Install <mod>`, focused. It lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it` and `Bind shift+tab to /mode`, naming only what the mod has. `Accept` (a) runs the setup, and a loading toast above the prompt shows the install with a progress bar. `Not now` (n) and Escape decline.
 - In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.`
 - In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, the keys, and the permissions, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
 - `Not now` leaves the mod off and logs `<mod> is not installed. Run cmod install <mod> to install it.`
@@ -116,7 +116,7 @@ The install step runs again on every new version of the mod and whenever its scr
 
 - When the first install of a mod fails or is stopped, cmod runs the uninstall step to undo it. So the uninstall step must work on a partial install.
 - When the install step of an upgrade fails or is stopped, cmod keeps the version it set up before.
-- The failure shows on the mod's progress line with `Fix the cause, then run: cmod install <mod>`.
+- The failure shows as an error toast with `Fix the cause, then retry, or run cmod install <mod> in a terminal.` and a `Retry` button that runs the install again.
 
 ## The uninstall step
 
@@ -216,7 +216,7 @@ A mod runs on macOS and Linux, on arm64 and x64, unless the `os` and `cpu` keys 
 { "name": "safe-delete", "os": ["darwin"], "cpu": ["arm64"] }
 ```
 
-- Setup refuses a machine the mod leaves out before any script runs, with `safe-delete runs on macOS on arm64, and this is Linux, so cmod set up nothing.`, in the terminal and in the mod's progress line in Claude Code.
+- Setup refuses a machine the mod leaves out before any script runs, with `safe-delete runs on macOS on arm64, and this is Linux, so cmod set up nothing.`, in the terminal and in the mod's error toast in Claude Code.
 - `cmod publish` builds the program for each machine the mod runs on.
 - `cmod check` fails when a `cmod download` line in the install step has no download for one of those machines, and when `os` or `cpu` names a value cmod does not run mods on, such as `win32`.
 

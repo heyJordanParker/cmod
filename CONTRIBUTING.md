@@ -58,7 +58,7 @@ env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 
 `.claude-plugin/plugin.json`, `core/package.json`, and `cli/package.json` share one version, which is the version of the cmod program too. To release:
 
-1. Raise the version in all three files to the same new version.
+1. Raise the version in all three files to the same new version, and `coreVersion` in `core/src/records.ts`, which a bundled mod reports when someone copies its error. A core test fails while it differs from `core/package.json`.
 2. Raise the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges to `^<new version>`, so the cmod plugin installs the release.
 3. Push to `main`.
 

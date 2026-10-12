@@ -27,14 +27,18 @@ import type { RoutedEvent } from './runtime/hooks.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
-import { calledAnswer, fakeClaude, type Fakes, type Shown, type TestCall } from './testing/fake-claude.js'
+import type { ShownToast } from './runtime/toaster.js'
+import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
 import { fakeHistory, type FakeHistory } from './testing/fake-history.js'
 import { listed } from './utils/text.js'
 import type { Slot, SlotProps } from './ui/slots.js'
 
-export type { Fakes, Shown, TestCall } from './testing/fake-claude.js'
+export type { Fakes, TestCall } from './testing/fake-claude.js'
+export type { ShownToast } from './runtime/toaster.js'
+
+export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[] }
 
 export type TestOptions<State extends object, Declared extends Options = Options> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
@@ -274,7 +278,12 @@ export function testMod<State extends object, Declared extends Options = Options
     },
     calls: fake.calls,
     fakes: fake.fakes,
-    shown: fake.shown,
+    shown: {
+      ...fake.shown,
+      get toasts() {
+        return lifecycle.toasts
+      },
+    },
   }
 }
 

@@ -1,6 +1,5 @@
-import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement, Timer } from 'claude-code'
-import type { Mod, PaneHandle, ProgressStep } from '../mod.js'
-import { ProgressBar } from '../ui/components.js'
+import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement } from 'claude-code'
+import type { Mod, PaneHandle } from '../mod.js'
 import type { Pane } from '../ui/define-pane.js'
 import { Box, drawWith, Text } from '../ui/elements.js'
 import type { MarkdownKind, MarkdownReader } from '../ui/markdown.js'
@@ -8,117 +7,12 @@ import type { Slot, SlotProps } from '../ui/slots.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import type { Router } from './router.js'
-
-export type ProgressLine = {
-  report(step: ProgressStep): void
-  wait(text: string): void
-  fail(reason: string, fix: string): void
-  end(): void
-}
-
-export type Progress = {
-  readonly isShown: boolean
-  start(title: string): ProgressLine
-  draw(drawn: RenderElement, table: ElementTable, columns: number | undefined): RenderElement
-}
-
-type Line = {
-  readonly title: string
-  step: ProgressStep | undefined
-  waiting: string | undefined
-  failure: { readonly reason: string; readonly fix: string } | undefined
-}
+import type { Failure, Toaster } from './toaster.js'
 
 type PaneSize = Pick<PaneOpenArgs, 'columns' | 'rows'>
 
-const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
-const spinnerMs = 100
 const bullet = '⏺'
-const widestBar = 30
-const narrowestBar = 10
 const sizeKeys = ['columns', 'rows'] as const
-
-export function createProgress(claude: Claude): Progress {
-  const lines: Line[] = []
-  let frame = 0
-  let timer: Timer | undefined
-
-  const changed = () => {
-    const isSpinning = lines.some((line) => line.failure === undefined && line.waiting === undefined)
-    if (isSpinning && timer === undefined) {
-      timer = claude.clock.every(spinnerMs, () => {
-        frame += 1
-        claude.ui.invalidate('ui.render')
-      })
-    }
-    if (!isSpinning && timer !== undefined) {
-      timer.cancel()
-      timer = undefined
-    }
-    claude.ui.invalidate('ui.render')
-  }
-
-  return {
-    get isShown() {
-      return lines.length > 0
-    },
-    start(title) {
-      const line: Line = { title, step: undefined, waiting: undefined, failure: undefined }
-      lines.push(line)
-      changed()
-      return {
-        report(step) {
-          line.step = step
-          line.waiting = undefined
-          changed()
-        },
-        wait(text) {
-          line.waiting = text
-          changed()
-        },
-        fail(reason, fix) {
-          line.failure = { reason, fix }
-          changed()
-        },
-        end() {
-          const index = lines.indexOf(line)
-          if (index >= 0) lines.splice(index, 1)
-          changed()
-        },
-      }
-    },
-    draw(drawn, table, columns) {
-      return drawWith(table, () => Box({ flexDirection: 'column', children: [drawn, ...lines.map((line) => drawLine(line, frame, columns))] }))
-    },
-  }
-}
-
-function drawLine(line: Line, frame: number, columns: number | undefined): RenderElement {
-  const title = Text({ bold: true, children: line.title })
-  if (line.failure !== undefined) {
-    return Box({
-      flexDirection: 'column',
-      children: [
-        Box({ children: [Box({ minWidth: 2, children: Text({ color: 'error', children: '✗' }) }), Text({ children: [title, '  ', Text({ color: 'error', children: line.failure.reason })] })] }),
-        Box({ paddingLeft: 2, children: Text({ dimColor: true, children: line.failure.fix }) }),
-      ],
-    })
-  }
-  if (line.waiting !== undefined) {
-    return Text({ wrap: 'truncate-end', children: [Text({ color: 'warning', children: '◌' }), ' ', title, '  ', Text({ dimColor: true, children: line.waiting })] })
-  }
-  const glyph = Text({ color: 'claude', children: spinner[frame % spinner.length] })
-  if (line.step === undefined) return Text({ wrap: 'truncate-end', children: [glyph, ' ', title, Text({ dimColor: true, children: '…' })] })
-  const { done, total, label = '' } = line.step
-  const width = barWidth(columns, `${line.title}${done}/${total}${label}`.length)
-  return Text({ wrap: 'truncate-end', children: [glyph, ' ', title, '  ', ProgressBar({ done, total, width }), ...(label === '' ? [] : ['  ', label])] })
-}
-
-function barWidth(columns: number | undefined, textLength: number): number {
-  if (columns === undefined) return widestBar
-  const spacing = 2 + 2 + 2 + 2
-  return Math.max(narrowestBar, Math.min(widestBar, columns - textLength - spacing))
-}
 
 function paneSize<State extends object>(pane: Pane<State>, state: State): PaneSize {
   const size: { columns?: number; rows?: number } = {}
@@ -197,7 +91,8 @@ export type UiOptions<State extends object> = {
   readonly name: string
   readonly claude: Claude
   readonly router: Router
-  readonly progress: Progress
+  readonly toaster: Toaster
+  readonly report: (failure: Failure) => void
   readonly announce: (feature: string) => void
   readonly mod: () => Mod<State>
 }
@@ -208,7 +103,7 @@ export type UiArea<State extends object> = {
   restorePanes(): Promise<void>
 }
 
-export function createUi<State extends object>({ name, claude, router, progress, announce, mod }: UiOptions<State>): UiArea<State> {
+export function createUi<State extends object>({ name, claude, router, toaster, report, announce, mod }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, Pane<State>>()
   const paneLogs = new Map<string, (failure: string) => void>()
   const openPanes = new Set<string>()
@@ -222,7 +117,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
   const logOnce = (what: string) => {
     let hasLogged = false
     return (failure: string) => {
-      if (!hasLogged) claude.ui.log(`${name}: the ${what} render ${failure}`)
+      if (!hasLogged) report({ id: `render:${what}`, message: `The ${what} render failed`, description: failure })
       hasLogged = true
     }
   }
@@ -330,7 +225,7 @@ export function createUi<State extends object>({ name, claude, router, progress,
     try {
       await run()
     } catch (error) {
-      claude.ui.log(`${name}: the ${pane.title} pane's ${handler} threw: ${messageOf(error)}`)
+      report({ id: `pane:${pane.id}:${handler}`, message: `The ${pane.title} pane's ${handler} threw`, error })
     }
   }
 
@@ -388,15 +283,8 @@ export function createUi<State extends object>({ name, claude, router, progress,
           return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
         })
       },
-      toast: (text, options) => claude.ui.toast(text, options),
-      async progress(title, task) {
-        const line = progress.start(title)
-        try {
-          return await task((step) => line.report(step))
-        } finally {
-          line.end()
-        }
-      },
+      toast: toaster.toast,
+      copy: toaster.copy,
       ask: (question, options) => claude.ui.ask(question, options),
       scroll: (args) => claude.ui.scroll(args),
     },

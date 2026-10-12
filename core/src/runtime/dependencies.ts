@@ -23,6 +23,16 @@ export function dependencyCalls(claude: Claude, within: (call: string, task: Pro
   return new Proxy({}, { get: (_dependencies, to) => (typeof to === 'string' && to !== 'then' ? methodsOf(to) : undefined) }) as CmodDependencies
 }
 
+export function withBareRefusals(claude: Claude): Claude {
+  const prefix = `${claude.plugin.name}: $.cmod.call: `
+  const call: Claude['cmod']['call'] = (input) =>
+    claude.cmod.call(input).catch((error: unknown) => {
+      const message = messageOf(error)
+      throw message.startsWith(prefix) ? new Error(message.slice(prefix.length), { cause: error }) : error
+    })
+  return { ...claude, cmod: { call } }
+}
+
 export function notInstalled(name: string): string {
   return `${name} is not installed. Run cmod install ${name}.`
 }

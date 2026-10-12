@@ -2,6 +2,7 @@ import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import type { Job, Mod } from '../mod.js'
 import { Validator } from '../vendor.js'
 import { toolDeadline } from '../runtime/deadline.js'
+import { showFailure } from '../runtime/toaster.js'
 import { reservedKeys, toolInputOf } from '../runtime/tool-calls.js'
 import { messageOf } from '../utils/text.js'
 import { modWithin } from './context.js'
@@ -31,7 +32,7 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
         registered = answer.tool
       },
       (error: unknown) => {
-        claude.ui.log(`${mod.name}: the ${name} tool is not added: ${messageOf(error)}`)
+        showFailure(mod, { id: `tool:${name}`, message: `The ${name} tool is not added`, error })
       },
     )
     announce(`the ${name} tool`)

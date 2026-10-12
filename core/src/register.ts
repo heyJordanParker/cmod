@@ -19,7 +19,6 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
   const claude: Claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
     ui: {
-      toast: (text, options) => $.ui.toast(text, options),
       status: (text) => $.ui.status(text),
       log: (text, options) => $.ui.log(text, options),
       notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
@@ -29,6 +28,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       close: (pane) => $.ui.close(pane),
       panes: () => $.ui.panes(),
       scroll: (args) => $.ui.scroll(args),
+      copy: (args) => $.ui.copy(args),
       resolve: (render) => $.ui.resolve(render),
     },
     process: {

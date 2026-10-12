@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 import type { RenderElement, RenderPropsOf } from 'claude-code'
-import { defineMod } from '../../src/mod.js'
+import { defineMod, type Mod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 import { textOf } from '../../src/testing/fake-elements.js'
+import { Progress } from '../../src/ui/components.js'
 import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Button, Text } from '../../src/ui/elements.js'
 import { markdownSlots } from '../../src/ui/markdown.js'
@@ -70,7 +71,8 @@ test("a component that throws keeps Claude's drawing", async () => {
 
   expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
   expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
-  expect(tested.shown.logs).toEqual(['broken added a render of ToolUse.', 'broken: the ToolUse render threw, so Claude Code draws its own: no git here'])
+  expect(tested.shown.logs).toEqual(['broken added a render of ToolUse.'])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The ToolUse render failed', description: 'threw, so Claude Code draws its own: no git here' }])
 })
 
 test('a pane whose render throws shows why, and logs it once', async () => {
@@ -85,7 +87,8 @@ test('a pane whose render throws shows why, and logs it once', async () => {
 
   expect(await tested.lines('board')).toEqual(['The Board pane could not draw: no board file'])
   expect(await tested.lines('board')).toEqual(['The Board pane could not draw: no board file'])
-  expect(tested.shown.logs).toEqual(['broken added the Board pane.', 'broken: the Board pane render threw: no board file'])
+  expect(tested.shown.logs).toEqual(['broken added the Board pane.'])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The Board pane render failed', description: 'threw: no board file' }])
 })
 
 test("a pane's onScroll hears its own window move, and never another pane's or the band's", async () => {
@@ -175,7 +178,7 @@ test("a pane's onClose hears it close, and a throwing handler is logged", async 
   await tested.fire('ui.close', { id: 'board', origin: { kind: 'plugin', name: 'history' } } as never, undefined)
 
   expect(closed).toEqual(['person'])
-  expect(tested.shown.logs).toContain("history: the Board pane's onClose threw: no board file")
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: "The Board pane's onClose threw", description: 'no board file' })
 })
 
 test('onScreen is passed on unchanged and the SDK draws the bullet beside Default pieces it wraps', async () => {
@@ -306,7 +309,12 @@ test('a component that uses Default a different number of times on its second pa
   )
 
   expect(await tested.lines(slots.TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['TurnDuration', '  word: "Baked"', '  durationMs: 3000'])
-  expect(tested.shown.logs).toEqual(['impure added a render of TurnDuration.', 'impure: the TurnDuration render used Default 1 time, then 2 times, so Claude Code draws its own. A render must draw the same for the same props.'])
+  expect(tested.shown.logs).toEqual(['impure added a render of TurnDuration.'])
+  expect(tested.shown.toasts).toContainEqual({
+    type: 'error',
+    message: 'The TurnDuration render failed',
+    description: 'used Default 1 time, then 2 times, so Claude Code draws its own. A render must draw the same for the same props.',
+  })
 })
 
 test('a component without Default runs once', async () => {
@@ -327,27 +335,23 @@ test('a component without Default runs once', async () => {
   expect(runs).toBe(1)
 })
 
-test("the install progress bar still draws above a mod's AbovePrompt render", async () => {
-  let finish: () => void = () => undefined
+test("toasts draw below a mod's AbovePrompt render, and hide while Claude Code shows a survey", async () => {
+  let toast: Mod['ui']['toast'] | undefined
   const tested = testMod(
     defineMod({
       name: 'indexer',
       setup(mod) {
+        toast = mod.ui.toast
         mod.ui.render(slots.AbovePrompt, () => <Text>3 prompts</Text>)
-        void mod.ui.progress('Indexing files', async (report) => {
-          report({ done: 2, total: 4, label: 'Reading src' })
-          await new Promise<void>((resolve) => {
-            finish = resolve
-          })
-        })
+        mod.ui.toast.loading('Indexing files', { id: 'index', description: <Progress value={50} width={8} /> })
       },
     }),
   )
   const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
-  expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts', `⠋ Indexing files  ${'█'.repeat(15)}${'░'.repeat(15)}  2/4  Reading src`])
-  finish()
-  await tested.settle()
+  expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts', '⠋  indexer  Indexing files  ✕', '            ████░░░░', '✓  indexer  Ready  ✕'])
+  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).toEqual(['3 prompts'])
+  toast?.dismiss()
   expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts'])
 })
 

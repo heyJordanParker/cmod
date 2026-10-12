@@ -77,9 +77,11 @@ test('a first line hello fails the start, closes the program, and the notice and
   await expect(started.ready()).rejects.toThrow('preview: the preview-server program stopped: its first line is "hello".')
   expect(started.state).toBe('fatal')
   expect(isClosed).toBe(true)
-  expect(tested.shown.logs).toContain(
-    'preview: the preview-server program stopped: its first line is "hello". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.',
-  )
+  expect(tested.shown.toasts).toContainEqual({
+    type: 'error',
+    message: 'The preview-server program stopped',
+    description: 'its first line is "hello". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.',
+  })
 })
 
 test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal with its last standard error line', async () => {

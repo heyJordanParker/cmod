@@ -4,6 +4,7 @@ import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import type { HistoryRequest } from '../node_modules/@cmodjs/core/runtime/history.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
+import { showFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { modsMemory, modsPanel, type ModsState } from './mods.js'
 
 export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null }; readonly session: { tip: string | null } } & ModsState
@@ -41,9 +42,14 @@ async function runCmod(mod: Mod<CmodPluginState>, args: readonly string[]): Prom
     else stderr += piece.text
   }
   const { code } = await stream.result
-  const lastError = stderr.trim().split('\n').at(-1) ?? ''
+  const lastError = lastLineOf(stderr, `cmod ${args[0]}: `)
   if (code !== 0) throw new Error(lastError === '' ? `${args.slice(0, 2).join(' ')} ${formatExit(code, '')}.` : lastError)
   return stdout
+}
+
+function lastLineOf(stderr: string, prefix: string): string {
+  const line = stderr.trim().split('\n').at(-1) ?? ''
+  return line.startsWith(prefix) ? line.slice(prefix.length) : line
 }
 
 export const cmodPlugin = defineMod({
@@ -97,9 +103,9 @@ export const cmodPlugin = defineMod({
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
       const isAnswered = outcome.kind === 'done' || outcome.kind === 'missing' || outcome.kind === 'failed'
       if (isAnswered) mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
-      if (outcome.kind === 'done') mod.ui.toast(`${name} is uninstalled. A session that still runs it stops after /reload-plugins.`)
-      else if (outcome.kind === 'failed') mod.ui.toast(outcome.message)
-      else if (exitCode !== 0) mod.ui.toast(`cmod teardown ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1)}`)
+      if (outcome.kind === 'done') mod.ui.toast.success(`${name} is uninstalled`, { description: 'A session that still runs it stops after /reload-plugins.' })
+      else if (outcome.kind === 'failed') showFailure(mod, { id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message })
+      else if (exitCode !== 0) showFailure(mod, { id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, lastLineOf(stderr, 'cmod teardown: '))}` })
     }
 
     const watchRemovals = async () => {
@@ -113,7 +119,7 @@ export const cmodPlugin = defineMod({
         if (triedRemovals.has(name)) continue
         triedRemovals.add(name)
         void tearDown(name).catch((error: unknown) => {
-          mod.ui.toast(`cmod teardown ${name} did not run: ${messageOf(error)}`)
+          showFailure(mod, { id: `teardown:${name}`, message: `Could not uninstall ${name}`, error })
         })
       }
     }

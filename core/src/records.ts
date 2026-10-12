@@ -247,6 +247,8 @@ function readKeys(keys: unknown): Steps {
   return { keys: commands }
 }
 
+export const coreVersion = '0.3.0'
+
 export function oldestCmodFor(steps: Steps): string {
   if (steps.permissions !== undefined) return '0.2.0'
   return Object.keys(steps.keys ?? {}).length > 0 ? '0.1.12' : '0.0.0'

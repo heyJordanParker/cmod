@@ -23,7 +23,7 @@ test('mod.options holds the values Claude Code passes, typed, with each default 
 
   await tested.start()
 
-  expect(tested.shown.toasts).toContain('watching main every 10 minutes as ghp_')
+  expect(tested.shown.toasts).toContainEqual({ type: 'default', message: 'watching main every 10 minutes as ghp_' })
 })
 
 test("a project's options.json beats the person's own value, and a secret in it is refused", async () => {
@@ -35,10 +35,12 @@ test("a project's options.json beats the person's own value, and a secret in it 
 
   await tested.start()
 
-  expect(tested.shown.toasts).toContain('watching release every 10 minutes as ghp_')
-  expect(tested.shown.logs).toEqual([
-    '/test/project/.claude/cmods/ci-watch/options.json sets every to 0, and Check every takes 1 or more.',
-    '/test/project/.claude/cmods/ci-watch/options.json sets githubToken, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.',
+  const path = '/test/project/.claude/cmods/ci-watch/options.json'
+  expect(tested.shown.toasts).toEqual([
+    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets every to 0, and Check every takes 1 or more.` },
+    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets githubToken, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.` },
+    { type: 'default', message: 'watching release every 10 minutes as ghp_' },
+    { type: 'success', message: 'Ready' },
   ])
 })
 
@@ -68,7 +70,7 @@ test('a value the organization locks in managed settings wins over the project f
 
   await tested.start()
 
-  expect(tested.shown.toasts).toContain('watching locked-main every 10 minutes as ghp_')
+  expect(tested.shown.toasts).toContainEqual({ type: 'default', message: 'watching locked-main every 10 minutes as ghp_' })
 })
 
 test('a mod does not start while an option with no default has no value, and names it', async () => {

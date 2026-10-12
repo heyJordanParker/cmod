@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
-import { Dialog, Help, Pagination, Panel, ProgressBar, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
+import { Dialog, Help, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
 import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Button, Text } from '../../src/ui/elements.js'
 
@@ -41,7 +41,7 @@ const kit = defineMod({
                   <Tooltip text="Files Claude read">
                     <Text>3 read</Text>
                   </Tooltip>
-                  <ProgressBar done={1} total={4} width={8} />
+                  <Progress value={25} width={8} />
                   <Pagination page={session.page} pages={2} onPage={(page) => void (session.page = page)} />
                 </Box>
               )}
@@ -116,8 +116,8 @@ test('Tooltip draws its children and keeps its card for the pointer alone', asyn
   expect(lines.join('\n')).not.toContain('Files Claude read')
 })
 
-test('ProgressBar fills its width in proportion and shows the count', async () => {
-  expect(await testMod(kit).lines('kit')).toContain('██░░░░░░  1/4')
+test('Progress fills its width in proportion to its percent', async () => {
+  expect(await testMod(kit).lines('kit')).toContain('██░░░░░░')
 })
 
 test('Pagination steps forward, and draws an end it cannot pass as text', async () => {

@@ -28,8 +28,9 @@ import type {
   Settings,
   SettingsReadArgs,
   Timer,
-  ToastOptions,
   ToolSpec,
+  UiCopyArgs,
+  UiCopyResult,
   UiLogOptions,
   UiOpenResult,
   UiPane,
@@ -40,7 +41,6 @@ import type {
 export type Claude = {
   readonly plugin: { readonly name: string; readonly root: string }
   readonly ui: {
-    toast(text: string, options?: ToastOptions): void
     status(text: string | undefined): void
     log(text: string, options?: UiLogOptions): void
     notice(toolUseId: string, text: string | undefined): void
@@ -50,6 +50,7 @@ export type Claude = {
     close(pane: PaneCloseArgs): Promise<void>
     panes(): Promise<readonly UiPane[]>
     scroll(args: UiScrollArgs): Promise<UiScrollResult>
+    copy(args: UiCopyArgs): Promise<UiCopyResult>
     resolve(e: ResolveInput): ElementTable<RenderSurface>
   }
   readonly process: {

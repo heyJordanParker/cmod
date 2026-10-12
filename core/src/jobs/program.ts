@@ -1,5 +1,6 @@
 import type { Job } from '../mod.js'
 import { PermissionRefused, programAddresses } from '../runtime/grants.js'
+import { showFailure } from '../runtime/toaster.js'
 import { messageOf } from '../utils/text.js'
 
 export type Program = {
@@ -27,7 +28,7 @@ export function program(options: { readonly command: readonly string[]; readonly
     const stop = (reason: string) => {
       state = 'fatal'
       failure = new Error(`${mod.name}: the ${executable} program stopped: ${reason}`)
-      claude.ui.log(failure.message)
+      showFailure(mod, { id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason })
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
     }
 

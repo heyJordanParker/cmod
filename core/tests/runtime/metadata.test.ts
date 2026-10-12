@@ -87,7 +87,7 @@ test('a script keeps its metadata in a comment block, and a JSON file in a sidec
   ])
 })
 
-test('a file cmod cannot read comes back with the line, read throws it, and cmod logs it once', async () => {
+test('a file cmod cannot read comes back with the line, read throws it, and cmod shows it once', async () => {
   const path = '/work/app/.claude/agents/broken.md'
   const { tested, mod } = await started({ projectRoot: '/work/app', files: { [path]: '---\nmetadata:\n  modes.mode:\n    - build\n---\n' } })
 
@@ -96,7 +96,9 @@ test('a file cmod cannot read comes back with the line, read throws it, and cmod
 
   expect(found).toEqual({ path, metadata: {}, error: `${path} line 4: a metadata value holds a list or a map. Each value is one line of text, and a list is one space-separated text.` })
   await expect(mod.metadata.read(path)).rejects.toThrow(`modes: ${path} line 4:`)
-  expect(tested.shown.logs.filter((line) => line.includes('line 4'))).toHaveLength(1)
+  expect(tested.shown.toasts.filter(({ description }) => description?.includes('line 4') === true)).toEqual([
+    { type: 'error', message: `Skips the metadata of ${path}`, description: `${path} line 4: a metadata value holds a list or a map. Each value is one line of text, and a list is one space-separated text.` },
+  ])
 })
 
 test('find keeps the files it can read and logs once, at debug level, each folder it could not list', async () => {

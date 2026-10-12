@@ -1,12 +1,12 @@
 # UI
 
-A mod draws in four places: its own panes, the rows Claude Code draws (slots), the blocks of Claude's replies (markdown slots), and short messages: toasts, progress lines, and questions. All of it lives on `mod.ui`.
+A mod draws in four places: its own panes, the rows Claude Code draws (slots), the blocks of Claude's replies (markdown slots), and short messages: toasts and questions. All of it lives on `mod.ui`.
 
 ```ts
 mod.ui.pane(pane: Pane<State>): PaneHandle
 mod.ui.render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
-mod.ui.toast(text: string, options?: { timeoutMs?: number }): void
-mod.ui.progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
+mod.ui.toast: Toast
+mod.ui.copy(text: string): Promise<void>
 mod.ui.ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
 mod.ui.scroll(args: UiScrollArgs): Promise<UiScrollResult>
 ```
@@ -45,7 +45,7 @@ export function Count({ label, count }: { readonly label: string; readonly count
 }
 ```
 
-An element called outside a render throws `<Element> was called outside a render. Use it inside a pane's render or a slot's component.` So build elements inside a pane's `render` or a slot's component, never at module load or in a hook.
+An element built outside a render, at module load or in a hook, holds its props until a render draws it. So a hook can build a toast's `description` and the band draws it later.
 
 `drawWith(table, draw, markdown?)` is the function cmod draws a render with. A mod never calls it.
 
@@ -62,7 +62,7 @@ Tooltip(props: { text: string; children? })
 Help(props: { text: string; isOpen: boolean; onOpenChange(isOpen: boolean): void })
 Dialog(props: { title: string; children?; actions })
 Pagination(props: { page: number; pages: number; onPage(page: number): void })
-ProgressBar(props: { done: number; total: number; width?: number })
+Progress(props: { value: number; width?: number })
 ```
 
 - `Tabs` draws a row of tabs over `children`. The selected tab's number is in the accent color and its label bold and underlined. Each other tab is a `Button` whose hotkey is its number, so a pane that holds the keyboard switches tabs by number, Tab, or a click. A hotkey is one digit, so only the first nine tabs have a number.
@@ -72,7 +72,7 @@ ProgressBar(props: { done: number; total: number; width?: number })
 - `Help` draws a `?` that shows `text` the same way. A press of `?` keeps the card open until the next press, so the keyboard reaches it too. Keep `isOpen` in `mod.state`.
 - `Dialog` lays out a dialog's title, body, and `actions`, the buttons in a row. Put the safe action first, as the `primary` Button with `autoFocus`.
 - `Pagination` draws `p: Previous  2 of 5  n: Next`. `p` and `n` are its hotkeys, and an end it cannot pass is dim text.
-- `ProgressBar` fills `width` columns, 24 unless given, in proportion to `done` of `total`, and shows the count. The progress lines `mod.ui.progress` draws use it too.
+- `Progress` fills `value` percent of `width` columns, 24 unless given. Put the count or a label beside it in a `Text`, or pass it as a loading toast's `description`.
 - `Tabs`, `Toggle`, `Help`, and `Pagination` hold no state of their own. Keep their value in `mod.state` and set it in the callback, as in React's controlled components.
 
 A pane opened with `focus`, `closeOnEscape`, and `holdToasts` is a dialog. Claude Code shows it as a tab of the dock, beside the mod's other panes, and Escape closes it:
@@ -114,7 +114,7 @@ Open it with `mod.ui.pane(confirmPane).open({ focus: true })`. It draws as:
  [ Keep it ]  [ Delete ]
 ```
 
-A pane with `Tabs`, a `Tooltip`, a `ProgressBar`, `Pagination`, and a `Toggle` with `Help` draws as:
+A pane with `Tabs`, a `Tooltip`, a `Progress` beside its count, `Pagination`, and a `Toggle` with `Help` draws as:
 
 ```text
  1: Controls   2: Split   3: Files
@@ -355,17 +355,29 @@ markdownBlocks<S>(text: string, slot: S): Omit<SlotProps<S>, 'Default'>[]
 
 ## Toasts
 
-`mod.ui.toast(text, options?)` shows the person a short message on Claude Code's stack of plugin toasts, over the transcript's top right corner and under the mod's name. It stays 4 seconds, or `timeoutMs`. A click takes it off, and the pointer resting on it holds it. While a pane opened with `holdToasts` is shown, it waits.
-
-## Progress lines
+`mod.ui.toast` shows the person a short message in the band above the prompt, one row per toast, under the mod's name. Its shape follows [Sonner](https://sonner.emilkowal.ski/toast):
 
 ```ts
-mod.ui.progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
+mod.ui.toast(message: string, options?: ToastOptions): ToastId
+mod.ui.toast.success(message, options?) / .info / .warning / .error / .loading
+mod.ui.toast.promise<T>(task: Promise<T> | (() => Promise<T>), messages: { loading: string; success: string | ((value: T) => string); error: string | ((error: unknown) => string) }): { unwrap(): Promise<T> }
+mod.ui.toast.dismiss(id?: ToastId): void
 
-type ProgressStep = { readonly done: number; readonly total: number; readonly label?: string }
+type ToastOptions = {
+  id?: ToastId
+  description?: string | RenderElement
+  action?: { label: string; onClick(): unknown }
+  duration?: number
+}
 ```
 
-`progress` draws a line in the band above the prompt while `task` runs, and removes it when `task` settles. The line shows a spinner and the title. After the first `report` it also shows a bar, `done/total`, and the label. `progress` resolves or rejects as `task` does.
+- Each type draws its icon: `✓` success, `ℹ` info, `⚠` warning, `✗` error, and a spinner for loading.
+- A toast stays 4 seconds once the band draws it, or `duration` ms. `Infinity` keeps it until the person closes it, and a loading toast stays until it changes. The time waits while Claude Code shows a survey over the band.
+- A toast with the `id` of a shown toast replaces it in place, so a loading toast turns into its success or error.
+- A text `description` shows its first line dim under the message. A press on the message unfolds the whole text and stops the time, and a second press folds it. An element `description`, such as a `Progress`, draws as it is.
+- `action` draws a button after the message. A press that throws shows an error toast with the cause.
+- `✕` closes the toast. The band shows the newest 3, and `+N more` shows every toast.
+- `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -374,14 +386,16 @@ export const indexer = defineMod({
   name: 'indexer',
   setup(mod) {
     mod.on('SessionStart', async () => {
-      const entries = await mod.fs.list(mod.projectRoot)
-      await mod.ui.progress('Indexing', async (report) => {
-        for (const [index, entry] of entries.entries()) report({ done: index + 1, total: entries.length, label: entry.name })
-      })
+      const indexed = mod.fs.list(mod.projectRoot).then((entries) => entries.length)
+      mod.ui.toast.promise(indexed, { loading: 'Indexing files', success: (count) => `Indexed ${count} files`, error: 'Indexing failed' })
     })
   },
 })
 ```
+
+An error cmod catches for a mod, such as a hook that throws, shows as an error toast that stays. Its `Copy` button copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack, for a bug report.
+
+`mod.ui.copy(text)` puts `text` on the person's clipboard. It rejects with Claude Code's reason when the terminal cannot take it.
 
 ## Questions
 
@@ -427,4 +441,4 @@ A [Message](mod.md#mod-history)'s `id` is the row Claude Code draws it under, an
 
 ## Test the UI
 
-`tested.lines(paneId)` reads an open pane as rows of text. `tested.lines(slot, props)` draws a slot render. `tested.press(paneId, key)` presses a button. `tested.shown.toasts` lists the toasts. [testing.md](testing.md) covers each.
+`tested.lines(paneId)` reads an open pane as rows of text. `tested.lines(slot, props)` draws a slot render. `tested.press(paneId, key)` presses a button. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.

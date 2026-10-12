@@ -4,6 +4,7 @@ import { ifMissing, isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import { picomatch, resolve } from '../vendor.js'
 import type { Claude } from './claude.js'
+import type { Failure } from './toaster.js'
 
 export type Places = {
   readonly home: string | undefined
@@ -35,7 +36,19 @@ export function resolvedPath(path: string, places: Places): string {
   return path.startsWith('/') ? resolve(path) : resolve(places.projectRoot(), path)
 }
 
-export function createModFiles({ name, claude, places, checkWrite }: { readonly name: string; readonly claude: Claude; readonly places: Places; readonly checkWrite: (path: string) => Promise<void> }): ModFiles {
+export function createModFiles({
+  name,
+  claude,
+  places,
+  checkWrite,
+  report,
+}: {
+  readonly name: string
+  readonly claude: Claude
+  readonly places: Places
+  readonly checkWrite: (path: string) => Promise<void>
+  readonly report: (failure: Failure) => void
+}): ModFiles {
   const prefix = `${name}.`
   const cache = new Map<string, { readonly signature: string; readonly read: Read }>()
   const logged = new Set<string>()
@@ -76,7 +89,7 @@ export function createModFiles({ name, claude, places, checkWrite }: { readonly 
       if (!(error instanceof MetadataError)) throw error
       const failure = `${located.holder} ${error.message}`
       read = { metadata: {}, error: failure }
-      if (!logged.has(failure)) claude.ui.log(`${name}: ${failure}`)
+      if (!logged.has(failure)) report({ id: `metadata:${located.holder}`, message: `Skips the metadata of ${located.holder}`, description: failure })
       logged.add(failure)
     }
     cache.set(path, { signature: located.signature, read })

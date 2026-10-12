@@ -46,7 +46,7 @@ type TestOptions<State, Options> = {
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `mod.projectRoot` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `mod.cwd` | `projectRoot` |
-| `dependencies` | The methods other mods answer with | none: every call fails with `<mod>: $.cmod.call: <name> is not installed. Run cmod install <name>.` |
+| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Run cmod install <name>.` |
 | `files` | The fake file system, absolute path to text | no files |
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
 | `history` | The saved conversations `mod.history` reads, in the order they were saved. A session's `project` puts it in the project, and a message's `session` and `agent` put it in a conversation ([mod.md](mod.md#mod-history)) | no conversations |
@@ -160,7 +160,7 @@ Waits until the work a hook started without awaiting it has run, such as a `void
 
 - `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`, the main conversation's view.
 - A `Button` draws as Claude Code draws it: `[ Save ]`, or `1: Save` when it is `plain` with a `hotkey`, or `Save` when it is `plain` alone. Borders and colors are not drawn.
-- `lines(slot, props, requestId?)` draws a slot render with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the render changed. Draw `slots.AssistantMessage` with a reply's `text` to test a markdown slot render. Draws that pass one `requestId` grow one streamed reply.
+- `lines(slot, props, requestId?)` draws a slot render with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the render changed. Draw `slots.AssistantMessage` with a reply's `text` to test a markdown slot render. Draws that pass one `requestId` grow one streamed reply. `slots.AbovePrompt` ends with the toasts shown now, under the mod's own rows.
 
 ```ts
 import { expect, test } from 'bun:test'
@@ -171,11 +171,11 @@ import { hints } from '../src/mod.js'
 
 const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
-test('the band shows the prompt count on its last line', async () => {
+test('the band shows the prompt count', async () => {
   const tested = testMod(hints)
   await tested.fire('UserPromptSubmit', { prompt: 'hello' })
 
-  expect((await tested.lines(slots.AbovePrompt, band)).at(-1)).toBe('Prompts: 1')
+  expect(await tested.lines(slots.AbovePrompt, band)).toContain('Prompts: 1')
 })
 ```
 
@@ -271,7 +271,7 @@ test('a Commit answer commits', async () => {
 
 ```ts
 type Shown = {
-  readonly toasts: string[]
+  readonly toasts: ShownToast[]
   readonly notes: string[]
   readonly prompts: string[]
   readonly logs: string[]
@@ -282,9 +282,11 @@ type Shown = {
   readonly tools: string[]
   readonly schedules: { readonly id: string; readonly cron: string; readonly prompt: string }[]
 }
+
+type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 ```
 
-What the person and Claude would see: the toasts, the notes the mod added for Claude with `mod.session.append` or a `prompt` that follows the state, the prompts it sent with `mod.session.submit`, the log lines, the debug log lines, each status line text, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
+What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `mod.session.append` or a `prompt` that follows the state, the prompts it sent with `mod.session.submit`, the log lines, the debug log lines, each status line text, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
 ```ts
 test('the Mode prompt follows the mode', async () => {

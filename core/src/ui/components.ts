@@ -49,9 +49,9 @@ export function Pagination({ page, pages, onPage }: { readonly page: number; rea
   })
 }
 
-export function ProgressBar({ done, total, width = 24 }: { readonly done: number; readonly total: number; readonly width?: number }): RenderElement {
-  const filled = total > 0 ? Math.round(Math.min(done / total, 1) * width) : 0
-  return Text({ children: [Text({ color: 'claude', children: '█'.repeat(filled) }), Text({ color: 'subtle', children: '░'.repeat(width - filled) }), '  ', Text({ dimColor: true, children: `${done}/${total}` })] })
+export function Progress({ value, width = 24 }: { readonly value: number; readonly width?: number }): RenderElement {
+  const filled = Math.round((Math.min(Math.max(value, 0), 100) / 100) * width)
+  return Text({ children: [Text({ color: 'claude', children: '█'.repeat(filled) }), Text({ color: 'subtle', children: '░'.repeat(width - filled) })] })
 }
 
 const cardColumns = 36

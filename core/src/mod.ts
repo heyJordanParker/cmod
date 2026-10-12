@@ -22,7 +22,6 @@ import type {
   ProcessSpawnResult,
   RenderElement,
   Timer,
-  ToastOptions,
   UiScrollArgs,
   UiScrollResult,
 } from 'claude-code'
@@ -37,10 +36,28 @@ import type { Message, Session } from './history.js'
 import type { Pane } from './ui/define-pane.js'
 import type { Slot, SlotProps } from './ui/slots.js'
 
-export type ProgressStep = {
-  readonly done: number
-  readonly total: number
-  readonly label?: string
+export type ToastId = string | number
+
+export type ToastType = 'default' | 'success' | 'info' | 'warning' | 'error' | 'loading'
+
+export type ToastOptions = {
+  readonly id?: ToastId
+  readonly description?: string | RenderElement
+  readonly action?: { readonly label: string; readonly onClick: () => unknown }
+  readonly duration?: number
+}
+
+type ToastMessage<Value> = string | ((value: Value) => string)
+
+export type Toast = {
+  (message: string, options?: ToastOptions): ToastId
+  success(message: string, options?: ToastOptions): ToastId
+  info(message: string, options?: ToastOptions): ToastId
+  warning(message: string, options?: ToastOptions): ToastId
+  error(message: string, options?: ToastOptions): ToastId
+  loading(message: string, options?: ToastOptions): ToastId
+  promise<T>(task: Promise<T> | (() => Promise<T>), messages: { readonly loading: string; readonly success: ToastMessage<T>; readonly error: ToastMessage<unknown> }): { unwrap(): Promise<T> }
+  dismiss(id?: ToastId): void
 }
 
 export type PaneHandle = {
@@ -155,8 +172,8 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly ui: {
     pane(pane: Pane<State>): PaneHandle
     render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
-    toast(text: string, options?: ToastOptions): void
-    progress<T>(title: string, task: (report: (step: ProgressStep) => void) => Promise<T>): Promise<T>
+    readonly toast: Toast
+    copy(text: string): Promise<void>
     ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
     scroll(args: UiScrollArgs): Promise<UiScrollResult>
   }

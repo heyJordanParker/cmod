@@ -47,9 +47,9 @@ export const greeter = defineMod({
 
 Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod the person has not accepted yet opens the installer pane, `Install <name>`, which lists its permissions and the changes it makes to the computer, and waits for Accept ([install-steps.md](install-steps.md)). An option with no default and no value is asked on the next page of the same pane. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the pane again for each `installer` step the mod declares that is not done.
 
-The first time a version starts, cmod shows the toast `<name> is ready` and logs `<name> added <what setup added>`, such as `the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit`.
+The first time a version starts, cmod shows the success toast `Ready` under the mod's name and logs `<name> added <what setup added>`, such as `the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit`.
 
-When a step fails, the mod does not start. Its progress line above the prompt names the failure and the fix:
+When a step fails, the mod does not start. An error toast above the prompt names the failure, with the fix under it:
 
 - `<mod>: state.<group> is not a lifetime. …` or `<mod>: state.<group> is not an object of values. …` when the declared state is not valid ([state.md](state.md)).
 - `its state did not load: <error>` when reading the saved values fails.
@@ -91,7 +91,7 @@ export function register(addHook: On, options: PluginOptions): void {
 }
 ```
 
-Such a mod also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its progress line names the line to add.
+Such a mod also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its error toast names the line to add.
 
 Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. The plugin directory reads the bundled module too, and flags it when the name of `register`'s first parameter is declared anywhere else in the bundle. `@cmodjs/core` declares `on` as the method `mod.on`, so name that parameter `addHook`. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
 
@@ -110,7 +110,7 @@ type Mod<State, Options> = {
   on(event, hook, options?): void
   use(job): Handle
   every(ms, hook): Timer
-  readonly ui: { pane, render, toast, progress, ask, scroll }
+  readonly ui: { pane, render, toast, copy, ask, scroll }
   readonly process: { run, spawn }
   readonly fs: { read, write, list, exists, stat, find }
   readonly metadata: { read, update }
@@ -137,7 +137,7 @@ type Mod<State, Options> = {
 | `on` | Adds a hook on a Claude Code event. | [hooks.md](hooks.md) |
 | `use` | Adds a job, such as a slash command or a tool, and returns its handle. | [jobs.md](jobs.md) |
 | `every` | Runs a function every so many milliseconds while the session runs. | below |
-| `ui` | Panes, slot renders, toasts, progress lines, questions, and scrolling. | [ui.md](ui.md) |
+| `ui` | Panes, slot renders, toasts, the clipboard, questions, and scrolling. | [ui.md](ui.md) |
 | `process` | Runs a program. | below |
 | `fs` | Reads, writes, looks up, and finds files. | below |
 | `metadata` | Reads and changes the mod's keys in one file's metadata. | below |
@@ -460,7 +460,7 @@ export const notes = defineMod({
   setup(mod) {
     mod.on('Stop', async () => {
       await mod.fs.write(`${mod.dataFolder}/last-stop.txt`, new Date().toISOString()).catch((error: unknown) => {
-        mod.ui.toast(`notes could not save: ${messageOf(error)}`)
+        mod.ui.toast.error('Could not save the last stop', { description: messageOf(error) })
       })
     })
   },

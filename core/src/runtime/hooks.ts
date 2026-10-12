@@ -3,6 +3,7 @@ import type { HookAnswer, HookInput, ModEvent, ModHook } from '../mod.js'
 import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
 import type { RoutedHook } from './router.js'
+import type { Failure } from './toaster.js'
 import { reservedKeys, toolInputOf, type ToolCalls } from './tool-calls.js'
 import { callEffects, inputOf, type CallBase, type FileAccess } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
@@ -53,7 +54,7 @@ const readFields: Record<ModEvent, readonly string[]> = {
   FileChanged: [],
 }
 
-export function classicHook<E extends Exclude<ModEvent, 'PreToolUse'>>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls): RoutedHook<RoutedEvent> {
+export function classicHook<E extends Exclude<ModEvent, 'PreToolUse'>>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
   const hookInputOf = async (e: unknown): Promise<unknown> => {
     if (event !== 'PostToolUse' && event !== 'PostToolUseFailure') return e
     const input = e as ClassicHookInputs['PostToolUse' | 'PostToolUseFailure']
@@ -68,9 +69,8 @@ export function classicHook<E extends Exclude<ModEvent, 'PreToolUse'>>(name: str
   }
   const routed = async (e: unknown, next: (e: unknown) => Promise<unknown>) => {
     const ours = await resultOf(e).catch((error: unknown): ClassicFields | undefined => {
-      const reason = `${name}: the ${event} hook failed: ${messageOf(error)}`
-      if (event === 'PermissionRequest') return { decision: { behavior: 'deny', message: reason } }
-      claude.ui.log(reason)
+      if (event === 'PermissionRequest') return { decision: { behavior: 'deny', message: `${name}: the ${event} hook failed: ${messageOf(error)}` } }
+      report({ id: `hook:${event}`, message: `The ${event} hook failed`, error })
       return undefined
     })
     if (ours === undefined) return next(e)

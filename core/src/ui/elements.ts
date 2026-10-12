@@ -6,25 +6,39 @@ type CompletedTable = Record<ElementName, (props: object) => RenderElement>
 
 type Drawing = { readonly table: CompletedTable; readonly markdown: ((props: MarkdownProps) => RenderElement) | undefined }
 
+const unbuilt = Symbol('an element built outside a render')
+
+type Unbuilt = { readonly [unbuilt]: { readonly name: ElementName; readonly props: object } }
+
 let drawing: Drawing | undefined
 
 export function drawWith<Drawn>(table: ElementTable, draw: () => Drawn, markdown?: (props: MarkdownProps) => RenderElement): Drawn {
   const outer = drawing
-  drawing = { table: table as CompletedTable, markdown }
+  const current = { table: table as CompletedTable, markdown }
+  drawing = current
   try {
-    return draw()
+    return built(current, draw()) as Drawn
   } finally {
     drawing = outer
   }
 }
 
 function element<Name extends keyof Terminal & ElementName>(name: Name): Terminal[Name] {
-  const construct = (props: object) => {
-    if (drawing === undefined) throw new Error(`${name} was called outside a render. Use it inside a pane's render or a slot's component.`)
-    if (name === 'Markdown' && drawing.markdown !== undefined) return drawing.markdown(props as MarkdownProps)
-    return drawing.table[name](props)
-  }
+  const construct = (props: object) => (drawing === undefined ? ({ [unbuilt]: { name, props } } satisfies Unbuilt as unknown as RenderElement) : build(drawing, name, props))
   return construct
+}
+
+function build(current: Drawing, name: ElementName, props: object): RenderElement {
+  const ready = 'children' in props ? { ...props, children: built(current, props.children) } : props
+  if (name === 'Markdown' && current.markdown !== undefined) return current.markdown(ready as MarkdownProps)
+  return current.table[name](ready)
+}
+
+function built(current: Drawing, value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((child: unknown) => built(current, child))
+  if (typeof value !== 'object' || value === null || !(unbuilt in value)) return value
+  const { name, props } = (value as Unbuilt)[unbuilt]
+  return build(current, name, props)
 }
 
 export const Box = element('Box')
