@@ -206,8 +206,8 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   }
   readonly history: {
     sessions(options?: { readonly since?: string; readonly everyProject?: boolean }): Promise<Session[]>
-    messages(options?: { readonly session?: string; readonly agent?: string; readonly after?: string; readonly last?: number; readonly follow?: boolean }): AsyncIterable<Message>
-    search(text: string, options?: { readonly since?: string; readonly everyProject?: boolean }): Promise<Message[]>
+    messages(options?: { readonly session?: string; readonly agent?: string; readonly subagents?: boolean; readonly after?: string; readonly last?: number; readonly follow?: boolean }): AsyncIterable<Message>
+    search(text: string, options?: { readonly since?: string; readonly everyProject?: boolean; readonly limit?: number; readonly before?: Pick<Message, 'session' | 'id'> }): Promise<Message[]>
   }
   readonly agent: {
     spawn(args: AgentSpawnArgs): Promise<AgentSpawnResult>

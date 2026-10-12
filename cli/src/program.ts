@@ -80,11 +80,11 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
   return { name, folder, build: declared['build'], output: declared['output'] }
 }
 
-export async function buildProgram(program: Program, wanted: readonly string[], progress: Progress): Promise<string[]> {
+export async function buildProgram(program: Program, wanted: readonly string[], progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<string[]> {
   const heading = `Building ${program.name}`
   progress.step(heading)
   const startedAt = Math.floor(Date.now() / 1000) * 1000
-  const result = await runStep(['sh', '-c', program.build], program.folder, { ...process.env, CMOD_MACHINES: wanted.join(' ') }, (event) => {
+  const result = await runStep(['sh', '-c', program.build], program.folder, { ...environment, CMOD_MACHINES: wanted.join(' ') }, (event) => {
     if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
     else progress.log(event.text)
   })
@@ -108,8 +108,8 @@ export async function buildProgram(program: Program, wanted: readonly string[], 
   return builds
 }
 
-export async function installProgram(program: Program, version: string, progress: Progress): Promise<void> {
-  const built = (await buildProgram(program, [machine], progress))[0] as string
+export async function installProgram(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
+  const built = (await buildProgram(program, [machine], progress, environment))[0] as string
 
   const target = storePath('bin', program.name, version, program.name)
   await mkdir(dirname(target), { recursive: true })

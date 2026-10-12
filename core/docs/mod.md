@@ -327,8 +327,8 @@ await mod.claude.settings.update({ source: 'user' }, { cleanupPeriodDays: 365 })
 
 ```ts
 mod.history.sessions(options?: { since?: string; everyProject?: boolean }): Promise<Session[]>
-mod.history.messages(options?: { session?: string; agent?: string; after?: string; last?: number; follow?: boolean }): AsyncIterable<Message>
-mod.history.search(text: string, options?: { since?: string; everyProject?: boolean }): Promise<Message[]>
+mod.history.messages(options?: { session?: string; agent?: string; subagents?: boolean; after?: string; last?: number; follow?: boolean }): AsyncIterable<Message>
+mod.history.search(text: string, options?: { since?: string; everyProject?: boolean; limit?: number; before?: { session: string; id: string } }): Promise<Message[]>
 ```
 
 `history` reads every conversation Claude Code saved, as sessions and messages, so a mod never parses a transcript. Every call needs the `conversation` permission ([permissions.md](permissions.md)).
@@ -364,8 +364,8 @@ type Sender =
 - `from` says who sent it: the person, Claude, a mod by name, the agent that started a subagent, another session, a schedule, a channel, a program through the SDK, or Claude Code itself, as a Skill it loaded, a `CLAUDE.md` file it read, a compaction summary, or a background task's notice.
 - Each of `tools` is a tool call in a reply: `tool` and `input` as a hook gets them, `id` as the call's `tool_use_id`, `result` as the text the tool answered, the whole of it even when Claude Code saved a long result to a file, `isError` when the tool failed, and `subagent` as the id of the subagent an Agent call started.
 - `sessions` lists the conversations of the project, newest first. `everyProject` lists every project's, and `since` keeps those active since a time, written as `30m`, `6h`, `2d`, `1w`, or a date such as `2026-10-01`.
-- `messages` yields one conversation's messages in order: this session's, or `session`'s. `agent` reads one of its subagents' conversations, the id a `SubagentStop` hook gets as `agent_id`. `last` starts that many messages from the end, and `after` starts after a message's `id`. With `follow`, the loop keeps yielding each new message until the mod leaves the loop: this session's as soon as its hooks run, and another session's within a second.
-- `search` answers every message whose text or tool input contains `text`, any case, newest first, in the project or with `everyProject` in every project. It reads every conversation it covers first. A tool's result is not searched.
+- `messages` yields one conversation's messages in order: this session's, or `session`'s. `agent` reads one of its subagents' conversations, the id a `SubagentStop` hook gets as `agent_id`, and `subagents` reads the conversation with every subagent's, in the order they were saved. `last` starts that many messages from the end, and `after` starts after a message's `id`. With `follow`, the loop keeps yielding each new message until the mod leaves the loop: this session's as soon as its hooks run, and another session's within a second.
+- `search` answers the newest 50 messages whose text or tool input contains `text`, any case, in the project or with `everyProject` in every project. `text` is at least 3 characters. `limit` changes the 50, and `before` takes the last message of a page to answer the page after it. It reads every conversation it covers first. Each tool input value is searched in its first 1,024 characters, and a tool's result is not searched.
 
 ```ts
 for await (const message of mod.history.messages({ follow: true })) {
@@ -375,9 +375,11 @@ for await (const message of mod.history.messages({ follow: true })) {
 
 ```ts
 const earlier = await mod.history.search('deploy job', { since: '1w' })
+const last = earlier.at(-1)
+const older = last === undefined ? [] : await mod.history.search('deploy job', { since: '1w', before: last })
 ```
 
-The `cmod history` command answers the same calls in a terminal ([commands.md](commands.md#cmod-history)). The cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since.
+The `cmod history` command answers the same calls in a terminal ([commands.md](commands.md#cmod-history)). While a mod holds the `conversation` permission, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since.
 
 ### mod.session
 

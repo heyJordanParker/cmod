@@ -8,6 +8,7 @@ import { home, readText, tilde } from '../files.js'
 import { tryPlugins } from '../claude.js'
 import { installPackages, readPlugin, sourceOf, type Plugin } from '../plugin.js'
 import { run as runCommand } from '../process.js'
+import { installProgram, readProgram, removeProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { configRoot, keepSettings, keptSettings } from '../settings.js'
 import { installCmodPlugin, setOptions } from './install.js'
@@ -32,8 +33,9 @@ keeps it for the next try, and --home ~ runs in your own home.
 Installs the cmod plugin into Claude Code when it lacks it and runs each mod's
 install step after asking consent for its install and uninstall commands and
 its key bindings, then starts one Claude Code session with every mod loaded
-through --plugin-dir. Unlike cmod link, it builds no program from cli/, so a
-program comes from the mod's GitHub release. When the session ends, even when
+through --plugin-dir. A checkout's program is built from its cli/ with your own
+home and environment, as cmod link builds it, and a GitHub mod's program comes
+from its release. When the session ends, even when
 its terminal closes, runs each mod's uninstall step and deletes its record, data
 folder, approval, key bindings, and program, so the mod stays uninstalled.
 Ctrl+C or Ctrl+D at a consent question deletes the clones and changes nothing
@@ -69,6 +71,9 @@ export async function run(argv: string[]): Promise<number> {
 
   const temporary = kept === undefined ? await mkdtemp(join(tmpdir(), 'cmod-try-home-')) : undefined
   const clones: string[] = []
+  const ownEnvironment = { ...process.env }
+  const built: { readonly mod: string; readonly program: string }[] = []
+  const setUp: string[] = []
   try {
     await useHome(temporary ?? (kept as string))
     const tried: Tried[] = []
@@ -88,10 +93,12 @@ export async function run(argv: string[]): Promise<number> {
       progress.step(`Installing packages for ${plugin.name}`)
       if (await installPackages(plugin)) progress.succeed(`Installed packages for ${plugin.name}`)
       else progress.succeed(`${plugin.name} has no packages to install`)
+      const program = clone === undefined ? await readProgram(plugin) : undefined
+      if (program !== undefined && record === undefined) built.push({ mod: plugin.name, program: program.name })
+      if (program !== undefined) await installProgram(program, plugin.version, progress, ownEnvironment)
       tried.push({ plugin, record })
     }
     if (hold.signal === undefined) await installCmodPlugin(progress)
-    const setUp: string[] = []
     try {
       for (const { plugin, record } of tried) {
         await setOptions(plugin.name, plugin.root, optionsFor(plugin.name, values.option ?? [], tried.length), progress)
@@ -107,6 +114,7 @@ export async function run(argv: string[]): Promise<number> {
       for (const name of setUp.reverse()) await teardownInTerminal(name, progress)
     }
   } finally {
+    for (const { mod, program } of built) if (!setUp.includes(mod)) await removeProgram(program)
     for (const clone of clones) await rm(clone, { recursive: true, force: true })
     if (temporary !== undefined) await rm(temporary, { recursive: true, force: true })
   }

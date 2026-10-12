@@ -6,8 +6,8 @@ import { storePath, takeLock } from '../store.js'
 export const summary = 'Read every saved Claude Code conversation as sessions and messages.'
 
 export const help = `Usage: cmod history sessions [--all] [--since 2d] [--project <folder>] [--json]
-       cmod history messages [<session>] [--agent <id>] [--last <n>] [--after <id>] [--limit <n>] [--follow] [--json]
-       cmod history search <text> [--all] [--since 2d] [--project <folder>] [--json]
+       cmod history messages [<session>] [--agent <id> | --subagents] [--last <n>] [--after <id>] [--limit <n>] [--follow] [--json]
+       cmod history search <text> [--all] [--since 2d] [--project <folder>] [--limit <n>] [--before <session>:<id>] [--json]
        cmod history index
 
 ${summary}
@@ -19,16 +19,21 @@ active in the last 30m, 6h, 2d, or 1w, or since a date such as 2026-10-01.
 messages prints one conversation's messages in order: the session named, or the
 conversation this command runs in when Claude Code sets CLAUDE_CODE_SESSION_ID.
 That conversation has no messages until Claude Code saves its first one.
---agent reads one of its subagents' conversations, --last starts that many
-messages from the end, --after starts after a message id, --limit stops after
-that many messages, and --follow keeps printing new messages as they are saved.
+--agent reads one of its subagents' conversations, --subagents reads the
+conversation with every subagent's in the order they were saved, --last starts
+that many messages from the end, --after starts after a message id, --limit
+stops after that many messages, and --follow keeps printing new messages as
+they are saved.
 
-search prints every message whose text or tool input contains the text, newest
-first, after indexing every conversation it covers. --all and --since scope it
-the way they scope sessions.
+search prints the newest 50 messages whose text or tool input contains the
+text, at least 3 characters, after indexing every conversation it covers. Each
+tool input value is searched in its first 1,024 characters. --all and --since
+scope it the way they scope sessions, --limit changes the 50, and --before
+<session>:<id> starts after the last message of the previous page.
 
-index indexes every saved conversation, and the cmod plugin runs it in the
-background at each session's start.`
+index indexes every saved conversation. The cmod plugin runs it in the
+background at each session's start while a mod holds the conversation
+permission.`
 
 const followMs = 250
 
@@ -41,6 +46,8 @@ export async function run(argv: string[]): Promise<number> {
       since: { type: 'string' },
       project: { type: 'string' },
       agent: { type: 'string' },
+      subagents: { type: 'boolean', default: false },
+      before: { type: 'string' },
       last: { type: 'string' },
       after: { type: 'string' },
       limit: { type: 'string' },
@@ -58,14 +65,19 @@ export async function run(argv: string[]): Promise<number> {
       return 0
     }
     if (command === 'search' && rest.length === 1) {
-      const found = searchMessages(db, rest[0] as string, scope)
+      const found = searchMessages(db, rest[0] as string, {
+        ...scope,
+        ...(values.limit === undefined ? {} : { limit: countOf('--limit', values.limit) }),
+        ...(values.before === undefined ? {} : { before: cursorOf(values.before) }),
+      })
       process.stdout.write(values.json ? `${JSON.stringify(found)}\n` : found.map((message) => messageLine(message, true)).join(''))
       return 0
     }
     if (command === 'messages' && rest.length <= 1) {
       const session = rest[0] ?? process.env['CLAUDE_CODE_SESSION_ID']
       if (session === undefined || session === '') throw new Error('cmod history messages takes a session id outside Claude Code. cmod history sessions lists them.')
-      const request = { session, project: scope.project, ...(values.agent === undefined ? {} : { agent: values.agent }), ...(values.after === undefined ? {} : { after: values.after }), ...(values.limit === undefined ? {} : { limit: countOf('--limit', values.limit) }) }
+      if (values.subagents && values.agent !== undefined) throw new Error('cmod history messages takes --agent or --subagents, not both.')
+      const request = { session, project: scope.project, subagents: values.subagents, ...(values.agent === undefined ? {} : { agent: values.agent }), ...(values.after === undefined ? {} : { after: values.after }), ...(values.limit === undefined ? {} : { limit: countOf('--limit', values.limit) }) }
       const messages = readMessages(db, { ...request, ...(values.last === undefined ? {} : { last: countOf('--last', values.last) }) })
       process.stdout.write(values.json ? `${JSON.stringify(messages)}\n` : messages.map((message) => messageLine(message, false)).join(''))
       if (values.follow) await follow(db, request, messages.at(-1)?.id ?? values.after, values.json)
@@ -133,6 +145,12 @@ function countOf(flag: string, value: string): number {
   const count = Number(value)
   if (!Number.isInteger(count) || count < 1) throw new Error(`${flag} takes a whole number above 0, not ${value}.`)
   return count
+}
+
+function cursorOf(value: string): { session: string; id: string } {
+  const [session, id] = value.split(':')
+  if (session === undefined || id === undefined || session === '' || id === '') throw new Error(`--before takes <session>:<id>, the last message of the previous page, not ${value}.`)
+  return { session, id }
 }
 
 function sinceOf(value: string | undefined): string | undefined {

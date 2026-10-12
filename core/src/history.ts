@@ -30,3 +30,17 @@ export type Message = {
   readonly text: string
   readonly tools: readonly (ToolCall & { readonly id: string; readonly result?: string; readonly isError?: boolean; readonly subagent?: string })[]
 }
+
+export const searchLimit = 50
+
+const toolValueChars = 1024
+
+export function searchText(message: Message): string {
+  return [message.text, ...message.tools.flatMap((tool) => stringsIn(tool.input).map((value) => value.slice(0, toolValueChars)))].join('\n')
+}
+
+function stringsIn(value: unknown): string[] {
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.flatMap(stringsIn)
+  return typeof value === 'object' && value !== null ? Object.values(value).flatMap(stringsIn) : []
+}

@@ -6,8 +6,8 @@ import type { Router } from './router.js'
 
 export type HistoryRequest =
   | { readonly command: 'sessions'; readonly project: string; readonly since?: string; readonly everyProject?: boolean }
-  | { readonly command: 'messages'; readonly project: string; readonly session: string; readonly agent?: string; readonly after?: string; readonly last?: number; readonly limit: number }
-  | { readonly command: 'search'; readonly project: string; readonly text: string; readonly since?: string; readonly everyProject?: boolean }
+  | { readonly command: 'messages'; readonly project: string; readonly session: string; readonly agent?: string; readonly subagents?: boolean; readonly after?: string; readonly last?: number; readonly limit: number }
+  | { readonly command: 'search'; readonly project: string; readonly text: string; readonly since?: string; readonly everyProject?: boolean; readonly limit?: number; readonly before?: Pick<Message, 'session' | 'id'> }
 
 const pageSize = 100
 
@@ -43,7 +43,7 @@ export function createHistory({ claude, router, checkGrant, project }: { readonl
   }
   return {
     sessions: (options = {}) => ask<Session[]>({ command: 'sessions', project: project(), ...options }),
-    search: (text, options = {}) => ask<Message[]>({ command: 'search', project: project(), text, ...options }),
+    search: (text, { before, ...options } = {}) => ask<Message[]>({ command: 'search', project: project(), text, ...options, ...(before === undefined ? {} : { before: { session: before.session, id: before.id } }) }),
     async *messages(options = {}) {
       const { follow: isFollowed = false, last, session: named, ...rest } = options
       const current = await claude.session.id()

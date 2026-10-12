@@ -39,6 +39,33 @@ const sessionListingSetup = `for path in .local/share/cmod/records/hello-mod.jso
   test -e "$HOME/$path" && echo "$path" >> "$HOME/during"
 done`
 
+const buildingHello = 'mkdir -p dist && for each in $CMOD_MACHINES; do printf \'#!/bin/sh\\necho built hello\\n\' > dist/hello-$each; done; echo "$HOME" > built-home'
+
+test("cmod try builds a checkout's program with your own home, and the session runs it", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, `hello > "${home}/session-ran"`) })
+  await writeFiles(root, { ...helloMod, 'cli/package.json': JSON.stringify({ name: 'hello', bin: { hello: 'dist/hello' }, cmod: { build: buildingHello, output: 'dist' } }) })
+
+  const result = await cmod(home, 'try', root, '--yes')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'session-ran'), 'utf8')).toBe('built hello\n')
+  expect(await readFile(join(root, 'cli/built-home'), 'utf8')).toBe(`${home}\n`)
+})
+
+test("cmod try removes the program it built when the mod is not set up", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'hello-mod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
+  await writeFiles(root, { ...helloMod, 'cli/package.json': JSON.stringify({ name: 'hello', bin: { hello: 'dist/hello' }, cmod: { build: buildingHello, output: 'dist' } }) })
+
+  const result = await cmod(home, 'try', '--home', '~', root)
+
+  expect(result.exitCode).toBe(10)
+  expect([existsSync(join(home, '.local/bin/hello')), existsSync(join(home, '.local/share/cmod/bin/hello'))]).toEqual([false, false])
+})
+
 test('try prints each step for a mod with no steps, and passes the arguments after -- to claude', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')

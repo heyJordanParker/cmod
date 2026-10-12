@@ -1041,6 +1041,7 @@ test("mod.history.messages reads this conversation, or a subagent's by its id", 
   expect(await readAll(mod!.history.messages({ agent: 'agent-3' }))).toEqual(['a1'])
   expect(await readAll(mod!.history.messages({ session: 'older' }))).toEqual(['o1'])
   expect(await readAll(mod!.history.messages({ last: 1 }))).toEqual(['m2'])
+  expect(await readAll(mod!.history.messages({ subagents: true }))).toEqual(['m1', 'm2', 'a1'])
 })
 
 test('mod.history.messages with follow yields each message saved after the event that adds it', async () => {
@@ -1099,6 +1100,9 @@ test('mod.history.search returns every message of the project containing the tex
 
   expect((await mod!.history.search('RENAME')).map((message) => message.id)).toEqual(['m1', 'o1'])
   expect((await mod!.history.search('find the pane')).map((message) => message.id)).toEqual(['a1', 'm2'])
+  expect((await mod!.history.search('find the pane', { limit: 1, before: { session: 'test-session', id: 'a1' } })).map((message) => message.id)).toEqual(['m2'])
+  await expect(mod!.history.search('pa')).rejects.toThrow('cmod history search takes at least 3 characters.')
+  await expect(mod!.history.search('pane', { before: { session: 'test-session', id: 'gone' } })).rejects.toThrow('No indexed message gone is in session test-session.')
   expect((await mod!.history.sessions({ since: '2026-10-11T00:00:00.000Z' })).map((session) => session.id)).toEqual(['test-session'])
 })
 

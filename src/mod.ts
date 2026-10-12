@@ -5,7 +5,7 @@ import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import type { HistoryRequest } from '../node_modules/@cmodjs/core/runtime/history.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { showFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
-import { modsMemory, modsPanel, type ModsState } from './mods.js'
+import { modsMemory, modsPanel, readConsent, type ModsState } from './mods.js'
 
 export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null }; readonly session: { tip: string | null } } & ModsState
 
@@ -28,9 +28,12 @@ function historyArguments(request: HistoryRequest): string[] {
   const scope = (since: string | undefined, everyProject: boolean | undefined) => [...(since === undefined ? [] : ['--since', since]), ...(everyProject === true ? ['--all'] : [])]
   const common = ['--json', '--project', request.project]
   if (request.command === 'sessions') return ['history', 'sessions', ...common, ...scope(request.since, request.everyProject)]
-  if (request.command === 'search') return ['history', 'search', request.text, ...common, ...scope(request.since, request.everyProject)]
-  const { session, agent, after, last, limit } = request
-  return ['history', 'messages', session, ...common, ...(agent === undefined ? [] : ['--agent', agent]), ...(after === undefined ? [] : ['--after', after]), ...(last === undefined ? [] : ['--last', String(last)]), '--limit', String(limit)]
+  if (request.command === 'search') {
+    const { text, since, everyProject, limit, before } = request
+    return ['history', 'search', text, ...common, ...scope(since, everyProject), ...(limit === undefined ? [] : ['--limit', String(limit)]), ...(before === undefined ? [] : ['--before', `${before.session}:${before.id}`])]
+  }
+  const { session, agent, subagents, after, last, limit } = request
+  return ['history', 'messages', session, ...common, ...(agent === undefined ? [] : ['--agent', agent]), ...(subagents === true ? ['--subagents'] : []), ...(after === undefined ? [] : ['--after', after]), ...(last === undefined ? [] : ['--last', String(last)]), '--limit', String(limit)]
 }
 
 async function runCmod(mod: Mod<CmodPluginState>, args: readonly string[]): Promise<string> {
@@ -96,7 +99,9 @@ export const cmodPlugin = defineMod({
       }),
     )
 
-    void runCmod(mod, ['history', 'index']).catch((error: unknown) => mod.claude.ui.log(`cmod: ${messageOf(error)}`, { to: 'debug' }))
+    void readConsent(mod)
+      .then((consent) => (Object.values(consent).some((granted) => granted.includes('conversation')) ? runCmod(mod, ['history', 'index']) : undefined))
+      .catch((error: unknown) => mod.claude.ui.log(`cmod: ${messageOf(error)}`, { to: 'debug' }))
 
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })

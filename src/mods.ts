@@ -33,10 +33,15 @@ const tabs: readonly { readonly key: Tab; readonly label: string }[] = [
   { key: 'pages', label: 'Pages' },
 ]
 
+export async function readConsent<State extends object>(mod: Mod<State>): Promise<ReturnType<typeof parseConsent>> {
+  const path = consentPath(storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() }))
+  return (await mod.fs.exists(path)) ? parseConsent(JSON.parse(await mod.fs.read(path)), path) : {}
+}
+
 export function modsPanel<State extends ModsState>(mod: Mod<State>) {
   const load = async (): Promise<readonly ModView[]> => {
     const store = storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() })
-    const consent = (await mod.fs.exists(consentPath(store))) ? parseConsent(JSON.parse(await mod.fs.read(consentPath(store))), consentPath(store)) : {}
+    const consent = await readConsent(mod)
     const rows = await mod.claude.config.list()
     const enabledPlugins = (await mod.claude.settings.read())['enabledPlugins']
     const turnedOff = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {})

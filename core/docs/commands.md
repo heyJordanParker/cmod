@@ -78,7 +78,7 @@ Starts one throwaway Claude Code session with mods set up, for trying a mod by h
   - `ANTHROPIC_CONFIG_DIR` points at your `~/.config/anthropic` login profiles, and `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` pass through.
 - The session keeps how Claude Code reaches the model and what it must never do, so a try is as safe as your own session. From your `settings.json` it keeps `env` (a proxy or `ANTHROPIC_BASE_URL`, without `cmod link`'s `CLAUDE_CODE_PLUGIN_DIRS`), the credential helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`), the login pins (`forceLoginMethod`, `forceLoginOrgUUID`, `forceLoginGatewayUrl`, `gatewayInternalNetworks`), `sandbox`, and `permissions.deny`. From `~/.claude.json` it keeps your account and the API keys you approved. A `~/` in a helper still means your own home. Hooks, plugins, allow rules, the model, and every other preference stay behind. Managed settings apply as always.
 - `--home <folder>` runs in that folder and keeps it, so the next `cmod try --home <folder>` starts from it. `--home ~` runs in your own home, with your settings and mods.
-- Unlike `cmod link`, it builds no program from `cli/`. A mod whose `package.json` `cmod.program` names a program downloads it from the GitHub release of the mod's version, so it fails until `cmod publish` has released that version.
+- A checkout's program is built from its `cli/` the way `cmod link` builds it, with your own home and environment, so the build finds your toolchains and caches. A GitHub mod's program downloads from the GitHub release of the mod's version, so it fails until `cmod publish` has released that version.
 - When the session ends, even when its terminal closes, it runs each mod's uninstall step and deletes its record, data folder, approval, key bindings, and program, so the mod stays uninstalled. A checkout already set up from the same folder keeps its setup.
 - A GitHub mod is cloned into a temporary folder, which is deleted too.
 - A mod another folder has set up in that home is refused, so `cmod try` never replaces an installed copy.
@@ -178,18 +178,18 @@ Lists every plugin Claude Code has installed or linked, with its version. A mod 
 
 ```text
 cmod history sessions [--all] [--since 2d] [--project <folder>] [--json]
-cmod history messages [<session>] [--agent <id>] [--last <n>] [--after <id>] [--limit <n>] [--follow] [--json]
-cmod history search <text> [--all] [--since 2d] [--project <folder>] [--json]
+cmod history messages [<session>] [--agent <id> | --subagents] [--last <n>] [--after <id>] [--limit <n>] [--follow] [--json]
+cmod history search <text> [--all] [--since 2d] [--project <folder>] [--limit <n>] [--before <session>:<id>] [--json]
 cmod history index
 ```
 
 Reads every conversation Claude Code saved, as the sessions and messages `mod.history` answers ([mod.md](mod.md#mod-history)), so a person or an agent reads them in a terminal without parsing a transcript.
 
 - `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, and `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`.
-- `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--agent` reads one of its subagents' conversations, `--last` starts that many messages from the end, `--after` starts after a message id, `--limit` stops after that many, and `--follow` keeps printing new messages as they are saved.
-- `search` prints every message whose text or tool input contains the text, any case, newest first, with its time and session.
+- `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--agent` reads one of its subagents' conversations, `--subagents` reads the conversation with every subagent's in the order they were saved, `--last` starts that many messages from the end, `--after` starts after a message id, `--limit` stops after that many, and `--follow` keeps printing new messages as they are saved.
+- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters. `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before.
 - `--json` prints the sessions or messages as JSON instead of one line each.
-- `index` reads every saved conversation into the index at `~/.local/share/cmod/history.sqlite`. The cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-2.sqlite`, which holds where each message is in its transcript, not a copy of it. While a mod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 ## Run in an install script
 

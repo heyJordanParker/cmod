@@ -271,8 +271,10 @@ test('cmod.call denies a call no mod takes with the install command', async () =
   expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Run cmod install tracer.' })
 })
 
-function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>) {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'] } } })
+const readingConsent = { [`${store}/consent.json`]: JSON.stringify({ recall: ['conversation'], notes: ['prompt'] }) }
+
+function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = readingConsent) {
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'] } }, files })
   const spawned: string[][] = []
   const sessions: (string | undefined)[] = []
   tested.fakes.process.spawn = (request) => {
@@ -289,20 +291,32 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
   return { tested, spawned, sessions }
 }
 
-test('the history call runs cmod history in this session with the request as flags and answers its JSON, and the session start indexes in the background', async () => {
+test('the history call runs cmod history in this session with the request as flags and answers its JSON, and the session start indexes in the background while a mod reads conversations', async () => {
   const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z' }
-  const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' } })
+  const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' }, 'history search': { code: 0, stdout: '[]\n' } })
   const history = (input: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'history', input })
 
   expect(await history({ command: 'sessions', project: '/work/app', since: '2d', everyProject: true })).toEqual({ value: [session] })
   expect(await history({ command: 'messages', project: '/work/app', session: 's1', agent: 'a7', after: 'm9', limit: 100 })).toEqual({ value: [] })
+  expect(await history({ command: 'messages', project: '/work/app', session: 's1', subagents: true, limit: 100 })).toEqual({ value: [] })
+  expect(await history({ command: 'search', project: '/work/app', text: 'deploy', limit: 20, before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
 
   expect(spawned).toEqual([
     ['cmod', 'history', 'index'],
     ['cmod', 'history', 'sessions', '--json', '--project', '/work/app', '--since', '2d', '--all'],
     ['cmod', 'history', 'messages', 's1', '--json', '--project', '/work/app', '--agent', 'a7', '--after', 'm9', '--limit', '100'],
+    ['cmod', 'history', 'messages', 's1', '--json', '--project', '/work/app', '--subagents', '--limit', '100'],
+    ['cmod', 'history', 'search', 'deploy', '--json', '--project', '/work/app', '--limit', '20', '--before', 's1:m9'],
   ])
-  expect(sessions).toEqual(['test-session', 'test-session', 'test-session'])
+  expect(sessions).toEqual(['test-session', 'test-session', 'test-session', 'test-session', 'test-session'])
+})
+
+test('the session start builds no history index while no mod reads conversations', async () => {
+  const { tested, spawned } = cmodAnswering({}, { [`${store}/consent.json`]: JSON.stringify({ notes: ['prompt'] }) })
+  await tested.start()
+  await tested.settle()
+
+  expect(spawned).toEqual([])
 })
 
 test("the updateSettings call runs cmod settings for the mod, and a refusal comes back as the deny with cmod's last error line", async () => {
