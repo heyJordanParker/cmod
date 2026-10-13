@@ -4,6 +4,7 @@ import { installPackages, readPlugin } from '../plugin.js'
 import { installProgram, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { addPluginFolder, settingsPath } from '../settings.js'
+import { findPlugin } from '../claude.js'
 import { installCmodPlugin, setOptions } from './install.js'
 import { noteNextStep, setupInTerminal } from './setup.js'
 
@@ -41,7 +42,7 @@ export async function run(argv: string[]): Promise<number> {
 
   const added = await addPluginFolder(plugin.root)
   progress.succeed(`${added ? 'Linked' : 'Already linked'} ${tilde(plugin.root)} in ${tilde(settingsPath())}`)
-  await setOptions(plugin.name, plugin.root, values.option ?? [], progress)
+  if (values.option !== undefined) await setOptions(await findPlugin(plugin.root), values.option, progress)
 
   const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
   if (code === 0) noteNextStep(plugin, progress)

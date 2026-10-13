@@ -1,6 +1,6 @@
 # State
 
-`mod.state` holds the mod's values. Claude Mod Manager (cmod) saves them, redraws the mod's panes and slot renders when one changes, and lets a person change the starting values without touching the mod's code.
+`mod.state` holds the mod's values. Claude Mod Manager (cmod) saves them, redraws the mod's panes and renders when one changes, and lets a person change the starting values without touching the mod's code.
 
 ## Declare the state
 
@@ -42,14 +42,14 @@ export const initialState: TasksState = {
 Then pass it to `defineMod`:
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
 import { initialState } from './state.js'
 
 export const tasks = defineMod({
   name: 'tasks',
   state: initialState,
   setup(mod) {
-    mod.on('UserPromptSubmit', () => {
+    mod.on(UserPromptSubmit, () => {
       mod.state.session.prompts += 1
     })
   },
@@ -66,13 +66,13 @@ Assign to a key. cmod saves the new value and redraws the mod.
 - An object or an array in the state is frozen. Changing it in place throws `<mod>: mod.state.<path> cannot change in place.` Assign a new value instead:
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, PostToolUse } from '../node_modules/@cmodjs/core/mod.js'
 
 export const reads = defineMod({
   name: 'reads',
   state: { memory: { readFiles: [] as readonly string[] } },
   setup(mod) {
-    mod.on('PostToolUse', (input) => {
+    mod.on(PostToolUse, (input) => {
       mod.state.memory.readFiles = [...mod.state.memory.readFiles, ...input.files.read]
     })
   },

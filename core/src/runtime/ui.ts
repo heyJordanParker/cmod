@@ -1,9 +1,9 @@
 import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement } from 'claude-code'
-import type { Mod, PaneHandle } from '../mod.js'
+import type { Disposable, Mod, PaneHandle } from '../mod.js'
 import type { Pane } from '../ui/define-pane.js'
 import { Box, drawWith, Text } from '../ui/elements.js'
-import type { MarkdownKind, MarkdownReader } from '../ui/markdown.js'
-import type { Slot, SlotProps } from '../ui/slots.js'
+import type { MarkdownReader } from '../ui/markdown.js'
+import { componentOf, nameOf, type Place, type PlaceProps } from '../ui/places.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import type { Router } from './router.js'
@@ -98,7 +98,7 @@ export type UiOptions<State extends object> = {
 }
 
 export type UiArea<State extends object> = {
-  readonly ui: Mod<State>['ui']
+  readonly ui: Omit<Mod<State>['ui'], 'notice'>
   changed(): void
   restorePanes(): Promise<void>
 }
@@ -145,9 +145,9 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
     }
   }
 
-  const routeMarkdown = (kind: MarkdownKind) => {
+  const routeMarkdown = (createReader: () => MarkdownReader) => {
     if (read !== undefined) return
-    const reader = kind.createReader()
+    const reader = createReader()
     read = reader
     router.add('ui.render', async (e, next) => {
       if (e.component !== 'AssistantMessage') return next(e)
@@ -253,26 +253,34 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
         }
         return handle
       },
-      render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement) {
-        const place: Slot = slot
-        const feature = 'markdown' in place ? `a render of markdown ${place.markdown.name}` : `a render of ${place.component}`
-        if (renders.has(feature)) throw new Error(`${name}: ${feature} is already added. Render each slot once.`)
+      render<P extends Place>(place: P, Component: (props: PlaceProps<P>) => RenderElement): Disposable {
+        const target: Place = place
+        const markdown = typeof target === 'string' ? undefined : target
+        const component = componentOf(place)
+        if (markdown === undefined && component === undefined) throw new Error(`${name}: ${String(place)} is not a place render draws, such as ToolCall or CodeBlock.`)
+        const feature = `a render of ${nameOf(place)}`
+        if (renders.has(feature)) throw new Error(`${name}: ${feature} is already added. Render each place once.`)
         renders.add(feature)
         announce(feature)
-        if ('markdown' in place) {
-          const kind = place.markdown
-          markdownRenders.set(kind.type, { Component: Component as unknown as MarkdownRender['Component'], log: logOnce(`markdown ${kind.name}`) })
-          routeMarkdown(kind)
-          return
+        if (markdown !== undefined) {
+          const markdownType = markdown.markdown
+          markdownRenders.set(markdownType, { Component: Component as unknown as MarkdownRender['Component'], log: logOnce(nameOf(place)) })
+          routeMarkdown(markdown.createReader)
+          return {
+            dispose() {
+              markdownRenders.delete(markdownType)
+              renders.delete(feature)
+              claude.ui.invalidate('ui.render')
+            },
+          }
         }
-        const { component } = place
-        const log = logOnce(component)
-        router.add('ui.render', async (e, next) => {
+        const log = logOnce(nameOf(place))
+        const drawing = router.add('ui.render', async (e, next) => {
           if (e.component !== component) return next(e)
           const table = claude.ui.resolve(e)
           const drawn = await drawComponent(
             table,
-            (Default) => Component({ ...e.props, Default } as unknown as SlotProps<S>),
+            (Default) => Component({ ...e.props, Default } as unknown as PlaceProps<P>),
             (given, isClaudesRow) => next({ ...e, props: pieceProps(e.props, given, isClaudesRow) } as typeof e),
           )
           if ('failure' in drawn) {
@@ -282,6 +290,13 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
           if (e.component !== 'AssistantMessage') return drawn.drawing
           return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
         })
+        return {
+          dispose() {
+            drawing.dispose()
+            renders.delete(feature)
+            claude.ui.invalidate('ui.render')
+          },
+        }
       },
       toast: toaster.toast,
       copy: toaster.copy,

@@ -21,7 +21,8 @@ ${summary}
 
 Refuses a machine its package.json "os" and "cpu" leave out. Downloads
 the program its package.json "cmod.program" names, which Claude Code
-then runs by its name, and links it into ~/.local/bin for a terminal,
+then runs by its name, or builds it from the checkout's cli/ when cmod link
+loaded the mod, and links it into ~/.local/bin for a terminal,
 runs the mod's install step from its package.json "cmod" key,
 saves its uninstall step, binds the keys its "cmod.keys" names in Claude
 Code's keybindings.json, and records the mod as set up. A key you already
@@ -68,7 +69,7 @@ async function setupWithEvents(root: string, consent: string | undefined): Promi
   try {
     const plugin = await readPlugin(root)
     const code = await runSetup(plugin, consent, printEvent)
-    if (code === 0) printEvent({ kind: 'done', name: plugin.name, version: plugin.version })
+    if (code === 0) printEvent({ type: 'done', name: plugin.name, version: plugin.version })
     return code
   } catch (error) {
     return printFailure(error)
@@ -80,7 +81,7 @@ export function printEvent(event: RunnerEvent): void {
 }
 
 export function printFailure(error: unknown): number {
-  printEvent({ kind: 'failed', code: 1, message: messageOf(error) })
+  printEvent({ type: 'failed', code: 1, message: messageOf(error) })
   return 1
 }
 
@@ -98,9 +99,9 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
     }
     progress.step(heading)
     code = await runSetup(plugin, needsConsent ? sha256 : undefined, (event) => {
-      if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
-      if (event.kind === 'log') progress.log(event.text)
-      if (event.kind === 'failed') Object.assign(failure, event)
+      if (event.type === 'progress') progress.update(heading, event.done, event.total, event.label)
+      if (event.type === 'log') progress.log(event.text)
+      if (event.type === 'failed') Object.assign(failure, event)
     })
   }
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
@@ -164,7 +165,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
   const state = await checkSetup(plugin)
   if (state.isCurrent) return 0
   if (state.needsConsent && consent !== state.sha256) {
-    emit({ kind: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys), permissions: state.missing })
+    emit({ type: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys), permissions: state.missing })
     return 10
   }
   if (hold.signal !== undefined) return 1
@@ -197,18 +198,18 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
     if (install !== undefined) {
       const environment = await stepEnvironment(plugin.root, plugin.name, plugin.version)
       const result = await runStep(['sh', '-c', install], plugin.root, environment, (event) =>
-        emit(event.kind === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
+        emit(event.type === 'progress' ? { ...event, done: event.done + counted, total: event.total + counted } : event),
       )
       if (result.exitCode !== 0) {
         const sentences = [`The install step of ${plugin.name} ${formatExit(result.exitCode, result.lastError)}.`]
         if (uninstall !== undefined && previous === undefined) {
           const undone = await runStep(uninterruptible(['sh', '-c', uninstall]), plugin.root, environment, (event) => {
-            if (event.kind === 'log') emit(event)
+            if (event.type === 'log') emit(event)
           })
-          if (undone.exitCode === 0) emit({ kind: 'log', text: `The uninstall step of ${plugin.name} undid the install.` })
+          if (undone.exitCode === 0) emit({ type: 'log', text: `The uninstall step of ${plugin.name} undid the install.` })
           else sentences.push(`The uninstall step then ${formatExit(undone.exitCode, undone.lastError)}, so parts of the install may remain.`)
         }
-        emit({ kind: 'failed', code: result.exitCode, message: sentences.join(' ') })
+        emit({ type: 'failed', code: result.exitCode, message: sentences.join(' ') })
         return 1
       }
     }
@@ -221,7 +222,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
     await unbindKeys(previous?.keys ?? {})
     const keys = await bindKeys(plugin.steps.keys ?? {})
     bound = keys.bound
-    for (const text of keys.kept) emit({ kind: 'log', text })
+    for (const text of keys.kept) emit({ type: 'log', text })
     await writeRecord(writeAtomically, store, {
       name: plugin.name,
       version: plugin.version,
@@ -235,7 +236,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
     isRecorded = true
     if (state.updates !== undefined) {
       await turnOnUpdates(state.updates)
-      emit({ kind: 'log', text: `${plugin.name} now updates automatically from the ${state.updates} marketplace. Turn it off in /plugin, Marketplaces.` })
+      emit({ type: 'log', text: `${plugin.name} now updates automatically from the ${state.updates} marketplace. Turn it off in /plugin, Marketplaces.` })
     }
   } finally {
     if (!isRecorded) {

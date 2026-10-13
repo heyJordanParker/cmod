@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { Args } from 'claude-code'
 import { statusLine } from '../../src/jobs/status-line.js'
-import { defineMod } from '../../src/mod.js'
+import { defineMod, fs } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 const measured: Args<'session.measure'> = { context: { window: 200000 }, rateLimits: [], changed: ['cost'] }
@@ -79,17 +79,17 @@ test('a text that throws keeps the last line and writes one debug line', async (
   await tested.settle()
 
   expect(tested.shown.statuses).toEqual(['main'])
-  expect(tested.shown.logs).toEqual(['branch-line added a status line.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a status line.')
   expect(tested.shown.debug).toEqual(['branch-line: the status line kept its last text: git timed out'])
 })
 
-test('a file read in text that passes the 2 s deadline keeps the line hidden and names the deadline in the debug line', async () => {
+test('a text that passes the 2 s deadline keeps the line hidden and names the deadline in the debug line', async () => {
   const deadlines: number[] = []
   const tested = testMod(
     defineMod({
       name: 'branch-line',
       setup(mod) {
-        mod.use(statusLine({ text: async (_usage, { fs }) => (await fs.read('.git/HEAD')).trim() }))
+        mod.use(statusLine({ text: async () => (await fs.read('.git/HEAD')).trim() }))
       },
     }),
   )
@@ -104,7 +104,7 @@ test('a file read in text that passes the 2 s deadline keeps the line hidden and
 
   expect(deadlines).toEqual([2000])
   expect(tested.shown.statuses).toEqual([])
-  expect(tested.shown.debug).toEqual(['branch-line: the status line kept its last text: mod.fs.read passed the 2 s deadline of statusLine'])
+  expect(tested.shown.debug).toEqual(['branch-line: the status line kept its last text: the status line passed the 2 s deadline of statusLine'])
 })
 
 test('a second statusLine in one mod throws in setup', async () => {

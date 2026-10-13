@@ -1,7 +1,9 @@
 import { permissionWords } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import type { Claude } from './claude.js'
+import { cmodPluginName } from './dependencies.js'
 import type { RoutedEvent } from './hooks.js'
+import { conversationMethods } from './sessions.js'
 
 export type Grants = {
   readonly name: string
@@ -31,6 +33,19 @@ const startsTurns: readonly string[] = ['CronCreate']
 
 const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
 
+const conversationCalls: Readonly<Record<string, string>> = {
+  [conversationMethods.sessions]: 'sessions.list',
+  [conversationMethods.search]: 'sessions.search',
+  [conversationMethods.messages]: 'messages',
+  [conversationMethods.turns]: 'turns',
+  [conversationMethods.contexts]: 'contexts',
+  [conversationMethods.tasks]: 'tasks',
+  [conversationMethods.goal]: 'goal',
+  [conversationMethods.updateGoal]: 'goal.update',
+  [conversationMethods.subscribe]: 'on',
+  [conversationMethods.send]: 'send',
+}
+
 export async function checkGrant(grants: Grants, call: string, item: string | undefined): Promise<void> {
   if (item === undefined) return
   await grants.refresh()
@@ -41,8 +56,8 @@ export async function checkWrite(grants: Grants, call: string, path: string): Pr
   await checkGrant(grants, call, writeItem(grants, path))
 }
 
-export async function checkSettings(grants: Grants, keys: readonly string[]): Promise<void> {
-  for (const key of keys) await checkGrant(grants, `settings.update(${key})`, `config:${key}`)
+export async function checkSettings(grants: Grants, source: 'user' | 'project' | 'local', keys: readonly string[]): Promise<void> {
+  for (const key of keys) await checkGrant(grants, `settings.${source}.update(${key})`, `config:${key}`)
 }
 
 export function checkingGrants(claude: Claude, grants: Grants): Claude {
@@ -83,14 +98,25 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
         return claude.session.messages(...args)
       }) as Claude['session']['messages'],
       append: async (args: Parameters<Claude['session']['append']>[0]) => {
-        await gate('session.append', 'prompt')
+        await gate('send', 'prompt')
         return claude.session.append(args)
+      },
+      send: async (args: Parameters<Claude['session']['send']>[0]) => {
+        await gate('send', 'prompt')
+        return claude.session.send(args)
       },
     },
     prompt: {
       submit: async (args: Parameters<Claude['prompt']['submit']>[0]) => {
-        await gate('session.submit', 'prompt')
+        await gate('send', 'prompt')
         return claude.prompt.submit(args)
+      },
+    },
+    cmod: {
+      async call(args) {
+        const named = args.to === cmodPluginName ? conversationCalls[args.method] : undefined
+        if (named !== undefined) await gate(named, args.method === conversationMethods.send ? 'prompt' : 'conversation')
+        return claude.cmod.call(args)
       },
     },
     model: {
@@ -102,7 +128,7 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     agent: {
       ...claude.agent,
       async spawn(args) {
-        await gate('agent.spawn', 'agents')
+        await gate('startTask', 'tasks')
         return claude.agent.spawn(args)
       },
     },
@@ -159,7 +185,7 @@ function writeItem(grants: Grants, path: string): string | undefined {
   const root = grants.projectRoot()
   const settingsFiles = [...projectSettingsFiles.map((file) => `${root}/${file}`), ...(grants.configRoot === undefined ? [] : [`${grants.configRoot}/settings.json`])]
   if (settingsFiles.includes(path)) {
-    throw new PermissionRefused(`${grants.name} writes ${path} by hand. Change Claude Code's settings with mod.claude.settings.update, which keeps the person's own edits and takes the mod's values out when it is removed.`)
+    throw new PermissionRefused(`${grants.name} writes ${path} by hand. Change Claude Code's settings with settings.user.update, settings.project.update, or settings.local.update, which keep the person's own edits and take the mod's values out when it is removed.`)
   }
   if (grants.freeFolders().some((folder) => relativePath(folder, path) !== undefined)) return undefined
   return `files:${path}`

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { slashCommand } from '../../src/jobs/slash-command.js'
-import { defineMod } from '../../src/mod.js'
+import { defineMod, http } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 test('/tree a b reaches reply with the args and their words, and the string reply is shown', async () => {
@@ -28,7 +28,7 @@ test('/tree a b reaches reply with the args and their words, and the string repl
   expect(seen).toEqual([{ args: 'a b', positionals: ['a', 'b'] }])
   expect(answer).toEqual({ text: 'Showing 2 folders' })
   expect(tested.shown.commands).toEqual(['tree'])
-  expect(tested.shown.logs).toEqual(['file-tree added /tree.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds /tree.')
 })
 
 test("reply gets the mod's own typed state, so a command counts its runs without capturing the mod from setup", async () => {
@@ -84,7 +84,7 @@ test('a command of another plugin passes on, and a reply that throws shows /<nam
   expect(await tested.type('/tree')).toEqual({ text: '/tree failed: git is not installed' })
 })
 
-test('a fetch in reply that passes the 30 s deadline shows /<name> failed with the call, the deadline, and the job', async () => {
+test('a reply that passes the 30 s deadline shows /<name> failed with the deadline and the job', async () => {
   const deadlines: number[] = []
   const tested = testMod(
     defineMod({
@@ -94,7 +94,7 @@ test('a fetch in reply that passes the 30 s deadline shows /<name> failed with t
           slashCommand({
             name: 'weather',
             description: 'Show the weather',
-            reply: async (_input, { http }) => (await http.fetch('https://weather.example/today')).text,
+            reply: async () => (await http.fetch('https://weather.example/today')).text,
           }),
         )
       },
@@ -108,6 +108,6 @@ test('a fetch in reply that passes the 30 s deadline shows /<name> failed with t
     return { cancel: () => undefined }
   }
 
-  expect(await tested.type('/weather')).toEqual({ text: '/weather failed: mod.http.fetch passed the 30 s deadline of slashCommand' })
+  expect(await tested.type('/weather')).toEqual({ text: '/weather failed: /weather passed the 30 s deadline of slashCommand' })
   expect(deadlines).toEqual([30000])
 })

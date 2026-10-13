@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { EngineCreateResult, HookStream, On, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import { PreToolUse, SessionStart, Stop, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
@@ -24,13 +25,13 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Ready' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the Mods pane, /mods and hooks on SessionStart, UserPromptSubmit, Stop and StopFailure.\nInstalled the cmod program.\nRun cmod on your computer.\nRead your Claude Code conversations.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled', description: 'A session that still runs it stops after /reload-plugins.' } as const
 
 test("a removed enabledPlugins key runs cmod teardown --events with that plugin's name, and the uninstall toast tells the user to reload", async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'progress 1 1 Removing the alias\ndone four-step\n', stderr: '' } })
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
   expect(tested.shown.toasts).toEqual([ready, uninstalled])
@@ -39,7 +40,7 @@ test("a removed enabledPlugins key runs cmod teardown --events with that plugin'
 
 test('a removal noticed at session start toasts that a session still running it stops after /reload-plugins', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'done four-step\n', stderr: '' } })
-  await tested.fire('SessionStart', { source: 'startup' })
+  await tested.fire(SessionStart, { source: 'startup' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
   expect(tested.shown.toasts).toEqual([ready, uninstalled])
@@ -48,7 +49,7 @@ test('a removal noticed at session start toasts that a session still running it 
 test('the cmod plugin tears down only keys removed from user settings', async () => {
   const user = { 'cmod@fixtures': true, 'four-step@fixtures': true }
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], user, {}, { 'cmod@fixtures': true, 'project-mod@team': true })
-  await tested.fire('SessionStart', { source: 'startup' })
+  await tested.fire(SessionStart, { source: 'startup' })
   await settled()
   expect(teardowns).toEqual([])
   expect(tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
@@ -56,7 +57,7 @@ test('the cmod plugin tears down only keys removed from user settings', async ()
 
 test('a key set to false runs nothing', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true, 'four-step@fixtures': false })
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual([])
   expect(tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
@@ -64,7 +65,7 @@ test('a key set to false runs nothing', async () => {
 
 test('a tool call reads no settings and tears nothing down', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
-  await tested.fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
+  await tested.fire(PreToolUse, { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
   await settled()
   expect(tested.calls.filter((call) => call.call === 'settings.read')).toEqual([])
   expect(teardowns).toEqual([])
@@ -72,7 +73,7 @@ test('a tool call reads no settings and tears nothing down', async () => {
 
 test('the first snapshot after install removes nothing', async () => {
   const { tested, teardowns } = testRemovals(null, { 'cmod@fixtures': true })
-  await tested.fire('SessionStart', { source: 'startup' })
+  await tested.fire(SessionStart, { source: 'startup' })
   await settled()
   expect(teardowns).toEqual([])
   expect(tested.state.global.installedPlugins).toEqual(['cmod'])
@@ -80,7 +81,7 @@ test('the first snapshot after install removes nothing', async () => {
 
 test('a removed plugin that is not a cmod mod answers missing and shows nothing', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'other-plugin'], { 'cmod@fixtures': true })
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown other-plugin --events'])
   expect(tested.shown.toasts).toEqual([ready])
@@ -91,12 +92,12 @@ test('a failed removal is not retried in the next session and its toast names th
   const message = 'The uninstall step of four-step exited 2: zsh: no such file: ~/.zshrc.d/four-step. Fix ~/.local/share/cmod/uninstall/four-step/uninstall.sh, then run cmod teardown four-step.'
   const failed = { 'four-step': { exitCode: 1, stdout: `log removing the alias\nfailed 2\t${message}\n`, stderr: '' } }
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, failed)
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   await settled()
   expect(tested.shown.toasts).toEqual([ready, { type: 'error', message: 'Could not uninstall four-step', description: message }])
 
   const next = testRemovals(tested.state.global.installedPlugins, { 'cmod@fixtures': true }, failed)
-  await next.tested.fire('SessionStart', { source: 'startup' })
+  await next.tested.fire(SessionStart, { source: 'startup' })
   await settled()
   expect(next.teardowns).toEqual([])
   expect(next.tested.shown.toasts).toEqual([ready])
@@ -105,12 +106,12 @@ test('a failed removal is not retried in the next session and its toast names th
 test('a removal interrupted before its teardown answers is torn down by the next session', async () => {
   const interrupted = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
   interrupted.tested.fakes.process.run = () => new Promise(() => {})
-  await interrupted.tested.fire('SessionStart', { source: 'startup' })
+  await interrupted.tested.fire(SessionStart, { source: 'startup' })
   await settled()
   expect(interrupted.tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
 
   const next = testRemovals(interrupted.tested.state.global.installedPlugins, { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'done four-step\n', stderr: '' } })
-  await next.tested.fire('SessionStart', { source: 'startup' })
+  await next.tested.fire(SessionStart, { source: 'startup' })
   await settled()
   expect(next.teardowns).toEqual(['cmod teardown four-step --events'])
   expect(next.tested.state.global.installedPlugins).toEqual(['cmod'])
@@ -122,22 +123,22 @@ test('a prompt while a removal is pending starts no second teardown in the same 
     teardowns.push(argv.join(' '))
     return new Promise(() => {})
   }
-  await tested.fire('SessionStart', { source: 'startup' })
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(SessionStart, { source: 'startup' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
 })
 
 test('a teardown that fails before any event shows its last line of standard error', async () => {
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 1, stdout: '', stderr: 'cmod teardown: records/four-step.json is not JSON\n' } })
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   await settled()
   expect(tested.shown.toasts).toEqual([ready, { type: 'error', message: 'Could not uninstall four-step', description: 'cmod teardown exited 1: records/four-step.json is not JSON' }])
 })
 
 const store = '/test/home/.local/share/cmod'
 
-function testPanel() {
+function testPanel(files: Readonly<Record<string, string>> = {}) {
   const tested = testMod(cmodPlugin, {
     state: { global: { installedPlugins: [] } },
     files: {
@@ -145,6 +146,7 @@ function testPanel() {
       [`${store}/consent.json`]: JSON.stringify({ 'ci-watch': ['network:api.github.com'] }),
       '/plugins/ci-watch/package.json': JSON.stringify({ cmod: { permissions: { network: ['api.github.com'], model: true } } }),
       '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0', description: 'Tells you when CI fails on your branch' }),
+      ...files,
     },
   })
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': true } })
@@ -186,6 +188,41 @@ test('/mods lists each set-up mod with its options, permissions, keys, and pages
   expect(permissions).toContain('[ ] Ask a model, which uses your plan')
   expect(keys).toContain('ctrl+l')
   expect(pages).toContain('Runs')
+})
+
+const changelog = '# Changelog\n\n## [Unreleased]\n\n- Watches merge queues.\n\n## [0.2.0] - 2026-10-13\n\n### Added\n- CI failures on your branch.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
+
+test('/mods ci-watch changelog opens the Changelog page at the installed version, one block per version', async () => {
+  const { tested } = testPanel({ '/plugins/ci-watch/CHANGELOG.md': changelog })
+
+  await tested.type('/mods ci-watch changelog')
+  await tested.settle()
+  const page = (await tested.lines('mods')).join('\n')
+
+  expect(tested.shown.openPanes.has('mods')).toBe(true)
+  expect(page).toContain('0.2.0 · 2026-10-13 · installed')
+  expect(page).toContain('CI failures on your branch.')
+  expect(page).toContain('Unreleased')
+  expect(page).toContain('0.1.0 · 2026-09-30')
+  expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args[0])).toEqual([{ to: { key: 'changelog:0.2.0' }, block: 'start' }])
+})
+
+test('/mods shows no Changelog tab for a mod without CHANGELOG.md', async () => {
+  const { tested } = testPanel()
+
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  expect((await tested.lines('mods')).join('\n')).not.toContain('Changelog')
+})
+
+test('a checkout whose version has no changelog section yet opens the Changelog page at Unreleased', async () => {
+  const { tested } = testPanel({ '/plugins/ci-watch/CHANGELOG.md': changelog.replace('## [0.2.0] - 2026-10-13', '## [0.1.5] - 2026-10-01') })
+
+  await tested.type('/mods ci-watch changelog')
+  await tested.settle()
+
+  expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args[0])).toEqual([{ to: { key: 'changelog:Unreleased' }, block: 'start' }])
 })
 
 test('a /mods permission toggle runs cmod permission, and an option saves through cmod option', async () => {
@@ -274,7 +311,7 @@ test('cmod.call denies a call no mod takes with the install command', async () =
 const readingConsent = { [`${store}/consent.json`]: JSON.stringify({ recall: ['conversation'], notes: ['prompt'] }) }
 
 function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = readingConsent) {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'] } }, files })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'] } }, files, projectRoot: '/work/app' })
   const spawned: string[][] = []
   const sessions: (string | undefined)[] = []
   tested.fakes.process.spawn = (request) => {
@@ -291,28 +328,38 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
   return { tested, spawned, sessions }
 }
 
-test('the history call runs cmod history in this session with the request as flags and answers its JSON, and the session start indexes in the background while a mod reads conversations', async () => {
-  const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z' }
-  const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' }, 'history search': { code: 0, stdout: '[]\n' } })
-  const history = (input: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'history', input })
+const askCmod = (tested: ReturnType<typeof cmodAnswering>['tested'], caller: string, method: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method, input, caller } as never)
 
-  expect(await history({ command: 'sessions', project: '/work/app', since: '2d', everyProject: true })).toEqual({ value: [session] })
-  expect(await history({ command: 'messages', project: '/work/app', session: 's1', agent: 'a7', after: 'm9', limit: 100 })).toEqual({ value: [] })
-  expect(await history({ command: 'messages', project: '/work/app', session: 's1', subagents: true, limit: 100 })).toEqual({ value: [] })
-  expect(await history({ command: 'search', project: '/work/app', text: 'deploy', limit: 20, before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
+test("the sessions service runs cmod history in this session with each request as flags for a mod that may read conversations, and the session start indexes them", async () => {
+  const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: false }
+  const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' }, 'history search': { code: 0, stdout: '[]\n' } })
+  await tested.start()
+  await tested.settle()
+
+  expect(await askCmod(tested, 'recall', 'cmod:sessions', { since: '2026-10-09T00:00:00.000Z', everyProject: true, running: true })).toEqual({ value: [session] })
+  expect(await askCmod(tested, 'recall', 'cmod:messages', { session: 's1', task: 'a7', after: 'm9', last: 5 })).toEqual({ value: [] })
+  expect(await askCmod(tested, 'recall', 'cmod:search', { text: 'deploy', limit: 20, before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
 
   expect(spawned).toEqual([
     ['cmod', 'history', 'index'],
-    ['cmod', 'history', 'sessions', '--json', '--project', '/work/app', '--since', '2d', '--all'],
-    ['cmod', 'history', 'messages', 's1', '--json', '--project', '/work/app', '--agent', 'a7', '--after', 'm9', '--limit', '100'],
-    ['cmod', 'history', 'messages', 's1', '--json', '--project', '/work/app', '--subagents', '--limit', '100'],
-    ['cmod', 'history', 'search', 'deploy', '--json', '--project', '/work/app', '--limit', '20', '--before', 's1:m9'],
+    ['cmod', 'history', 'sessions', '--since', '2026-10-09T00:00:00.000Z', '--all', '--running', '--json', '--project', '/work/app'],
+    ['cmod', 'history', 'messages', 's1', '--task', 'a7', '--after', 'm9', '--last', '5', '--json', '--project', '/work/app'],
+    ['cmod', 'history', 'search', 'deploy', '--limit', '20', '--before', 's1:m9', '--json', '--project', '/work/app'],
   ])
-  expect(sessions).toEqual(['test-session', 'test-session', 'test-session', 'test-session', 'test-session'])
+  expect(sessions).toEqual(['test-session', 'test-session', 'test-session', 'test-session'])
 })
 
-test('the session start builds no history index while no mod reads conversations', async () => {
-  const { tested, spawned } = cmodAnswering({}, { [`${store}/consent.json`]: JSON.stringify({ notes: ['prompt'] }) })
+test('the sessions service refuses a mod without the conversation grant, and runs nothing for it', async () => {
+  const { tested, spawned } = cmodAnswering({})
+  await tested.start()
+  await tested.settle()
+
+  expect(await askCmod(tested, 'notes', 'cmod:sessions', {})).toEqual({ deny: 'notes reads your conversations without your grant. Turn it on in /mods notes.' })
+  expect(spawned).toEqual([['cmod', 'history', 'index']])
+})
+
+test("the session start builds no history index while no other mod reads conversations, whatever cmod's own grants say", async () => {
+  const { tested, spawned } = cmodAnswering({}, { [`${store}/consent.json`]: JSON.stringify({ cmod: ['conversation'], notes: ['prompt'] }) })
   await tested.start()
   await tested.settle()
 
@@ -326,7 +373,7 @@ test("the updateSettings call runs cmod settings for the mod, and a refusal come
   expect(await update('notes', { cleanupPeriodDays: 365 })).toEqual({ value: null })
   expect(await update('keeper', { statusLine: null })).toEqual({ deny: 'cmod: keeper has no grant to change statusLine.' })
 
-  expect(spawned.slice(1)).toEqual([
+  expect(spawned.filter((argv) => argv[1] === 'settings')).toEqual([
     ['cmod', 'settings', 'notes', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
     ['cmod', 'settings', 'keeper', 'project', '{"statusLine":null}', '--project', '/work/app'],
   ])
@@ -343,9 +390,9 @@ test('forkParent names the session whose last turn ended on this conversation, a
   expect(await forkParent()).toEqual({ value: null })
 
   tested.fakes.session.messages = (async () => conversation) as unknown as Claude['session']['messages']
-  await tested.fire('Stop', { stop_hook_active: false })
+  await tested.fire(Stop, { stop_hook_active: false })
   await settled()
-  await tested.fire('SessionStart', { source: 'fork', session_id: 'forked-elsewhere' })
+  await tested.fire(SessionStart, { source: 'fork', session_id: 'forked-elsewhere' })
 
   expect(await forkParent()).toEqual({ value: 'test-session' })
 })

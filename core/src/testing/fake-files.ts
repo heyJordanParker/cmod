@@ -36,7 +36,7 @@ export function fakeFiles(files: Readonly<Record<string, string>>, links: Readon
       modified.set(realPath, writes)
     },
     list: async (path) => {
-      if (path === undefined) throw new Error('fs.list() lists the working folder, which the fake files do not know. Name the folder, such as fs.list(mod.cwd).')
+      if (path === undefined) throw new Error('fs.list() lists the working folder, which the fake files do not know. Name the folder, such as fs.list(sessions.current.cwd).')
       const folder = realPathOf(path)
       if (kindOf(folder) !== 'dir') throw new Error(`ENOENT: no such directory, list '${path}'`)
       const names = new Set(below(folder).map((file) => file.split('/')[0] as string))

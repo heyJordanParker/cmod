@@ -1,37 +1,36 @@
 import { expect, test } from 'bun:test'
 import type { RenderElement, RenderPropsOf } from 'claude-code'
-import { defineMod, type Mod } from '../../src/mod.js'
+import { AbovePrompt, defineMod, Reply, SessionMode, ToolCall, TurnDuration, type Mod, type Place } from '../../src/mod.js'
+import { Heading } from '../../src/ui/markdown.js'
 import { testMod } from '../../src/testing.js'
 import { textOf } from '../../src/testing/fake-elements.js'
 import { Progress } from '../../src/ui/components.js'
 import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Button, Text } from '../../src/ui/elements.js'
-import { markdownSlots } from '../../src/ui/markdown.js'
-import { type Slot, slots } from '../../src/ui/slots.js'
 
 const bashRow: RenderPropsOf['ToolUse'] = { tool_use_id: 'toolu_1', tool: 'Bash', input: { command: 'deploy --token s3cret' }, isRunning: false, isErrored: false, isInterrupted: false }
 
 const bashRowLines = (command: string) => ['ToolUse', '  tool_use_id: "toolu_1"', '  tool: "Bash"', `  input: {"command":"${command}"}`, '  isRunning: false', '  isErrored: false', '  isInterrupted: false']
 
-test('a slot component changes the props Claude draws with', async () => {
+test('a place component changes the props Claude draws with', async () => {
   const tested = testMod(
     defineMod({
       name: 'redact',
       setup(mod) {
-        mod.ui.render(slots.ToolUse, ({ input, Default }) => <Default input={{ command: String((input as { command: string }).command).replace('s3cret', '•••') }} />)
+        mod.ui.render(ToolCall, ({ input, Default }) => <Default input={{ command: String((input as { command: string }).command).replace('s3cret', '•••') }} />)
       },
     }),
   )
 
-  expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token •••'))
+  expect(await tested.lines(ToolCall, bashRow)).toEqual(bashRowLines('deploy --token •••'))
 })
 
-test("a slot component adds to Claude's drawing", async () => {
+test("a place component adds to Claude's drawing", async () => {
   const tested = testMod(
     defineMod({
       name: 'tool-count',
       setup(mod) {
-        mod.ui.render(slots.TurnDuration, ({ Default }) => (
+        mod.ui.render(TurnDuration, ({ Default }) => (
           <Box flexDirection="column">
             <Default />
             <Text dimColor>4 tools</Text>
@@ -41,20 +40,20 @@ test("a slot component adds to Claude's drawing", async () => {
     }),
   )
 
-  expect(await tested.lines(slots.TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['TurnDuration', '  word: "Baked"', '  durationMs: 3000', '4 tools'])
+  expect(await tested.lines(TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['TurnDuration', '  word: "Baked"', '  durationMs: 3000', '4 tools'])
 })
 
-test("a slot component replaces Claude's drawing", async () => {
+test("a place component replaces Claude's drawing", async () => {
   const tested = testMod(
     defineMod({
       name: 'modes',
       setup(mod) {
-        mod.ui.render(slots.SessionMode, ({ modes }) => <Text>{modes.join(' + ')}</Text>)
+        mod.ui.render(SessionMode, ({ modes }) => <Text>{modes.join(' + ')}</Text>)
       },
     }),
   )
 
-  expect(await tested.lines(slots.SessionMode, { modes: ['focus', 'memory paused'] })).toEqual(['focus + memory paused'])
+  expect(await tested.lines(SessionMode, { modes: ['focus', 'memory paused'] })).toEqual(['focus + memory paused'])
 })
 
 test("a component that throws keeps Claude's drawing", async () => {
@@ -62,17 +61,17 @@ test("a component that throws keeps Claude's drawing", async () => {
     defineMod({
       name: 'broken',
       setup(mod) {
-        mod.ui.render(slots.ToolUse, () => {
+        mod.ui.render(ToolCall, () => {
           throw new Error('no git here')
         })
       },
     }),
   )
 
-  expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
-  expect(await tested.lines(slots.ToolUse, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
-  expect(tested.shown.logs).toEqual(['broken added a render of ToolUse.'])
-  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The ToolUse render failed', description: 'threw, so Claude Code draws its own: no git here' }])
+  expect(await tested.lines(ToolCall, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
+  expect(await tested.lines(ToolCall, bashRow)).toEqual(bashRowLines('deploy --token s3cret'))
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a render of ToolCall.')
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The ToolCall render failed', description: 'threw, so Claude Code draws its own: no git here' }])
 })
 
 test('a pane whose render throws shows why, and logs it once', async () => {
@@ -87,7 +86,7 @@ test('a pane whose render throws shows why, and logs it once', async () => {
 
   expect(await tested.lines('board')).toEqual(['The Board pane could not draw: no board file'])
   expect(await tested.lines('board')).toEqual(['The Board pane could not draw: no board file'])
-  expect(tested.shown.logs).toEqual(['broken added the Board pane.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the Board pane.')
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The Board pane render failed', description: 'threw: no board file' }])
 })
 
@@ -186,7 +185,7 @@ test('onScreen is passed on unchanged and the SDK draws the bullet beside Defaul
     defineMod({
       name: 'pieces',
       setup(mod) {
-        mod.ui.render(slots.AssistantMessage, ({ text, Default }) => (
+        mod.ui.render(Reply, ({ text, Default }) => (
           <Box flexDirection="column">
             {text.split('\n\n').map((part) => (
               <Default text={part} />
@@ -197,7 +196,7 @@ test('onScreen is passed on unchanged and the SDK draws the bullet beside Defaul
     }),
   )
 
-  const lines = await tested.lines(slots.AssistantMessage, { text: 'Intro\n\nOutro', isFirstOfReply: true, onScreen: { first: 0, last: 3, of: 4 } })
+  const lines = await tested.lines(Reply, { text: 'Intro\n\nOutro', isFirstOfReply: true, onScreen: { first: 0, last: 3, of: 4 } })
 
   expect(lines).toEqual([
     '⏺ AssistantMessage',
@@ -216,7 +215,7 @@ test('an AssistantMessage render that draws a row above Default keeps the bullet
     defineMod({
       name: 'labels',
       setup(mod) {
-        mod.ui.render(slots.AssistantMessage, ({ Default }) => (
+        mod.ui.render(Reply, ({ Default }) => (
           <Box flexDirection="column">
             <Text>Claude says:</Text>
             <Default />
@@ -226,7 +225,7 @@ test('an AssistantMessage render that draws a row above Default keeps the bullet
     }),
   )
 
-  expect(await tested.lines(slots.AssistantMessage, { text: 'We read.', isFirstOfReply: true })).toEqual(['⏺ Claude says:', '  AssistantMessage', '    text: "We read."', '    isFirstOfReply: false'])
+  expect(await tested.lines(Reply, { text: 'We read.', isFirstOfReply: true })).toEqual(['⏺ Claude says:', '  AssistantMessage', '    text: "We read."', '    isFirstOfReply: false'])
 })
 
 test('an AssistantMessage render that returns Default unchanged leaves the bullet to Claude Code', async () => {
@@ -234,12 +233,12 @@ test('an AssistantMessage render that returns Default unchanged leaves the bulle
     defineMod({
       name: 'redact',
       setup(mod) {
-        mod.ui.render(slots.AssistantMessage, ({ text, Default }) => <Default text={text.replace('s3cret', '•••')} />)
+        mod.ui.render(Reply, ({ text, Default }) => <Default text={text.replace('s3cret', '•••')} />)
       },
     }),
   )
 
-  expect(await tested.lines(slots.AssistantMessage, { text: 'The token is s3cret.', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "The token is •••."', '  isFirstOfReply: true'])
+  expect(await tested.lines(Reply, { text: 'The token is s3cret.', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "The token is •••."', '  isFirstOfReply: true'])
 })
 
 test('an AssistantMessage render of a later block has a blank line above it', async () => {
@@ -247,20 +246,20 @@ test('an AssistantMessage render of a later block has a blank line above it', as
     defineMod({
       name: 'quiet',
       setup(mod) {
-        mod.ui.render(slots.AssistantMessage, ({ text }) => <Text>{text.toUpperCase()}</Text>)
+        mod.ui.render(Reply, ({ text }) => <Text>{text.toUpperCase()}</Text>)
       },
     }),
   )
 
-  expect(await tested.lines(slots.AssistantMessage, { text: 'We read.', isFirstOfReply: false })).toEqual(['', 'WE READ.'])
+  expect(await tested.lines(Reply, { text: 'We read.', isFirstOfReply: false })).toEqual(['', 'WE READ.'])
 })
 
-test("two Default pieces in one drawing each draw Claude's slot", async () => {
+test("two Default pieces in one drawing each draw Claude's place", async () => {
   const tested = testMod(
     defineMod({
       name: 'twice',
       setup(mod) {
-        mod.ui.render(slots.ToolUse, ({ Default }) => (
+        mod.ui.render(ToolCall, ({ Default }) => (
           <Box flexDirection="column">
             <Default />
             <Default isErrored />
@@ -276,12 +275,12 @@ test("two Default pieces in one drawing each draw Claude's slot", async () => {
   expect(textOf(drawn)).toBe('Bash(deploy)\nBash(deploy)')
 })
 
-test("Default inside a Box draws Claude's slot when the Box hides its children", async () => {
+test("Default inside a Box draws Claude's place when the Box hides its children", async () => {
   const tested = testMod(
     defineMod({
       name: 'boxed',
       setup(mod) {
-        mod.ui.render(slots.TurnDuration, ({ Default }) => (
+        mod.ui.render(TurnDuration, ({ Default }) => (
           <Box flexDirection="column">
             <Text>above</Text>
             <Default word="Brewed" />
@@ -291,7 +290,7 @@ test("Default inside a Box draws Claude's slot when the Box hides its children",
     }),
   )
 
-  expect(await tested.lines(slots.TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['above', 'TurnDuration', '  word: "Brewed"', '  durationMs: 3000'])
+  expect(await tested.lines(TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['above', 'TurnDuration', '  word: "Brewed"', '  durationMs: 3000'])
 })
 
 test('a component that uses Default a different number of times on its second pass keeps Claude\'s drawing', async () => {
@@ -300,7 +299,7 @@ test('a component that uses Default a different number of times on its second pa
     defineMod({
       name: 'impure',
       setup(mod) {
-        mod.ui.render(slots.TurnDuration, ({ Default }) => {
+        mod.ui.render(TurnDuration, ({ Default }) => {
           runs += 1
           return <Box flexDirection="column">{runs % 2 === 1 ? <Default /> : [<Default />, <Default />]}</Box>
         })
@@ -308,8 +307,8 @@ test('a component that uses Default a different number of times on its second pa
     }),
   )
 
-  expect(await tested.lines(slots.TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['TurnDuration', '  word: "Baked"', '  durationMs: 3000'])
-  expect(tested.shown.logs).toEqual(['impure added a render of TurnDuration.'])
+  expect(await tested.lines(TurnDuration, { word: 'Baked', durationMs: 3000 })).toEqual(['TurnDuration', '  word: "Baked"', '  durationMs: 3000'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a render of TurnDuration.')
   expect(tested.shown.toasts).toContainEqual({
     type: 'error',
     message: 'The TurnDuration render failed',
@@ -323,7 +322,7 @@ test('a component without Default runs once', async () => {
     defineMod({
       name: 'once',
       setup(mod) {
-        mod.ui.render(slots.SessionMode, ({ modes }) => {
+        mod.ui.render(SessionMode, ({ modes }) => {
           runs += 1
           return <Text>{modes.join(' + ')}</Text>
         })
@@ -331,7 +330,7 @@ test('a component without Default runs once', async () => {
     }),
   )
 
-  expect(await tested.lines(slots.SessionMode, { modes: ['focus'] })).toEqual(['focus'])
+  expect(await tested.lines(SessionMode, { modes: ['focus'] })).toEqual(['focus'])
   expect(runs).toBe(1)
 })
 
@@ -342,42 +341,42 @@ test("toasts draw below a mod's AbovePrompt render, and hide while Claude Code s
       name: 'indexer',
       setup(mod) {
         toast = mod.ui.toast
-        mod.ui.render(slots.AbovePrompt, () => <Text>3 prompts</Text>)
+        mod.ui.render(AbovePrompt, () => <Text>3 prompts</Text>)
         mod.ui.toast.loading('Indexing files', { id: 'index', description: <Progress value={50} width={8} /> })
       },
     }),
   )
   const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
-  expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts', '⠋  indexer  Indexing files  ✕', '            ████░░░░', '✓  indexer  Ready  ✕'])
-  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).toEqual(['3 prompts'])
+  expect(await tested.lines(AbovePrompt, band)).toEqual(['3 prompts', '⠋  indexer  Indexing files  ✕', '            ████░░░░', '✓  indexer  Installed                      Settings  ✕', '            Adds a render of AbovePrompt.'])
+  expect(await tested.lines(AbovePrompt, { ...band, hasSurvey: true })).toEqual(['3 prompts'])
   toast?.dismiss()
-  expect(await tested.lines(slots.AbovePrompt, band)).toEqual(['3 prompts'])
+  expect(await tested.lines(AbovePrompt, band)).toEqual(['3 prompts'])
 })
 
-test('a mod that renders one slot twice is refused with the same message for every slot', async () => {
-  const renderedTwice = (slot: Slot) =>
+test('a mod that renders one place twice is refused with the same message for every place', async () => {
+  const renderedTwice = (place: Place) =>
     testMod(
       defineMod({
         name: 'twice',
         setup(mod) {
-          mod.ui.render(slot, () => <Text>once</Text>)
-          mod.ui.render(slot, () => <Text>twice</Text>)
+          mod.ui.render(place, () => <Text>once</Text>)
+          mod.ui.render(place, () => <Text>twice</Text>)
         },
       }),
     ).start()
 
-  await expect(renderedTwice(slots.ToolUse)).rejects.toThrow('twice: a render of ToolUse is already added. Render each slot once.')
-  await expect(renderedTwice(markdownSlots.Heading)).rejects.toThrow('twice: a render of markdown Heading is already added. Render each slot once.')
+  await expect(renderedTwice(ToolCall)).rejects.toThrow('twice: a render of ToolCall is already added. Render each place once.')
+  await expect(renderedTwice(Heading)).rejects.toThrow('twice: a render of Heading is already added. Render each place once.')
 })
 
-test('a slot component takes the props its slot carries', () => {
+test('a place component takes the props its place carries', () => {
   defineMod({
     name: 'typed',
     setup(mod) {
-      mod.ui.render(slots.ToolUse, ({ input, Default }) => <Default input={input} />)
+      mod.ui.render(ToolCall, ({ input, Default }) => <Default input={input} />)
       // @ts-expect-error
-      mod.ui.render(slots.ToolUse, ({ text }) => <Text>{text}</Text>)
+      mod.ui.render(ToolCall, ({ text }) => <Text>{text}</Text>)
     },
   })
 })

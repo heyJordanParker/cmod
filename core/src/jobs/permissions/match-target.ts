@@ -1,6 +1,6 @@
 import { matchesGlob } from '../../utils/matches-glob.js'
 import { parseShell } from '../../utils/parse-shell.js'
-import { callBaseOf, type CallBase, type CallEffects, type CommandCall, type FetchCall, type FileAccess, type FileCall, type ToolCall } from '../../utils/call-effects.js'
+import { callBaseOf, type CallBase, type CallEffects, type CommandCall, type FetchCall, type FileAccess, type FileCall, type Call } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
 import { realPathOf, relativePath } from '../../utils/paths.js'
 import { basename } from '../../vendor.js'
@@ -9,7 +9,7 @@ export type TargetCalls = { command: CommandCall; read: FileCall; write: FileCal
 export type TargetKey = keyof TargetCalls
 export type TargetOf<Key extends TargetKey> = Record<Key, string | string[]> & Partial<Record<Exclude<TargetKey, Key>, never>>
 export type Target = { [Key in TargetKey]: TargetOf<Key> }[TargetKey]
-export type MatchedCall = { call: ToolCall; access: FileAccess | undefined; folder: string }
+export type MatchedCall = { call: Call; access: FileAccess | undefined; folder: string }
 
 const targetKeys: readonly TargetKey[] = ['command', 'read', 'write', 'fetch', 'subagent', 'tool']
 
@@ -29,7 +29,7 @@ export function targetOf(target: Target): { key: TargetKey; patterns: string[]; 
 export async function matchTarget(target: Target, call: CallBase, effects: CallEffects, workspace: Workspace): Promise<MatchedCall[]> {
   const { key, patterns, exclusions } = targetOf(target)
   const base = callBaseOf(call)
-  const only = (matched: ToolCall, folder = workspace.cwd): MatchedCall[] => [{ call: matched, access: undefined, folder }]
+  const only = (matched: Call, folder = workspace.cwd): MatchedCall[] => [{ call: matched, access: undefined, folder }]
   const isNamed = (value: string) => matchesAny(value, patterns) && !matchesAny(value, exclusions)
   if (key === 'read' || key === 'write') {
     const matched: MatchedCall[] = []

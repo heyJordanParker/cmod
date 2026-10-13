@@ -1,17 +1,18 @@
 import { strictness } from '../../runtime/hooks.js'
 import { messageOf } from '../../utils/text.js'
-import { callBaseOf, callEffects, type CallEffects, type ToolCall } from '../../utils/call-effects.js'
+import { callBaseOf, callEffects, type CallEffects, type Call } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
 import { folderInScope, matchTarget, targetOf, type MatchedCall, type Target, type TargetCalls, type TargetKey, type TargetOf } from './match-target.js'
 import { resolve } from '../../vendor.js'
+import { inFolder } from '../context.js'
 
 export type Rule<Mod> = {
   [Key in TargetKey]: TargetOf<Key> & {
-    when?: (call: TargetCalls[Key], mod: Mod) => boolean | Promise<boolean>
+    when?: (call: TargetCalls[Key] & { readonly folder: string }, mod: Mod) => boolean | Promise<boolean>
     reason?: string
   }
 }[TargetKey]
-type WhenOf<Mod> = { when?(call: ToolCall, mod: Mod): boolean | Promise<boolean> }
+type WhenOf<Mod> = { when?(call: Call & { readonly folder: string }, mod: Mod): boolean | Promise<boolean> }
 export type PermissionRules<Mod> = { deny?: Rule<Mod>[]; ask?: Rule<Mod>[] }
 export type Decision = 'allow' | 'ask' | 'deny'
 export type Verdict = { decision: Decision; reason?: string }
@@ -22,12 +23,12 @@ export function stricterVerdict<Result extends Verdict>(first: Result, second: R
   return strictness.indexOf(second.decision) > strictness.indexOf(first.decision) ? second : first
 }
 
-export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: ToolCall, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<Verdict | undefined> {
+export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: Call, workspace: Workspace, mod: Mod, within: (run: () => boolean | Promise<boolean>) => Promise<boolean>): Promise<Verdict | undefined> {
   try {
     const effects = callEffects(use, workspace)
     for (const decision of ['deny', 'ask'] as const) {
       for (const rule of rules[decision] ?? []) {
-        const outcome = await ruleOutcome(rule, use, effects, workspace, modOf)
+        const outcome = await ruleOutcome(rule, use, effects, workspace, mod, within)
         if (outcome === undefined) continue
         const reason = [rule.reason, outcome.failure === undefined ? undefined : `Its when check failed: ${outcome.failure}`].filter((part) => part !== undefined).join(' ')
         return reason === '' ? { decision } : { decision, reason }
@@ -39,7 +40,7 @@ export async function decidePermission<Mod>(rules: PermissionRules<Mod>, use: To
   }
 }
 
-async function ruleOutcome<Mod>(rule: Rule<Mod>, use: ToolCall, effects: CallEffects, workspace: Workspace, modOf: (call: ToolCall, folder: string) => Mod): Promise<{ failure: string | undefined } | undefined> {
+async function ruleOutcome<Mod>(rule: Rule<Mod>, use: Call, effects: CallEffects, workspace: Workspace, mod: Mod, within: (run: () => boolean | Promise<boolean>) => Promise<boolean>): Promise<{ failure: string | undefined } | undefined> {
   const matched = await matchTarget(rule, use, effects, workspace)
   const calls = matched.length > 0 ? matched : await unparsedMatches(rule, use, effects, workspace)
   if (calls.length === 0) return undefined
@@ -48,7 +49,8 @@ async function ruleOutcome<Mod>(rule: Rule<Mod>, use: ToolCall, effects: CallEff
   for (const { call, access, folder } of calls) {
     const fullCall = access?.contents === undefined ? call : { ...call, ...(await access.contents()) }
     try {
-      if (await when(fullCall, modOf(fullCall, folder))) return { failure: undefined }
+      const placed = await inFolder(fullCall, folder, workspace)
+      if (await within(() => when(placed, mod))) return { failure: undefined }
     } catch (error) {
       return { failure: messageOf(error) }
     }
@@ -56,7 +58,7 @@ async function ruleOutcome<Mod>(rule: Rule<Mod>, use: ToolCall, effects: CallEff
   return undefined
 }
 
-async function unparsedMatches(target: Target, use: ToolCall, effects: CallEffects, workspace: Workspace): Promise<MatchedCall[]> {
+async function unparsedMatches(target: Target, use: Call, effects: CallEffects, workspace: Workspace): Promise<MatchedCall[]> {
   const shell = effects.shell
   if (shell === undefined || shell.isFullyParsed) return []
   const { key, patterns } = targetOf(target)

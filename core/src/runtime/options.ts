@@ -72,7 +72,7 @@ export function createOptions({
     for (const [key, value] of Object.entries(file)) {
       const option = declared[key]
       if (option === undefined) ignore(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? 'Remove it.' : `Remove it, or use one of: ${Object.keys(declared).join(', ')}.`}`)
-      else if (option.kind === 'secret') ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.`)
+      else if (option.type === 'secret') ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.`)
       else {
         const misfit = fitsOption(option, value)
         if (misfit === undefined) kept[key] = value
@@ -113,5 +113,5 @@ function valueOf(key: string, option: Option, own: unknown, project: Readonly<Re
   if (locked.has(key)) return own
   if (Object.hasOwn(project, key)) return project[key]
   if (!isUnset(own) && fitsOption(option, own) === undefined) return Array.isArray(own) ? Object.freeze([...own]) : own
-  return option.default ?? (option.kind === 'list' ? Object.freeze([]) : option.kind === 'number' ? undefined : '')
+  return option.default ?? (option.type === 'list' ? Object.freeze([]) : option.type === 'number' ? undefined : '')
 }

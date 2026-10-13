@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { prompt } from '../../src/jobs/prompt.js'
-import { defineMod, type Job } from '../../src/mod.js'
+import { defineMod, process, SessionStart, type Job } from '../../src/mod.js'
+import { engineOf } from '../../src/runtime/engine.js'
 import { testMod } from '../../src/testing.js'
 
 const answered = { result: { stdout: '', stderr: '', interrupted: false }, text: '' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
@@ -28,7 +29,7 @@ test('prompt adds its text after a matching call', async () => {
 
   expect(afterCommit).toEqual({ ...answered, context: ['# push-reminder\nPush only when the user asks.'] })
   expect(afterStatus).toEqual(answered)
-  expect(tested.shown.logs).toEqual(['notes added the push-reminder prompt after git commit.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the push-reminder prompt after git commit.')
 })
 
 test('a prompt after a call gives Claude the string its callback returns', async () => {
@@ -67,8 +68,8 @@ test("a prompt callback after a call gets the mod's own typed state, so it count
 
 test('a prompt after a write gets the path from the folder the shell was in before the call', async () => {
   const bashMovesFolder: Job<void> = (job) => {
-    const { claude } = job.mod
-    claude.on('tool.call', async (e, next) => {
+    const { claude, router } = engineOf(job.mod)
+    router.add('tool.call', async (e, next) => {
       claude.session.cwd = async () => '/test/plugins/notes/app'
       return next(e)
     })
@@ -78,16 +79,16 @@ test('a prompt after a write gets the path from the folder the shell was in befo
   expect(await tested.fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['# cart\n/test/plugins/notes/app/cart.ts'] })
 })
 
-test('a prompt callback can run past 5 seconds within its deadline', async () => {
-  const tested = withPrompt(prompt({ name: 'history', prompt: async (_input, mod) => (await mod.process.run(['git', 'log', '-1'], { timeoutMs: 60_000 })).stdout }))
-  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: 'fix: x', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+test('a prompt callback that passes its 5 s deadline adds nothing, and the mod logs why', async () => {
+  const tested = withPrompt(prompt({ name: 'history', prompt: async () => (await process.run(['git', 'log', '-1'])).stdout }))
+  tested.fakes.process.run = () => new Promise(() => undefined)
   tested.fakes.clock.after = (ms, fire) => {
-    if (ms <= 5000) void Promise.resolve().then(fire)
+    if (ms === 5000) void Promise.resolve().then(fire)
     return { cancel: () => undefined }
   }
 
-  expect(await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [{ name: 'history', text: 'fix: x' }] })
-  expect(tested.calls.find((call) => call.call === 'process.run')?.args).toEqual([['git', 'log', '-1'], { timeoutMs: 60000 }])
+  expect(await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
+  expect(tested.shown.debug).toContain('notes: prompt "history" added nothing: the history prompt passed the 5 s deadline of prompt')
 })
 
 test('a prompt with no trigger gives Claude its new text once each time the state it reads changes it', async () => {
@@ -127,7 +128,7 @@ test('after a resume, a prompt with no trigger gives Claude its text on the firs
     }),
     { permissions: ['prompt'] },
   )
-  await tested.fire('SessionStart', { source: 'resume' })
+  await tested.fire(SessionStart, { source: 'resume' })
   tested.state.session.mode = 'build'
   await tested.settle()
 
@@ -177,8 +178,8 @@ test('a block with the same name below adds nothing and writes one debug line', 
   const answer = await tested.fire('prompt.context', { blocks: [currentDate] }, { blocks: [currentDate] })
 
   expect(answer).toEqual({ blocks: [currentDate] })
-  expect(tested.shown.debug).toEqual(['prompt "currentDate" added nothing: a block named "currentDate" is already in the context'])
-  expect(tested.shown.logs).toEqual(['notes added the currentDate prompt.'])
+  expect(tested.shown.debug).toEqual(['notes: prompt "currentDate" added nothing: a block named "currentDate" is already in the context'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the currentDate prompt.')
 })
 
 const typed = { wait: false, origin: { kind: 'composer' } } as const
@@ -190,7 +191,7 @@ test('a prompt with when adds its text beside each user prompt that when accepts
   expect(await byPattern.fire('prompt.submit', { text: 'Cut a Release', ...typed })).toEqual({ text: 'Cut a Release', context: ['# release\nRelease steps for: Cut a Release'], origin: typed.origin })
   expect(await byPattern.fire('prompt.submit', { text: 'Fix the bug', ...typed })).toEqual({ text: 'Fix the bug', origin: typed.origin })
   expect(await byFunction.fire('prompt.submit', { text: 'ship it', ...typed })).toEqual({ text: 'ship it', context: ['# release\nRun bun run release.'], origin: typed.origin })
-  expect(byPattern.shown.logs).toEqual(['notes added the release prompt after matching user prompts.'])
+  expect(byPattern.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the release prompt after matching user prompts.')
 })
 
 test('fire answers prompt.submit with the below it is given, as the hooks beneath the mod would', async () => {
@@ -210,8 +211,8 @@ test('a callback that throws adds nothing and writes one debug line', async () =
   )
 
   expect(await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(tested.shown.debug).toEqual(['prompt "broken" added nothing: no notes file'])
-  expect(tested.shown.logs).toEqual(['notes added the broken prompt.'])
+  expect(tested.shown.debug).toEqual(['notes: prompt "broken" added nothing: no notes file'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the broken prompt.')
 })
 
 test('one name two times in one mod, or when with after, throws in setup', async () => {

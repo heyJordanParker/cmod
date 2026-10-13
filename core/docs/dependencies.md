@@ -4,16 +4,16 @@ A mod offers methods to other mods in `api`. Another mod lists it as a dependenc
 
 ## Offer methods: api
 
-Each method of `api` gets the caller's input and the provider's own `mod`, and returns its result or a promise of it. Inputs and results cross from one plugin to another, so keep them plain JSON data.
+Each method of `api` gets the caller's input and the provider's own `mod` as its second argument, and returns its result or a promise of it. Inputs and results cross from one plugin to another, so keep them plain JSON data.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, fs } from '../node_modules/@cmodjs/core/mod.js'
 
 export const tracer = defineMod({
   name: 'tracer',
   api: {
-    signatures: async ({ path }: { path: string }, mod) =>
-      (await mod.fs.read(path)).split('\n').flatMap((text, index) => {
+    signatures: async ({ path }: { path: string }) =>
+      (await fs.read(path)).split('\n').flatMap((text, index) => {
         const name = /^export function (\w+)/.exec(text)?.[1]
         return name === undefined ? [] : [{ name, line: index + 1 }]
       }),
@@ -49,16 +49,16 @@ declare module 'claude-code' {
 A mod that calls tracer lists it in its own `.claude-plugin/plugin.json`, and Claude Code installs it with the mod:
 
 ```json
-"dependencies": ["cmod", "tracer"]
+"dependencies": [{ "name": "cmod", "version": "^1.0.0" }, "tracer"]
 ```
 
 A provider that changes or removes a method breaks every mod that calls it, and with automatic updates the provider can update first. Name the versions you tested with a range, and Claude Code turns your mod off with a clear error instead of letting its calls fail one by one:
 
 ```json
-"dependencies": ["cmod", { "name": "tracer", "version": "^1.0" }]
+"dependencies": [{ "name": "cmod", "version": "^1.0.0" }, { "name": "tracer", "version": "^1.0" }]
 ```
 
-Claude Code checks the range against the `version` in the provider's `plugin.json` when it loads your mod ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)).
+Claude Code checks the range against the `version` in the provider's `plugin.json` when it loads your mod ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)). cmod is a provider too: a mod built on `@cmodjs/core` 1.0 calls methods only the 1.0 cmod plugin has, so `cmod new` writes the `^1.0.0` range.
 
 Claude Code then lays tracer's types file beside the mod's own types, so the call is typed:
 
@@ -97,7 +97,7 @@ tracer: <the message of the error the method threw>
 - `tracer is not installed` covers a provider whose code did not load, one the person declined to install, and one whose install failed.
 - `tracer is installing` covers a provider that is still running its install step. A provider that is only starting makes the call wait for it, up to 9 seconds.
 - When tracer is disabled, Claude Code unloads the mod that lists it, with its own error: `Dependency "tracer" is disabled — enable it or remove the dependency`.
-- A call runs inside the deadline of the job that makes it ([jobs.md](jobs.md)), and 30 seconds anywhere else. Past the deadline of a job, the call fails with `mod.dependencies.tracer.signatures passed the 30 s deadline of slashCommand`, naming the job. Anywhere else it fails with `mod.dependencies.tracer.signatures passed its 30 s deadline`.
+- A call fails with `mod.dependencies.tracer.signatures passed its 30 s deadline` when the other mod takes longer than 30 seconds. A job bounds the whole function that makes the call by its own deadline ([jobs.md](jobs.md)), so a slow call inside `slashCommand` can fail the command first, with `/outline passed the 30 s deadline of slashCommand`.
 
 ```ts
 notInstalled(name: string): string

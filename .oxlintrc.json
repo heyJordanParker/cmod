@@ -19,13 +19,13 @@
       "rules": {
         "no-restricted-globals": [
           "error",
-          { "name": "process", "message": "Code that runs inside Claude Code has no process. Read the environment with mod.claude.env." },
-          { "name": "Bun", "message": "Code that runs inside Claude Code has no Bun. Run a program with mod.process.run." },
-          { "name": "fetch", "message": "Fetch through mod.http.fetch, so the test kit and the mod's permissions see the call." },
-          { "name": "setTimeout", "message": "Wait with mod.claude.clock.after, so the test kit's clock drives it." },
+          { "name": "process", "message": "Code that runs inside Claude Code has no process global. Import process from mod.js to run a program, and read the environment through engineOf(mod).claude.env." },
+          { "name": "Bun", "message": "Code that runs inside Claude Code has no Bun. Run a program with process.run, imported from mod.js." },
+          { "name": "fetch", "message": "Fetch through http.fetch, imported from mod.js, so the test kit and the mod's permissions see the call." },
+          { "name": "setTimeout", "message": "Wait with mod.after, so the test kit's clock drives it." },
           { "name": "setInterval", "message": "Repeat with mod.every, so the test kit's clock drives it." }
         ],
-        "no-restricted-properties": ["error", { "object": "Date", "property": "now", "message": "Read the time with mod.claude.clock.now, so the test kit's clock drives it." }]
+        "no-restricted-properties": ["error", { "object": "Date", "property": "now", "message": "Read the time with engineOf(mod).claude.clock.now, so the test kit's clock drives it." }]
       }
     }
   ]

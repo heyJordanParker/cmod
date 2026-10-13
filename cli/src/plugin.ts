@@ -48,10 +48,10 @@ function stepsIn(root: string, packageJson: unknown): Steps {
   }
 }
 
-export function sourceOf(text: string): { kind: 'path' | 'github'; text: string } {
-  if (/^[\w.-]+\/[\w.-]+$/.test(text) && !existsSync(text)) return { kind: 'github', text }
+export function sourceOf(text: string): { type: 'path' | 'github'; text: string } {
+  if (/^[\w.-]+\/[\w.-]+$/.test(text) && !existsSync(text)) return { type: 'github', text }
   if (!existsSync(text)) throw new Error(`${text} is neither a GitHub owner/repo nor a folder.`)
-  return { kind: 'path', text: realpathSync(text) }
+  return { type: 'path', text: realpathSync(text) }
 }
 
 export async function usesCmod(root: string, name: string): Promise<boolean> {
@@ -59,7 +59,7 @@ export async function usesCmod(root: string, name: string): Promise<boolean> {
   return Object.keys(steps).length > 0 || (await readRecord(readText, storeFolder(process.env), name)) !== undefined
 }
 
-export type DeclaredOptions = { readonly kind: 'declared'; readonly userConfig: Record<string, unknown> } | { readonly kind: 'no-hooks' } | { readonly kind: 'no-core' } | { readonly kind: 'old-core' }
+export type DeclaredOptions = { readonly type: 'declared'; readonly userConfig: Record<string, unknown> } | { readonly type: 'no-hooks' } | { readonly type: 'no-core' } | { readonly type: 'old-core' }
 
 const readDeclared = `
 const root = process.env.CMOD_ROOT
@@ -68,23 +68,23 @@ globalThis.Fragment ??= () => ({})
 const hooks = await Bun.file(root + '/hooks/hooks.json').json().catch(() => undefined)
 const module = Array.isArray(hooks?.modules) ? hooks.modules[0] : undefined
 if (typeof module !== 'string') {
-  console.log(JSON.stringify({ kind: 'no-hooks' }))
+  console.log(JSON.stringify({ type: 'no-hooks' }))
 } else {
   const core = await import(root + '/node_modules/@cmodjs/core/register.js')
   if (typeof core.registeredMod !== 'function') {
-    console.log(JSON.stringify({ kind: 'old-core' }))
+    console.log(JSON.stringify({ type: 'old-core' }))
   } else {
     const { userConfigOf } = await import(root + '/node_modules/@cmodjs/core/options.js')
     const { register } = await import(root + '/hooks/' + module)
     register(() => undefined, {})
     const options = core.registeredMod()?.options
-    console.log(JSON.stringify({ kind: 'declared', userConfig: options === undefined ? {} : userConfigOf(options) }))
+    console.log(JSON.stringify({ type: 'declared', userConfig: options === undefined ? {} : userConfigOf(options) }))
   }
 }
 `
 
 export async function declaredOptions(root: string): Promise<DeclaredOptions> {
-  if (!existsSync(join(root, 'node_modules/@cmodjs/core/register.js'))) return { kind: 'no-core' }
+  if (!existsSync(join(root, 'node_modules/@cmodjs/core/register.js'))) return { type: 'no-core' }
   const bun = bunArgv('-e', readDeclared)
   const { exitCode, stdout, stderr } = await capture(bun.argv, { cwd: root, env: { ...bun.env, CMOD_ROOT: root } })
   if (exitCode !== 0) {

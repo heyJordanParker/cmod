@@ -10,7 +10,7 @@ A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmo
 
 ```text
 my-mod/
-├── .claude-plugin/plugin.json          name, version, and "dependencies": ["cmod"]
+├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": "^1.0.0" }]
 ├── .claude/CLAUDE.md                   facts for coding agents, starting with these docs
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
@@ -19,7 +19,7 @@ my-mod/
 ├── src/mod.tsx                         defineMod: the state, the setup, the hooks, the panes
 ├── src/state.ts                        the starting state
 ├── src/panes/prompts.tsx               one definePane per file
-├── src/components/prompt-count.tsx     what the panes and slot renders draw with
+├── src/components/prompt-count.tsx     what the panes and renders draw with
 ├── skills/my-mod/SKILL.md              a Skill the mod ships
 ├── tests/mod.test.ts                   testMod tests, run with bun test
 ├── package.json                        depends on @cmodjs/core
@@ -40,7 +40,7 @@ Claude Code links the types of each plugin the mod depends on, such as `cmod`, i
 
 ## Where a mod runs
 
-Mod code runs inside Claude Code's hooks environment, not in Node or Bun. It has no Node or Bun modules, no DOM, and no `import()`. `mod.fs` reaches files, `mod.process` runs programs, and `mod.http` reaches the network ([mod.md](mod.md)). A job of your own also reaches the plugin's folder through `claude.plugin.root` and timers through `claude.clock` ([jobs.md](jobs.md)).
+Mod code runs inside Claude Code's hooks environment, not in Node or Bun. It has no Node or Bun modules, no DOM, and no `import()`: Claude Code refuses a module that holds one. `fs` reaches files, `process` runs programs, `http` reaches the network, and `sessions` reads the conversations, each an import from `mod.js` ([mod.md](mod.md)). `mod.folder` is the plugin's own folder.
 
 `cmod check` fails a mod that breaks this:
 
@@ -57,16 +57,16 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | Question | File |
 | --- | --- |
 | How do I define a mod, and what can `mod` call? | [mod.md](mod.md) |
-| How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every) |
+| How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every-and-mod-after), [session.md](session.md#send-to-a-conversation) |
 | How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
 | How do I keep values across prompts, sessions, and projects? | [state.md](state.md) |
 | How does a person set a token, a URL, or a setting for my mod, for themselves or their team? | [options.md](options.md) |
 | Which hosts, programs, and files may my mod reach, and how does the person grant them? | [permissions.md](permissions.md) |
-| How does my mod find files and keep its own keys on each one, such as on a Skill? | [mod.md](mod.md#mod-metadata) |
+| How does my mod find files and keep its own keys on each one, such as on a Skill? | [mod.md](mod.md#metadata-a-file-s-own-keys) |
 | How does the person finish a setup step only they can do, such as signing in? | [install-steps.md](install-steps.md#steps-in-claude-code) |
-| How do I add my mod's own page to `/mods`, or change Claude Code's settings? | [mod.md](mod.md#mod-settings) |
-| How does my mod read this conversation, a subagent's, or earlier ones, and search them? | [mod.md](mod.md#mod-history) |
-| How do I react to a Claude Code event, and what can a hook answer? | [hooks.md](hooks.md) |
+| How do I add my mod's own page to `/mods`, or change Claude Code's settings? | [mod.md](mod.md#mod-settings), [mod.md](mod.md#settings-claude-code-s-settings-files) |
+| How does my mod read and follow this conversation, its tasks, or earlier ones, search them, or start a task? | [session.md](session.md) |
+| How do I listen to a Claude Code hook, and what can a listener answer? | [hooks.md](hooks.md) |
 | How do I draw a pane, change a row Claude Code draws, or ask the person something? | [ui.md](ui.md) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, a status line, or a background program? | [jobs.md](jobs.md) |
 | How does one mod call another? | [dependencies.md](dependencies.md) |
@@ -80,32 +80,34 @@ A mod imports from the files below, and every other file in this package is inte
 
 | Import | Exports | Docs |
 | --- | --- | --- |
-| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `JobContext`, `Job`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md) |
+| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `Disposable`, `Permissions`, `Allowed`, `JobContext`, `Job`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md) |
+| `mod.js` | `settings`, `SettingsFile`, `model`, `fs`, `Entry`, `Stat`, `FileMatch`, `metadata`, `Metadata`, `process`, `http`, `Imports` | [mod.md](mod.md) |
+| `mod.js` | `sessions`, `Sessions`, `Session`, `SessionScope`, `SessionSend`, `SessionEvent`, `SessionPayload`, `TaskStartArgs`, `Usage`, `Matcher` | [session.md](session.md) |
+| `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `Document`, `Notice`, `Sender`, `SenderType`, `Person`, `Schedule`, `Channel`, `Sdk` | [session.md](session.md#message) |
+| `mod.js` | `Context`, `ContextStart`, `ContextEnd`, `Turn`, `TurnStart`, `TurnEnd`, `Goal`, `GoalChange`, `Task`, `TaskStart`, `TaskEnd` | [session.md](session.md#turn-context-goal-and-task) |
+| `mod.js` | `Hook`, `HookInput`, `HookListener`, `HookOptions`, `HookAnswer`, and one constant per hook, from `SessionStart` to `FileChanged` | [hooks.md](hooks.md) |
 | `mod.js` | `Toast`, `ToastId`, `ToastType`, `ToastOptions` | [ui.md](ui.md#toasts) |
-| `mod.js` | `Claude`, `ModClaude`, `RoutedEvent`, `RoutedHook`, `ToolCalls` | [jobs.md](jobs.md) |
-| `mod.js` | `FileMatch`, `Metadata`, `Session`, `Message`, `Sender` | [mod.md](mod.md) |
-| `installer.js` | `defineStep`, `Step` | [install-steps.md](install-steps.md#steps-in-claude-code) |
-| `mod.js` | `ModEvent`, `ModHook`, `HookOptions`, `HookInput`, `HookAnswer` | [hooks.md](hooks.md) |
+| `mod.js` | `Place`, `PlaceProps`, `ToolGroup`, `ToolProgress`, `CommandOutput`, `AskUserQuestion`, `Spinner`, `TurnDuration`, `SessionMode`, `PromptHint`, `AbovePrompt` | [ui.md](ui.md#places-change-a-row-claude-code-draws) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
+| `installer.js` | `defineStep`, `Step` | [install-steps.md](install-steps.md#steps-in-claude-code) |
 | `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod` | [mod.md](mod.md) |
-| `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionKind`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
+| `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionType`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [hooks.md](hooks.md) |
 | `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [hooks.md](hooks.md) |
-| `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `ShownToast`, `TestCall` | [testing.md](testing.md) |
+| `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `ShownToast`, `TestCall`, `FakeSession`, `MessageDraft` | [testing.md](testing.md) |
 | `ui/define-pane.js` | `definePane`, `Pane` | [ui.md](ui.md) |
 | `ui/elements.js` | `Box`, `Text`, `Button`, `Link`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `drawWith` | [ui.md](ui.md) |
 | `ui/components.js` | `Tabs`, `Tab`, `Split`, `Panel`, `Toggle`, `Tooltip`, `Help`, `Dialog`, `Pagination`, `Progress` | [ui.md](ui.md) |
-| `ui/slots.js` | `slots`, `Slot`, `SlotProps` | [ui.md](ui.md) |
-| `ui/markdown.js` | `markdownSlots`, `markdownBlocks`, `MarkdownKind`, `MarkdownReader`, `MarkdownPiece` | [ui.md](ui.md) |
-| `jobs/slash-command.js` | `slashCommand`, `Reply` | [jobs.md](jobs.md) |
+| `ui/markdown.js` | `Heading`, `Paragraph`, `CodeBlock`, `BlockQuote`, `List`, `Table`, `ThematicBreak`, `HtmlBlock`, `MarkdownPlace`, `markdownBlocks`, `BlockProps`, `MarkdownReader`, `MarkdownPiece` | [ui.md](ui.md#markdown-places-change-the-blocks-of-a-reply) |
+| `jobs/slash-command.js` | `slashCommand`, `CommandReply` | [jobs.md](jobs.md) |
 | `jobs/tool.js` | `tool` | [jobs.md](jobs.md) |
-| `jobs/permissions.js` | `permissions`, `Rule`, `PermissionRules`, `Target`, `CommandCall`, `FileCall`, `FetchCall`, `ToolCall` | [jobs.md](jobs.md) |
+| `jobs/permissions.js` | `permissions`, `Rule`, `PermissionRules`, `Target`, `CommandCall`, `FileCall`, `FetchCall`, `Call` | [jobs.md](jobs.md) |
 | `jobs/check.js` | `check` | [jobs.md](jobs.md) |
 | `jobs/prompt.js` | `prompt` | [jobs.md](jobs.md) |
-| `jobs/schedule.js` | `schedule`, `Schedule` | [jobs.md](jobs.md) |
-| `jobs/status-line.js` | `statusLine`, `Usage` | [jobs.md](jobs.md) |
+| `jobs/schedule.js` | `schedule`, `ScheduledPrompt` | [jobs.md](jobs.md) |
+| `jobs/status-line.js` | `statusLine` | [jobs.md](jobs.md) |
 | `jobs/program.js` | `program`, `Program` | [jobs.md](jobs.md) |
-| `jobs/context.js` | `afterCall`, `modWithin`, `modOf`, `workspaceReader` | [jobs.md](jobs.md) |
+| `jobs/context.js` | `afterCall`, `inFolder`, `withinDeadline`, `workspaceReader` | [jobs.md](jobs.md#the-building-blocks) |
 | `jobs/permissions/decide-permission.js` | `decidePermission`, `stricterVerdict`, `Rule`, `PermissionRules`, `Decision`, `Verdict` | [jobs.md](jobs.md) |
 | `jobs/permissions/find-project-scope.js` | `findProjectScope`, `ProjectScope`, `Workspace` | [jobs.md](jobs.md) |
 

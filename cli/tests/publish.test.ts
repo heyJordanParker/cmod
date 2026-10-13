@@ -8,6 +8,8 @@ afterEach(deleteTemporaryHomes)
 
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 
+const releasedChangelog = '# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-10-13\n\n### Changed\n- The greeter greets by name.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
+
 async function committedMod(home: string, build: string, manifest: Record<string, unknown> = { name: 'hello' }): Promise<string> {
   const root = join(home, 'cmod')
   await writeFiles(root, {
@@ -15,6 +17,7 @@ async function committedMod(home: string, build: string, manifest: Record<string
     'package.json': JSON.stringify({ name: 'cmod', cmod: { program: 'hello' } }),
     'cli/package.json': JSON.stringify({ ...manifest, cmod: { build, output: 'dist' } }),
     'cli/src/main.ts': 'console.log("hello")\n',
+    'CHANGELOG.md': releasedChangelog,
   })
   const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
   await git('init', '-q')
@@ -68,7 +71,7 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(assets.map((asset) => basename(asset))).toEqual(['cmod-0.2.0.zip', ...platforms.map((platform) => `hello-${platform}`), 'SHA256SUMS'])
   const archive = assets[0] as string
   const entries = await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()
-  expect(entries.split('\n').filter((entry) => entry !== '').sort()).toEqual(['.claude-plugin/', '.claude-plugin/plugin.json', 'package.json'])
+  expect(entries.split('\n').filter((entry) => entry !== '').sort()).toEqual(['.claude-plugin/', '.claude-plugin/plugin.json', 'CHANGELOG.md', 'package.json'])
   const sums = await readFile(join(dirname(archive), 'SHA256SUMS'), 'utf8')
   const expected = []
   for (const asset of assets.slice(0, -1)) expected.push(`${new Bun.CryptoHasher('sha256').update(await Bun.file(asset).arrayBuffer()).digest('hex')}  ${basename(asset)}`)
@@ -77,19 +80,26 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(await Bun.file(join(root, '.claude-plugin/marketplace.json')).exists()).toBe(false)
 })
 
-test('publish opens the release notes with every breaking change since the last v tag', async () => {
+test("publish writes the version's CHANGELOG.md section as the release notes, and ships the changelog in the release", async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home)
-  const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
-  await git('tag', 'v0.1.0')
-  await git('commit', '-q', '--allow-empty', '-m', 'feat: greet by name\n\nBREAKING CHANGE: greet() takes the name to greet.\nPass it as greet(name).\n\nBREAKING CHANGE: wave() is gone. Call greet(name).\n\nsrc/\n└── greet.ts*')
-  await git('commit', '-q', '--allow-empty', '-m', 'feat!: the greeter speaks only on session start')
-  await git('commit', '-q', '--allow-empty', '-m', 'fix: greet once per session')
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toContain('Its release notes would open with:\n\n## Breaking changes\n\n- the greeter speaks only on session start\n- greet() takes the name to greet. Pass it as greet(name).\n- wave() is gone. Call greet(name).\n')
+  expect(result.stdout).toContain('Its release notes would read:\n\n### Changed\n- The greeter greets by name.\n')
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  expect(await zipText(archive, 'CHANGELOG.md')).toBe(releasedChangelog)
+})
+
+test('publish refuses a version the committed CHANGELOG.md has no section for, and names the fix', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, { 'CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n\n- The greeter greets by name.\n' })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe('cmod publish: The committed CHANGELOG.md has no "## [0.2.0]" section with notes. Write what changed for the people who use cmod under it, commit it, then run cmod publish again.\n')
 })
 
 test("a mod's marketplace lists the cmod plugin from cmod's release branch, so its cmod dependency follows each cmod release", async () => {
@@ -104,16 +114,6 @@ test("a mod's marketplace lists the cmod plugin from cmod's release branch, so i
   expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' } })
 })
 
-test('publish adds no breaking changes section when no commit since the last v tag has one', async () => {
-  const home = await temporaryHome()
-  const root = await committedHooksMod(home)
-
-  const result = await cmod(home, 'publish', root, '--dry-run')
-
-  expect(result.exitCode).toBe(0)
-  expect(result.stdout).not.toContain('Breaking changes')
-})
-
 async function committedHooksMod(home: string, files: Record<string, string> = {}): Promise<string> {
   const root = join(home, 'greeter')
   await writeFiles(root, {
@@ -124,6 +124,7 @@ async function committedHooksMod(home: string, files: Record<string, string> = {
     'src/greet.ts': "export async function greet($, e, next) {\n  await $.ui.toast('hello')\n  return next(e)\n}\n",
     '.github/workflows/release.yml': 'name: Release\n',
     '.claude/skills/repack/SKILL.md': '# Repack\n',
+    'CHANGELOG.md': releasedChangelog,
     ...files,
   })
   const git = (...args: string[]) => Bun.spawn(['git', '-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { stdout: 'ignore', stderr: 'ignore' }).exited
@@ -148,7 +149,7 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
-  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
+  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
   expect(JSON.parse(await zipText(archive, 'hooks/hooks.json'))).toEqual({ description: 'greeter hooks module', modules: ['./register.js'] })
   const bundle = await zipText(archive, 'hooks/register.js')
   expect(bundle).toContain('function greet($, e, next)')
@@ -172,7 +173,7 @@ test('publish writes a control character in the bundle as a \\u escape, so a rea
   expect(bundle).not.toContain('\u007f')
 })
 
-test('a "files" list in package.json limits the release to its paths, .claude-plugin/, package.json, tsconfig.json, the README, and the license', async () => {
+test('a "files" list in package.json limits the release to its paths, .claude-plugin/, package.json, tsconfig.json, the README, the license, and the changelog', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, {
     'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'src'] }),
@@ -189,7 +190,7 @@ test('a "files" list in package.json limits the release to its paths, .claude-pl
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
-  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts', 'tsconfig.json'])
+  expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts', 'tsconfig.json'])
 })
 
 test('a "files" list that leaves out the install step still releases its folder, so the mod installs', async () => {

@@ -4,12 +4,12 @@ type Line = { stream: 'stdout' | 'stderr'; text: string }
 
 export type RunOptions = { cwd?: string; env?: Record<string, string | undefined>; stdin?: 'inherit' | 'ignore' | { readonly text: string } }
 
-export async function runStep(argv: string[], cwd: string, env: Record<string, string | undefined>, emit: (event: Extract<RunnerEvent, { kind: 'progress' | 'log' }>) => void): Promise<{ exitCode: number; lastError: string }> {
+export async function runStep(argv: string[], cwd: string, env: Record<string, string | undefined>, emit: (event: Extract<RunnerEvent, { type: 'progress' | 'log' }>) => void): Promise<{ exitCode: number; lastError: string }> {
   let lastError = ''
   const exitCode = await runLines(argv, { cwd, env }, (line) => {
     if (line.stream === 'stderr' && line.text.trim() !== '') lastError = line.text
     const event = line.stream === 'stdout' ? parseEvent(line.text) : undefined
-    emit(event?.kind === 'progress' ? event : { kind: 'log', text: line.text })
+    emit(event?.type === 'progress' ? event : { type: 'log', text: line.text })
   })
   return { exitCode, lastError }
 }

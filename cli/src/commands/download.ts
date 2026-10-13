@@ -42,7 +42,7 @@ export async function run(argv: string[]): Promise<number> {
   const chosen = downloads.find((entry) => entry.machine === machine)
   if (chosen === undefined) throw new Error(`${program} has no download for this machine, ${machine}. The install script lists ${downloads.map((entry) => entry.machine).join(', ')}.`)
 
-  const emit = (done: number, label: string) => printEvent({ kind: 'progress', done, total: steps, label })
+  const emit = (done: number, label: string) => printEvent({ type: 'progress', done, total: steps, label })
   emit(0, `Downloading ${program} for ${machine}`)
   let quarter = 0
   const bytes = await download(chosen.url, 'The install script lists a download that is gone, so the mod needs an update.', (received, size) => {

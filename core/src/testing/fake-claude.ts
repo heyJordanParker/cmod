@@ -16,7 +16,7 @@ export type Fakes = {
   settings: { read?: Claude['settings']['read'] }
   config: { list?: Claude['config']['list'] }
   ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll']; copy?: Claude['ui']['copy'] }
-  session: { messages?: Claude['session']['messages']; append?: Claude['session']['append'] }
+  session: { messages?: Claude['session']['messages']; append?: Claude['session']['append']; send?: Claude['session']['send'] }
   prompt: { submit?: Claude['prompt']['submit'] }
   model: { complete?: Claude['model']['complete'] }
   agent: { list?: Claude['agent']['list']; spawn?: Claude['agent']['spawn'] }
@@ -181,10 +181,11 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       root: async () => plugin.root,
       cwd: async () => plugin.root,
       model: async () => 'test-model',
-      usage: async () => ({ context: { window: 200000 }, rateLimits: {}, cost: { usd: 0 } }) as unknown as Awaited<ReturnType<Claude['session']['usage']>>,
+      usage: async () => ({ startedAt: Date.parse('2026-01-01T00:00:00.000Z'), context: { window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
       surfaces: async () => ['terminal'],
       messages: rejected('session.messages', () => fakes.session.messages as ((args?: unknown) => Promise<unknown>) | undefined) as Claude['session']['messages'],
       append: rejected('session.append', () => fakes.session.append ?? appendNote),
+      send: rejected('session.send', () => fakes.session.send ?? (async () => ({ isDelivered: true as const }))),
     },
     prompt: { submit: rejected('prompt.submit', () => fakes.prompt.submit ?? submitPrompt) },
     model: { complete: rejected('model.complete', () => fakes.model.complete) },

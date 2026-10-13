@@ -4,7 +4,7 @@ import { readText, tilde } from '../files.js'
 import { changeSettings, settingsFileOf, type SettingsSource } from '../settings.js'
 import { approvals } from '../store.js'
 
-export const summary = "Change Claude Code settings for a mod, as its mod.claude.settings.update does."
+export const summary = "Change Claude Code settings for a mod, as its settings.user.update, settings.project.update, or settings.local.update does."
 
 export const help = `Usage: cmod settings <mod> <user|project|local> <json> [--project <folder>]
 

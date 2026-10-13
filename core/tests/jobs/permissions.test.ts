@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { permissions, type PermissionRules } from '../../src/jobs/permissions.js'
-import { defineMod, type Job } from '../../src/mod.js'
+import { defineMod, process, UserPromptSubmit, type Job } from '../../src/mod.js'
+import { engineOf } from '../../src/runtime/engine.js'
 import { testMod } from '../../src/testing.js'
 
 const bashCheck = (command: string, toolUseId: string) => ({ tool: 'Bash', input: { command }, tool_use_id: toolUseId })
@@ -21,7 +22,7 @@ test('a deny rule refuses a Bash call in bypassPermissions mode, and its reason 
 
   expect(answer).toEqual({ decision: 'deny', reason: 'Force pushes rewrite shared history.' })
   expect(await tested.fire('tool.check', bashCheck('git push origin main', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
-  expect(tested.shown.logs).toEqual(['no-force-push added 1 permission rule.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds 1 permission rule.')
 })
 
 test('rules read from state judge each call by the state at that call', async () => {
@@ -41,7 +42,7 @@ test('rules read from state judge each call by the state at that call', async ()
   expect(await write('/work/docs/plans/a.md', 'toolu_2')).toEqual(allowedInBypassMode)
   tested.state.session.mode = 'build'
   expect(await write('/work/src/a.ts', 'toolu_3')).toEqual(allowedInBypassMode)
-  expect(tested.shown.logs).toEqual(['modes added permission rules from its state.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds permission rules from its state.')
 })
 
 test('rules from state that throw deny the call with the reason', async () => {
@@ -66,7 +67,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
   const reachedBelow = new Promise<void>((resolve) => (reachBelow = resolve))
   const callFinished = new Promise<void>((resolve) => (finishCall = resolve))
   const coreBeneath: Job<void> = (job) => {
-    job.mod.claude.on('tool.call', async (e, next) => {
+    engineOf(job.mod).router.add('tool.call', async (e, next) => {
       reachBelow()
       await callFinished
       return next(e)
@@ -123,18 +124,18 @@ test("the main loop's agentType is the session's Agent, read from the classic ho
     }),
   )
 
-  await tested.fire('UserPromptSubmit', { prompt: 'hi', agent_type: 'cto' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hi', agent_type: 'cto' })
   await tested.fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)
 
   expect(seen).toEqual(['cto'])
 })
 
-test('a when check whose mod.process.run passes the 2 s deadline gives the rule its own decision', async () => {
+test('a when check that passes the 2 s deadline gives the rule its own decision', async () => {
   const tested = testMod(
     defineMod({
       name: 'clean-tree',
       setup(mod) {
-        mod.use(permissions({ deny: [{ command: 'git commit', when: async (_call, mod) => (await mod.process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] }))
+        mod.use(permissions({ deny: [{ command: 'git commit', when: async () => (await process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] }))
       },
     }),
     { permissions: ['run:git'] },
@@ -149,9 +150,9 @@ test('a when check whose mod.process.run passes the 2 s deadline gives the rule 
 
   const answer = await tested.fire('tool.check', bashCheck('git commit -m x', 'toolu_1'), allowedInBypassMode)
 
-  expect(answer).toEqual({ decision: 'deny', reason: 'Commit a clean tree. Its when check failed: mod.process.run passed the 2 s deadline of permissions' })
+  expect(answer).toEqual({ decision: 'deny', reason: 'Commit a clean tree. Its when check failed: it passed the 2 s deadline of permissions' })
   expect(timers).toEqual([2000])
-  expect(tested.calls.find((call) => call.call === 'process.run')?.args).toEqual([['git', 'status'], { timeoutMs: 2000 }])
+  expect(tested.calls.find((call) => call.call === 'process.run')?.args[0]).toEqual(['git', 'status'])
 })
 
 const project = '/work/dent'
@@ -207,17 +208,14 @@ test('a user-scope deny on Domain.md still denies after Claude runs cd docs', as
   expect(await tested.fire('tool.check', editCheck('/work/app/docs/Domain.md', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
-test("a command rule's when runs in the folder the command cds into", async () => {
-  const tested = inProject({ deny: [{ command: 'git commit', when: async (_call, mod) => (await mod.process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] })
+test("a command rule's when gets the work tree the command cds into as its folder", async () => {
+  const tested = inProject({ deny: [{ command: 'git commit', when: async ({ folder }) => (await process.run(['git', 'status'], { cwd: folder })).stdout !== '', reason: 'Commit a clean tree.' }] })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
   await tested.fire('tool.check', bashCheck('cd worktrees/design && git commit -m x', 'toolu_1'), allowedInBypassMode)
   await tested.fire('tool.check', bashCheck('git commit -m x', 'toolu_2'), allowedInBypassMode)
 
-  expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])).toEqual([
-    { cwd: `${project}/worktrees/design`, timeoutMs: 2000 },
-    { cwd: project, timeoutMs: 2000 },
-  ])
+  expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])).toEqual([{ cwd: `${project}/worktrees/design` }, { cwd: project }])
 })
 
 test('a rule with no target key throws in setup with the keys it accepts', async () => {

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { Args } from 'claude-code'
 import { tool } from '../../src/jobs/tool.js'
-import { defineMod } from '../../src/mod.js'
+import { defineMod, http, process } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 test('a call without the required title is denied with title named, and execute never runs', async () => {
@@ -81,8 +81,8 @@ test('execute gets the input without the keys Claude Code adds, and an object re
 
   expect(answer).toEqual({ result: '{"a":1}' })
   expect(executed).toEqual([{ title: 'Crash' }])
-  expect(handle).toEqual({ name: 'mcp__tickets__ticket' })
-  expect(tested.shown.logs).toEqual(['tickets added the ticket tool.'])
+  expect(handle?.name).toBe('mcp__tickets__ticket')
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the ticket tool.')
 })
 
 test('a call of another tool passes on, and an execute that throws is denied with its message', async () => {
@@ -108,8 +108,7 @@ test('a call of another tool passes on, and an execute that throws is denied wit
   expect(await tested.callTool('ticket', {})).toEqual({ deny: 'The ticket tool failed: the tracker is down' })
 })
 
-test('a fetch in execute that passes the 30 s deadline is denied, and process.run takes 30 s by default and a raised timeoutMs up to 10 minutes', async () => {
-  const runs: unknown[] = []
+test('an execute whose fetch passes the 30 s deadline is denied, and the next call runs', async () => {
   const tested = testMod(
     defineMod({
       name: 'tickets',
@@ -118,11 +117,7 @@ test('a fetch in execute that passes the 30 s deadline is denied, and process.ru
           tool({
             name: 'ticket',
             description: 'Open a ticket',
-            execute: async (input, { http, process }) => {
-              if (typeof input['timeoutMs'] === 'number') return (await process.run(['tracker', 'sync'], { timeoutMs: input['timeoutMs'] })).stdout
-              if (input['sync'] === true) return (await process.run(['tracker', 'sync'])).stdout
-              return (await http.fetch('https://tracker.example/new')).text
-            },
+            execute: async (input) => (input['sync'] === true ? (await process.run(['tracker', 'sync'])).stdout : (await http.fetch('https://tracker.example/new')).text),
           }),
         )
       },
@@ -130,25 +125,15 @@ test('a fetch in execute that passes the 30 s deadline is denied, and process.ru
     { permissions: ['network:tracker.example', 'run:tracker'] },
   )
   tested.fakes.http.fetch = () => new Promise(() => undefined)
-  tested.fakes.process.run = async (argv, init) => {
-    runs.push({ argv, init })
-    return { exitCode: 0, stdout: 'synced', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
-  }
+  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: 'synced', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   tested.fakes.clock.after = (ms, fn) => {
     if (ms === 30000) void Promise.resolve().then(fn)
     return { cancel: () => undefined }
   }
 
-  expect(await tested.callTool('ticket', {})).toEqual({ deny: 'The ticket tool failed: mod.http.fetch passed the 30 s deadline of tool' })
-  expect(await tested.callTool('ticket', { timeoutMs: 120000 })).toEqual({ result: 'synced' })
-  expect(await tested.callTool('ticket', { timeoutMs: 900000 })).toEqual({ result: 'synced' })
-  expect(runs).toEqual([
-    { argv: ['tracker', 'sync'], init: { timeoutMs: 120000 } },
-    { argv: ['tracker', 'sync'], init: { timeoutMs: 600000 } },
-  ])
-  runs.length = 0
-  await tested.callTool('ticket', { sync: true })
-  expect(runs).toEqual([{ argv: ['tracker', 'sync'], init: { timeoutMs: 30000 } }])
+  expect(await tested.callTool('ticket', {})).toEqual({ deny: 'The ticket tool failed: the ticket tool passed the 30 s deadline of tool' })
+  tested.fakes.clock.after = () => ({ cancel: () => undefined })
+  expect(await tested.callTool('ticket', { sync: true })).toEqual({ result: 'synced' })
 })
 
 test('an inputSchema with a key Claude Code keeps for itself throws in setup', async () => {

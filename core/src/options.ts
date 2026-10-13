@@ -1,11 +1,11 @@
-export type OptionKind = 'text' | 'secret' | 'number' | 'toggle' | 'choice' | 'folder' | 'file' | 'list'
+export type OptionType = 'text' | 'secret' | 'number' | 'toggle' | 'choice' | 'folder' | 'file' | 'list'
 
 export type OptionValue = string | number | boolean | readonly string[]
 
 type Described = { readonly title: string; readonly description: string }
 
 export type Option<Value extends OptionValue = OptionValue> = Described & {
-  readonly kind: OptionKind
+  readonly type: OptionType
   readonly default?: Value
   readonly min?: number
   readonly max?: number
@@ -27,17 +27,17 @@ export type UserConfigField = Described & {
 }
 
 export const option = {
-  text: (field: Described & { readonly default?: string }): Option<string> => ({ ...field, kind: 'text' }),
-  secret: (field: Described): Option<string> => ({ ...field, kind: 'secret' }),
-  number: (field: Described & { readonly default?: number; readonly min?: number; readonly max?: number }): Option<number> => ({ ...field, kind: 'number' }),
-  toggle: (field: Described & { readonly default?: boolean }): Option<boolean> => ({ ...field, kind: 'toggle', default: field.default ?? false }),
-  choice: <const Choice extends string>(choices: readonly Choice[], field: Described & { readonly default?: Choice }): Option<Choice> => ({ ...field, kind: 'choice', choices }),
-  folder: (field: Described & { readonly default?: string }): Option<string> => ({ ...field, kind: 'folder' }),
-  file: (field: Described & { readonly default?: string }): Option<string> => ({ ...field, kind: 'file' }),
-  list: (field: Described & { readonly default?: readonly string[] }): Option<readonly string[]> => ({ ...field, kind: 'list' }),
+  text: (field: Described & { readonly default?: string }): Option<string> => ({ ...field, type: 'text' }),
+  secret: (field: Described): Option<string> => ({ ...field, type: 'secret' }),
+  number: (field: Described & { readonly default?: number; readonly min?: number; readonly max?: number }): Option<number> => ({ ...field, type: 'number' }),
+  toggle: (field: Described & { readonly default?: boolean }): Option<boolean> => ({ ...field, type: 'toggle', default: field.default ?? false }),
+  choice: <const Choice extends string>(choices: readonly Choice[], field: Described & { readonly default?: Choice }): Option<Choice> => ({ ...field, type: 'choice', choices }),
+  folder: (field: Described & { readonly default?: string }): Option<string> => ({ ...field, type: 'folder' }),
+  file: (field: Described & { readonly default?: string }): Option<string> => ({ ...field, type: 'file' }),
+  list: (field: Described & { readonly default?: readonly string[] }): Option<readonly string[]> => ({ ...field, type: 'list' }),
 }
 
-const types: Readonly<Record<OptionKind, UserConfigField['type']>> = { text: 'string', secret: 'string', number: 'number', toggle: 'boolean', choice: 'string', folder: 'directory', file: 'file', list: 'string' }
+const types: Readonly<Record<OptionType, UserConfigField['type']>> = { text: 'string', secret: 'string', number: 'number', toggle: 'boolean', choice: 'string', folder: 'directory', file: 'file', list: 'string' }
 
 const optionKey = /^[A-Za-z_]\w*$/
 
@@ -46,8 +46,8 @@ export function checkOptions(name: string, options: Options): Options {
     const at = `${name}: options.${key}`
     if (!optionKey.test(key)) throw new Error(`${at} is not an option name. Use letters, digits, and _, starting with a letter, as Claude Code passes each option on as CLAUDE_PLUGIN_OPTION_${key.toUpperCase()}.`)
     if (declared.title.trim() === '') throw new Error(`${at} needs a title, the label /config shows.`)
-    if (declared.kind === 'choice' && (declared.choices ?? []).length === 0) throw new Error(`${at} is a choice with no choices. Give option.choice(['a', 'b'], { ... }).`)
-    if (declared.kind === 'choice' && declared.default !== undefined && !(declared.choices ?? []).includes(declared.default as string)) throw new Error(`${at} defaults to ${String(declared.default)}, which is not one of its choices: ${(declared.choices ?? []).join(', ')}.`)
+    if (declared.type === 'choice' && (declared.choices ?? []).length === 0) throw new Error(`${at} is a choice with no choices. Give option.choice(['a', 'b'], { ... }).`)
+    if (declared.type === 'choice' && declared.default !== undefined && !(declared.choices ?? []).includes(declared.default as string)) throw new Error(`${at} defaults to ${String(declared.default)}, which is not one of its choices: ${(declared.choices ?? []).join(', ')}.`)
   }
   return options
 }
@@ -57,12 +57,12 @@ export function userConfigOf(options: Options): Record<string, UserConfigField> 
     Object.entries(options).map(([key, declared]) => [
       key,
       {
-        type: types[declared.kind],
+        type: types[declared.type],
         title: declared.title,
         description: declared.description,
-        ...(declared.kind === 'secret' ? { sensitive: true } : {}),
-        ...(declared.kind === 'list' ? { multiple: true } : {}),
-        ...(declared.kind === 'choice' ? { options: declared.choices } : {}),
+        ...(declared.type === 'secret' ? { sensitive: true } : {}),
+        ...(declared.type === 'list' ? { multiple: true } : {}),
+        ...(declared.type === 'choice' ? { options: declared.choices } : {}),
         ...(declared.default === undefined ? {} : { default: declared.default }),
         ...(declared.min === undefined ? {} : { min: declared.min }),
         ...(declared.max === undefined ? {} : { max: declared.max }),
@@ -76,16 +76,16 @@ export function isUnset(value: unknown): boolean {
 }
 
 export function fitsOption(declared: Option, value: unknown): string | undefined {
-  const kind = declared.kind
-  if (kind === 'toggle') return typeof value === 'boolean' ? undefined : 'takes true or false'
-  if (kind === 'number') {
+  const type = declared.type
+  if (type === 'toggle') return typeof value === 'boolean' ? undefined : 'takes true or false'
+  if (type === 'number') {
     if (typeof value !== 'number' || !Number.isFinite(value)) return 'takes a number'
     if (declared.min !== undefined && value < declared.min) return `takes ${declared.min} or more`
     if (declared.max !== undefined && value > declared.max) return `takes ${declared.max} or less`
     return undefined
   }
-  if (kind === 'list') return Array.isArray(value) && value.every((item) => typeof item === 'string') ? undefined : 'takes a list of text'
+  if (type === 'list') return Array.isArray(value) && value.every((item) => typeof item === 'string') ? undefined : 'takes a list of text'
   if (typeof value !== 'string') return 'takes text'
-  if (kind === 'choice' && !(declared.choices ?? []).includes(value)) return `takes one of: ${(declared.choices ?? []).join(', ')}`
+  if (type === 'choice' && !(declared.choices ?? []).includes(value)) return `takes one of: ${(declared.choices ?? []).join(', ')}`
   return undefined
 }

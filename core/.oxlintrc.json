@@ -42,7 +42,7 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(register|mod|records|options|testing|path|shell)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
+              { "regex": "^(\\.\\./)+((jobs|runtime|session|testing|ui)/|(register|mod|records|options|testing|path|shell)\\.js$)", "message": "utils/ imports only utils/ and the vendored libraries." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
           }
@@ -56,8 +56,23 @@
           "error",
           {
             "patterns": [
-              { "regex": "^(\\.\\./)+((jobs|runtime|testing|utils)/|(register|records|testing|path|shell)\\.js$)", "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
+              { "regex": "^(\\.\\./)+((jobs|runtime|session|testing|utils)/|(register|records|testing|path|shell)\\.js$)", "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
               { "regex": "^(\\.\\./)+mod\\.js$", "allowTypeImports": true, "message": "ui/ imports only ui/, the vendored libraries, and types from mod.ts." },
+              { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/session/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              { "regex": "^(\\.\\./)+((jobs|runtime|testing|ui)/|(register|options|testing|path|shell)\\.js$)", "message": "session/ builds on utils/ and records.ts, and imports only types from mod.ts." },
+              { "regex": "^(\\.\\./)+mod\\.js$", "allowTypeImports": true, "message": "session/ builds on utils/ and records.ts, and imports only types from mod.ts." },
               { "regex": "^@cmodjs/core(/|$)", "message": "Import core/src/ by relative path." }
             ]
           }

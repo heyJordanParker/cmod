@@ -62,8 +62,8 @@ export function createModFiles({
     const extensionless = !realPath.slice(realPath.lastIndexOf('/') + 1).includes('.')
     const firstLine = extensionless ? (await claude.fs.read(realPath)).split('\n', 1)[0] : undefined
     const format = formatOf(realPath, firstLine)
-    const holder = format.kind === 'sidecar' ? `${realPath}${sidecarSuffix}` : realPath
-    const sidecar = format.kind === 'sidecar' ? await claude.fs.stat(holder).catch(ifMissing(undefined)) : undefined
+    const holder = format.type === 'sidecar' ? `${realPath}${sidecarSuffix}` : realPath
+    const sidecar = format.type === 'sidecar' ? await claude.fs.stat(holder).catch(ifMissing(undefined)) : undefined
     return { realPath, format, holder, signature: `${stat.mtimeMs}:${stat.size}:${sidecar?.kind === 'file' ? `${sidecar.mtimeMs}:${sidecar.size}` : ''}` }
   }
 
@@ -71,7 +71,7 @@ export function createModFiles({
 
   const skipped = <Value>(path: string, value: Value) => (error: unknown): Value => {
     if (isMissing(error)) return value
-    const reason = `${name}: mod.fs.find skipped ${path}: ${messageOf(error)}`
+    const reason = `${name}: fs.find skipped ${path}: ${messageOf(error)}`
     if (!logged.has(reason)) claude.ui.log(reason, { to: 'debug' })
     logged.add(reason)
     return value

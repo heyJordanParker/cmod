@@ -224,6 +224,10 @@ export async function linkedFolders(): Promise<string[]> {
   return entriesOf(text).map(expand)
 }
 
+export async function isLinked(folder: string): Promise<boolean> {
+  return (await linkedFolders()).some((entry) => sameFolder(entry, folder))
+}
+
 export async function addPluginFolder(folder: string): Promise<boolean> {
   const { path, text } = await readSettings()
   const entries = entriesOf(text)

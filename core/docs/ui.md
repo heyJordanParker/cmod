@@ -1,14 +1,15 @@
 # UI
 
-A mod draws in four places: its own panes, the rows Claude Code draws (slots), the blocks of Claude's replies (markdown slots), and short messages: toasts and questions. All of it lives on `mod.ui`.
+A mod draws in four ways: its own panes, the rows Claude Code draws (places), the blocks of Claude's replies (markdown places), and short messages: toasts, questions, and notices. All of it lives on `mod.ui`.
 
 ```ts
 mod.ui.pane(pane: Pane<State>): PaneHandle
-mod.ui.render<S extends Slot>(slot: S, Component: (props: SlotProps<S>) => RenderElement): void
+mod.ui.render<P extends Place>(place: P, Component: (props: PlaceProps<P>) => RenderElement): Disposable
 mod.ui.toast: Toast
 mod.ui.copy(text: string): Promise<void>
 mod.ui.ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
 mod.ui.scroll(args: UiScrollArgs): Promise<UiScrollResult>
+mod.ui.notice(callId: string, text: string | undefined): void
 ```
 
 Claude Mod Manager (cmod) draws the mod again whenever a value in `mod.state` changes. A render reads `mod.state` and returns what to show. It never draws by hand.
@@ -51,7 +52,7 @@ An element built outside a render, at module load or in a hook, holds its props 
 
 ## Components
 
-`ui/components.js` exports controls built from the elements and Claude Code's theme colors, so they follow the person's theme and look the same in every mod. Each is a component like the ones a mod writes: a function of props, used in a pane's `render` or a slot's component.
+`ui/components.js` exports controls built from the elements and Claude Code's theme colors, so they follow the person's theme and look the same in every mod. Each is a component like the ones a mod writes: a function of props, used in a pane's `render` or a place's component.
 
 ```ts
 Tabs(props: { tabs: readonly { key: string; label: string }[]; selected: string; onSelect(key: string): void; children? })
@@ -248,110 +249,121 @@ export const notes = defineMod({
 })
 ```
 
-## Slots: change a row Claude Code draws
+## Places: change a row Claude Code draws
 
-`mod.ui.render(slot, Component)` draws in place of one of Claude Code's own rows. `ui/slots.js` exports `slots`:
+`mod.ui.render(place, Component)` draws in place of one of Claude Code's own rows. `mod.js` exports each place as a constant. A message type is a place too, so `Reply` is where Claude Code draws a reply:
 
-| Slot | What Claude Code draws there |
+| Place | What Claude Code draws there |
 | --- | --- |
-| `slots.AssistantMessage` | One text block of Claude's reply |
-| `slots.UserMessage` | A user row: the prompt, a task notification, or another agent's message |
-| `slots.ToolUse` | A tool call's row |
-| `slots.ToolResult` | A tool call's result |
-| `slots.ToolGroup` | The condensed row of a group of tool calls |
-| `slots.ToolProgress` | A tool's progress line |
-| `slots.CommandOutput` | A slash command's output |
-| `slots.AskUserQuestion` | The dialog the AskUserQuestion tool opens |
-| `slots.InfoNotice` | A dim status line under the logo |
-| `slots.Spinner` | The spinner line while Claude works |
-| `slots.TurnDuration` | The line that closes a turn |
-| `slots.SessionMode` | The session's modes |
-| `slots.PromptHint` | The prompt's hint line, such as `? for shortcuts` |
-| `slots.AbovePrompt` | The band above the prompt, where surveys draw |
+| `Reply` | One text block of Claude's reply |
+| `Prompt` | A prompt row: the person's prompt, a task notification, or another session's message |
+| `ToolCall` | A tool call's row |
+| `ToolResult` | A tool call's result |
+| `Notice` | A dim status line under the logo |
+| `ToolGroup` | The condensed row of a group of tool calls |
+| `ToolProgress` | A tool's progress line |
+| `CommandOutput` | A slash command's output |
+| `AskUserQuestion` | The dialog the AskUserQuestion tool opens |
+| `Spinner` | The spinner line while Claude works |
+| `TurnDuration` | The line that closes a turn |
+| `SessionMode` | The session's modes |
+| `PromptHint` | The prompt's hint line, such as `? for shortcuts` |
+| `AbovePrompt` | The band above the prompt, where surveys draw |
 
-`Component` gets `SlotProps<S>`: the props Claude Code types as `RenderPropsOf['<Slot>']`, plus `Default`.
+`Component` gets `PlaceProps<P>`: the props Claude Code draws that row with, plus `Default`.
 
 - `Default` draws what Claude Code, and the renders of other mods, would draw. Pass it props to change what it draws, such as `<Default hint="…" />`. Return `<Default />` to change nothing.
 - A render adds to what it wraps. In `AbovePrompt`, drawing `<Default />` and a line under it keeps the lines of Claude Code and other mods.
 - A render must draw the same for the same props. One that calls `Default` a different number of times on a second draw falls back to Claude Code's drawing.
-- A render that throws falls back to Claude Code's drawing. cmod logs `<mod>: the <Slot> render threw, so Claude Code draws its own: <error>` once.
-- A mod renders each slot once. A second `mod.ui.render` of one slot throws `<mod>: a render of <Slot> is already added. Render each slot once.` For a markdown slot the error names it as `a render of markdown <Kind>`, such as `a render of markdown CodeBlock`.
-- `slots.ToolUse` changes a call's own row. A group of calls shows the `slots.ToolGroup` row, which Claude Code builds from the stored message, so a mod that hides a tool's input also sets `isExpanded` on `slots.ToolGroup` to unfold the group into `ToolUse` rows.
-- No slot covers the permission dialog.
+- A render that throws, or draws differently on a second pass, falls back to Claude Code's drawing, and cmod shows the error toast `The <Place> render failed` once, with the reason under it.
+- A mod renders each place once. A second `mod.ui.render` of one place throws `<mod>: a render of <Place> is already added. Render each place once.`
+- `render` returns a `Disposable`. `dispose()` takes the render back, and Claude Code draws the row as before ([mod.md](mod.md#disposable)).
+- `ToolCall` changes a call's own row. A group of calls shows the `ToolGroup` row, which Claude Code builds from the stored message, so a mod that hides a tool's input also sets `isExpanded` on `ToolGroup` to unfold the group into `ToolCall` rows.
+- No place covers the permission dialog. `mod.ui.notice` adds a line under it instead ([Notices](#notices)).
 
 ```tsx
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { AbovePrompt, defineMod, PromptHint, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
 import { Box, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
-import { slots } from '../node_modules/@cmodjs/core/ui/slots.js'
 
 export const hints = defineMod({
   name: 'hints',
   state: { session: { prompts: 0 } },
   setup(mod) {
-    mod.ui.render(slots.PromptHint, ({ hint, Default }) => <Default hint={hint.toUpperCase()} />)
-    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) =>
+    mod.ui.render(PromptHint, ({ hint, Default }) => <Default hint={hint.toUpperCase()} />)
+    mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) =>
       hasSurvey ? <Default /> : (
         <Box flexDirection="column">
           <Default />
           <Text dimColor>{`Prompts: ${mod.state.session.prompts}`}</Text>
         </Box>
       ))
-    mod.on('UserPromptSubmit', () => {
+    mod.on(UserPromptSubmit, () => {
       mod.state.session.prompts += 1
     })
   },
 })
 ```
 
-`Slot` and `SlotProps` are the types behind `slots`. Type a component's props as `SlotProps<typeof slots.PromptHint>`.
+`Place` is the type of every place, and `PlaceProps` the props of one. Type a component's props as `PlaceProps<typeof PromptHint>`.
 
-## Markdown slots: change the blocks of a reply
+## Markdown places: change the blocks of a reply
 
-`ui/markdown.js` exports `markdownSlots`, one per markdown block:
+Each markdown block of a reply is a place of its own. `ui/markdown.js` exports these places, apart from the rest, because it brings the markdown reader, about 230 KB that takes some 18 ms to load. A mod that imports none of them starts without it.
 
-| Slot | Block | Props beyond `text` and `source` |
+| Place | Block | Props beyond `text` and `source` |
 | --- | --- | --- |
-| `markdownSlots.Heading` | A heading | `depth`, 1 to 6 |
-| `markdownSlots.Paragraph` | A paragraph | none |
-| `markdownSlots.CodeBlock` | A code block | `lang`, `meta`, `value` |
-| `markdownSlots.BlockQuote` | A block quote | none |
-| `markdownSlots.List` | A list | `ordered`, `start`, `spread` |
-| `markdownSlots.Table` | A table | `align` |
-| `markdownSlots.ThematicBreak` | A `---` line | none |
-| `markdownSlots.HtmlBlock` | An HTML block | `value` |
+| `Heading` | A heading | `depth`, 1 to 6 |
+| `Paragraph` | A paragraph | none |
+| `CodeBlock` | A code block | `lang`, `meta`, `value` |
+| `BlockQuote` | A block quote | none |
+| `List` | A list | `ordered`, `start`, `spread` |
+| `Table` | A table | `align` |
+| `ThematicBreak` | A `---` line | none |
+| `HtmlBlock` | An HTML block | `value` |
 
 - `text` is the block's plain text, one line per list item, table row, or quoted line. `source` is the block's markdown.
 - `Default` draws the block as Claude Code would. `<Default source="…" />` draws other markdown in its place.
-- A markdown slot render draws in Claude's replies and in every `Markdown` element of the mod's panes.
+- A markdown render draws in Claude's replies and in every `Markdown` element of the mod's panes.
 - While a reply streams in, Claude Code draws a block that is not finished yet. The mod draws it once it is.
-- A render that throws falls back to Claude Code's drawing of the block and logs once.
+- A render that throws falls back to Claude Code's drawing of the block, and shows the error toast once.
 
 ```tsx
 import type { RenderElement } from 'claude-code'
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, type PlaceProps } from '../node_modules/@cmodjs/core/mod.js'
+import { CodeBlock } from '../node_modules/@cmodjs/core/ui/markdown.js'
 import { Text } from '../node_modules/@cmodjs/core/ui/elements.js'
-import { markdownSlots } from '../node_modules/@cmodjs/core/ui/markdown.js'
-import type { SlotProps } from '../node_modules/@cmodjs/core/ui/slots.js'
 
-function MermaidBlock({ lang, value, Default }: SlotProps<typeof markdownSlots.CodeBlock>): RenderElement {
+function MermaidBlock({ lang, value, Default }: PlaceProps<typeof CodeBlock>): RenderElement {
   return lang === 'mermaid' ? <Text>{`diagram: ${value}`}</Text> : <Default />
 }
 
 export const diagrams = defineMod({
   name: 'diagrams',
   setup(mod) {
-    mod.ui.render(markdownSlots.CodeBlock, MermaidBlock)
+    mod.ui.render(CodeBlock, MermaidBlock)
   },
 })
 ```
 
 ```ts
-markdownBlocks<S>(text: string, slot: S): Omit<SlotProps<S>, 'Default'>[]
+markdownBlocks<P extends MarkdownPlace>(text: string, place: P): Omit<PlaceProps<P>, 'Default'>[]
 ```
 
-`markdownBlocks` returns the props of every block of one kind in a markdown text. A test uses it to call a component with real props.
+`markdownBlocks`, exported from `ui/markdown.js`, returns the props of every block at one markdown place in a markdown text, such as every code block of a reply. A mod reads the blocks of a reply it got in a hook with it, and a test calls a component with real props.
 
-`MarkdownKind`, `MarkdownReader`, and `MarkdownPiece` are the types behind `markdownSlots`. A mod never builds them.
+```ts
+import { CodeBlock, markdownBlocks } from '../node_modules/@cmodjs/core/ui/markdown.js'
+
+const diagrams = markdownBlocks(reply, CodeBlock).filter((block) => block.lang === 'mermaid')
+```
+
+## Notices
+
+```ts
+mod.ui.notice(callId: string, text: string | undefined): void
+```
+
+`notice` shows `text` as one line under the permission dialog that is open for the tool call `callId`, the call's `tool_use_id`, such as `checked by safe-delete`. `undefined` removes the line, and Claude Code removes it on its own once the call is decided. A call with no open dialog takes no line.
 
 ## Toasts
 
@@ -380,13 +392,13 @@ type ToastOptions = {
 - `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, fs, SessionStart, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const indexer = defineMod({
   name: 'indexer',
   setup(mod) {
-    mod.on('SessionStart', async () => {
-      const indexed = mod.fs.list(mod.projectRoot).then((entries) => entries.length)
+    mod.on(SessionStart, async () => {
+      const indexed = fs.list(sessions.current.project).then((entries) => entries.length)
       mod.ui.toast.promise(indexed, { loading: 'Indexing files', success: (count) => `Indexed ${count} files`, error: 'Indexing failed' })
     })
   },
@@ -408,14 +420,14 @@ type AskOptions = { options?: readonly string[]; header?: string; multiSelect?: 
 `ask` shows a question with 2 to 4 options and resolves the answer. Fewer than two options are padded with Yes and No, and the person may type an answer of their own. `header` is a short chip beside the question, 12 characters at most. `multiSelect` lets the person pick several, and the answer comes back joined by commas.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, process, sessions, Stop } from '../node_modules/@cmodjs/core/mod.js'
 
 export const committer = defineMod({
   name: 'committer',
   setup(mod) {
-    mod.on('Stop', async () => {
+    mod.on(Stop, async () => {
       const answer = await mod.ui.ask('Commit the changes?', { options: ['Commit', 'Wait'], header: 'Commit' })
-      if (answer === 'Commit') await mod.process.run(['git', 'commit', '-am', 'wip'], { cwd: mod.projectRoot })
+      if (answer === 'Commit') await process.run(['git', 'commit', '-am', 'wip'], { cwd: sessions.current.project })
     })
   },
 })
@@ -433,12 +445,12 @@ mod.ui.scroll(args: { to: 'start' | 'end' | { key: string } | { requestId: strin
 <Button label="Latest" onPress={() => mod.ui.scroll({ to: 'end', in: 'log' })} />
 ```
 
-A [Message](mod.md#mod-history)'s `id` is the row Claude Code draws it under, and each of its tool calls' `id` is that call's row, so a history pane brings the conversation to the message a person presses:
+A [message](session.md#message)'s `id` names the row Claude Code draws it under, so a history pane brings the conversation to the message a person presses. When one row holds several messages, such as a reply with its tool calls, each `id` ends in `:<n>`, and the row is the `id` before it:
 
 ```tsx
-<Button label={message.text} onPress={() => mod.ui.scroll({ to: { requestId: message.id } })} />
+<Button label={message.text} onPress={() => mod.ui.scroll({ to: { requestId: message.id.split(':')[0] } })} />
 ```
 
 ## Test the UI
 
-`tested.lines(paneId)` reads an open pane as rows of text. `tested.lines(slot, props)` draws a slot render. `tested.press(paneId, key)` presses a button. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.
+`tested.lines(paneId)` reads an open pane as rows of text. `tested.lines(place, props)` draws a place render. `tested.press(paneId, key)` presses a button. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.

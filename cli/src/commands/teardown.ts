@@ -53,12 +53,12 @@ export async function teardownInTerminal(name: string, progress: Progress): Prom
   if (record !== undefined) progress.step(heading)
   let isAnswered = false as boolean
   const code = await tearDown(name, (event) => {
-    if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
-    if (event.kind === 'log') progress.log(event.text)
-    if (event.kind === 'missing') progress.skip(`${name} has no install record, so there is nothing to tear down. cmod list shows the mods cmod set up.`)
-    if (event.kind === 'failed') progress.fail(event.message)
-    if (event.kind === 'done') progress.succeed(record?.uninstall ? `Ran the uninstall step of ${name} and removed what cmod set up for it` : `Removed what cmod set up for ${name}`)
-    isAnswered ||= event.kind === 'missing' || event.kind === 'failed' || event.kind === 'done'
+    if (event.type === 'progress') progress.update(heading, event.done, event.total, event.label)
+    if (event.type === 'log') progress.log(event.text)
+    if (event.type === 'missing') progress.skip(`${name} has no install record, so there is nothing to tear down. cmod list shows the mods cmod set up.`)
+    if (event.type === 'failed') progress.fail(event.message)
+    if (event.type === 'done') progress.succeed(record?.uninstall ? `Ran the uninstall step of ${name} and removed what cmod set up for it` : `Removed what cmod set up for ${name}`)
+    isAnswered ||= event.type === 'missing' || event.type === 'failed' || event.type === 'done'
   })
   if (!isAnswered) progress.fail(`Cancelled uninstalling ${name} on ${hold.signal}, before its uninstall step started. Run cmod teardown ${name} to finish.`)
   return code
@@ -73,11 +73,11 @@ async function tearDown(name: string, emit: (event: RunnerEvent) => void): Promi
   if (record === undefined) {
     await removeData(name)
     await revokeApprovals(name)
-    emit({ kind: 'missing', name })
+    emit({ type: 'missing', name })
     return 0
   }
   const code = await removeSetup(record, emit)
-  if (code === 0) emit({ kind: 'done', name })
+  if (code === 0) emit({ type: 'done', name })
   return code
 }
 
@@ -87,7 +87,7 @@ async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => 
   if (record.uninstall !== null) {
     const { exitCode, lastError } = await runStep(uninterruptible(['sh', record.uninstall]), folder, await stepEnvironment(join(folder, 'root'), record.name, record.version), emit)
     if (exitCode !== 0) {
-      emit({ kind: 'failed', code: exitCode, message: `The uninstall step of ${record.name} ${formatExit(exitCode, lastError)}. Fix ${tilde(record.uninstall)}, then run cmod teardown ${record.name}.` })
+      emit({ type: 'failed', code: exitCode, message: `The uninstall step of ${record.name} ${formatExit(exitCode, lastError)}. Fix ${tilde(record.uninstall)}, then run cmod teardown ${record.name}.` })
       return 1
     }
   }

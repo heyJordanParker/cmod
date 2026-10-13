@@ -1,6 +1,6 @@
 # Permissions
 
-A mod declares what it does beyond drawing and answering hooks: the hosts it connects to, the programs it runs, the files it changes outside its project, and whether it reads the conversation, adds text Claude reads, asks a model, starts agents, uses Claude's tools, changes Claude Code's settings, or approves tool calls. The person sees each permission as one sentence when they install the mod, turns each one on or off in `/mods`, and cmod checks every call and every answer against what they granted.
+A mod declares what it does beyond drawing and answering hooks: the hosts it connects to, the programs it runs, the files it changes outside its project, and whether it reads the conversation, adds text Claude reads, asks a model, starts tasks, uses Claude's tools, changes Claude Code's settings, or approves tool calls. The person sees each permission as one sentence when they install the mod, turns each one on or off in `/mods`, and cmod checks every call and every answer against what they granted.
 
 Permissions bind every mod built on `@cmodjs/core`, and the plugin directory reads them from `package.json`. They are a contract, not a sandbox: a Claude Code plugin can skip cmod and call Claude Code directly.
 
@@ -16,18 +16,18 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 
 | Permission | The person reads | cmod checks |
 | --- | --- | --- |
-| `"network": ["api.github.com"]` | Connect to api.github.com | `mod.http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"`. The address of the mod's own running `program` job needs none |
-| `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `mod.process.run`, `mod.process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` and the copy in cmod's programs folder |
-| `"files": ["~/.zshrc"]` | Change ~/.zshrc | `mod.fs.write` and `mod.metadata.update` outside the project and the mod's data folder. A folder covers every file below it |
-| `"conversation": true` | Read your Claude Code conversations | `mod.history`, `mod.claude.session.messages`, and reading Claude Code's transcript files |
-| `"prompt": true` | Add text Claude reads and start turns | `mod.session.append`, `mod.session.submit`, the `prompt` and `schedule` jobs, and the hook answers listed below |
-| `"model": true` | Ask a model, which uses your plan | `mod.model.complete` |
-| `"agents": true` | Start agents | `mod.agent.spawn` |
-| `"tools": true` | Use and change Claude's tool calls | `mod.claude.tool.call`, and a hook that changes a tool call's input |
-| `"config": ["cleanupPeriodDays"]` | Change cleanupPeriodDays in your Claude Code settings | `mod.claude.settings.update` of that setting, in any source. `mcpServers` covers the project's `.mcp.json` |
+| `"network": ["api.github.com"]` | Connect to api.github.com | `http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"`. The address of the mod's own running `program` job needs none |
+| `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `process.run`, `process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` and the copy in cmod's programs folder |
+| `"files": ["~/.zshrc"]` | Change ~/.zshrc | `fs.write` and `metadata.update` outside the project and the mod's data folder. A folder covers every file below it |
+| `"conversation": true` | Read your Claude Code conversations | Reading `sessions`: their messages, turns, contexts, goals, and tasks, `sessions.list`, `sessions.search`, and a session's `on`. Also reading Claude Code's transcript files |
+| `"prompt": true` | Add text Claude reads and start turns | A session's `send`, the `prompt` and `schedule` jobs, and the hook answers listed below |
+| `"model": true` | Ask a model, which uses your plan | `model.complete` |
+| `"tasks": true` | Start tasks that work beside Claude | `sessions.current.startTask` |
+| `"tools": true` | Use and change Claude's tool calls | A listener or a job that changes a tool call's input |
+| `"config": ["cleanupPeriodDays"]` | Change cleanupPeriodDays in your Claude Code settings | `settings.user.update`, `settings.project.update`, and `settings.local.update` of that setting. `mcpServers` covers the project's `.mcp.json` |
 | `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A deny needs no permission |
 
-Reading files, drawing panes and slot renders, toasts, slash commands, tools of the mod's own, and hooks need no permission. Writing a Claude Code settings file with `mod.fs.write` is refused with every permission, and names `mod.claude.settings.update` ([mod.md](mod.md#mod-settings)).
+Reading files, drawing panes and renders, toasts, slash commands, tools of the mod's own, and listeners need no permission. Writing a Claude Code settings file with `fs.write` is refused with every permission, and names the `settings` call to use instead ([mod.md](mod.md#settings-claude-code-s-settings-files)).
 
 `cmod check` adds `"approve": true` to `package.json` when `hooks/register.ts` calls `registerPermissionCheck` and the line is missing, and says so.
 
@@ -46,16 +46,27 @@ The install opens the installer pane in Claude Code and lists every permission i
 ## Check a permission before a feature uses it
 
 ```ts
-mod.permissions.has(name: 'network' | 'run' | 'files' | 'config', value: string): boolean
-mod.permissions.has(name: 'conversation' | 'prompt' | 'model' | 'agents' | 'tools' | 'approve'): boolean
+type Permissions = {
+  readonly conversation: boolean
+  readonly prompt: boolean
+  readonly model: boolean
+  readonly tasks: boolean
+  readonly tools: boolean
+  readonly approve: boolean
+  readonly network: { allows(host: string): boolean }
+  readonly run: { allows(program: string): boolean }
+  readonly files: { allows(path: string): boolean }
+  readonly config: { allows(key: string): boolean }
+}
 ```
 
-`has` says whether the person has the permission turned on, so a mod hides a feature instead of failing it:
+`mod.permissions` says whether the person has each permission turned on, so a mod hides a feature instead of failing it. A flag is `true` while it is granted, and `allows` answers for one host, program, path, or settings key:
 
 ```ts
-if (mod.permissions.has('model')) {
-  const verdict = await mod.model.complete({ prompt: 'Is this reply a waste of time?' })
+if (mod.permissions.model) {
+  const verdict = await model.complete({ model: 'haiku', prompt: 'Is this reply a waste of time?' })
 }
+if (mod.permissions.run.allows('gh')) mod.every(60_000, refreshRuns)
 ```
 
 ## When a call has no grant

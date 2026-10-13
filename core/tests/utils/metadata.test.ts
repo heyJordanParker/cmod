@@ -1,15 +1,15 @@
 import { expect, test } from 'bun:test'
 import { formatOf, readMetadata, writeMetadata } from '../../src/utils/metadata.js'
 
-const markdown = { kind: 'frontmatter' } as const
-const shell = { kind: 'comment', prefix: '#' } as const
-const sidecar = { kind: 'sidecar' } as const
+const markdown = { type: 'frontmatter' } as const
+const shell = { type: 'comment', prefix: '#' } as const
+const sidecar = { type: 'sidecar' } as const
 
 test('formatOf picks frontmatter for Markdown, a comment block for scripts and config, and a sidecar for the rest', () => {
   expect(formatOf('/a/SKILL.md', undefined)).toEqual(markdown)
   expect(formatOf('/a/lint.sh', undefined)).toEqual(shell)
-  expect(formatOf('/a/hook.ts', undefined)).toEqual({ kind: 'comment', prefix: '//' })
-  expect(formatOf('/a/query.sql', undefined)).toEqual({ kind: 'comment', prefix: '--' })
+  expect(formatOf('/a/hook.ts', undefined)).toEqual({ type: 'comment', prefix: '//' })
+  expect(formatOf('/a/query.sql', undefined)).toEqual({ type: 'comment', prefix: '--' })
   expect(formatOf('/a/deploy', '#!/bin/sh')).toEqual(shell)
   expect(formatOf('/a/settings.json', undefined)).toEqual(sidecar)
   expect(formatOf('/a/logo.png', undefined)).toEqual(sidecar)

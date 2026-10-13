@@ -17,28 +17,35 @@ import type {
   UiPressArgument,
   UiSelectArgument,
 } from 'claude-code'
-import type { Reply } from './jobs/slash-command.js'
-import type { ModDefinition, ModEvent } from './mod.js'
+import type { CommandReply } from './jobs/slash-command.js'
+import type { Hook, ModDefinition } from './mod.js'
 import type { Options, OptionValues } from './options.js'
 import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
-import { answerCall, notInstalled } from './runtime/dependencies.js'
+import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
+import { conversationMethods } from './runtime/sessions.js'
 import type { ShownToast } from './runtime/toaster.js'
+import type { Message } from './session/context/turn/message/message.js'
+import { Note } from './session/context/turn/message/note.js'
+import { Prompt } from './session/context/turn/message/prompt.js'
+import { Mod, Person } from './session/context/turn/message/sender.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
-import { fakeHistory, type FakeHistory } from './testing/fake-history.js'
+import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft } from './testing/fake-sessions.js'
 import { listed } from './utils/text.js'
-import type { Slot, SlotProps } from './ui/slots.js'
+import { componentOf, type ComponentPlace, type PlaceProps } from './ui/places.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
+export type { FakeSession, MessageDraft } from './testing/fake-sessions.js'
+export type { RoutedEvent } from './runtime/hooks.js'
 export type { ShownToast } from './runtime/toaster.js'
 
-export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[] }
+export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent'] }
 
 export type TestOptions<State extends object, Declared extends Options = Options> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
@@ -50,24 +57,28 @@ export type TestOptions<State extends object, Declared extends Options = Options
   readonly dependencies?: { readonly [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
   readonly links?: Readonly<Record<string, string>>
-  readonly history?: FakeHistory
+  readonly sessions?: readonly FakeSession[]
 }
 
 type FilledField = 'session_id' | 'transcript_path' | 'cwd' | 'hook_event_name' | 'tool_use_id'
 
-export type TestInput<E extends ModEvent> = Omit<ClassicHookInputs[E], FilledField> & Partial<Pick<ClassicHookInputs[E], FilledField & keyof ClassicHookInputs[E]>>
+export type TestInput<H extends Hook> = Omit<ClassicHookInputs[H], FilledField> & Partial<Pick<ClassicHookInputs[H], FilledField & keyof ClassicHookInputs[H]>>
 
 export type TestedMod<State extends object> = {
   start(): Promise<void>
-  fire<E extends ModEvent>(event: E, input: TestInput<E>, below?: EventResult<`classic.${E}`>): Promise<EventResult<`classic.${E}`>>
+  fire<H extends Hook>(hook: H, input: TestInput<H>, below?: EventResult<`classic.${H}`>): Promise<EventResult<`classic.${H}`>>
   fire<N extends RoutedEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
   settle(): Promise<void>
+  add(message: MessageDraft, options?: { readonly task?: string }): Promise<Message[]>
+  endTurn(): Promise<void>
+  compact(): Promise<void>
+  startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
-  lines<S extends Slot<object, object, { readonly component: RenderComponent }>>(slot: S, props: Omit<SlotProps<S>, 'Default'>, requestId?: string): Promise<string[]>
-  type(line: string): Promise<Reply>
+  lines<P extends ComponentPlace>(place: P, props: Omit<PlaceProps<P>, 'Default'>, requestId?: string): Promise<string[]>
+  type(line: string): Promise<CommandReply>
   callTool(name: string, input: Record<string, unknown>): Promise<EventResult<'tool.call'>>
   press(paneId: string, key: string, link?: string): Promise<void>
-  input(paneId: string, key: string, text: string, kind?: UiInputArgument['kind']): Promise<void>
+  input(paneId: string, key: string, text: string, type?: UiInputArgument['kind']): Promise<void>
   select(paneId: string, key: string, value: string): Promise<void>
   moveTo(projectRoot: string, cwd?: string): Promise<void>
   readonly state: Readonly<State>
@@ -82,7 +93,7 @@ const defaultRows = 24
 
 const presentation: CommandPresentation = { isFullscreen: false, columns: defaultColumns }
 
-const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] satisfies readonly ModEvent[]
+const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] satisfies readonly Hook[]
 
 export function testMod<State extends object, Declared extends Options = Options>(definition: ModDefinition<State, string, Declared>, options: TestOptions<State, Declared> = {}): TestedMod<State> {
   installJsx()
@@ -99,7 +110,29 @@ export function testMod<State extends object, Declared extends Options = Options
   fake.claude.session.id = async () => sessionId
   fake.claude.session.root = async () => projectRoot
   fake.claude.session.cwd = async () => cwd
-  fake.fakes.cmod.call = fakeDependencies(name, options.dependencies ?? {}, options.history ?? {})
+  const conversations = fakeSessions({
+    project: () => projectRoot,
+    given: options.sessions ?? [],
+    push: (mod, session, change) => {
+      if (mod !== name) return
+      const pushed = { to: mod, method: conversationMethods.changed, input: { session, change }, caller: cmodPluginName } as unknown as Frozen<Args<'cmod.call'>>
+      void lifecycle.route('cmod.call', pushed, async () => ({ deny: notInstalled(mod) }))
+    },
+  })
+  conversations.start(sessionId)
+  fake.fakes.cmod.call = fakeDependencies(name, options.dependencies ?? {}, conversations)
+  const appendRow = fake.claude.session.append
+  fake.claude.session.append = async (args) => {
+    const added = await appendRow(args)
+    if (added.deny === undefined) conversations.add({ type: Note, text: args.message.content.map((block) => (typeof block['text'] === 'string' ? block['text'] : '')).join(''), from: { type: Mod, name } })
+    return added
+  }
+  const submitRow = fake.claude.prompt.submit
+  fake.claude.prompt.submit = async (args) => {
+    const submitted = await submitRow(args)
+    conversations.add({ type: Prompt, text: args.text, from: { type: Mod, name, ...(args.asUser === true ? { as: Person } : {}) } })
+    return submitted
+  }
   const firedAgents = new Map<string, string>()
   const listAgents = fake.claude.agent.list
   fake.claude.agent.list = async () => {
@@ -129,6 +162,7 @@ export function testMod<State extends object, Declared extends Options = Options
       }
     })
     await started
+    await fake.settle()
     const { failure } = lifecycle
     if (failure instanceof MissingOptions) {
       const given = failure.keys.map((key) => `${key}: …`).join(', ')
@@ -173,7 +207,10 @@ export function testMod<State extends object, Declared extends Options = Options
 
   const fire = ((event: string, input: object, below?: unknown) => {
     if (event.includes('.')) return route(event as RoutedEvent, input, below)
-    if (event === 'SessionStart') sessionId = (input as { session_id?: string }).session_id ?? sessionId
+    if (event === 'SessionStart') {
+      sessionId = (input as { session_id?: string }).session_id ?? sessionId
+      conversations.start(sessionId)
+    }
     if (event === 'UserPromptSubmit') {
       cwd = cwdAfterPrompt ?? cwd
       cwdAfterPrompt = undefined
@@ -182,7 +219,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const transcript = `/test/transcripts/${sessionId}.jsonl`
     const filled = { session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event, ...toolUse, ...input }
     if (event === 'SessionStart' && !('transcript_path' in input)) return files.write(transcript, '').then(() => route('classic.SessionStart', filled, below))
-    if (event !== 'PreToolUse') return route(`classic.${event as Exclude<ModEvent, 'PreToolUse'>}`, filled, below)
+    if (event !== 'PreToolUse') return route(`classic.${event as Exclude<Hook, 'PreToolUse'>}`, filled, below)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
   }) as TestedMod<State>['fire']
 
@@ -207,12 +244,35 @@ export function testMod<State extends object, Declared extends Options = Options
     } as EventResult<'classic.PreToolUse'>
   }
 
+  const settled = async <Value>(value: Value) => {
+    await fake.settle()
+    return value
+  }
+
   return {
     start,
     fire,
     settle: fake.settle,
-    lines: async (target: string | { readonly component: RenderComponent }, props: object = {}, requestId?: string) => {
-      const { drawing, columns } = typeof target === 'string' ? await drawPane(target) : await drawSlot(target.component, props, requestId)
+    add: async (message, added) => {
+      await start()
+      return settled(conversations.add(message, added?.task))
+    },
+    endTurn: async () => {
+      await start()
+      await settled(conversations.endTurn())
+    },
+    compact: async () => {
+      await start()
+      await settled(conversations.compact())
+    },
+    startTask: async (task) => {
+      await start()
+      return settled(conversations.startTask(task))
+    },
+    lines: async (target: string, props?: object, requestId?: string) => {
+      const component = componentOf(target as ComponentPlace)
+      if (props !== undefined && component === undefined) throw new Error(`lines takes a pane id, or a place render draws and its props, and ${target} is neither a place such as ToolCall nor called without props.`)
+      const { drawing, columns } = props === undefined || component === undefined ? await drawPane(target) : await drawSlot(component, props, requestId)
       return rowsOf(drawing, columns).map((row) => row.trimEnd())
     },
     async type(line) {
@@ -245,10 +305,10 @@ export function testMod<State extends object, Declared extends Options = Options
         return { element: e.element }
       })
     },
-    async input(paneId, key, text, kind = 'submit') {
+    async input(paneId, key, text, type = 'submit') {
       const props = await drawnElement(paneId, 'Input', key)
-      const typed: UiInputArgument = { ...eventIn(paneId, key), kind, value: text }
-      await (props[kind === 'submit' ? 'onSubmit' : 'onInput'] as ((value: string, e: UiInputArgument) => unknown) | undefined)?.(text, typed)
+      const typed: UiInputArgument = { ...eventIn(paneId, key), kind: type, value: text }
+      await (props[type === 'submit' ? 'onSubmit' : 'onInput'] as ((value: string, e: UiInputArgument) => unknown) | undefined)?.(text, typed)
     },
     async select(paneId, key, value) {
       const props = await drawnElement(paneId, 'Select', key)
@@ -283,14 +343,17 @@ export function testMod<State extends object, Declared extends Options = Options
       get toasts() {
         return lifecycle.toasts
       },
+      sent: conversations.sent,
     },
   }
 }
 
-function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, history: FakeHistory): Claude['cmod']['call'] {
-  const cmod = { forkParent: () => null, updateSettings: () => null, history: fakeHistory(history) }
-  const apis = { cmod, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
+function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions): Claude['cmod']['call'] {
+  const cmod = { forkParent: () => null, updateSettings: () => null }
+  const apis = { [cmodPluginName]: cmod, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
   return async (call) => {
+    const served = call.to === cmodPluginName ? conversations.answer(caller, call.method, call.input) : undefined
+    if (served !== undefined) return calledAnswer(caller, served as EventResult<'cmod.call'>)
     const api = apis[call.to]
     return calledAnswer(caller, api === undefined ? { deny: notInstalled(call.to) } : await answerCall(call.to, api, call))
   }
@@ -307,7 +370,7 @@ function plainOutput({ component, props }: Args<'ui.render'>): RenderElement {
   return elements.Box({ flexDirection: 'column', children: [elements.Text({ children: component }), elements.Box({ flexDirection: 'column', paddingLeft: 2, children: rows })] })
 }
 
-function replyOf({ text, context }: CommandRunResult): Reply {
+function replyOf({ text, context }: CommandRunResult): CommandReply {
   return { ...(text === undefined ? {} : { text }), ...(context === undefined ? {} : { context: context.join('\n') }) }
 }
 

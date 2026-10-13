@@ -241,6 +241,20 @@ test('cmod option sets one declared option through claude plugin configure, and 
   expect(missing.stderr).toBe('cmod option: demo has no option colour. Its options are: branch.\n')
 })
 
+test('cmod option sets an option of a linked mod by the id Claude Code lists it under, as /mods and the first-start questions do', async () => {
+  const home = await marketplaceHome({})
+  const checkout = join(home, 'Developer/linked')
+  await writeFiles(home, {
+    'Developer/linked/.claude-plugin/plugin.json': JSON.stringify({ name: 'linked', userConfig: { tracerOnly: { type: 'boolean', title: 'Tracer only' } } }),
+    'installed/linked@inline': JSON.stringify({ id: 'linked@inline', version: '0.1.0', scope: 'session', enabled: true, installPath: checkout }),
+  })
+
+  const set = await cmod(home, 'option', 'linked', 'tracerOnly', 'true')
+
+  expect(set.stdout).toBe('Set tracerOnly for linked.\n')
+  expect(JSON.parse(await readFile(join(home, 'configured-linked@inline'), 'utf8'))).toEqual({ tracerOnly: 'true' })
+})
+
 test('cmod disable of a name Claude Code does not hold points at cmod list', async () => {
   const home = await marketplaceHome({})
 

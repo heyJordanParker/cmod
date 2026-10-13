@@ -1,9 +1,10 @@
 import type { Job } from '../mod.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
-import { callEffects, type ToolCall } from '../utils/call-effects.js'
+import { callEffects, type Call } from '../utils/call-effects.js'
 import { dirname } from '../vendor.js'
 import { listed, messageOf } from '../utils/text.js'
-import { afterCall, modOf, targetWords } from './context.js'
+import { engineOf } from '../runtime/engine.js'
+import { afterCall, targetWords, withinDeadline } from './context.js'
 import type { Workspace } from './permissions/find-project-scope.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
 
@@ -27,7 +28,9 @@ export function check<State extends object = Record<never, never>>(options: { re
         if (triggered === undefined) return []
         try {
           const { command, folder } = triggered
-          const { exitCode, stdout, stderr } = await modOf(job, { folder }, workspace, deadline).process.run(command)
+          const workTree = await workspace.scope?.workTreeOf(folder)
+          const { claude } = engineOf(job.mod)
+          const { exitCode, stdout, stderr } = await withinDeadline(job.mod, deadline, command.join(' '), () => claude.process.run(command, { ...(workTree === undefined ? {} : { cwd: workTree }), timeoutMs }))
           return exitCode === 0 ? [] : [`${command.join(' ')} exited with ${exitCode}:\n${`${stdout}${stderr}`.trim()}`]
         } catch (error) {
           return [`The ${named} failed: ${messageOf(error)}`]
@@ -39,7 +42,7 @@ export function check<State extends object = Record<never, never>>(options: { re
   }
 }
 
-async function triggeredRun(after: readonly Target[], run: readonly string[], use: ToolCall, workspace: Workspace): Promise<{ command: string[]; folder: string } | undefined> {
+async function triggeredRun(after: readonly Target[], run: readonly string[], use: Call, workspace: Workspace): Promise<{ command: string[]; folder: string } | undefined> {
   const effects = callEffects(use, workspace)
   const paths = new Set<string>()
   let commandFolder: string | undefined

@@ -1,10 +1,10 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, longestMs, messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, longestMs, messageOf, process, SessionStart, settings, Stop, StopFailure, UserPromptSubmit, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
+import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
+import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
-import type { HistoryRequest } from '../node_modules/@cmodjs/core/runtime/history.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
-import { showFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { modsMemory, modsPanel, readConsent, type ModsState } from './mods.js'
 
 export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null }; readonly session: { tip: string | null } } & ModsState
@@ -16,7 +16,7 @@ const cmodSession: CmodPluginState['session'] = { tip: null }
 const newestMessages = 8
 
 async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
-  const messages = await mod.claude.session.messages()
+  const messages = await engineOf(mod).claude.session.messages()
   if (messages.length === 0) return null
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([messages.length, messages.slice(-newestMessages)])))
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
@@ -24,36 +24,6 @@ async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
 
 const panels = new WeakMap<object, ReturnType<typeof modsPanel<CmodPluginState>>>()
 
-function historyArguments(request: HistoryRequest): string[] {
-  const scope = (since: string | undefined, everyProject: boolean | undefined) => [...(since === undefined ? [] : ['--since', since]), ...(everyProject === true ? ['--all'] : [])]
-  const common = ['--json', '--project', request.project]
-  if (request.command === 'sessions') return ['history', 'sessions', ...common, ...scope(request.since, request.everyProject)]
-  if (request.command === 'search') {
-    const { text, since, everyProject, limit, before } = request
-    return ['history', 'search', text, ...common, ...scope(since, everyProject), ...(limit === undefined ? [] : ['--limit', String(limit)]), ...(before === undefined ? [] : ['--before', `${before.session}:${before.id}`])]
-  }
-  const { session, agent, subagents, after, last, limit } = request
-  return ['history', 'messages', session, ...common, ...(agent === undefined ? [] : ['--agent', agent]), ...(subagents === true ? ['--subagents'] : []), ...(after === undefined ? [] : ['--after', after]), ...(last === undefined ? [] : ['--last', String(last)]), '--limit', String(limit)]
-}
-
-async function runCmod(mod: Mod<CmodPluginState>, args: readonly string[]): Promise<string> {
-  const stream = mod.process.spawn(['cmod', ...args], { env: { CLAUDE_CODE_SESSION_ID: await mod.claude.session.id() } })
-  let stdout = ''
-  let stderr = ''
-  for await (const piece of stream) {
-    if (piece.stream === 'stdout') stdout += piece.text
-    else stderr += piece.text
-  }
-  const { code } = await stream.result
-  const lastError = lastLineOf(stderr, `cmod ${args[0]}: `)
-  if (code !== 0) throw new Error(lastError === '' ? `${args.slice(0, 2).join(' ')} ${formatExit(code, '')}.` : lastError)
-  return stdout
-}
-
-function lastLineOf(stderr: string, prefix: string): string {
-  const line = stderr.trim().split('\n').at(-1) ?? ''
-  return line.startsWith(prefix) ? line.slice(prefix.length) : line
-}
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
@@ -63,8 +33,9 @@ export const cmodPlugin = defineMod({
     async forkParent(_input: null, mod) {
       const tip = await tipOf(mod)
       if (tip === null) return null
-      const current = await mod.claude.session.id()
-      return (await sessionsWith(mod.claude, mod.name, 'tip', tip)).find((session) => session !== current) ?? null
+      const { claude } = engineOf(mod)
+      const current = await claude.session.id()
+      return (await sessionsWith(claude, mod.name, 'tip', tip)).find((session) => session !== current) ?? null
     },
     async openSettings(input: { readonly mod: string; readonly page?: string }, mod) {
       const panel = panels.get(mod)
@@ -72,11 +43,9 @@ export const cmodPlugin = defineMod({
       await panel.open(input.mod, input.page)
       return null
     },
-    async history(request: HistoryRequest, mod) {
-      return JSON.parse(await runCmod(mod, historyArguments(request))) as unknown
-    },
     async updateSettings(input: { readonly mod: string; readonly source: string; readonly project: string; readonly values: Readonly<Record<string, unknown>> }, mod) {
-      await runCmod(mod,['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project])
+      const { claude } = engineOf(mod)
+      await runCmod(claude, ['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project], await claude.session.id())
       return null
     },
   },
@@ -99,22 +68,24 @@ export const cmodPlugin = defineMod({
       }),
     )
 
+    const { claude, report } = engineOf(mod)
+
     void readConsent(mod)
-      .then((consent) => (Object.values(consent).some((granted) => granted.includes('conversation')) ? runCmod(mod, ['history', 'index']) : undefined))
-      .catch((error: unknown) => mod.claude.ui.log(`cmod: ${messageOf(error)}`, { to: 'debug' }))
+      .then(async (consent) => (Object.entries(consent).some(([name, granted]) => name !== mod.name && granted.includes('conversation')) ? runCmod(claude, ['history', 'index'], await claude.session.id()) : undefined))
+      .catch((error: unknown) => mod.log(messageOf(error)))
 
     const tearDown = async (name: string) => {
-      const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
+      const { exitCode, stdout, stderr } = await process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
-      const isAnswered = outcome.kind === 'done' || outcome.kind === 'missing' || outcome.kind === 'failed'
+      const isAnswered = outcome.type === 'done' || outcome.type === 'missing' || outcome.type === 'failed'
       if (isAnswered) mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
-      if (outcome.kind === 'done') mod.ui.toast.success(`${name} is uninstalled`, { description: 'A session that still runs it stops after /reload-plugins.' })
-      else if (outcome.kind === 'failed') showFailure(mod, { id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message })
-      else if (exitCode !== 0) showFailure(mod, { id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, lastLineOf(stderr, 'cmod teardown: '))}` })
+      if (outcome.type === 'done') mod.ui.toast.success(`${name} is uninstalled`, { description: 'A session that still runs it stops after /reload-plugins.' })
+      else if (outcome.type === 'failed') report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message })
+      else if (exitCode !== 0) report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, 'teardown'))}` })
     }
 
     const watchRemovals = async () => {
-      const enabledPlugins = (await mod.claude.settings.read({ source: 'user' }))['enabledPlugins'] as Record<string, unknown> | undefined
+      const enabledPlugins = (await settings.user.read())['enabledPlugins'] as Record<string, unknown> | undefined
       const current = [...new Set(Object.keys(enabledPlugins ?? {}).map((key) => key.replace(/@[^@]*$/, '')))]
       const previous = mod.state.global.installedPlugins
       const removed = (previous ?? []).filter((name) => !current.includes(name))
@@ -123,19 +94,17 @@ export const cmodPlugin = defineMod({
       for (const name of removed) {
         if (triedRemovals.has(name)) continue
         triedRemovals.add(name)
-        void tearDown(name).catch((error: unknown) => {
-          showFailure(mod, { id: `teardown:${name}`, message: `Could not uninstall ${name}`, error })
-        })
+        void tearDown(name).catch((error: unknown) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error }))
       }
     }
 
-    mod.on('SessionStart', watchRemovals)
-    mod.on('UserPromptSubmit', watchRemovals)
+    mod.on(SessionStart, watchRemovals)
+    mod.on(UserPromptSubmit, watchRemovals)
 
     const keepTip = async () => {
       mod.state.session.tip = await tipOf(mod)
     }
-    mod.on('Stop', keepTip)
-    mod.on('StopFailure', keepTip)
+    mod.on(Stop, keepTip)
+    mod.on(StopFailure, keepTip)
   },
 })

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
 import { defineStep } from '../../src/installer.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
-import { defineMod, type Mod } from '../../src/mod.js'
+import { CwdChanged, defineMod, PermissionRequest, PostToolUse, PreToolUse, SessionStart, sessions, type Mod } from '../../src/mod.js'
 import { option } from '../../src/options.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
@@ -88,7 +88,7 @@ function trackedMod() {
     name: 'safe-delete',
     setup(mod) {
       runs.push('setup')
-      mod.on('PostToolUse', () => {
+      mod.on(PostToolUse, () => {
         runs.push('PostToolUse')
         return { hookSpecificOutput: { additionalContext: 'safe-delete saw it' } }
       })
@@ -150,9 +150,10 @@ test('a mod with a pending install registers nothing until done, then runs setup
 
   expect(runs).toEqual(['setup', 'PostToolUse'])
   expect(answer).toEqual({ additionalContext: ['safe-delete saw it'] })
-  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Ready' }])
-  expect(fake.shown.logs).toEqual(['safe-delete added the Trash pane and a hook on PostToolUse.'])
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toBe('>\n✓  safe-delete  Ready  ✕')
+  await fake.settle()
+  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane and a hook on PostToolUse.\nAdd text Claude reads and start turns.' }])
+  expect(fake.shown.logs).toEqual([])
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith('>\n✓  safe-delete  Installed')
 })
 
 test('a call to a mod still installing fails with when to retry', async () => {
@@ -363,6 +364,179 @@ test('Retry on a failed install runs cmod setup again, and a done setup activate
   expect(runs).toEqual(['setup', 'PostToolUse'])
 })
 
+const changelog = `# Changelog
+
+## [Unreleased]
+
+## [0.2.0] - 2026-10-13
+
+### Added
+- /rollback undoes the last deploy.
+
+### Changed
+- Deploys wait for CI.
+- The status line names the branch.
+
+### Removed
+- /deploy-old.
+
+## [0.1.0] - 2026-09-30
+
+- First release.
+`
+
+async function updatedFrom(previous: unknown, files: Record<string, string>, pluginRoot = root) {
+  const fake = fakeClaude({ name: 'safe-delete', root: pluginRoot })
+  const disk = fakeFiles(files)
+  fake.fakes.fs.read = disk.read
+  fake.store.set('cmod:announced', previous)
+  const opened: unknown[] = []
+  fake.fakes.cmod.call = async (call) => void opened.push(call)
+  const lifecycle = createLifecycle(trackedMod().definition)
+  await lifecycle.start(fake.claude, given({ ...pending, root: pluginRoot, isInstalled: true }))
+  await fake.settle()
+  return { fake, lifecycle, opened }
+}
+
+test("an update shows the new version's changelog, where it came from, and a Changelog button that opens it in /mods", async () => {
+  const { lifecycle, opened } = await updatedFrom({ version: '0.1.0', added: [] }, { [`${root}/CHANGELOG.md`]: changelog })
+
+  expect(lifecycle.toasts).toEqual([
+    {
+      type: 'success',
+      message: 'Updated to 0.2.0',
+      description: 'Added: /rollback undoes the last deploy.\nChanged: Deploys wait for CI.\nChanged: The status line names the branch.\n…\nFrom 0.1.0, loaded from /plugins/safe-delete.',
+    },
+  ])
+  const button = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Changelog')
+  if (button === undefined) throw new Error('The Updated toast draws no Changelog button.')
+  await (button['onPress'] as () => Promise<void>)()
+  expect(opened).toEqual([{ to: 'cmod', method: 'openSettings', input: { mod: 'safe-delete', page: 'changelog' } }])
+})
+
+test('an update with no changelog says what the mod adds now, links its release, and has no Changelog button', async () => {
+  const installed = '/home/.claude/plugins/cache/market/safe-delete/0.2.0'
+  const manifest = JSON.stringify({ name: 'safe-delete', version: '0.2.0', repository: 'https://github.com/owner/safe-delete' })
+  const { lifecycle } = await updatedFrom({ version: '0.1.0', added: ['the Trash pane', 'the Bin pane'] }, { [`${installed}/.claude-plugin/plugin.json`]: manifest }, installed)
+
+  expect(lifecycle.toasts).toEqual([
+    {
+      type: 'success',
+      message: 'Updated to 0.2.0',
+      description: 'Now adds a hook on PostToolUse.\nNo longer adds the Bin pane.\nFrom 0.1.0.\nRelease notes: https://github.com/owner/safe-delete/releases/tag/v0.2.0',
+    },
+  ])
+  expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Changelog')).toBeUndefined()
+})
+
+test('a version this machine already announced shows no toast', async () => {
+  const { lifecycle } = await updatedFrom({ version: '0.2.0', added: [] }, { [`${root}/CHANGELOG.md`]: changelog })
+
+  expect(lifecycle.toasts).toEqual([])
+})
+
+const recordFile = '/home/.local/share/cmod/records/safe-delete.json'
+
+function stoppedSession(firstOutcome: string, code: number) {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const disk = fakeFiles({})
+  fake.fakes.fs.stat = disk.stat
+  fake.fakes.fs.read = disk.read
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => finished([firstOutcome], code)
+  const { runs, definition } = trackedMod()
+  return { fake, disk, runs, lifecycle: createLifecycle(definition) }
+}
+
+const installedNow = (installed: { isInstalled: boolean }) => async () => ({ ...pending, isInstalled: installed.isInstalled })
+
+test('two sessions whose install failed start on their next prompt once cmod install writes the record, with no reload', async () => {
+  const installed = { isInstalled: false }
+  const sessions = [stoppedSession('failed 1\tdisk full', 1), stoppedSession('failed 1\tdisk full', 1)]
+  for (const { fake, lifecycle } of sessions) {
+    await lifecycle.start(fake.claude, installedNow(installed))
+    await fake.settle()
+  }
+  expect(sessions.map(({ lifecycle }) => lifecycle.phase)).toEqual(['failed', 'failed'])
+
+  installed.isInstalled = true
+  for (const { disk } of sessions) await disk.write(recordFile, '{}')
+  for (const { lifecycle } of sessions) await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  for (const { lifecycle } of sessions) await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
+
+  expect(sessions.map(({ lifecycle }) => lifecycle.phase)).toEqual(['active', 'active'])
+  expect(sessions.map(({ lifecycle }) => lifecycle.failure)).toEqual([undefined, undefined])
+  expect(sessions.map(({ runs }) => runs)).toEqual([
+    ['setup', 'PostToolUse'],
+    ['setup', 'PostToolUse'],
+  ])
+})
+
+test('a mod whose install was declined starts on the next prompt once cmod install writes the record', async () => {
+  const installed = { isInstalled: false }
+  const { fake, disk, runs, lifecycle } = stoppedSession('needs-consent abc123\t./setup/install.sh\t', 10)
+  await lifecycle.start(fake.claude, installedNow(installed))
+  await fake.settle()
+  await pressInInstaller(lifecycle, 'not-now')
+  await fake.settle()
+  expect(lifecycle.phase).toBe('declined')
+
+  installed.isInstalled = true
+  await disk.write(recordFile, '{}')
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect(lifecycle.phase).toBe('active')
+  expect(runs).toEqual(['setup'])
+})
+
+test('a mod whose first start failed after its install starts again once cmod install rewrites its record', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const disk = fakeFiles({})
+  fake.fakes.fs.stat = disk.stat
+  fake.fakes.fs.read = disk.read
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  let setups = 0
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      setup() {
+        setups += 1
+        if (setups === 1) throw new Error('the first setup fails')
+      },
+    }),
+  )
+  const installed = { isInstalled: false }
+  await lifecycle.start(fake.claude, installedNow(installed))
+  await fake.settle()
+  await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
+  await fake.settle()
+  expect(lifecycle.phase).toBe('failed')
+
+  installed.isInstalled = true
+  await disk.write(recordFile, '{}')
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await fake.settle()
+
+  expect(lifecycle.phase).toBe('active')
+  expect(setups).toBe(2)
+})
+
+test('a stopped mod whose record is unchanged stays stopped across prompts and shows its error once', async () => {
+  const installed = { isInstalled: false }
+  const { fake, runs, lifecycle } = stoppedSession('failed 1\tdisk full', 1)
+  await lifecycle.start(fake.claude, installedNow(installed))
+  await fake.settle()
+
+  installed.isInstalled = true
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+
+  expect(lifecycle.phase).toBe('failed')
+  expect(runs).toEqual([])
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'disk full', description: 'Fix the cause, then retry, or run cmod install safe-delete in a terminal.' }])
+})
+
 test('an install error longer than the band wraps its message beside the Retry button', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodOnPath
@@ -470,6 +644,30 @@ test('a mod that binds keys waits while PATH finds a cmod older than 0.1.12, nam
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
 })
 
+test('a mod that asks for the tasks permission or a config list waits while PATH finds a cmod older than 1.0.0, which does not know them', async () => {
+  const fake = fakeClaude({ name: 'modes', root })
+  fake.fakes.process.run = async () => ({ exitCode: 0, stdout: 'cmod 0.3.0\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  const spawned: ProcessSpawnRequest[] = []
+  fake.fakes.process.spawn = (request) => {
+    spawned.push(request)
+    return finished(['done modes 0.2.0'], 0)
+  }
+  const timers: { ms: number; fire: () => void }[] = []
+  fake.fakes.clock.after = (ms, fire) => (timers.push({ ms, fire }), { cancel: () => {} })
+  fake.fakes.clock.every = fake.fakes.clock.after
+  const lifecycle = createLifecycle(defineMod({ name: 'modes', setup() {} }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'modes', steps: { permissions: ['config:statusLine'] } }))
+  await fake.settle()
+  timers.find((made) => made.ms === 1000)?.fire()
+  await fake.settle()
+  timers.find((made) => made.ms === 60_000)?.fire()
+  await fake.settle()
+
+  expect(spawned).toEqual([])
+  expect(lifecycle.toasts[0]?.description).toBe('PATH finds cmod 0.3.0, and modes needs cmod 1.0.0 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.')
+})
+
 test('a mod keeps waiting for cmod past 60 seconds and starts once cmod is ready', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodMissing
@@ -513,7 +711,7 @@ test('a mod whose setup function throws says its setup function threw, and leave
     defineMod({
       name: 'broken',
       setup(mod) {
-        mod.on('PostToolUse', () => {
+        mod.on(PostToolUse, () => {
           hookRuns += 1
         })
         throw new Error('no config file')
@@ -649,7 +847,7 @@ test('a step left on Not now is listed to /mods, and finishing from /mods opens 
 
 test('a mod that decides permissions without registerPermissionCheck does not start, and names the line to add', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PermissionRequest', () => undefined) }), () => false)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on(PermissionRequest, () => undefined) }), () => false)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
@@ -660,7 +858,7 @@ test('a mod that decides permissions without registerPermissionCheck does not st
 
 test('a mod that decides permissions starts once registerPermissionCheck registered the permission events', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on('PermissionRequest', () => undefined) }), () => true)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.on(PermissionRequest, () => undefined) }), () => true)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
@@ -669,7 +867,7 @@ test('a mod that decides permissions starts once registerPermissionCheck registe
 
 test('a mod with a PreToolUse hook starts without registerPermissionCheck', async () => {
   const fake = fakeClaude({ name: 'docs', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'docs', setup: (mod) => mod.on('PreToolUse', () => undefined) }), () => false)
+  const lifecycle = createLifecycle(defineMod({ name: 'docs', setup: (mod) => mod.on(PreToolUse, () => undefined) }), () => false)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'docs', isInstalled: true }))
 
@@ -678,7 +876,7 @@ test('a mod with a PreToolUse hook starts without registerPermissionCheck', asyn
 
 test('a PreToolUse allow without registerPermissionCheck denies the call and names the line to add', async () => {
   const fake = fakeClaude({ name: 'auto-approve', root })
-  const allows = defineMod({ name: 'auto-approve', setup: (mod) => mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } })) })
+  const allows = defineMod({ name: 'auto-approve', setup: (mod) => mod.on(PreToolUse, () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } })) })
   const lifecycle = createLifecycle(allows, () => false)
   await lifecycle.start(fake.claude, given({ ...pending, name: 'auto-approve', isInstalled: true }))
 
@@ -849,7 +1047,7 @@ test('a mod with no steps activates at once and writes its record in the backgro
 
   expect(runs).toEqual(['setup'])
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
-  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Ready' }])
+  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane and a hook on PostToolUse.' }])
 
   step.print('done safe-delete 0.2.0')
   step.exit(0)
@@ -880,15 +1078,15 @@ test('a mod with no steps writes its record silently, and retries on the next pr
 
   expect(runs).toEqual(['setup'])
   expect(spawned).toEqual([])
-  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Ready' }])
-  expect(fake.shown.logs).toEqual(['safe-delete added the Trash pane and a hook on PostToolUse.'])
+  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane and a hook on PostToolUse.' }])
+  expect(fake.shown.logs).toEqual([])
 
   isOnPath = true
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
   await fake.settle()
 
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
-  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Ready' }])
+  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane and a hook on PostToolUse.' }])
 })
 
 test('a folder named in an install command does not stop the mod from starting', async () => {
@@ -1205,7 +1403,7 @@ function folderPane() {
   const redrawnFolders: string[] = []
   fake.claude.ui.invalidate = (event) => {
     redraws.push(event)
-    redrawnFolders.push(`${lifecycle.mod?.projectRoot} ${lifecycle.mod?.cwd}`)
+    redrawnFolders.push(`${sessions.current.project} ${sessions.current.cwd}`)
   }
   const moves: unknown[] = []
   const lifecycle = createLifecycle(
@@ -1213,13 +1411,16 @@ function folderPane() {
       name: 'file-tree',
       state: { project: { expanded: [] as string[] } },
       setup(mod) {
-        mod.ui.pane({ id: 'files', title: 'Files', render: (drawn) => Text({ children: `${drawn.projectRoot} ${drawn.cwd}` }) })
-        mod.on('CwdChanged', (input) => void moves.push(input))
+        mod.ui.pane({ id: 'files', title: 'Files', render: () => Text({ children: `${sessions.current.project} ${sessions.current.cwd}` }) })
+        mod.on(CwdChanged, (input) => void moves.push(input))
       },
     }),
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
-  const start = () => lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+  const start = async () => {
+    await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+    await fake.settle()
+  }
   const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
   return { fake, lifecycle, session, redraws, redrawnFolders, moves, start, drawn }
 }
@@ -1228,7 +1429,7 @@ const movedTo = (oldCwd: string, newCwd: string) => ({ session_id: 'test-session
 
 const cd = (args: string) => ({ command: 'cd', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
 
-test('a Bash cd moves mod.cwd and redraws the pane', async () => {
+test('a Bash cd moves the current session cwd and redraws the pane', async () => {
   const { lifecycle, session, redraws, start, drawn } = folderPane()
   await start()
   redraws.length = 0
@@ -1236,12 +1437,12 @@ test('a Bash cd moves mod.cwd and redraws the pane', async () => {
 
   await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd lib' } }, {})
 
-  expect(lifecycle.mod?.cwd).toBe('/work/a/lib')
+  expect(sessions.current.cwd).toBe('/work/a/lib')
   expect(redraws).toEqual(['ui.render'])
   expect(await drawn()).toBe('/work/a /work/a/lib')
 })
 
-test('a Bash cd in a command that fails still moves mod.cwd', async () => {
+test('a Bash cd in a command that fails still moves the current session cwd', async () => {
   const { lifecycle, session, redraws, start, drawn } = folderPane()
   await start()
   redraws.length = 0
@@ -1249,12 +1450,12 @@ test('a Bash cd in a command that fails still moves mod.cwd', async () => {
 
   await fire(lifecycle, 'classic.PostToolUseFailure', { ...postToolUse, hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'cd lib && make' }, error: 'make: *** No targets.' }, {})
 
-  expect(lifecycle.mod?.cwd).toBe('/work/a/lib')
+  expect(sessions.current.cwd).toBe('/work/a/lib')
   expect(redraws).toEqual(['ui.render'])
   expect(await drawn()).toBe('/work/a /work/a/lib')
 })
 
-test('a PowerShell cd moves mod.cwd', async () => {
+test('a PowerShell cd moves the current session cwd', async () => {
   const { lifecycle, session, redraws, start, drawn } = folderPane()
   await start()
   redraws.length = 0
@@ -1262,7 +1463,7 @@ test('a PowerShell cd moves mod.cwd', async () => {
 
   await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'PowerShell', tool_input: { command: 'Set-Location lib' } }, {})
 
-  expect(lifecycle.mod?.cwd).toBe('/work/a/lib')
+  expect(sessions.current.cwd).toBe('/work/a/lib')
   expect(redraws).toEqual(['ui.render'])
   expect(await drawn()).toBe('/work/a /work/a/lib')
 })
@@ -1279,7 +1480,7 @@ test("a /cd fires the mod's CwdChanged hook with the old and new folder", async 
   expect(await drawn()).toBe('/work/b /work/b')
 })
 
-test('after /cd a pane that draws mod.cwd shows the new folder', async () => {
+test('after /cd a pane that draws the session cwd shows the new folder', async () => {
   const { lifecycle, session, redrawnFolders, start } = folderPane()
   await start()
   redrawnFolders.length = 0
@@ -1293,7 +1494,7 @@ test('after /cd a pane that draws mod.cwd shows the new folder', async () => {
   expect(redrawnFolders).toEqual(['/work/b /work/b', '/work/b /work/b/lib'])
 })
 
-test('after /cd while Claude Code still reports the old cwd, the pane redraws once with the new root as mod.cwd', async () => {
+test('after /cd while Claude Code still reports the old cwd, the pane redraws once with the new root as the session cwd', async () => {
   const { lifecycle, session, redrawnFolders, moves, start } = folderPane()
   await start()
   redrawnFolders.length = 0
@@ -1305,7 +1506,7 @@ test('after /cd while Claude Code still reports the old cwd, the pane redraws on
   expect(moves).toEqual([movedTo('/work/a', '/work/b')])
 })
 
-test('a Bash call between /cd and the next prompt keeps mod.cwd on the new root', async () => {
+test('a Bash call between /cd and the next prompt keeps the session cwd on the new root', async () => {
   const { lifecycle, session, moves, start } = folderPane()
   await start()
   session.root = '/work/b'
@@ -1313,7 +1514,7 @@ test('a Bash call between /cd and the next prompt keeps mod.cwd on the new root'
 
   await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'ls' } }, {})
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/work/b'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/b', '/work/b'])
   expect(moves).toEqual([movedTo('/work/a', '/work/b')])
 
   session.cwd = '/work/b'
@@ -1331,11 +1532,11 @@ test('a Bash cd back to the old folder during the lag shows on the next prompt',
 
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/work/a'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/b', '/work/a'])
   expect(moves).toEqual([movedTo('/work/a', '/work/b'), movedTo('/work/b', '/work/a')])
 })
 
-test('a /cd the user cancels after a Bash cd out of the project keeps mod.cwd where the Bash cd left it', async () => {
+test('a /cd the user cancels after a Bash cd out of the project keeps the session cwd where the Bash cd left it', async () => {
   const { lifecycle, session, moves, start } = folderPane()
   await start()
   session.cwd = '/tmp'
@@ -1343,11 +1544,11 @@ test('a /cd the user cancels after a Bash cd out of the project keeps mod.cwd wh
 
   await fire(lifecycle, 'command.run', cd('../b'), {})
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/a', '/tmp'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/a', '/tmp'])
   expect(moves).toEqual([movedTo('/work/a', '/tmp')])
 })
 
-test('a Bash cd out of the project after a /cd whose project failed to load moves mod.cwd out of it', async () => {
+test('a Bash cd out of the project after a /cd whose project failed to load moves the current session cwd out of it', async () => {
   const { fake, lifecycle, session, moves, start } = folderPane()
   const storeGet = fake.claude.store.get
   let isStoreLocked = false
@@ -1361,7 +1562,7 @@ test('a Bash cd out of the project after a /cd whose project failed to load move
 
   await fire(lifecycle, 'classic.PostToolUse', { ...postToolUse, tool_name: 'Bash', tool_input: { command: 'cd /tmp' } }, {})
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/tmp'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/b', '/tmp'])
   expect(moves).toEqual([movedTo('/work/a', '/tmp')])
 })
 
@@ -1399,17 +1600,17 @@ test('a folder move whose project fails to load fires CwdChanged on the retry', 
 
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/a', '/work/a'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/a', '/work/a'])
   expect(moves).toEqual([])
 
   isStoreLocked = false
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/b', '/work/b'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/b', '/work/b'])
   expect(moves).toEqual([movedTo('/work/a', '/work/b')])
 })
 
-test('two overlapping folder moves that both fail leave mod.cwd at the last loaded folder', async () => {
+test('two overlapping folder moves that both fail leave the session cwd at the last loaded folder', async () => {
   const { fake, lifecycle, session, moves, start } = folderPane()
   const storeGet = fake.claude.store.get
   let isStoreLocked = false
@@ -1434,7 +1635,7 @@ test('two overlapping folder moves that both fail leave mod.cwd at the last load
   failLockedReads()
   await Promise.all([first, second])
 
-  expect([lifecycle.mod?.projectRoot, lifecycle.mod?.cwd]).toEqual(['/work/a', '/work/a'])
+  expect([sessions.current.project, sessions.current.cwd]).toEqual(['/work/a', '/work/a'])
   expect(moves).toEqual([])
 })
 
@@ -1448,7 +1649,7 @@ test('a /cd the user cancels moves nothing', async () => {
 
   await fire(lifecycle, 'command.run', cd('../b'), {})
 
-  expect([mod.projectRoot, mod.cwd, mod.state.project.expanded]).toEqual(['/work/a', '/work/a', ['src']])
+  expect([sessions.current.project, sessions.current.cwd, mod.state.project.expanded]).toEqual(['/work/a', '/work/a', ['src']])
   expect(redraws).toEqual([])
   expect(moves).toEqual([])
   expect(await drawn()).toBe('/work/a /work/a')
@@ -1492,13 +1693,13 @@ test("a project whose saved state fails to load leaves the mod in the project it
 
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([mod.projectRoot, mod.state.project.expanded]).toEqual(['/work/a', ['src']])
+  expect([sessions.current.project, mod.state.project.expanded]).toEqual(['/work/a', ['src']])
   expect(lifecycle.toasts).toContainEqual({ type: 'error', message: 'Keeps the state of /work/a until the next prompt or folder move', description: 'the store file is locked' })
 
   isStoreLocked = false
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect([mod.projectRoot, mod.state.project.expanded]).toEqual(['/work/b', []])
+  expect([sessions.current.project, mod.state.project.expanded]).toEqual(['/work/b', []])
 })
 
 function sessionStartMod() {
@@ -1506,7 +1707,7 @@ function sessionStartMod() {
   const definition = defineMod({
     name: 'safe-delete',
     setup(mod) {
-      mod.on('SessionStart', (input) => {
+      mod.on(SessionStart, (input) => {
         sources.push(input.source)
         return { hookSpecificOutput: { additionalContext: `safe-delete saw ${input.source}` } }
       })
@@ -1660,7 +1861,7 @@ test('a late SessionStart replay that throws leaves the mod active', async () =>
     defineMod({
       name: 'safe-delete',
       setup: (mod) =>
-        mod.claude.on('classic.SessionStart', async () => {
+        mod.on(SessionStart, async () => {
           throw new Error('no session file')
         }),
     }),
@@ -1688,7 +1889,7 @@ test("a mod that finishes installing before /clear replays only the cleared sess
     defineMod({
       name: 'safe-delete',
       setup(mod) {
-        mod.on('SessionStart', (input) => void seen.push(`${input.source} ${input.session_id}`))
+        mod.on(SessionStart, (input) => void seen.push(`${input.source} ${input.session_id}`))
       },
     }),
   )

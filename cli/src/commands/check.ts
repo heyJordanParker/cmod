@@ -151,7 +151,7 @@ async function checkMetadata(plugin: Plugin): Promise<Result> {
     if (file.endsWith(sidecarSuffix)) continue
     const extensionless = !basename(file).includes('.')
     const format = formatOf(file, extensionless ? (await readText(file))?.split('\n', 1)[0] : undefined)
-    const holder = format.kind === 'sidecar' ? `${file}${sidecarSuffix}` : file
+    const holder = format.type === 'sidecar' ? `${file}${sidecarSuffix}` : file
     if (!existsSync(holder)) continue
     const text = (await readText(holder)) ?? ''
     try {
@@ -172,9 +172,9 @@ async function checkOptions(plugin: Plugin): Promise<Result> {
   } catch (error) {
     return { status: 'fail', text: messageOf(error), fix: 'Fix the error, then run cmod check again.' }
   }
-  if (declared.kind === 'no-hooks') return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so no options to read' }
-  if (declared.kind === 'no-core') return { status: 'skip', text: 'No @cmodjs/core in node_modules, so no options to read' }
-  if (declared.kind === 'old-core') return { status: 'skip', text: 'The @cmodjs/core in node_modules has no options. Raise it in package.json to read them' }
+  if (declared.type === 'no-hooks') return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so no options to read' }
+  if (declared.type === 'no-core') return { status: 'skip', text: 'No @cmodjs/core in node_modules, so no options to read' }
+  if (declared.type === 'old-core') return { status: 'skip', text: 'The @cmodjs/core in node_modules has no options. Raise it in package.json to read them' }
   const keys = Object.keys(declared.userConfig)
   const isWritten = await writeUserConfig(plugin.root, declared.userConfig)
   if (keys.length === 0) return isWritten ? { status: 'pass', text: 'Removed userConfig from plugin.json, as defineMod declares no options' } : { status: 'skip', text: 'defineMod declares no options' }
@@ -189,7 +189,7 @@ async function checkImports(plugin: Plugin): Promise<Result> {
     const isSource = file.startsWith(join(plugin.root, 'src') + sep)
     for (const specifier of importsOf((await readText(file)) ?? '')) {
       if (specifier.startsWith('.') && resolve(dirname(file), specifier).startsWith(cli)) problems.push(`${relative(plugin.root, file)} imports ${specifier} from cli/, which the release leaves out: move the shared code into src/`)
-      if (isSource && isBuiltin(specifier)) problems.push(`${relative(plugin.root, file)} imports ${specifier}: Claude Code runs mods with no Node or Bun, so use mod.fs, mod.process, or mod.http`)
+      if (isSource && isBuiltin(specifier)) problems.push(`${relative(plugin.root, file)} imports ${specifier}: Claude Code runs mods with no Node or Bun, so use fs, process, or http, imported from @cmodjs/core/mod.js`)
     }
   }
   if (problems.length > 0) return { status: 'fail', text: `${problems.length} import${problems.length === 1 ? '' : 's'} a mod cannot use`, fix: problems.join('\n    fix: ') }

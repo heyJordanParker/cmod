@@ -56,13 +56,14 @@ In Claude Code, the mod sets itself up through the `cmod` in cmod's programs fol
 Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and the installer pane shows each one after the permissions and the options, once the mod has started:
 
 ```ts
+import { process } from '../node_modules/@cmodjs/core/mod.js'
 import { defineStep } from '../node_modules/@cmodjs/core/installer.js'
 
 const signIn = defineStep({
   id: 'sign-in',
   title: 'Sign in to GitHub',
   render: () => <Text>Run gh auth login in a terminal, then press Next.</Text>,
-  isDone: async (mod) => (await mod.process.run(['gh', 'auth', 'status'])).exitCode === 0,
+  isDone: async () => (await process.run(['gh', 'auth', 'status'])).exitCode === 0,
 })
 
 export const ciWatch = defineMod({ name: 'ci-watch', installer: [signIn], setup(mod) { … } })
@@ -163,7 +164,7 @@ cmod download <program> <machine> <url> <sha256> [<machine> <url> <sha256> …]
 
 An install script runs `cmod download` to fetch a program built by someone else. It picks the download for this machine, checks its SHA-256, unpacks a `.tar.gz` or a `.zip` or takes the file as it is, and moves the file named `<program>` to `$CMOD_DATA/bin/<program>`, which Claude Code then runs by its name. A download whose SHA-256 differs installs nothing. Machines are `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
 
-`$CMOD_DATA/bin/<program>` is `${mod.dataFolder}/bin/<program>` in mod code. That folder is not on `PATH`, so mod code names the program by that full path, such as `` mod.process.run([`${mod.dataFolder}/bin/mermaid-ascii`, '--help']) ``, and so does the `command` of a `program` job.
+`$CMOD_DATA/bin/<program>` is `${mod.dataFolder}/bin/<program>` in mod code. That folder is not on `PATH`, so mod code names the program by that full path, such as `` process.run([`${mod.dataFolder}/bin/mermaid-ascii`, '--help']) ``, and so does the `command` of a `program` job.
 
 ```sh
 cmod download mermaid-ascii \
@@ -193,7 +194,7 @@ A mod that builds its own command-line program keeps its source in `cli/`, and c
 
 Then:
 
-- `cmod link` builds the program and links this machine's build into cmod's programs folder and `~/.local/bin`.
+- `cmod link` builds the program and links this machine's build into cmod's programs folder and `~/.local/bin`. When the linked checkout's version changes, the next session's setup builds it again from the checkout, so a version with no release yet still sets up.
 - `cmod publish` builds every machine's file and attaches each to the GitHub release `v<version>`, with a `SHA256SUMS` file. It refuses a `cli/` program that the `package.json` `program` key does not name.
 - On install, cmod downloads `<repository>/releases/download/v<version>/<program>-<machine>`, checks it against `SHA256SUMS`, runs `<program> --version`, and links it into cmod's programs folder and `~/.local/bin`.
 - `cmod unlink` and the uninstall remove the program and both links.
@@ -203,7 +204,7 @@ Then:
 cmod links every program it installs into its programs folder, `~/.local/share/cmod/programs/<program>` (under `$XDG_DATA_HOME` when it is set): the program `cmod.program` names, each program `cmod download` installs, and `cmod` itself. Claude Code runs the one there by its name, whatever else `PATH` holds, so a mod's `trace` wins over `/usr/bin/trace`:
 
 - The cmod plugin's `SessionStart` hook puts the programs folder first on `PATH` for every Bash command Claude runs.
-- `mod.process.run` and `mod.process.spawn` run `[name, ...args]` from the programs folder when it holds `name`. A path such as `/usr/bin/trace` runs as given.
+- `process.run` and `process.spawn` run `[name, ...args]` from the programs folder when it holds `name`. A path such as `/usr/bin/trace` runs as given.
 - Install and uninstall steps find the programs folder on `PATH` after cmod's own `bun`.
 
 cmod also links the program into `~/.local/bin/<program>` so a terminal runs it, unless a file there is not cmod's. Setup then logs which program a terminal runs, and changes nothing outside cmod's folders.

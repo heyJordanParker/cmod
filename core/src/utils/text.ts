@@ -3,6 +3,10 @@ export function listed(items: readonly string[]): string {
   return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 }
 
+export function firstLine(text: string): string {
+  return text.split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
+}
+
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

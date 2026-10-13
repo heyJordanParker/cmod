@@ -87,6 +87,7 @@ export type Claude = {
     surfaces(): Promise<readonly RenderSurface[]>
     messages: EngineInterface['session']['messages']
     append: EngineInterface['session']['append']
+    send: EngineInterface['session']['send']
   }
   readonly prompt: { submit: EngineInterface['prompt']['submit'] }
   readonly model: { complete: EngineInterface['model']['complete'] }

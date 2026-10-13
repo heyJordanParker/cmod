@@ -3,6 +3,7 @@ import type { ModDefinition } from './mod.js'
 import type { Options } from './options.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
+import { cmodPluginName } from './runtime/dependencies.js'
 import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle.js'
 
 let lifecycle: Lifecycle<object>
@@ -65,6 +66,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       surfaces: () => $.session.surfaces(),
       messages: ((args?: Parameters<Claude['session']['messages']>[0]) => (args === undefined ? $.session.messages() : $.session.messages(args))) as Claude['session']['messages'],
       append: (args) => $.session.append(args),
+      send: (args) => $.session.send(args),
     },
     prompt: { submit: (args) => $.prompt.submit(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
@@ -87,6 +89,11 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
 
 function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: Next<N>): Promise<EventResult<N>> {
   return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>)
+}
+
+function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>): Promise<EventResult<'cmod.call'>> {
+  const called = { ...eventInput, caller: passOn.origin.plugin } as Frozen<Args<'cmod.call'>>
+  return lifecycle.route('cmod.call', called, (passed) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>))
 }
 
 export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
@@ -119,7 +126,12 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('ui.press', routeToMod)
   addHook('ui.scroll', routeToMod)
   addHook('ui.close', routeToMod)
-  addHook('cmod.call', routeToMod)
+  addHook('cmod.call', routeCallToMod)
+  if (definition.name !== cmodPluginName) return
+  addHook('session.append', routeToMod)
+  addHook('session.compact', routeToMod)
+  addHook('session.receive', routeToMod)
+  addHook('agent.spawn', routeToMod)
 }
 
 export function registerPermissionCheck(addHook: On): void {

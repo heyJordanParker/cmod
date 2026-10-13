@@ -6,6 +6,7 @@ core/*.d.ts
 core/*.d.ts.map
 core/runtime/
 core/jobs/
+core/session/
 core/testing/
 core/ui/
 core/utils/

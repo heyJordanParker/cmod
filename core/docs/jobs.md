@@ -27,18 +27,20 @@ Each job announces itself. The first time a version starts, Claude Mod Manager (
 
 ## Deadlines
 
-Inside a job, the `mod` a function receives fails each call that runs past the job's deadline, with `<call> passed the <n> s deadline of <job>`, such as `mod.fs.read passed the 30 s deadline of tool`.
+A job gives each function it calls a deadline. The whole function must answer within it, every call it makes included, or the job goes on without its answer and names what passed the deadline, as in `the open_ticket tool passed the 30 s deadline of tool`.
 
-| Job and function | Deadline of each `mod.fs`, `mod.http`, `mod.dependencies`, and `mod.process.spawn` call | `mod.process.run` |
+| Job and function | Deadline | Past the deadline |
 | --- | --- | --- |
-| `slashCommand`'s `reply` | 30 s | 30 s, or `timeoutMs` up to 10 minutes |
-| `tool`'s `execute` | 30 s | 30 s, or `timeoutMs` up to 10 minutes |
-| `prompt`'s `prompt` | 5 s | 5 s, or `timeoutMs` up to 10 minutes |
-| `statusLine`'s `text` | 2 s | 2 s at most |
-| `permissions`' `when` | 2 s | 2 s at most |
-| `check`'s `run` | none: `run` is the check's only call | `timeoutMs`, 60 s by default, 10 minutes at most |
+| `slashCommand`'s `reply` | 30 s | The command shows `/<name> failed: /<name> passed the 30 s deadline of slashCommand`. |
+| `tool`'s `execute` | 30 s | The call is denied with `The <name> tool failed: the <name> tool passed the 30 s deadline of tool`. |
+| `prompt`'s `prompt` | 5 s | The prompt adds nothing, and the reason goes to Claude Code's debug log. |
+| `statusLine`'s `text` | 2 s | The status line keeps its last text, and the reason goes to Claude Code's debug log. |
+| `permissions`' `when` | 2 s | The rule matches, and its reason adds `Its when check failed: it passed the 2 s deadline of permissions`. |
+| `check`'s `run` | `timeoutMs`, 60 s by default, 10 minutes at most | The call's result says the command passed the deadline. |
 
-Outside a job, in a hook or a render, a `mod.dependencies` call fails after 30 s, and the other calls have only Claude Code's own limits ([mod.md](mod.md)).
+A deadline stops waiting for the function, not the work it started: a program the function spawned runs on until it exits or the mod stops. A function that waits on something slow keeps it short, such as a `process.run` with its own `timeoutMs`.
+
+Outside a job, in a listener or a render, a `mod.dependencies` call fails after 30 s, and the other calls have only Claude Code's own limits ([mod.md](mod.md)).
 
 ## slashCommand
 
@@ -48,17 +50,17 @@ slashCommand<State>(options: {
   readonly description: string
   readonly argumentHint?: string
   readonly immediate?: true
-  readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => Reply | void | Promise<Reply | void>
-}): Job<void, State>
+  readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => CommandReply | void | Promise<CommandReply | void>
+}): Job<Disposable, State>
 
-type Reply = string | { text?: string; context?: string } | undefined
+type CommandReply = string | { text?: string; context?: string } | undefined
 ```
 
 - `name` is the command without the slash: 1 to 64 letters, digits, `_`, or `-`. The person types `/<name>`. Another name throws `<mod>: "<name>" is not a slash command name.`
 - `description` is the line the typeahead and `/help` show.
 - `argumentHint` is drawn dim after the name, such as `[path]`.
 - `immediate: true` runs the command at once while Claude is still working. Without it, the command waits for the turn to end.
-- A command lasts for the session. Adding a command with a name the session already has replaces it, and Claude Code has no call that removes one, so a command whose source is gone answers that it no longer applies.
+- A command lasts for the session. Adding a command with a name the session already has replaces it, and Claude Code has no call that removes one, so a command whose source is gone answers that it no longer applies. `dispose()` on the handle stops the mod answering the command.
 - A key the mod binds in its `package.json` `"cmod": { "keys": { "shift+tab": "/mode" } }` runs the command ([install-steps.md](install-steps.md#key-bindings)). The command of a key takes `immediate: true`, so the key works while Claude works, and a `reply` that returns `undefined`, so a press adds no row to the conversation. It changes `mod.state`, and a pane or band that shows the state is how the person sees the press. cmod logs `<mod>: <key> runs /<name>, which waits for Claude's turn to end and adds a row to the conversation. Give /<name> immediate: true.` for a key whose command lacks it.
 
 ```ts
@@ -101,10 +103,10 @@ tool<Schema, State>(options: {
   readonly description: string
   readonly inputSchema?: Schema
   readonly execute: (input: FromSchema<Schema>, mod: Mod<State>) => unknown
-}): Job<{ readonly name: string }, State>
+}): Job<Disposable & { readonly name: string }, State>
 ```
 
-- `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name.
+- `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name. `dispose()` on the handle stops the mod answering the tool.
 - `description` tells Claude what the tool does.
 - `inputSchema` is a JSON Schema with `type: 'object'`. It types `execute`'s `input`, so write it inline. cmod checks each call's input against it, draft 2020-12, and denies an input that does not fit with the list of its errors. Its properties cannot be named `tool`, `tool_use_id`, `consent`, or `agentId`, which Claude Code keeps for itself.
 - `execute` returns the result Claude reads. A `string` and an array of content blocks go to Claude as they are. Any other value goes as JSON. `undefined` returns nothing.
@@ -175,7 +177,7 @@ permissions<State>(rules: PermissionRules<State> | ((state: State) => Permission
 type PermissionRules<State> = { deny?: Rule<State>[]; ask?: Rule<State>[] }
 
 type Rule<State> = Target & {
-  when?: (call: <the call of the target's key>, mod: Mod<State>) => boolean | Promise<boolean>
+  when?: (call: <the call of the target's key> & { folder: string }, mod: Mod<State>) => boolean | Promise<boolean>
   reason?: string
 }
 ```
@@ -189,16 +191,16 @@ type Rule<State> = Target & {
 - `permissions({})` throws `permissions: give it a deny or an ask rule, or remove it from setup.`
 - A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it the mod does not start.
 
-`when` gets the call, typed by the target's key. `jobs/permissions.js` exports each type, and `ToolCall` is any of them:
+`when` gets the call, typed by the target's key. `jobs/permissions.js` exports each type, and `Call` is any of them:
 
-| Key | Call type | Fields beyond `tool`, `input`, `agentId`, and `agentType` |
+| Key | Call type | Fields beyond `tool`, `input`, `agentId`, `agentType`, and `folder` |
 | --- | --- | --- |
 | `command` | `CommandCall` | `commands`, each `[program, ...arguments]`, and `isFullyParsed` |
 | `read`, `write` | `FileCall` | `path`, and for an `Edit` or a `Write`, `content`, the new text, and `previousContent`, the text before |
 | `fetch` | `FetchCall` | `url` |
-| `subagent`, `tool` | `ToolCall` | none |
+| `subagent`, `tool` | `Call` | none |
 
-`tool` is the tool's name, such as `Bash`, and `input` is its input as Claude Code sent it, such as `{ command, description }` for `Bash`, so a rule reads any field cmod does not parse. `agentId` and `agentType` name the subagent that makes the call. In the main conversation `agentId` is absent, and `agentType` is the agent the session started as, when it started as one. `jobs/permissions.js` also exports `Target`, `Rule`, and `PermissionRules`.
+`tool` is the tool's name, such as `Bash`, and `input` is its input as Claude Code sent it, such as `{ command, description }` for `Bash`, so a rule reads any field cmod does not parse. `agentId` and `agentType` name the subagent that makes the call. In the main conversation `agentId` is absent, and `agentType` is the agent the session started as, when it started as one. `folder` is the root of the git work tree that holds the call's file or folder, or that folder itself outside one, so `process.run(['git', 'status'], { cwd: call.folder })` asks the repository the call works in. `jobs/permissions.js` also exports `Target`, `Rule`, and `PermissionRules`.
 
 ```ts
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
@@ -256,7 +258,7 @@ It needs `"prompt": true`. Without the grant it adds nothing and logs once which
 ```ts
 prompt<State>(options: {
   name: string
-  prompt: string | ((input: { userPrompt?: string; call?: ToolCall }, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
+  prompt: string | ((input: { userPrompt?: string; call?: Call & { folder: string } }, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
   when?: RegExp | ((userPrompt: string) => boolean)
   after?: Target | Target[]
 }): Job<void, State>
@@ -268,16 +270,16 @@ prompt<State>(options: {
 | --- | --- |
 | neither | At the start of each conversation, as a block of context named `name`. A block of that name already in the context wins. Then again whenever `mod.state` changes and the text differs from what Claude last got. |
 | `when` | With each prompt the person sends whose text matches the `RegExp`, or for which the function returns true. `input.userPrompt` is the prompt. |
-| `after` | After each call that matches a target and succeeds, with the call's result. `input.call` is the matched call. |
+| `after` | After each call that matches a target and succeeds, with the call's result. `input.call` is the matched call, with its `folder` as `permissions` gives it. |
 
 - With `when` or `after`, the text goes to Claude under the heading `# <name>`.
-- With neither, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again, and when the text differs from what Claude last got, it adds `# <name>` and the new text to the conversation as a note Claude reads on its next call to the model, through `mod.session.append`. Several changes in a row give one note with the last text. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
+- With neither, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again, and when the text differs from what Claude last got, it adds `# <name>` and the new text to the conversation as a `Note` Claude reads on its next call to the model, as `sessions.current.send` does ([session.md](session.md#send-to-a-conversation)). Several changes in a row give one note with the last text. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
 - A `prompt` function that returns `undefined` or `''` adds nothing. One that throws adds nothing, and the error goes to Claude Code's debug log.
 - `name` cannot be blank. `when` and `after` together throw: add a second `prompt` for the other trigger. Two prompts with one name in a mod throw.
 - A `when` prompt runs on `prompt.submit` and adds its text to the event it passes down. In a test, `fire('prompt.submit', …)` returns that text in the answer's `context`. [testing.md](testing.md#test-a-prompt-with-when) shows how.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, fs, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'
 
 export const conventions = defineMod({
@@ -287,7 +289,7 @@ export const conventions = defineMod({
     mod.use(prompt({ name: 'Commit messages', prompt: 'Write commit messages in the imperative mood.' }))
     mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
     mod.use(prompt({ name: 'Migrations', when: /\bmigrat/i, prompt: 'Every migration has a down step.' }))
-    mod.use(prompt({ name: 'Schema', after: { write: 'db/schema.sql' }, prompt: async (_input, mod) => `The schema is now:\n${await mod.fs.read(`${mod.projectRoot}/db/schema.sql`)}` }))
+    mod.use(prompt({ name: 'Schema', after: { write: 'db/schema.sql' }, prompt: async () => `The schema is now:\n${await fs.read(`${sessions.current.project}/db/schema.sql`)}` }))
   },
 })
 ```
@@ -297,9 +299,9 @@ export const conventions = defineMod({
 It needs `"prompt": true`, because each cron starts a turn ([permissions.md](permissions.md)).
 
 ```ts
-schedule<State>(entry: Schedule | ((state: State) => Schedule | undefined)): Job<void, State>
+schedule<State>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<void, State>
 
-type Schedule = { readonly cron: string; readonly prompt: string }
+type ScheduledPrompt = { readonly cron: string; readonly prompt: string }
 ```
 
 `schedule` gives Claude a prompt on a schedule, through the cron jobs Claude Code keeps for `/loop`. `cron` is a standard 5-field cron in local time, such as `*/10 * * * *` for every 10 minutes. At each fire Claude Code shows one `Running scheduled task` row and Claude answers the prompt.
@@ -368,13 +370,13 @@ type Program = {
 `program` runs a background program, such as a preview server, and hands the mod its address.
 
 - `command` is the program on `PATH` and its arguments. `environment` sets variables for it. An empty `command` throws.
-- The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `mod.http.fetch`, which reaches that address with no `network` permission while the program runs.
+- The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `http.fetch`, which reaches that address with no `network` permission while the program runs.
 - In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()`.
 - When the program exits, cmod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and cmod logs `<mod>: the <program> program stopped: <reason>`.
 - A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` is not on `PATH`, so `command` names it by its full path, `${mod.dataFolder}/bin/<program>`.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, http } from '../node_modules/@cmodjs/core/mod.js'
 import { program } from '../node_modules/@cmodjs/core/jobs/program.js'
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 
@@ -386,9 +388,9 @@ export const preview = defineMod({
       slashCommand({
         name: 'preview-status',
         description: 'Ask the preview server for its status',
-        reply: async (_input, mod) => {
+        reply: async () => {
           const { url, socketPath } = await server.ready()
-          const response = await mod.http.fetch(`${url}/status`, socketPath === undefined ? {} : { socketPath })
+          const response = await http.fetch(`${url}/status`, socketPath === undefined ? {} : { socketPath })
           return response.text
         },
       }),
@@ -405,96 +407,41 @@ A `Job` is a function. `mod.use` calls it with a `JobContext` and returns what i
 type JobContext<State> = {
   readonly mod: Mod<State>
   announce(feature: string): void
-  reserveName(kind: string, name: string, taken: string): void
-  readonly toolCalls: ToolCalls
+  reserveName(type: string, name: string, taken: string): Disposable
 }
 ```
 
-A job reaches Claude Code through `mod.claude`, the same member every hook has:
-
-- `mod.claude` holds Claude Code's own calls. [The claude members](#the-claude-members) lists each one. Each call checks the permission it needs, as `mod`'s own members do ([permissions.md](permissions.md)).
-- `mod.claude.store` is where cmod saves `mod.state`, under keys that start with `<mod>.`, such as `<mod>.<key>`. A job of your own never writes those keys, or it changes the mod's state behind cmod's back.
-- `mod.claude.on` adds a Claude Code hook-module handler, `(e, next) => …`, on a `classic.<ModEvent>` event or on `tool.check`, `tool.call`, `prompt.submit`, `prompt.context`, `command.run`, `session.measure`, `skill.prompt`, `ui.render`, `ui.press`, `ui.scroll`, `ui.close`, or `cmod.call`. The handler calls `next(e)` to pass the event on. cmod checks what it answers against the person's grants, part by part ([permissions.md](permissions.md#when-a-hook-answer-has-no-grant)). A job with a handler on `tool.check` or `classic.PermissionRequest` needs `registerPermissionCheck` in `hooks/register.ts` ([mod.md](mod.md)).
-
-The context adds what only a job needs:
-
+- `mod` is the mod that uses the job. A job builds on `mod.on`, `mod.every`, `mod.ui`, and the imports from `mod.js`, as `setup` does ([mod.md](mod.md)).
 - `announce` adds a phrase to the list cmod logs when the mod first starts.
-- `reserveName` throws `taken` when the mod already reserved that `kind` and `name`. A job calls it to refuse a duplicate.
-- `toolCalls.agentOf(toolUseId)` resolves `{ agentId?, agentType? }`, the subagent behind a call.
-- `toolCalls.cwdOf(toolUseId)` returns the working folder when the call ran, or `undefined` once its `PostToolUse` or `PostToolUseFailure` has run. cmod keeps the folders of the last 100 calls.
+- `reserveName` throws `taken` when the mod already reserved that `type` and `name`, so a job refuses a duplicate. `dispose()` on what it returns frees the name again.
+
+A job that hands back a feature the mod turns off returns a `Disposable`, as `slashCommand` and `tool` do:
 
 ```ts
-import { defineMod, type Job } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions, Stop, ToolCall, type Disposable, type Job } from '../node_modules/@cmodjs/core/mod.js'
 
-const clock: Job<{ now(): Promise<number> }> = ({ mod, announce }) => {
-  announce('a clock')
-  return { now: () => mod.claude.clock.now() }
+const editCounter = (tool: string): Job<Disposable & { readonly count: () => number }> => ({ mod, announce, reserveName }) => {
+  const reserved = reserveName('editCounter', tool, `${mod.name}: edits of ${tool} are already counted.`)
+  let edits = 0
+  const listening = sessions.current.on(ToolCall, { name: tool }, () => void (edits += 1))
+  announce(`a count of ${tool} calls`)
+  return {
+    count: () => edits,
+    dispose() {
+      listening.dispose()
+      reserved.dispose()
+    },
+  }
 }
 
-export const timer = defineMod({
-  name: 'timer',
+export const counter = defineMod({
+  name: 'counter',
   setup(mod) {
-    const started = mod.use(clock)
-    mod.on('Stop', async () => {
-      mod.ui.toast(`Turn ended at ${new Date(await started.now()).toISOString()}`)
-    })
+    const writes = mod.use(editCounter('Write'))
+    mod.on(Stop, () => mod.ui.toast(`${writes.count()} files written so far`))
   },
 })
 ```
-
-### The claude members
-
-`mod.js` exports the types `Claude`, `RoutedEvent`, `RoutedHook`, and `ToolCalls`, so a job of your own names them in its own helpers, such as `(claude: Claude, calls: ToolCalls): RoutedHook<'command.run'> => …`.
-
-Each member calls the member of the same name in Claude Code's hooks API, `$`, with the same arguments. The `env` members read `$.env.get` instead. `mod.claude.on` adds a handler, as [Write a job of your own](#write-a-job-of-your-own) shows.
-
-A member that does what a permission covers checks it first and rejects with the fix: `process` needs `run`, `http.fetch` needs `network` except to the mod's own program, `fs.write` outside the project and the data folder needs `files` and refuses Claude Code's own settings files, `settings.update` needs `config` for each key, `fs.read` of a transcript needs `conversation`, `session.messages` needs `conversation`, `session.append` and `prompt.submit` need `prompt`, `model.complete` needs `model`, `agent.spawn` needs `agents`, and `tool.call` needs `tools`, except `CronCreate`, which needs `prompt`, and `CronList` and `CronDelete`, which need nothing ([permissions.md](permissions.md)).
-
-| Member | What it does |
-| --- | --- |
-| `plugin.name` | The plugin's name. |
-| `plugin.root` | The plugin's own folder, absolute, where the files the mod ships live. |
-| `ui.status(text)` | Pins `text` as the plugin's one status line under the prompt. `undefined` removes it. |
-| `ui.log(text, options?)` | Adds a dim line to the transcript that Claude does not read, or with `{ to: 'debug' }` a line to the debug log only. |
-| `ui.notice(toolUseId, text)` | Shows `text` as a line under the open permission dialog of that call. `undefined` removes it. |
-| `ui.invalidate(event)` | Draws `ui.render` again, or drops the cached answers of `prompt.context` and the other cached events. |
-| `ui.ask(question, options?)` | Asks the person in Claude Code's question dialog, and resolves the label they chose. It rejects when they dismiss it, and in a `-p` run. |
-| `ui.open(pane)` | Opens a pane, `{ id, title?, focus?, closeOnEscape?, holdToasts?, rows?, columns? }`, and resolves `{ isPlaced }`. |
-| `ui.close(pane)` | Closes the open pane with that `{ id }`. |
-| `ui.panes()` | The plugin's open panes: each one's id, title, and whether it is shown, holds the keyboard, and is placed. |
-| `ui.scroll(args)` | What `mod.ui.scroll` calls. |
-| `ui.copy({ text })` | Puts `text` on the person's clipboard, and resolves `{ isCopied }`, or `{ isCopied: false, reason }`. `mod.ui.copy` is built on it. |
-| `ui.resolve(e)` | The element table of the surface a `ui.render` event draws on. |
-| `process.run(argv, init?)` | Runs a program to its end. `mod.process.run` is built on it. |
-| `process.spawn(request)` | Starts a program and streams its output. `mod.process.spawn` is built on it. |
-| `fs.read`, `fs.write`, `fs.list`, `fs.exists`, `fs.stat` | What `mod.fs` calls. A relative path is under the session's working folder. |
-| `http.fetch(url, init?)` | What `mod.http.fetch` calls. |
-| `settings.read(args?)` | Reads Claude Code's own `settings.json` files. Without `{ source }` it answers every source merged. `user`, `project`, `local`, `flag`, and `policy` each answer one. |
-| `settings.update({ source }, values)` | Changes keys in the `user`, `project`, or `local` settings through the cmod program, which keeps the person's own edits and takes the mod's values out when it is removed ([mod.md](mod.md#mod-settings)). |
-| `config.list()` | Lists the rows `/config` shows, such as `<mod>.<option>`. A mod sets an option through `cmod option <mod> <key> <value>`, as `/mods` does. |
-| `store.get`, `store.set`, `store.delete`, `store.keys` | The plugin's key-value store, where cmod also keeps `mod.state`. |
-| `clock.now()` | Resolves milliseconds since the epoch. |
-| `clock.after(ms, fn)` | Calls `fn` once after `ms` milliseconds, and returns `{ cancel() }`. |
-| `clock.every(ms, fn)` | Calls `fn` every `ms` milliseconds, at least 1, and returns `{ cancel() }`. |
-| `session.id()` | The session's id, the transcript file's name. |
-| `session.root()` | The session's project root. A shell `cd` does not move it. |
-| `session.cwd()` | The folder the session runs in. |
-| `session.model()` | The main conversation's model, as `/model` shows it. |
-| `session.usage()` | When the session began, the context window's fill, the rate-limit windows, and the cost, as the status line has them. |
-| `session.surfaces()` | Every surface the session draws on, `terminal` first. Empty in a plain `-p` run. |
-| `session.messages(args?)` | Claude Code's own read of the newest 4096 messages of this conversation, or of a subagent's with `{ agentId }`, each `{ role, text, toolUses, toolResults }`. `mod.history` reads every conversation whole, as messages with ids and senders ([mod.md](mod.md#mod-history)). |
-| `session.append({ message, agentId? })` | Adds a message Claude reads to the conversation, or to a subagent's, and resolves `{ message, uuid }` or `{ deny }`. `mod.session.append` is built on it. |
-| `prompt.submit({ text, asUser? })` | Sends a prompt Claude answers as a turn once the session is idle. `mod.session.submit` is built on it. |
-| `model.complete(request, options?)` | What `mod.model.complete` calls. |
-| `command.register(spec)` | Adds a slash command. `slashCommand` is built on it. |
-| `tool.register(spec)` | Adds a tool. `tool` is built on it. |
-| `tool.call({ tool, ...input })` | Calls a tool the way Claude does, through the permission check, and resolves `{ result, text, isError? }` or `{ deny }`. `schedule` is built on it, calling `CronCreate` and `CronDelete`. |
-| `agent.list()` | The session's subagents and teammates so far. |
-| `agent.spawn(args)` | What `mod.agent.spawn` calls. |
-| `env.home()` | The `HOME` variable, or `undefined` when it is unset. |
-| `env.dataHome()` | The `XDG_DATA_HOME` variable, or `undefined`. |
-| `env.configHome()` | The `CLAUDE_CONFIG_DIR` variable, or `undefined`. |
-| `cmod.call({ to, method, input })` | Calls `method` of the mod named `to`, and resolves what the method returned, or rejects with the reason it failed. The mod's own `cmod.call` handler answers `{ value }` or `{ deny }`, and Claude Code turns that into the result. `mod.dependencies` is built on it. |
 
 ### The building blocks
 
@@ -503,9 +450,9 @@ The built-in jobs are written from these building blocks, which a job of your ow
 | Import | Export | What it does |
 | --- | --- | --- |
 | `jobs/context.js` | `afterCall(job, contextAfter, failed)` | Runs `contextAfter` after each call that succeeds, and adds the lines it returns to the call's result. |
-| `jobs/context.js` | `modWithin(job, deadline, workTree?)` | A `mod` whose calls fail at `deadline`, `{ ms, job?, longestMs? }`. |
-| `jobs/context.js` | `modOf(job, { call?, folder }, workspace, deadline)` | `modWithin`, with `mod.process` calls run in the call's work tree. |
-| `jobs/context.js` | `workspaceReader(job)` | A function that reads the session's `projectRoot`, `cwd`, `home`, file access, and project scope. |
+| `jobs/context.js` | `inFolder(call, folder, workspace)` | Adds the `folder` a rule's `when` gets: the work tree that holds the call's path or folder, or the folder itself. |
+| `jobs/context.js` | `withinDeadline(mod, deadline, subject, run)` | Runs `run`, and rejects with `<subject> passed the <n> s deadline of <job>` when it has not answered by `deadline`, `{ ms, job? }`. |
+| `jobs/context.js` | `workspaceReader(job)` | A function that reads the session's project, working folder, home, file access, and project scope. |
 | `jobs/permissions/decide-permission.js` | `decidePermission`, `stricterVerdict`, and the types `Rule`, `PermissionRules`, `Decision`, `Verdict` | Decides a call against permission rules. |
 | `jobs/permissions/find-project-scope.js` | `findProjectScope`, and the types `ProjectScope`, `Workspace` | Finds the repository a project plugin belongs to. |
 

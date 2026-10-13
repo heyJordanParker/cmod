@@ -1,21 +1,21 @@
 import type { Job } from '../mod.js'
 import { onStateChange } from '../runtime/state.js'
-import { showFailure } from '../runtime/toaster.js'
+import { engineOf } from '../runtime/engine.js'
 
-export type Schedule = { readonly cron: string; readonly prompt: string }
+export type ScheduledPrompt = { readonly cron: string; readonly prompt: string }
 
 const scheduleCounts = new WeakMap<object, number>()
 
-export function schedule<State extends object = Record<never, never>>(entry: Schedule | ((state: State) => Schedule | undefined)): Job<void, State> {
+export function schedule<State extends object = Record<never, never>>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<void, State> {
   if (typeof entry !== 'function') checked(entry)
 
   return (job) => {
     const { mod } = job
-    const { claude } = mod
+    const { claude, report: reportFailure } = engineOf(mod)
     const order = scheduleCounts.get(mod) ?? 0
     scheduleCounts.set(mod, order + 1)
     const storeKey = `cmod:schedule:${order}`
-    const report = (message: string, error: unknown) => void showFailure(mod, { id: storeKey, message: `The schedule ${message}`, error })
+    const report = (message: string, error: unknown) => reportFailure({ id: storeKey, message: `The schedule ${message}`, error })
     let current: { readonly id: string; readonly wanted: string } | undefined
     let isQueued = false
 
@@ -26,7 +26,7 @@ export function schedule<State extends object = Record<never, never>>(entry: Sch
 
     const update = async () => {
       isQueued = false
-      let next: Schedule | undefined
+      let next: ScheduledPrompt | undefined
       try {
         next = typeof entry === 'function' ? entry(mod.state) : entry
         if (next !== undefined) checked(next)
@@ -60,7 +60,7 @@ export function schedule<State extends object = Record<never, never>>(entry: Sch
   }
 }
 
-function checked(entry: Schedule): void {
+function checked(entry: ScheduledPrompt): void {
   if (entry.cron.trim() === '') throw new Error('schedule: give it a cron, such as "*/10 * * * *" for every 10 minutes.')
   if (entry.prompt.trim() === '') throw new Error('schedule: give it the prompt Claude gets at each fire.')
 }

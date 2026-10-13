@@ -164,7 +164,16 @@ test('link installs no cmod plugin when a linked cmod checkout provides it', asy
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
 })
 
-const claudeConfiguring = claudeAnswering(cmodPluginListed).replace('  *) exit 1 ;;', '  "plugin configure "*) cat > "$HOME/configured" ;;\n  *) exit 1 ;;')
+const claudeConfiguring = claudeAnswering(cmodPluginListed)
+  .replace(
+    /  "plugin list --json"\) echo '.*' ;;/,
+    `  "plugin list --json")
+    if grep -q 'Developer/demo' "$HOME/.claude/settings.json" 2>/dev/null
+    then echo '[{"id":"cmod@cmod","version":"0.1.0","scope":"user","enabled":true,"installPath":"/cmod"},{"id":"demo@inline","version":"0.1.0","scope":"session","enabled":true,"installPath":"'"$HOME"'/Developer/demo"}]'
+    else echo '${JSON.stringify(cmodPluginListed)}'
+    fi ;;`,
+  )
+  .replace('  "plugin "*) exit 1 ;;', '  "plugin configure demo@inline --values-stdin --json") cat > "$HOME/configured" ;;\n  "plugin "*) exit 1 ;;')
 
 test('link --option sets each option through claude plugin configure', async () => {
   const home = await temporaryHome()
@@ -174,8 +183,8 @@ test('link --option sets each option through claude plugin configure', async () 
   const linked = await cmod(home, 'link', join(home, 'Developer/demo'), '--option', 'branch=main', '--option', 'interval=30')
 
   expect(linked.exitCode).toBe(0)
-  expect(linked.stdout).toContain('✔ Set branch, interval for demo')
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin configure demo --values-stdin --json\n')
+  expect(linked.stdout).toContain('✔ Set branch, interval for demo@inline')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin configure demo@inline --values-stdin --json\n')
   expect(JSON.parse(await readFile(join(home, 'configured'), 'utf8'))).toEqual({ branch: 'main', interval: '30' })
 })
 
@@ -186,7 +195,7 @@ test('link --option names the options a mod has when the key is not one of them'
   const linked = await cmod(home, 'link', join(home, 'Developer/demo'), '--option', 'brnach=main')
 
   expect(linked.exitCode).toBe(1)
-  expect(`${linked.stdout}${linked.stderr}`).toContain('demo has no option brnach. Its options are: branch.')
+  expect(`${linked.stdout}${linked.stderr}`).toContain('demo@inline has no option brnach. Its options are: branch.')
   expect(existsSync(join(home, 'configured'))).toBe(false)
 })
 

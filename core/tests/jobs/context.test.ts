@@ -1,78 +1,19 @@
 import { expect, test } from 'bun:test'
 import type { EventResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { modOf, targetWords } from '../../src/jobs/context.js'
-import { findProjectScope, type Workspace } from '../../src/jobs/permissions/find-project-scope.js'
+import { targetWords } from '../../src/jobs/context.js'
 import { prompt } from '../../src/jobs/prompt.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { tool } from '../../src/jobs/tool.js'
-import { defineMod, type Claude, type JobContext, type RoutedEvent, type RoutedHook, type ToolCalls } from '../../src/mod.js'
+import { defineMod, process, sessions } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
-import { fakeFiles } from '../../src/testing/fake-files.js'
 
 const root = '/work/dent'
-const home = '/Users/jordan'
-const deadline = { ms: 2000, job: 'permissions' }
 const files = {
   [`${root}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${root}/.git/worktrees/design/commondir`]: '../..\n',
   [`${root}/worktrees/design/.git`]: `gitdir: ${root}/.git/worktrees/design\n`,
   [`${root}/worktrees/design/Domain.md`]: '# Domain\n',
 }
-const fs = fakeFiles(files)
-
-async function jobContextFor() {
-  let used: JobContext | undefined
-  const tested = testMod(defineMod({ name: 'dent', setup: (mod) => mod.use((context) => void (used = context)) }), { projectRoot: root, permissions: ['run:git'] })
-  tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
-  await tested.start()
-  if (used === undefined) throw new Error('setup did not run')
-  return { fake: tested, context: used }
-}
-
-test("in a project-scope plugin, a callback's mod.process.run runs in the work tree that holds the call's path", async () => {
-  const { fake, context } = await jobContextFor()
-  const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: await findProjectScope(`${root}/.claude/skills/dent`, home, fs) }
-
-  const commit = { tool: 'Bash', input: { command: 'git commit' }, commands: [['git', 'commit']] as [string, ...string[]][], isFullyParsed: true }
-  await modOf(context, { call: { tool: 'Edit', input: {}, path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { call: commit, folder: root }, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { call: commit, folder: `${root}/worktrees/design/app` }, workspace, deadline).process.run(['git', 'status'])
-  await modOf(context, { call: { tool: 'Edit', input: {}, path: `${root}/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'], { cwd: '/tmp', timeoutMs: 9000 })
-
-  expect(fake.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])).toEqual([
-    { cwd: `${root}/worktrees/design`, timeoutMs: 2000 },
-    { cwd: root, timeoutMs: 2000 },
-    { cwd: `${root}/worktrees/design`, timeoutMs: 2000 },
-    { cwd: '/tmp', timeoutMs: 2000 },
-  ])
-})
-
-test("in any other plugin, a callback's mod.process.run runs in the session's folder", async () => {
-  const { fake, context } = await jobContextFor()
-  const workspace: Workspace = { projectRoot: root, cwd: root, home, fs, scope: undefined }
-
-  await modOf(context, { call: { tool: 'Edit', input: {}, path: `${root}/worktrees/design/Domain.md` }, folder: root }, workspace, deadline).process.run(['git', 'status'])
-
-  expect(fake.calls.find((call) => call.call === 'process.run')?.args[1]).toEqual({ timeoutMs: 2000 })
-})
-
-test('a job of your own names the Claude, RoutedEvent, RoutedHook, and ToolCalls types that mod.js exports', async () => {
-  const event = 'command.run' satisfies RoutedEvent
-  const answerWhere =
-    (claude: Claude, calls: ToolCalls): RoutedHook<typeof event> =>
-    async (e, next) =>
-      e.command === 'where' ? { text: `${claude.plugin.name} ${calls.cwdOf('toolu_1') ?? 'before any call'}` } : next(e)
-  const tested = testMod(
-    defineMod({
-      name: 'where',
-      setup(mod) {
-        mod.use(({ mod: { claude }, toolCalls }) => claude.on(event, answerWhere(claude, toolCalls)))
-      },
-    }),
-  )
-
-  expect(await tested.type('/where')).toEqual({ text: 'where before any call' })
-})
 
 test('targetWords names each target in words a user reads', () => {
   expect(targetWords({ write: '*.ts' })).toBe('edits to *.ts')
@@ -100,25 +41,12 @@ function written(text: string): Stream {
   return Object.assign(pieces(), { result: Promise.resolve({ code: 0, signal: null }) })
 }
 
-function endless(killed: () => void): Stream {
-  const stream = {
-    next: () => new Promise(() => undefined),
-    return: async (value: ProcessSpawnResult) => {
-      killed()
-      return { done: true, value }
-    },
-    [Symbol.asyncIterator]: () => stream,
-    result: new Promise(() => undefined),
-  }
-  return stream as unknown as Stream
-}
-
-test('spawn inside a prompt callback runs in the work tree', async () => {
+test("a prompt callback gets the work tree that holds the edited file as the call's folder", async () => {
   const tested = testMod(
     defineMod({
       name: 'dent',
       setup(mod) {
-        mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: (_input, mod) => readAll(mod.process.spawn(['git', 'status'])) }))
+        mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: ({ call }) => readAll(process.spawn(['git', 'status'], call === undefined ? {} : { cwd: call.folder })) }))
       },
     }),
     { scope: 'project', projectRoot: root, files, permissions: ['prompt', 'run:git'] },
@@ -134,12 +62,12 @@ test('spawn inside a prompt callback runs in the work tree', async () => {
   expect(answer.context).toEqual(['# status\nOn branch design\n'])
 })
 
-test("a job's mod.cwd follows a move", async () => {
+test("the current session's cwd follows a move", async () => {
   const tested = testMod(
     defineMod({
       name: 'where',
       setup(mod) {
-        mod.use(slashCommand({ name: 'where', description: 'Name the working folder', reply: (_input, mod) => mod.cwd }))
+        mod.use(slashCommand({ name: 'where', description: 'Name the working folder', reply: () => sessions.current.cwd }))
       },
     }),
     { projectRoot: '/work/a' },
@@ -150,23 +78,19 @@ test("a job's mod.cwd follows a move", async () => {
   expect(await tested.type('/where')).toEqual({ text: '/work/b' })
 })
 
-test("a spawn inside a job stops at the job's deadline", async () => {
-  let isKilled = false
+test("a tool's execute that outlasts the job's deadline answers that it passed the deadline", async () => {
   const tested = testMod(
     defineMod({
       name: 'tickets',
       setup(mod) {
-        mod.use(tool({ name: 'sync', description: 'Sync the tickets', execute: (_input, mod) => readAll(mod.process.spawn(['tracker', 'sync'])) }))
+        mod.use(tool({ name: 'sync', description: 'Sync the tickets', execute: () => new Promise<never>(() => undefined) }))
       },
     }),
-    { permissions: ['run:tracker'] },
   )
-  tested.fakes.process.spawn = () => endless(() => (isKilled = true))
   tested.fakes.clock.after = (ms, fire) => {
     if (ms === 30000) void Promise.resolve().then(fire)
     return { cancel: () => undefined }
   }
 
-  expect(await tested.callTool('sync', {})).toEqual({ deny: 'The sync tool failed: mod.process.spawn passed the 30 s deadline of tool' })
-  expect(isKilled).toBe(true)
+  expect(await tested.callTool('sync', {})).toEqual({ deny: 'The sync tool failed: the sync tool passed the 30 s deadline of tool' })
 })

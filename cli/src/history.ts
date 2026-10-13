@@ -1,59 +1,67 @@
 import { Database } from 'bun:sqlite'
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
-import { searchLimit, searchText, type Message, type Sender, type Session } from '@cmodjs/core/src/history.js'
-import { isAtLeast, isObject } from '@cmodjs/core/src/records.js'
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch } from 'node:fs'
+import { join } from 'node:path'
+import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
+import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
+import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
+import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
+import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
+import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
+import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
+import { TaskEnd, TaskStart } from '@cmodjs/core/src/session/goal/task.js'
+import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type ConversationState, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '@cmodjs/core/src/session/conversation.js'
+import { firstLine } from '@cmodjs/core/src/utils/text.js'
 import { configRoot } from './settings.js'
 import { storePath } from './store.js'
 
-type Row = Readonly<Record<string, unknown>>
+type Raw = Readonly<Record<string, unknown>>
 
-type Tool = Message['tools'][number]
-
-type Transcript = { readonly path: string; readonly folder: string; readonly session: string; readonly agent: string | undefined }
+type Transcript = { readonly path: string; readonly folder: string; readonly session: string; readonly task: string | undefined }
 
 type Line = { readonly bytes: Buffer; readonly offset: number; readonly length: number }
 
-type Place = { readonly row: number; readonly id: string; readonly session: string; readonly agent: string; readonly file: number; readonly offset: number; readonly length: number }
+type Place = { readonly row: number; readonly id: string; readonly session: string; readonly task: string; readonly context: number; readonly turn: string | null; readonly file: number; readonly offset: number; readonly length: number; readonly part: number }
 
-type Summary = { startedAt: string; lastAt: string; project: string; title: string; customTitle: string | null; forkedFrom: string | null; isPrompted: number }
+type Summary = { startedAt: string; lastAt: string; project: string; cwd: string; model: string; title: string; customTitle: string | null; forkedFrom: string | null; isPrompted: number }
 
-export type Scope = { readonly project: string; readonly everyProject: boolean; readonly since: string | undefined }
+type Meta = { readonly task: string; readonly title: string; readonly agentType: string; readonly call: string }
+
+type Step = { readonly transcript: Transcript; readonly line: Line; readonly raw: Raw; readonly changes: readonly SessionChange[] }
+
+export type Scope = { readonly project: string; readonly everyProject: boolean; readonly since: string | undefined; readonly running?: boolean }
 
 const schema = `
-create table files (id integer primary key, path text not null unique, session text not null, agent text not null, offset integer not null);
-create table sessions (id text primary key, folder text not null, project text not null default '', title text not null default '', custom_title text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer);
+create table files (id integer primary key, path text not null unique, session text not null, task text not null, offset integer not null);
+create table sessions (id text primary key, folder text not null, project text not null default '', cwd text not null default '', model text not null default '', title text not null default '', custom_title text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer, state text);
 create table folders (id integer primary key, path text not null unique);
-create table messages (row integer primary key, id text not null, session text not null, agent text not null, folder integer not null, at text not null, file integer not null, offset integer not null, length integer not null, seq integer, unique (file, offset));
+create table messages (row integer primary key, id text not null, session text not null, task text not null, type text not null, context integer not null, turn text, folder integer not null, at text not null, file integer not null, offset integer not null, length integer not null, part integer not null, seq integer, unique (file, offset, part));
 create index messages_by_id on messages (id);
-create index messages_by_agent on messages (session, agent, seq);
-create index messages_by_session on messages (session, seq);
+create index messages_by_task on messages (session, task, seq);
+create index messages_by_turn on messages (session, turn, seq);
 create index messages_by_time on messages (at);
 create index messages_by_folder on messages (folder, at);
-create table tool_uses (session text not null, agent text not null, id text not null, file integer, offset integer, length integer, subagent text, primary key (session, agent, id));
+create table turns (session text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, primary key (session, prompt));
+create table contexts (session text not null, number integer not null, opened_at text not null, closed_at text, primary key (session, number));
+create table tasks (session text not null, id text not null, title text not null, agent_type text not null, model text, opened_by text not null, opened_at text not null, closed_at text, parent text, context integer not null, primary key (session, id));
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
+
+const indexFile = 'history-3.sqlite'
+
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite']
 
 const chunkBytes = 65_536
 
 const tailBytes = 65_536
 
-const batchRows = 2000
-
 const sortedMatches = 20_000
 
-const skillPrefix = 'Base directory for this skill:'
-
-const personOrigins: readonly string[] = ['human', 'composer', 'bridge', 'slack-ping', 'auto-continuation']
-
-const sessionOrigins: readonly string[] = ['peer', 'peer-send-message', 'coordinator', 'projects-relay', 'observer', 'observer-activity']
-
-const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"custom-title"', '"nested_memory"', '"forkedFrom"']
+const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"forkedFrom"']
 
 export function openHistory(): Database {
   mkdirSync(storePath(), { recursive: true })
-  for (const suffix of ['', '-wal', '-shm']) rmSync(storePath(`history.sqlite${suffix}`), { force: true })
-  const path = storePath('history-2.sqlite')
+  for (const older of olderIndexes) for (const suffix of ['', '-wal', '-shm']) rmSync(storePath(`${older}${suffix}`), { force: true })
+  const path = storePath(indexFile)
   if (!existsSync(path)) createIndex(path)
   const db = new Database(path)
   db.exec('pragma busy_timeout = 120000')
@@ -96,30 +104,57 @@ export function foldersIn(scope: Pick<Scope, 'project' | 'everyProject'>): strin
   return existsSync(projectsFolder()) ? readdirSync(projectsFolder(), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(projectsFolder(), entry.name)) : []
 }
 
+export function runningSessions(): Set<string> {
+  const folder = join(configRoot(), 'sessions')
+  if (!existsSync(folder)) return new Set()
+  const running = new Set<string>()
+  for (const name of readdirSync(folder)) {
+    if (!name.endsWith('.json')) continue
+    const entry = parsedRow(readFileSync(join(folder, name), 'utf8'))
+    if (typeof entry?.['pid'] === 'number' && typeof entry['sessionId'] === 'string' && isAlive(entry['pid'])) running.add(entry['sessionId'])
+  }
+  return running
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
 function mainTranscripts(folder: string): Transcript[] {
   if (!existsSync(folder)) return []
   return readdirSync(folder)
     .filter((name) => name.endsWith('.jsonl'))
-    .map((name) => ({ path: join(folder, name), folder, session: name.slice(0, -'.jsonl'.length), agent: undefined }))
+    .map((name) => ({ path: join(folder, name), folder, session: name.slice(0, -'.jsonl'.length), task: undefined }))
 }
 
-function agentTranscripts(main: Transcript): Transcript[] {
+function taskTranscripts(main: Transcript): Transcript[] {
   const subagents = join(main.folder, main.session, 'subagents')
   if (!existsSync(subagents)) return []
-  return readdirSync(subagents).flatMap((name) => {
-    const agent = /^agent-(.+)\.jsonl$/.exec(name)?.[1]
-    return agent === undefined ? [] : [{ path: join(subagents, name), folder: main.folder, session: main.session, agent }]
-  })
+  return readdirSync(subagents)
+    .flatMap((name) => {
+      const task = /^agent-(.+)\.jsonl$/.exec(name)?.[1]
+      return task === undefined ? [] : [{ transcript: { path: join(subagents, name), folder: main.folder, session: main.session, task }, born: statSync(join(subagents, name)).birthtimeMs }]
+    })
+    .sort((first, second) => first.born - second.born)
+    .map(({ transcript }) => transcript)
+}
+
+function sessionFolder(session: string, project: string): string | undefined {
+  const preferred = folderOf(project)
+  return [preferred, ...foldersIn({ project, everyProject: true }).filter((folder) => folder !== preferred)].find((each) => existsSync(join(each, `${session}.jsonl`)))
 }
 
 export function sessionTranscripts(session: string, project: string): Transcript[] {
-  const preferred = folderOf(project)
-  const folders = [preferred, ...foldersIn({ project, everyProject: true }).filter((folder) => folder !== preferred)]
-  const folder = folders.find((each) => existsSync(join(each, `${session}.jsonl`)))
+  const folder = sessionFolder(session, project)
   if (folder === undefined && session === process.env['CLAUDE_CODE_SESSION_ID']) return []
   if (folder === undefined) throw new Error(`No Claude Code transcript is named ${session}.jsonl under ${projectsFolder()}. cmod history sessions --all lists the sessions.`)
-  const main = { path: join(folder, `${session}.jsonl`), folder, session, agent: undefined }
-  return [main, ...agentTranscripts(main)]
+  const main = { path: join(folder, `${session}.jsonl`), folder, session, task: undefined }
+  return [main, ...taskTranscripts(main)]
 }
 
 export function readFolders(db: Database, folders: readonly string[], fully: boolean): void {
@@ -127,7 +162,7 @@ export function readFolders(db: Database, folders: readonly string[], fully: boo
   const offsets = offsetsOf(db)
   const mains = folders.flatMap(mainTranscripts).map((main) => ({ main, stat: statSync(main.path) }))
   for (const { main, stat } of mains.sort((first, second) => first.stat.mtimeMs - second.stat.mtimeMs)) {
-    if (fully || offsets.has(main.path)) readSession(db, [main, ...agentTranscripts(main)], offsets)
+    if (fully || offsets.has(main.path)) readSession(db, [main, ...taskTranscripts(main)], offsets)
     else summarize(db, main, stat.size)
   }
   if (fully && folders.length > 0) checkForks(db, folders)
@@ -137,60 +172,136 @@ function offsetsOf(db: Database): Map<string, number> {
   return new Map(db.query<{ path: string; offset: number }, []>('select path, offset from files').all().map((file) => [file.path, file.offset]))
 }
 
-export function readSession(db: Database, transcripts: readonly Transcript[], offsets: ReadonlyMap<string, number> = offsetsOf(db)): void {
-  for (const transcript of transcripts) {
-    const size = existsSync(transcript.path) ? statSync(transcript.path).size : 0
-    if (offsets.get(transcript.path) !== size) readFile(db, transcript, size)
-  }
-  const session = transcripts[0]?.session
-  if (session !== undefined) assignSeq(db, session)
+function sizeOf(path: string): number {
+  return existsSync(path) ? statSync(path).size : 0
 }
 
-function readFile(db: Database, transcript: Transcript, size: number): void {
-  const fileOf = db.query<{ id: number; offset: number }, [string]>('select id, offset from files where path = ?')
-  const known = fileOf.get(transcript.path)
-  if (known === null) db.query('insert into files (path, session, agent, offset) values (?, ?, ?, 0) on conflict (path) do nothing').run(transcript.path, transcript.session, transcript.agent ?? '')
-  const file = known ?? fileOf.get(transcript.path)
-  if (file === null) throw new Error(`cmod history lost the index row of ${transcript.path}. Run the command again.`)
-  let folder = 0
-  let offset = file.offset
-  if (size < offset) {
-    db.transaction(() => forgetFile(db, file.id)).immediate()
-    offset = 0
-  }
-  const summary = emptySummary()
-  let rows = 0
-  let reached = offset
-  const save = () => {
-    if (transcript.agent === undefined) saveSummary(db, transcript.session, summary)
-    db.query('update files set offset = max(offset, ?) where id = ?').run(reached, file.id)
-    db.exec('commit')
-  }
+export function readSession(db: Database, transcripts: readonly Transcript[], known: ReadonlyMap<string, number> = offsetsOf(db)): void {
+  const [main] = transcripts
+  if (main === undefined || !transcripts.some((transcript) => hasNewLine(transcript.path, known.get(transcript.path) ?? 0))) return
+  db.exec('begin immediate')
   try {
-    reached = readLines(transcript.path, offset, size, (line) => {
-      if (!db.inTransaction) {
-        db.exec('begin immediate')
-        if (transcript.agent === undefined) ensureSession(db, transcript)
-        folder = db.query<{ id: number }, [string]>('insert into folders (path) values (?) on conflict (path) do update set path = path returning id').get(transcript.folder)?.id ?? 0
-      }
-      rows += readLine(db, transcript, { file: file.id, folder }, line, summary)
-      if (rows < batchRows) return true
-      reached = line.offset + line.length + 1
-      save()
-      rows = 0
-      return true
-    })
-    if (db.inTransaction) {
-      if (transcript.agent !== undefined) linkAgent(db, transcript, transcript.agent)
-      save()
+    const offsets = offsetsOf(db)
+    if (transcripts.some((transcript) => (offsets.get(transcript.path) ?? 0) > sizeOf(transcript.path))) {
+      forgetSession(db, main.session)
+      for (const transcript of transcripts) offsets.delete(transcript.path)
     }
+    db.query('insert into sessions (id, folder) values (?, ?) on conflict (id) do nothing').run(main.session, main.folder)
+    const folder = db.query<{ id: number }, [string]>('insert into folders (path) values (?) on conflict (path) do update set path = path returning id').get(main.folder)?.id ?? 0
+    const files = new Map(transcripts.map((transcript) => [transcript.path, fileOf(db, transcript)]))
+    const conversation = createConversation(stateOf(db, main.session) ?? emptyConversation(main.session))
+    const summary = emptySummary()
+    const reached = stepThrough(conversation, transcripts, offsets, ({ transcript, line, raw, changes }) => {
+      if (transcript.task === undefined) noteRow(summary, main.session, raw)
+      saveChanges(db, { session: main.session, folder, file: files.get(transcript.path) ?? 0, line, row: typeof raw['uuid'] === 'string' ? raw['uuid'] : '' }, changes)
+    })
+    saveSummary(db, main.session, summary)
+    db.query('update sessions set state = ? where id = ?').run(JSON.stringify(conversation.state), main.session)
+    for (const [path, offset] of reached) db.query('update files set offset = ? where path = ?').run(offset, path)
+    assignSeq(db, main.session)
+    db.exec('commit')
   } catch (error) {
     if (db.inTransaction) db.exec('rollback')
     throw error
   }
 }
 
+function hasNewLine(path: string, from: number): boolean {
+  const size = sizeOf(path)
+  if (size < from) return true
+  let found = false
+  readLines(path, from, size, () => {
+    found = true
+    return false
+  })
+  return found
+}
+
+function fileOf(db: Database, transcript: Transcript): number {
+  db.query('insert into files (path, session, task, offset) values (?, ?, ?, 0) on conflict (path) do nothing').run(transcript.path, transcript.session, transcript.task ?? '')
+  return db.query<{ id: number }, [string]>('select id from files where path = ?').get(transcript.path)?.id ?? 0
+}
+
+function stateOf(db: Database, session: string): ConversationState | undefined {
+  const saved = db.query<{ state: string | null }, [string]>('select state from sessions where id = ?').get(session)?.state
+  return typeof saved === 'string' ? (JSON.parse(saved) as ConversationState) : undefined
+}
+
+function stepThrough(conversation: Conversation, transcripts: readonly Transcript[], offsets: ReadonlyMap<string, number>, onStep: (step: Step) => void): Map<string, number> {
+  const metas = metasOf(transcripts.filter((transcript) => transcript.task !== undefined))
+  const isStarted = (task: string) => conversation.state.tasks[task] !== undefined
+  const reached = new Map<string, number>()
+  for (const transcript of transcripts) {
+    const { task } = transcript
+    reached.set(
+      transcript.path,
+      readLines(transcript.path, offsets.get(transcript.path) ?? 0, sizeOf(transcript.path), (line) => {
+        const raw = wantedRow(line)
+        if (raw === undefined) return true
+        const row = rowOfLine(raw)
+        const changes: SessionChange[] = []
+        if (row !== undefined) {
+          if (task !== undefined && !isStarted(task)) changes.push(...conversation.startTask(taskData([...metas.values()].find((meta) => meta.task === task) ?? { task, title: '', agentType: 'general-purpose', call: '' }, row.at)))
+          const added = conversation.add(row, task)
+          changes.push(...added)
+          for (const change of added) {
+            const meta = change.type === Message && change.message.type === ToolCall ? metas.get(change.message.callId) : undefined
+            if (meta !== undefined && !isStarted(meta.task)) changes.push(...conversation.startTask(taskData(meta, row.at, task)))
+          }
+        }
+        onStep({ transcript, line, raw, changes })
+        return true
+      }),
+    )
+  }
+  return reached
+}
+
+function metasOf(tasks: readonly Transcript[]): Map<string, Meta> {
+  const metas = new Map<string, Meta>()
+  for (const { path, task } of tasks) {
+    const metaPath = path.replace(/\.jsonl$/, '.meta.json')
+    const meta = task === undefined || !existsSync(metaPath) ? undefined : parsedRow(readFileSync(metaPath, 'utf8'))
+    if (task === undefined || typeof meta?.['toolUseId'] !== 'string') continue
+    metas.set(meta['toolUseId'], { task, title: typeof meta['description'] === 'string' ? meta['description'] : '', agentType: typeof meta['agentType'] === 'string' ? meta['agentType'] : 'general-purpose', call: meta['toolUseId'] })
+  }
+  return metas
+}
+
+function taskData(meta: Meta, at: string, parent?: string): TaskData {
+  return { id: meta.task, title: meta.title, agentType: meta.agentType, openedBy: meta.call, openedAt: at, ...(parent === undefined ? {} : { parent }) }
+}
+
+function saveChanges(db: Database, place: { readonly session: string; readonly folder: number; readonly file: number; readonly line: Line; readonly row: string }, changes: readonly SessionChange[]): void {
+  const { session, folder, file, line, row } = place
+  for (const change of changes) {
+    if (change.type === Message) {
+      const { message } = change
+      const part = message.id === row ? 0 : Number(message.id.slice(row.length + 1))
+      const added = db
+        .query('insert or ignore into messages (id, session, task, type, context, turn, folder, at, file, offset, length, part) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(message.id, session, message.task ?? '', message.type, message.context, message.turn ?? null, folder, message.at, file, line.offset, line.length, part)
+      const text = searchText(message)
+      if (added.changes > 0 && text !== '') db.query('insert into message_text (rowid, text) values (?, ?)').run(added.lastInsertRowid, text)
+    } else if (change.type === TurnStart) {
+      db.query('insert or replace into turns (session, prompt, context, opened_at) values (?, ?, ?, ?)').run(session, change.turn.prompt.id, change.turn.context, change.turn.openedAt)
+    } else if (change.type === TurnEnd) {
+      db.query('update turns set closed_at = ? where session = ? and prompt = ?').run(change.turn.closedAt ?? null, session, change.turn.prompt.id)
+    } else if (change.type === ContextStart) {
+      db.query('insert or replace into contexts (session, number, opened_at) values (?, ?, ?)').run(session, change.context.number, change.context.openedAt)
+    } else if (change.type === ContextEnd) {
+      db.query('update contexts set closed_at = ? where session = ? and number = ?').run(change.context.closedAt ?? null, session, change.context.number)
+    } else if (change.type === TaskStart) {
+      const { task } = change
+      db.query('insert or replace into tasks (session, id, title, agent_type, model, opened_by, opened_at, parent, context) values (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(session, task.id, task.title, task.agentType, task.model ?? null, task.openedBy, task.openedAt, task.parent ?? null, task.context)
+    } else if (change.type === TaskEnd) {
+      db.query('update tasks set closed_at = ? where session = ? and id = ?').run(change.task.closedAt ?? null, session, change.task.id)
+    }
+  }
+}
+
 function readLines(path: string, from: number, to: number, onLine: (line: Line) => boolean): number {
+  if (from >= to) return from
   const descriptor = openSync(path, 'r')
   const chunk = Buffer.alloc(chunkBytes)
   let carry = Buffer.alloc(0)
@@ -229,70 +340,42 @@ function readLines(path: string, from: number, to: number, onLine: (line: Line) 
   return lineStart
 }
 
-function readLine(db: Database, transcript: Transcript, { file, folder }: { readonly file: number; readonly folder: number }, line: Line, summary: Summary): number {
-  if (line.bytes.includes('"type":"tool_result"') && line.bytes.includes('"type":"user"')) {
-    for (const id of toolUseIds(line.bytes)) {
-      db.query('update tool_uses set file = ?, offset = ?, length = ? where session = ? and agent = ? and id = ?').run(file, line.offset, line.length, transcript.session, transcript.agent ?? '', id)
-    }
-    return 1
-  }
-  const row = wantedRow(line)
-  if (row === undefined) return 0
-  if (transcript.agent === undefined) noteRow(summary, transcript.session, row)
-  const message = messageIn(row, transcript.session, transcript.agent)
-  if (message === undefined) return 0
-  const added = db.query('insert or ignore into messages (id, session, agent, folder, at, file, offset, length) values (?, ?, ?, ?, ?, ?, ?, ?)').run(message.id, message.session, message.agent ?? '', folder, message.at, file, line.offset, line.length)
-  if (added.changes === 0) return 0
-  db.query('insert into message_text (rowid, text) values (?, ?)').run(added.lastInsertRowid, searchText(message))
-  for (const tool of message.tools) db.query('insert or ignore into tool_uses (session, agent, id) values (?, ?, ?)').run(message.session, message.agent ?? '', tool.id)
-  return 1
-}
-
-function wantedRow(line: Line): Row | undefined {
+function wantedRow(line: Line): Raw | undefined {
   return wantedRows.some((marker) => line.bytes.includes(marker)) ? parsedRow(line.bytes.toString('utf8')) : undefined
-}
-
-function toolUseIds(bytes: Buffer): Set<string> {
-  const ids = new Set<string>()
-  const key = '"tool_use_id":"'
-  for (let found = bytes.indexOf(key); found >= 0; found = bytes.indexOf(key, found + key.length)) {
-    const start = found + key.length
-    const end = bytes.indexOf(34, start)
-    if (end > start) ids.add(bytes.toString('utf8', start, end))
-  }
-  return ids
 }
 
 function assignSeq(db: Database, session: string): void {
   if (db.query<{ found: number }, [string]>('select exists (select 1 from messages where session = ? and seq is null) as found').get(session)?.found !== 1) return
-  db.transaction(() => {
-    db.query(
-      `update messages set seq = ordered.seq
-       from (select row, (select coalesce(max(seq), 0) from messages where session = ?1) + row_number() over (order by at, row) as seq from messages where session = ?1 and seq is null) as ordered
-       where messages.row = ordered.row`,
-    ).run(session)
-  }).immediate()
+  db.query(
+    `update messages set seq = ordered.seq
+     from (select row, (select coalesce(max(seq), 0) from messages where session = ?1) + row_number() over (order by at, row) as seq from messages where session = ?1 and seq is null) as ordered
+     where messages.row = ordered.row`,
+  ).run(session)
 }
 
 function emptySummary(): Summary {
-  return { startedAt: '', lastAt: '', project: '', title: '', customTitle: null, forkedFrom: null, isPrompted: 0 }
+  return { startedAt: '', lastAt: '', project: '', cwd: '', model: '', title: '', customTitle: null, forkedFrom: null, isPrompted: 0 }
 }
 
-function noteRow(summary: Summary, session: string, row: Row): void {
-  const at = typeof row['timestamp'] === 'string' ? row['timestamp'] : undefined
+function noteRow(summary: Summary, session: string, raw: Raw): void {
+  const at = typeof raw['timestamp'] === 'string' ? raw['timestamp'] : undefined
   if (at !== undefined && (summary.startedAt === '' || at < summary.startedAt)) summary.startedAt = at
   if (at !== undefined && at > summary.lastAt) summary.lastAt = at
-  if (summary.project === '' && typeof row['cwd'] === 'string') summary.project = row['cwd']
-  if (row['type'] === 'custom-title' && typeof row['customTitle'] === 'string') summary.customTitle = row['customTitle']
-  const forked = isObject(row['forkedFrom']) ? row['forkedFrom']['sessionId'] : undefined
+  if (typeof raw['cwd'] === 'string') {
+    if (summary.project === '') summary.project = raw['cwd']
+    summary.cwd = raw['cwd']
+  }
+  if (raw['type'] === 'custom-title' && typeof raw['customTitle'] === 'string') summary.customTitle = raw['customTitle']
+  const forked = isObject(raw['forkedFrom']) ? raw['forkedFrom']['sessionId'] : undefined
   if (typeof forked === 'string' && forked !== session) summary.forkedFrom = forked
-  if (row['type'] !== 'user' || row['isMeta'] === true || row['isCompactSummary'] === true) return
-  const text = contentText(messageOf(row)['content']).trim()
-  const prompt = text.startsWith(skillPrefix) ? undefined : promptText(text)
-  const sender = senderOf(row['origin'], false)
-  if (prompt === undefined || prompt === '' || sender.kind === 'claude-code') return
-  summary.isPrompted = 1
-  if (summary.title === '' && (sender.kind === 'person' || sender.kind === 'unknown')) summary.title = firstLine(prompt)
+  const row = rowOfLine(raw)
+  if (row?.model !== undefined && row.type === 'assistant') summary.model = row.model
+  if (row?.type !== 'user') return
+  for (const message of messagesOf(row, false)) {
+    if (message.type !== Prompt) continue
+    summary.isPrompted = 1
+    if (summary.title === '' && message.from.type === Person) summary.title = firstLine(message.text)
+  }
 }
 
 function saveSummary(db: Database, session: string, summary: Summary): void {
@@ -301,12 +384,14 @@ function saveSummary(db: Database, session: string, summary: Summary): void {
        started_at = case when ?1 = '' then started_at when started_at = '' or started_at > ?1 then ?1 else started_at end,
        last_at = case when ?2 > last_at then ?2 else last_at end,
        project = case when project = '' then ?3 else project end,
-       title = case when title = '' then ?4 else title end,
-       custom_title = coalesce(?5, custom_title),
-       forked_from = coalesce(forked_from, ?6),
-       is_prompted = max(is_prompted, ?7)
-     where id = ?8`,
-  ).run(summary.startedAt, summary.lastAt, summary.project, summary.title, summary.customTitle, summary.forkedFrom, summary.isPrompted, session)
+       cwd = case when ?4 = '' then cwd else ?4 end,
+       model = case when ?5 = '' then model else ?5 end,
+       title = case when title = '' then ?6 else title end,
+       custom_title = coalesce(?7, custom_title),
+       forked_from = coalesce(forked_from, ?8),
+       is_prompted = max(is_prompted, ?9)
+     where id = ?10`,
+  ).run(summary.startedAt, summary.lastAt, summary.project, summary.cwd, summary.model, summary.title, summary.customTitle, summary.forkedFrom, summary.isPrompted, session)
 }
 
 function summarize(db: Database, main: Transcript, size: number): void {
@@ -317,69 +402,24 @@ function summarize(db: Database, main: Transcript, size: number): void {
   let reached = known?.summarized_size ?? 0
   if (!isTitled) {
     reached = readLines(main.path, reached, size, (line) => {
-      const row = wantedRow(line)
-      if (row !== undefined) noteRow(summary, main.session, row)
+      const raw = wantedRow(line)
+      if (raw !== undefined) noteRow(summary, main.session, raw)
       return summary.title === ''
     })
   }
   const tail = Math.max(reached, size - tailBytes)
   let isPartial = tail > reached
   readLines(main.path, tail, size, (line) => {
-    const row = isPartial ? undefined : wantedRow(line)
+    const raw = isPartial ? undefined : wantedRow(line)
     isPartial = false
-    if (row !== undefined) noteRow(summary, main.session, row)
+    if (raw !== undefined) noteRow(summary, main.session, raw)
     return true
   })
   db.transaction(() => {
-    ensureSession(db, main)
+    db.query('insert into sessions (id, folder) values (?, ?) on conflict (id) do nothing').run(main.session, main.folder)
     saveSummary(db, main.session, summary)
     db.query('update sessions set summarized_size = ? where id = ?').run(isTitled || summary.title !== '' ? size : reached, main.session)
   }).immediate()
-}
-
-function messageIn(row: Row, session: string, agent: string | undefined): Message | undefined {
-  const id = typeof row['uuid'] === 'string' ? row['uuid'] : undefined
-  const at = typeof row['timestamp'] === 'string' ? row['timestamp'] : undefined
-  if (id === undefined || at === undefined) return undefined
-  const base = { id, session, ...(agent === undefined ? {} : { agent }), at }
-  if (row['type'] === 'attachment') {
-    const attachment = isObject(row['attachment']) ? row['attachment'] : {}
-    if (attachment['type'] !== 'nested_memory' || typeof attachment['path'] !== 'string') return undefined
-    return { ...base, from: { kind: 'claude-code', reason: 'instructions', name: attachment['path'] }, text: typeof attachment['content'] === 'string' ? attachment['content'] : '', tools: [] }
-  }
-  const content = messageOf(row)['content']
-  if (row['type'] === 'assistant') {
-    const blocks = Array.isArray(content) ? content.filter(isObject) : []
-    const text = blocks.flatMap((block) => (block['type'] === 'text' && typeof block['text'] === 'string' ? [block['text']] : [])).join('\n').trim()
-    const tools = blocks.flatMap((block): Tool[] =>
-      block['type'] === 'tool_use' && typeof block['id'] === 'string' && typeof block['name'] === 'string'
-        ? [{ tool: block['name'], input: isObject(block['input']) ? block['input'] : {}, ...(agent === undefined ? {} : { agentId: agent }), id: block['id'] }]
-        : [],
-    )
-    return text === '' && tools.length === 0 ? undefined : { ...base, from: { kind: 'claude' }, text, tools }
-  }
-  if (row['type'] !== 'user') return undefined
-  const text = contentText(content).trim()
-  if (row['isCompactSummary'] === true) return { ...base, from: { kind: 'claude-code', reason: 'compaction' }, text, tools: [] }
-  if (text.startsWith(skillPrefix)) {
-    const folder = text.slice(skillPrefix.length).split('\n')[0]?.trim() ?? ''
-    return { ...base, from: { kind: 'claude-code', reason: 'skill', name: basename(folder) }, text, tools: [] }
-  }
-  if (row['isMeta'] === true || text === '') return undefined
-  if (text.startsWith('<task-notification')) return { ...base, from: { kind: 'claude-code', reason: 'notification' }, text: tagOf(text, 'summary') ?? text, tools: [] }
-  const prompt = promptText(text)
-  return prompt === undefined ? undefined : { ...base, from: senderOf(row['origin'], agent !== undefined), text: prompt, tools: [] }
-}
-
-function linkAgent(db: Database, transcript: Transcript, agent: string): void {
-  const metaPath = transcript.path.replace(/\.jsonl$/, '.meta.json')
-  if (!existsSync(metaPath)) return
-  const toolUseId = parsedRow(readFileSync(metaPath, 'utf8'))?.['toolUseId']
-  if (typeof toolUseId === 'string') db.query("update tool_uses set subagent = ? where session = ? and agent = '' and id = ?").run(agent, transcript.session, toolUseId)
-}
-
-function ensureSession(db: Database, main: Transcript): void {
-  db.query('insert into sessions (id, folder) values (?, ?) on conflict (id) do nothing').run(main.session, main.folder)
 }
 
 function forgetDeleted(db: Database): void {
@@ -389,47 +429,53 @@ function forgetDeleted(db: Database): void {
   const ended = sessions.filter((session) => !existsSync(join(session.folder, `${session.id}.jsonl`)))
   if (gone.length === 0 && ended.length === 0) return
   db.transaction(() => {
-    for (const file of gone) {
-      forgetFile(db, file.id)
-      db.query('delete from files where id = ?').run(file.id)
-    }
     for (const session of ended) {
-      db.query('delete from tool_uses where session = ?').run(session.id)
+      forgetSession(db, session.id)
+      db.query('delete from files where session = ?').run(session.id)
       db.query('delete from sessions where id = ?').run(session.id)
+    }
+    for (const file of gone) {
+      db.query('delete from message_text where rowid in (select row from messages where file = ?)').run(file.id)
+      db.query('delete from messages where file = ?').run(file.id)
+      db.query('delete from files where id = ?').run(file.id)
     }
   }).immediate()
 }
 
-function forgetFile(db: Database, file: number): void {
-  db.query('delete from message_text where rowid in (select row from messages where file = ?)').run(file)
-  db.query('delete from messages where file = ?').run(file)
-  db.query('update tool_uses set file = null, offset = null, length = null where file = ?').run(file)
-  db.query('update files set offset = 0 where id = ?').run(file)
+function forgetSession(db: Database, session: string): void {
+  db.query('delete from message_text where rowid in (select row from messages where session = ?)').run(session)
+  db.query('delete from messages where session = ?').run(session)
+  for (const table of ['turns', 'contexts', 'tasks']) db.query(`delete from ${table} where session = ?`).run(session)
+  db.query('update files set offset = 0 where session = ?').run(session)
+  db.query('update sessions set state = null where id = ?').run(session)
 }
 
 function checkForks(db: Database, folders: readonly string[]): void {
   const unchecked = db
-    .query<{ id: string; started_at: string }, string[]>(`select id, started_at from sessions s where folder in (${foldersMarks(folders.length)}) and is_fork_checked = 0 and exists (select 1 from messages where session = s.id and agent = '')`)
+    .query<{ id: string; started_at: string }, string[]>(`select id, started_at from sessions s where folder in (${foldersMarks(folders.length)}) and is_fork_checked = 0 and exists (select 1 from messages where session = s.id and task = '')`)
     .all(...folders)
   for (const session of unchecked) {
     db.query('update sessions set forked_from = coalesce(forked_from, ?), is_fork_checked = 1 where id = ?').run(parentOf(db, session.id, session.started_at) ?? null, session.id)
   }
 }
 
-export function listSessions(db: Database, scope: Scope): Session[] {
+export function listSessions(db: Database, scope: Scope): SessionData[] {
   const folders = foldersIn(scope)
   readFolders(db, folders, false)
+  const running = runningSessions()
   const rows = db
-    .query<{ id: string; project: string; title: string; custom_title: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
-      `select id, project, title, custom_title, started_at, last_at, forked_from, is_fork_checked,
-         case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and agent = '') else 0 end as is_indexed
+    .query<{ id: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
+      `select id, project, cwd, model, title, custom_title, started_at, last_at, forked_from, is_fork_checked,
+         case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and task = '') else 0 end as is_indexed
        from sessions where folder in (${foldersMarks(folders.length)}) and last_at >= ? and (is_prompted = 1 or custom_title is not null) order by last_at desc`,
     )
     .all(...folders, scope.since ?? '')
-  return rows.map((row) => {
-    const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
-    return { id: row.id, title: row.custom_title ?? row.title, project: row.project, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }) }
-  })
+  return rows
+    .filter((row) => scope.running !== true || running.has(row.id))
+    .map((row) => {
+      const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
+      return { id: row.id, title: row.custom_title ?? row.title, project: row.project, cwd: row.cwd || row.project, model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), isRunning: running.has(row.id) }
+    })
 }
 
 function foundParent(db: Database, session: string, startedAt: string): string | undefined {
@@ -442,47 +488,121 @@ function parentOf(db: Database, session: string, startedAt: string): string | un
   const found = db
     .query<{ session: string }, [string, string]>(
       `select other.session from messages own
-       join messages other on other.id = own.id and other.session != own.session and other.agent = ''
+       join messages other on other.id = own.id and other.session != own.session and other.task = ''
        join sessions parent on parent.id = other.session
-       where own.session = ? and own.agent = '' and parent.started_at < ?
+       where own.session = ? and own.task = '' and parent.started_at < ?
        order by own.row desc, parent.started_at asc limit 1`,
     )
     .get(session, startedAt)
   return found?.session
 }
 
-const placeColumns = 'row, id, session, agent, file, offset, length'
+const placeColumns = 'row, id, session, task, context, turn, file, offset, length, part'
 
-export function readMessages(db: Database, request: { readonly session: string; readonly project: string; readonly agent?: string; readonly subagents?: boolean; readonly after?: string; readonly last?: number; readonly limit?: number }): Message[] {
-  const scope = request.subagents === true ? 'session = ?1' : 'session = ?1 and agent = ?2'
+export type MessagesRequest = { readonly session: string; readonly project: string; readonly task?: string; readonly turn?: string; readonly after?: string; readonly last?: number }
+
+export function readMessages(db: Database, request: MessagesRequest): SessionMessage[] {
   return readTwice(`The transcripts of ${request.session} changed while cmod read them. Run the command again.`, () => {
     readSession(db, sessionTranscripts(request.session, request.project))
     const after = request.after === undefined ? 0 : (db.query<{ seq: number }, [string, string]>('select seq from messages where session = ? and id = ? and seq is not null').get(request.session, request.after)?.seq ?? Number.POSITIVE_INFINITY)
+    const inTurn = request.turn === undefined ? '' : 'and turn = ?4'
+    const fits = `session = ?1 and task = ?2 ${inTurn} and seq > ?3`
+    const params = [request.session, request.task ?? '', after, ...(request.turn === undefined ? [] : [request.turn])]
     const places =
       request.last === undefined
-        ? db.query<Place, [string, string, number, number]>(`select ${placeColumns} from messages where ${scope} and seq > ?3 order by seq limit ?4`).all(request.session, request.agent ?? '', after, request.limit ?? -1)
-        : db.query<Place, [string, string, number, number]>(`select * from (select ${placeColumns}, seq from messages where ${scope} and seq > ?3 order by seq desc limit ?4) order by seq`).all(request.session, request.agent ?? '', after, request.last)
+        ? db.query<Place, (string | number)[]>(`select ${placeColumns} from messages where ${fits} order by seq`).all(...params)
+        : db.query<Place, (string | number)[]>(`select * from (select ${placeColumns}, seq from messages where ${fits} order by seq desc limit ${request.last}) order by seq`).all(...params)
     return messagesAt(db, places)
   })
 }
 
+export function readTurns(db: Database, request: { readonly session: string; readonly project: string; readonly context?: number; readonly last?: number }): TurnData[] {
+  return readTwice(`The transcripts of ${request.session} changed while cmod read them. Run the command again.`, () => {
+    readSession(db, sessionTranscripts(request.session, request.project))
+    const inContext = request.context === undefined ? '' : 'and context = ?2'
+    const rows = db
+      .query<{ prompt: string; context: number; opened_at: string; closed_at: string | null }, (string | number)[]>(`select prompt, context, opened_at, closed_at from turns where session = ?1 ${inContext} order by opened_at`)
+      .all(request.session, ...(request.context === undefined ? [] : [request.context]))
+    const kept = request.last === undefined ? rows : rows.slice(-request.last)
+    const placeOf = db.query<Place, [string, string]>(`select ${placeColumns} from messages where session = ?1 and task = '' and id = ?2`)
+    const prompts = messagesAt(
+      db,
+      kept.flatMap((turn) => {
+        const place = placeOf.get(request.session, turn.prompt)
+        return place === null ? [] : [place]
+      }),
+    )
+    if (prompts === undefined) return undefined
+    const byId = new Map(prompts.map((message) => [message.id, message]))
+    return kept.flatMap((turn) => {
+      const prompt = byId.get(turn.prompt)
+      return prompt?.type === Prompt ? [{ prompt, context: turn.context, openedAt: turn.opened_at, ...(turn.closed_at === null ? {} : { closedAt: turn.closed_at }) }] : []
+    })
+  })
+}
+
+export function readContexts(db: Database, request: { readonly session: string; readonly project: string }): ContextData[] {
+  readSession(db, sessionTranscripts(request.session, request.project))
+  return db
+    .query<{ number: number; opened_at: string; closed_at: string | null }, [string]>('select number, opened_at, closed_at from contexts where session = ? order by number')
+    .all(request.session)
+    .map((row) => ({ number: row.number, openedAt: row.opened_at, ...(row.closed_at === null ? {} : { closedAt: row.closed_at }) }))
+}
+
+export function readTasks(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string }): TaskData[] {
+  readSession(db, sessionTranscripts(request.session, request.project))
+  return db
+    .query<{ id: string; title: string; agent_type: string; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; parent: string | null }, [string, string | null]>(
+      'select id, title, agent_type, model, opened_by, opened_at, closed_at, parent from tasks where session = ?1 and parent is ?2 order by opened_at',
+    )
+    .all(request.session, request.task ?? null)
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      agentType: row.agent_type,
+      ...(row.model === null ? {} : { model: row.model }),
+      openedBy: row.opened_by,
+      openedAt: row.opened_at,
+      ...(row.closed_at === null ? {} : { closedAt: row.closed_at }),
+      ...(row.parent === null ? {} : { parent: row.parent }),
+    }))
+}
+
+export function readState(db: Database, request: { readonly session: string; readonly project: string }): ConversationState {
+  readSession(db, sessionTranscripts(request.session, request.project))
+  const state = stateOf(db, request.session) ?? emptyConversation(request.session)
+  const goal = savedGoal(request.session)
+  return goal === undefined ? state : { ...state, goal }
+}
+
+export function readGoal(db: Database, request: { readonly session: string; readonly project: string }): GoalData {
+  return { text: readState(db, request).goal ?? '' }
+}
+
+function savedGoal(session: string): string | undefined {
+  const path = join(dataFolder(storeFolder(process.env), 'cmod'), 'goals', `${session}.txt`)
+  return existsSync(path) ? readFileSync(path, 'utf8') : undefined
+}
+
 const searchPaths = { time: 'indexed by messages_by_time', folder: 'indexed by messages_by_folder', matches: 'not indexed' }
 
-export function searchQuery(scope: { readonly isScoped: boolean; readonly hasBefore: boolean; readonly path: keyof typeof searchPaths }): string {
+export function searchQuery(scope: { readonly isScoped: boolean; readonly isRunning: boolean; readonly hasBefore: boolean; readonly path: keyof typeof searchPaths }): string {
   const inFolder = scope.isScoped ? 'and folder = (select id from folders where path = ?)' : ''
+  const running = scope.isRunning ? 'and session in (select value from json_each(?))' : ''
   const before = scope.hasBefore ? 'and (at, row) < (?, ?)' : ''
   return `select ${placeColumns} from messages ${searchPaths[scope.path]}
-    where row in (select rowid from message_text where message_text match ?) ${inFolder} and at >= ? ${before}
+    where row in (select rowid from message_text where message_text match ?) ${inFolder} ${running} and at >= ? ${before}
     order by at desc, row desc limit ?`
 }
 
 type SearchScope = Scope & { readonly limit?: number; readonly before?: { readonly session: string; readonly id: string } }
 
-export function searchMessages(db: Database, text: string, scope: SearchScope): Message[] {
+export function searchMessages(db: Database, text: string, scope: SearchScope): SessionMessage[] {
   if ([...text].length < 3) throw new Error('cmod history search takes at least 3 characters.')
   const folders = foldersIn(scope)
   const phrase = `"${text.replaceAll('"', '""')}"`
   const scoped = scope.everyProject ? [] : folders
+  const running = scope.running === true ? [JSON.stringify([...runningSessions()])] : []
   return readTwice('The transcripts changed while cmod searched them. Run the command again.', () => {
     readFolders(db, folders, true)
     const before = scope.before
@@ -490,9 +610,52 @@ export function searchMessages(db: Database, text: string, scope: SearchScope): 
     if (cursor === null) throw new Error(`No indexed message ${before?.id} is in session ${before?.session}.`)
     const matches = db.query<{ found: number }, [string, number]>('select count(*) as found from (select rowid from message_text where message_text match ? limit ?)').get(phrase, sortedMatches)?.found ?? 0
     const path = matches < sortedMatches ? 'matches' : scoped.length > 0 ? 'folder' : 'time'
-    const query = searchQuery({ isScoped: scoped.length > 0, hasBefore: cursor !== undefined, path })
-    const places = db.query<Place, (string | number)[]>(query).all(phrase, ...scoped, scope.since ?? '', ...(cursor === undefined ? [] : [cursor.at, cursor.row]), scope.limit ?? searchLimit)
+    const query = searchQuery({ isScoped: scoped.length > 0, isRunning: running.length > 0, hasBefore: cursor !== undefined, path })
+    const places = db.query<Place, (string | number)[]>(query).all(phrase, ...scoped, ...running, scope.since ?? '', ...(cursor === undefined ? [] : [cursor.at, cursor.row]), scope.limit ?? searchLimit)
     return messagesAt(db, places)
+  })
+}
+
+export async function followSessions(db: Database, sessions: readonly string[], project: string, onChange: (session: string, change: SessionChange) => void, signal: AbortSignal): Promise<void> {
+  const followers = sessions.map((session) => followSession(db, session, project, (change) => onChange(session, change), signal))
+  await Promise.all(followers)
+}
+
+async function followSession(db: Database, session: string, project: string, onChange: (change: SessionChange) => void, signal: AbortSignal): Promise<void> {
+  const folder = sessionFolder(session, project) ?? folderOf(project)
+  mkdirSync(folder, { recursive: true })
+  const prefix = `${session}.jsonl`
+  const tasksPrefix = join(session, 'subagents')
+  const watcher = watch(folder, { recursive: true, signal })
+  let conversation: Conversation | undefined
+  let offsets = new Map<string, number>()
+  const transcripts = () => {
+    const main = { path: join(folder, prefix), folder, session, task: undefined }
+    return existsSync(main.path) ? [main, ...taskTranscripts(main)] : []
+  }
+  const step = () => {
+    if (conversation === undefined) {
+      const found = transcripts()
+      readSession(db, found)
+      const [state, indexed] = db.transaction(() => [stateOf(db, session), offsetsOf(db)] as const)()
+      conversation = createConversation(found.length === 0 ? emptyConversation(session) : (state ?? emptyConversation(session)))
+      offsets = indexed
+      return
+    }
+    const reached = stepThrough(conversation, transcripts(), offsets, ({ changes }) => {
+      for (const change of changes) onChange(change)
+    })
+    for (const [path, offset] of reached) offsets.set(path, offset)
+  }
+  watcher.on('change', (_event, name) => {
+    const changed = String(name)
+    if (changed === prefix || changed.startsWith(tasksPrefix)) step()
+  })
+  step()
+  await new Promise<void>((resolve) => {
+    watcher.on('close', resolve)
+    watcher.on('error', () => resolve())
+    signal.addEventListener('abort', () => resolve(), { once: true })
   })
 }
 
@@ -500,26 +663,27 @@ function foldersMarks(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
 }
 
-function readTwice(failure: string, read: () => Message[] | undefined): Message[] {
-  const messages = read() ?? read()
-  if (messages === undefined) throw new Error(failure)
-  return messages
+function readTwice<Value>(failure: string, read: () => Value | undefined): Value {
+  const value = read() ?? read()
+  if (value === undefined) throw new Error(failure)
+  return value
 }
 
-function messagesAt(db: Database, places: readonly Place[]): Message[] | undefined {
+function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | undefined {
   const lines = lineReader(db)
   try {
-    const messages: Message[] = []
-    const stale = new Set<number>()
+    const messages: SessionMessage[] = []
+    const stale = new Set<string>()
     for (const place of places) {
-      const row = parsedRow(lines.read(place.file, place.offset, place.length) ?? '')
-      const message = row === undefined ? undefined : messageIn(row, place.session, place.agent === '' ? undefined : place.agent)
-      if (message === undefined || message.id !== place.id) stale.add(place.file)
-      else messages.push(withResults(db, lines, message))
+      const raw = parsedRow(lines.read(place.file, place.offset, place.length) ?? '')
+      const row = raw === undefined ? undefined : rowOfLine(raw)
+      const unplaced = row === undefined ? undefined : messagesOf(row, place.task !== '')[place.part]
+      if (unplaced === undefined || unplaced.id !== place.id) stale.add(place.session)
+      else messages.push({ ...unplaced, session: place.session, context: place.context, ...(place.turn === null ? {} : { turn: place.turn }), ...(place.task === '' ? {} : { task: place.task }) })
     }
     if (stale.size === 0) return messages
     db.transaction(() => {
-      for (const file of stale) forgetFile(db, file)
+      for (const session of stale) forgetSession(db, session)
     }).immediate()
     return undefined
   } finally {
@@ -548,66 +712,7 @@ function lineReader(db: Database): { read(file: number, offset: number, length: 
   }
 }
 
-function withResults(db: Database, lines: ReturnType<typeof lineReader>, message: Message): Message {
-  if (message.tools.length === 0) return message
-  const placeOf = db.query<{ file: number | null; offset: number | null; length: number | null; subagent: string | null }, [string, string, string]>('select file, offset, length, subagent from tool_uses where session = ? and agent = ? and id = ?')
-  const tools = message.tools.map((tool) => {
-    const place = placeOf.get(message.session, message.agent ?? '', tool.id)
-    const linked = place?.subagent == null ? tool : { ...tool, subagent: place.subagent }
-    if (place?.file == null || place.offset === null || place.length === null) return linked
-    const content = messageOf(parsedRow(lines.read(place.file, place.offset, place.length) ?? '') ?? {})['content']
-    const block = Array.isArray(content) ? content.filter(isObject).find((each) => each['type'] === 'tool_result' && each['tool_use_id'] === tool.id) : undefined
-    if (block === undefined) return linked
-    return { ...linked, result: fullResult(contentText(block['content'])), ...(block['is_error'] === true ? { isError: true } : {}) }
-  })
-  return { ...message, tools }
-}
-
-function senderOf(origin: unknown, isAgentPrompt: boolean): Sender {
-  const kind = isObject(origin) && typeof origin['kind'] === 'string' ? origin['kind'] : undefined
-  if (kind === undefined) return isAgentPrompt ? { kind: 'agent' } : { kind: 'unknown' }
-  if (personOrigins.includes(kind)) return { kind: 'person' }
-  if (sessionOrigins.includes(kind)) return { kind: 'session' }
-  if (kind === 'plugin' && isObject(origin) && typeof origin['name'] === 'string') return { kind: 'mod', name: origin['name'] }
-  if (kind === 'scheduled-trigger') return { kind: 'schedule' }
-  if (kind === 'channel' && isObject(origin) && typeof origin['server'] === 'string') return { kind: 'channel', name: origin['server'] }
-  if (kind === 'sdk') return { kind: 'sdk' }
-  if (kind === 'task-notification') return { kind: 'claude-code', reason: 'notification' }
-  return { kind: 'unknown' }
-}
-
-function promptText(text: string): string | undefined {
-  if (text.startsWith('<local-command-') || text.startsWith('<bash-stdout') || text.startsWith('<bash-stderr')) return undefined
-  const command = tagOf(text, 'command-name')
-  if (command === undefined) return text
-  const args = tagOf(text, 'command-args') ?? ''
-  return args === '' ? command : `${command} ${args}`
-}
-
-function fullResult(text: string): string {
-  const saved = /<persisted-output>[\s\S]*?Full output saved to: (\S+)/.exec(text)?.[1]
-  return saved !== undefined && existsSync(saved) ? readFileSync(saved, 'utf8') : text
-}
-
-function messageOf(row: Row): Row {
-  return isObject(row['message']) ? row['message'] : {}
-}
-
-function contentText(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content.flatMap((block) => (isObject(block) && block['type'] === 'text' && typeof block['text'] === 'string' ? [block['text']] : [])).join('\n')
-}
-
-function tagOf(text: string, tag: string): string | undefined {
-  return new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text)?.[1]?.trim()
-}
-
-function firstLine(text: string): string {
-  return text.split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
-}
-
-function parsedRow(line: string): Row | undefined {
+function parsedRow(line: string): Raw | undefined {
   try {
     const value: unknown = JSON.parse(line)
     return isObject(value) ? value : undefined

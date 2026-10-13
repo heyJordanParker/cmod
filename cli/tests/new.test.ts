@@ -3,12 +3,23 @@ import { existsSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
+import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { listFiles } from '../src/files.js'
 import { capture } from '../src/process.js'
 import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 setDefaultTimeout(15_000)
 afterEach(deleteTemporaryHomes)
+
+test("cmod new writes a CHANGELOG.md whose section for the first version cmod publish releases", async () => {
+  const home = await temporaryHome()
+
+  expect((await cmod(home, 'new', 'my-mod')).exitCode).toBe(0)
+
+  const sections = changelogSections(await readFile(join(home, 'my-mod/CHANGELOG.md'), 'utf8'))
+  expect(sections.map(({ version }) => version)).toEqual(['Unreleased', '0.1.0'])
+  expect(sections[1]?.text).toStartWith('### Added\n- ')
+})
 
 test('new writes the repository layout with a defineMod that has one hook and one pane, and installs its packages', async () => {
   const home = await temporaryHome()
@@ -29,10 +40,10 @@ test('new writes the repository layout with a defineMod that has one hook and on
   })
   expect(JSON.parse(await readFile(join(root, 'tests/tsconfig.json'), 'utf8'))).toEqual({ extends: '../tsconfig.json', include: ['.', '../types', '../node_modules/bun-types/index.d.ts'] })
   const manifest = JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8'))
-  expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: ['cmod'] })
+  expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: [{ name: 'cmod', version: `^${coreVersion}` }] })
   const mod = await readFile(join(root, 'src/mod.tsx'), 'utf8')
   expect(mod).toContain('export const myMod = defineMod({')
-  expect(mod).toContain("mod.on('UserPromptSubmit'")
+  expect(mod).toContain('mod.on(UserPromptSubmit, ')
   expect(mod).not.toContain('mod.ui.toast')
   expect(mod).not.toContain('additionalContext')
   expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toContain('registerMod(addHook, myMod, options)')

@@ -102,12 +102,12 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
               `${name} needs ${missing.length === 1 ? 'one setting' : `${missing.length} settings`}:`,
               missing.map(([key, option]) => {
                 const label = Text({ children: [Text({ bold: true, children: option.title }), option.description === '' ? '' : Text({ dimColor: true, children: `  ${option.description}` })] })
-                if (option.kind === 'secret') return Box({ flexDirection: 'column', children: [label, Text({ dimColor: true, children: `Set it in /config, where Claude Code keeps it in your keychain, then press Next.` })] })
+                if (option.type === 'secret') return Box({ flexDirection: 'column', children: [label, Text({ dimColor: true, children: `Set it in /config, where Claude Code keeps it in your keychain, then press Next.` })] })
                 const failure = failures.get(key)
                 const field = Input({
                   key: `option:${key}`,
                   label: '› ',
-                  placeholder: option.kind === 'choice' ? (option.choices ?? []).join(', ') : option.kind === 'toggle' ? 'true or false' : option.kind === 'list' ? 'comma-separated' : '',
+                  placeholder: option.type === 'choice' ? (option.choices ?? []).join(', ') : option.type === 'toggle' ? 'true or false' : option.type === 'list' ? 'comma-separated' : '',
                   value: saved.get(key) ?? '',
                   submitLabel: 'save',
                   onSubmit: (value: string) =>

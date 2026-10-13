@@ -5,13 +5,13 @@ import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { statusLine } from '../src/jobs/status-line.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod, type Mod } from '../src/mod.js'
+import { CwdChanged, defineMod, fs, PostToolUse, process, PromptHint, Reply, sessions, Stop, UserPromptSubmit, type Mod } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
+import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Input, Markdown, Select, Text } from '../src/ui/elements.js'
-import { markdownSlots } from '../src/ui/markdown.js'
-import { slots } from '../src/ui/slots.js'
+import { Heading } from '../src/ui/markdown.js'
 
 const tickets = defineMod({
   name: 'tickets',
@@ -53,13 +53,13 @@ test('fire fills the tool_use_id Claude Code gives each tool call', async () => 
     defineMod({
       name: 'reads',
       setup(mod) {
-        mod.on('PostToolUse', (input) => void seen.push(input.tool_use_id))
+        mod.on(PostToolUse, (input) => void seen.push(input.tool_use_id))
       },
     }),
   )
 
-  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/a.ts' }, tool_response: {} })
-  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/b.ts' }, tool_response: {} })
+  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/a.ts' }, tool_response: {} })
+  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/b.ts' }, tool_response: {} })
 
   expect(seen).toEqual(['toolu_1', 'toolu_2'])
 })
@@ -70,15 +70,15 @@ test('a Read of a file the test gave contents to lists it in files.read', async 
     defineMod({
       name: 'reads',
       setup(mod) {
-        mod.on('PostToolUse', (input) => void seen.push(input.files))
+        mod.on(PostToolUse, (input) => void seen.push(input.files))
       },
     }),
     { files: { '/work/notes.md': '' } },
   )
 
-  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/notes.md' }, tool_response: {} })
-  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work' }, tool_response: {} })
-  await tested.fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/gone.md' }, tool_response: {} })
+  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/notes.md' }, tool_response: {} })
+  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work' }, tool_response: {} })
+  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/gone.md' }, tool_response: {} })
 
   expect(seen).toEqual([
     { read: ['/work/notes.md'], changed: [] },
@@ -282,17 +282,17 @@ test('lines refuses a pane that is not open', async () => {
   expect(tested.state.global.notes).toEqual(['Buy milk', 'Call the plumber about the sink'])
 })
 
-test('tested.lines draws a slot render with Default', async () => {
+test('tested.lines draws a place render with Default', async () => {
   const tested = testMod(
     defineMod({
       name: 'hints',
       setup(mod) {
-        mod.ui.render(slots.PromptHint, ({ hint, Default }) => Box({ flexDirection: 'column', children: [Default({ hint: hint.toUpperCase() }), Text({ dimColor: true, children: 'from hints' })] }))
+        mod.ui.render(PromptHint, ({ hint, Default }) => Box({ flexDirection: 'column', children: [Default({ hint: hint.toUpperCase() }), Text({ dimColor: true, children: 'from hints' })] }))
       },
     }),
   )
 
-  expect(await tested.lines(slots.PromptHint, { isDraft: false, isWorking: false, hint: '? for shortcuts' })).toEqual([
+  expect(await tested.lines(PromptHint, { isDraft: false, isWorking: false, hint: '? for shortcuts' })).toEqual([
     'PromptHint',
     '  isDraft: false',
     '  isWorking: false',
@@ -308,13 +308,13 @@ const journal = defineMod({
       slashCommand({
         name: 'jot',
         description: 'Add a line to the journal',
-        reply: async ({ args }, mod) => {
-          await mod.fs.write('/work/journal.md', `${await mod.fs.read('/work/journal.md')}${args}\n`)
-          return mod.fs.read('/work/journal.md')
+        reply: async ({ args }) => {
+          await fs.write('/work/journal.md', `${await fs.read('/work/journal.md')}${args}\n`)
+          return fs.read('/work/journal.md')
         },
       }),
     )
-    mod.use(slashCommand({ name: 'ls', description: 'List a folder', reply: async ({ args }, mod) => (await mod.fs.list(args)).map(({ name, kind }) => `${name} ${kind}`).join(', ') }))
+    mod.use(slashCommand({ name: 'ls', description: 'List a folder', reply: async ({ args }) => (await fs.list(args)).map(({ name, isFolder }) => `${name} ${isFolder ? 'folder' : 'file'}`).join(', ') }))
   },
 })
 
@@ -326,17 +326,46 @@ test("a read after testMod's fake write sees the new text", async () => {
   expect(await tested.type('/jot fix the sink')).toEqual({ text: 'buy milk\ncall mum\nfix the sink\n' })
 })
 
+test("two tested mods in one test each read their own fake files through the fs import", async () => {
+  const seen: string[] = []
+  const reader = (name: string) => defineMod({ name, setup: (mod) => void mod.on(UserPromptSubmit, async () => void seen.push(await fs.read('/test/project/x.txt'))) })
+  const a = testMod(reader('a'), { files: { '/test/project/x.txt': 'A' }, projectRoot: '/test/project' })
+  const b = testMod(reader('b'), { files: { '/test/project/x.txt': 'B' }, projectRoot: '/test/project' })
+  await a.start()
+  await b.start()
+
+  await a.fire(UserPromptSubmit, { prompt: 'hi' })
+  await b.fire(UserPromptSubmit, { prompt: 'hi' })
+
+  expect(seen).toEqual(['A', 'B'])
+})
+
+test("a tested mod's timer reads its own fake files while another tested mod runs", async () => {
+  const seen: string[] = []
+  const first = testMod(defineMod({ name: 'first', setup: (mod) => void mod.after(30, async () => void seen.push(await fs.read('/test/data.txt'))) }), { files: { '/test/data.txt': 'first' } })
+  const second = testMod(defineMod({ name: 'second', setup() {} }), { files: { '/test/data.txt': 'second' } })
+  const fires: (() => void)[] = []
+  first.fakes.clock.after = (_ms, fire) => (fires.push(fire), { cancel: () => undefined })
+  await first.start()
+  await second.start()
+
+  for (const fire of fires) fire()
+  await first.settle()
+
+  expect(seen).toEqual(['first'])
+})
+
 test('fs.list in testMod lists the files given', async () => {
   const tested = testMod(journal, { files: { '/work/journal.md': '', '/work/src/a.ts': 'a', '/work/src/lib/b.ts': 'b' } })
 
-  expect(await tested.type('/ls /work')).toEqual({ text: 'journal.md file, src dir' })
-  expect(await tested.type('/ls /work/src')).toEqual({ text: 'a.ts file, lib dir' })
+  expect(await tested.type('/ls /work')).toEqual({ text: 'journal.md file, src folder' })
+  expect(await tested.type('/ls /work/src')).toEqual({ text: 'a.ts file, lib folder' })
 })
 
 const headings = defineMod({
   name: 'headings',
   setup(mod) {
-    mod.ui.render(markdownSlots.Heading, ({ text }) => Text({ bold: true, children: text.toUpperCase() }))
+    mod.ui.render(Heading, ({ text }) => Text({ bold: true, children: text.toUpperCase() }))
   },
 })
 
@@ -344,17 +373,17 @@ test('a second AssistantMessage drawn in one test is its own reply', async () =>
   const tested = testMod(headings)
   const reply = { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }
 
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true })
+  await tested.lines(Reply, { text: '# Plan\n\nWe', isFirstOfReply: true })
 
-  expect(await tested.lines(slots.AssistantMessage, reply)).toEqual(await testMod(headings).lines(slots.AssistantMessage, reply))
+  expect(await tested.lines(Reply, reply)).toEqual(await testMod(headings).lines(Reply, reply))
 })
 
 test('AssistantMessage draws that pass one requestId grow one streamed reply', async () => {
   const tested = testMod(headings)
 
-  await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe', isFirstOfReply: true }, 'msg_1')
+  await tested.lines(Reply, { text: '# Plan\n\nWe', isFirstOfReply: true }, 'msg_1')
 
-  expect(await tested.lines(slots.AssistantMessage, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }, 'msg_1')).toEqual([
+  expect(await tested.lines(Reply, { text: '# Plan\n\nWe read.\n\n## Steps', isFirstOfReply: true }, 'msg_1')).toEqual([
     '⏺ PLAN',
     '  AssistantMessage',
     '    text: "We read.\\n\\n## Steps"',
@@ -392,8 +421,8 @@ test('clock.every in testMod fires only when the test ticks it', async () => {
 })
 
 async function showGitLetters(mod: Mod): Promise<void> {
-  const root = (await mod.process.run(['git', 'rev-parse', '--show-toplevel'])).stdout.trim()
-  const status = await mod.process.run(['git', 'status', '--porcelain'], { cwd: root })
+  const root = (await process.run(['git', 'rev-parse', '--show-toplevel'])).stdout.trim()
+  const status = await process.run(['git', 'status', '--porcelain'], { cwd: root })
   mod.ui.toast(`${root}: ${status.stdout.trim()}`)
 }
 
@@ -405,15 +434,15 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
     defineMod({
       name: 'git-letters',
       setup(mod) {
-        clock = mod.claude.clock
-        mod.on('Stop', () => void showGitLetters(mod))
+        clock = engineOf(mod).claude.clock
+        mod.on(Stop, () => void showGitLetters(mod))
       },
     }),
     { permissions: ['run:git'] },
   )
   tested.fakes.process.run = (argv) => new Promise((resolve) => clock?.after(0, () => resolve(gitAnswer(argv))))
 
-  await tested.fire('Stop', { stop_hook_active: false })
+  await tested.fire(Stop, { stop_hook_active: false })
   await tested.settle()
 
   expect(tested.shown.toasts).toContainEqual({ type: 'default', message: '/work/shop: M README.md' })
@@ -421,10 +450,10 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
 
 test('settle returns while a fake is held open by the test', async () => {
   const answers: (() => void)[] = []
-  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => mod.on('Stop', () => void showGitLetters(mod)) }), { permissions: ['run:git'] })
+  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => mod.on(Stop, () => void showGitLetters(mod)) }), { permissions: ['run:git'] })
   tested.fakes.process.run = (argv) => new Promise((resolve) => answers.push(() => resolve(gitAnswer(argv))))
 
-  await tested.fire('Stop', { stop_hook_active: false })
+  await tested.fire(Stop, { stop_hook_active: false })
   await tested.settle()
 
   expect(answers).toHaveLength(1)
@@ -437,7 +466,7 @@ function folderWatchIn(projectRoot: string) {
     defineMod({
       name: 'folder-watch',
       setup(mod) {
-        mod.on('CwdChanged', (input) => void seen.push({ old: input.old_cwd, new: input.new_cwd, cwd: mod.cwd, projectRoot: mod.projectRoot }))
+        mod.on(CwdChanged, (input) => void seen.push({ old: input.old_cwd, new: input.new_cwd, cwd: sessions.current.cwd, projectRoot: sessions.current.project }))
       },
     }),
     { projectRoot },
@@ -445,7 +474,7 @@ function folderWatchIn(projectRoot: string) {
   return { tested, seen }
 }
 
-test('moveTo with only a new cwd fires CwdChanged with mod.cwd already moved', async () => {
+test('moveTo with only a new cwd fires CwdChanged with the session cwd already moved', async () => {
   const { tested, seen } = folderWatchIn('/work/shop')
 
   await tested.moveTo('/work/shop', '/work/shop/src')
@@ -472,21 +501,21 @@ test("after /cd while Claude Code still reports the old cwd, the mod's cwd is th
 
   expect(seen).toEqual([moved])
 
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
 
   expect(seen).toEqual([moved])
 })
 
 test('after moveTo another project, Claude Code reports the new root at once and the old cwd until the next prompt', async () => {
   let session: Claude['session'] | undefined
-  const tested = testMod(defineMod({ name: 'session-reader', setup: (mod) => void (session = mod.claude.session) }), { projectRoot: '/work/a' })
+  const tested = testMod(defineMod({ name: 'session-reader', setup: (mod) => void (session = engineOf(mod).claude.session) }), { projectRoot: '/work/a' })
   const reported = async () => [await session?.root(), await session?.cwd()]
 
   await tested.moveTo('/work/b')
 
   expect(await reported()).toEqual(['/work/b', '/work/a'])
 
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
 
   expect(await reported()).toEqual(['/work/b', '/work/b'])
 })
@@ -502,7 +531,7 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
     defineMod({
       name: 'branch',
       setup(mod) {
-        mod.use(slashCommand({ name: 'branch', description: 'Name the branch', reply: async (_input, mod) => (await mod.process.run(['git', 'branch', '--show-current'])).stdout.trim() }))
+        mod.use(slashCommand({ name: 'branch', description: 'Name the branch', reply: async () => (await process.run(['git', 'branch', '--show-current'])).stdout.trim() }))
       },
     }),
     { permissions: ['run:git'] },
@@ -517,8 +546,8 @@ test("fire('cmod.call') answers a method of the mod's api with { value }, as dep
   const tracer = defineMod({
     name: 'tracer',
     api: {
-      signatures: async ({ path }: { path: string }, mod) =>
-        (await mod.fs.read(path)).split('\n').flatMap((text, index) => {
+      signatures: async ({ path }: { path: string }) =>
+        (await fs.read(path)).split('\n').flatMap((text, index) => {
           const name = /^export function (\w+)/.exec(text)?.[1]
           return name === undefined ? [] : [{ name, line: index + 1 }]
         }),

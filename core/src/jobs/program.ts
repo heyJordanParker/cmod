@@ -1,6 +1,6 @@
 import type { Job } from '../mod.js'
 import { PermissionRefused, programAddresses } from '../runtime/grants.js'
-import { showFailure } from '../runtime/toaster.js'
+import { engineOf } from '../runtime/engine.js'
 import { messageOf } from '../utils/text.js'
 
 export type Program = {
@@ -15,7 +15,7 @@ const backoffSeconds = [1, 2, 4, 8, 16] as const
 export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program> {
   const { command, environment } = options
   return ({ mod, announce }) => {
-    const { claude } = mod
+    const { claude, report } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
     let state: Program['state'] = 'stopped'
@@ -28,7 +28,7 @@ export function program(options: { readonly command: readonly string[]; readonly
     const stop = (reason: string) => {
       state = 'fatal'
       failure = new Error(`${mod.name}: the ${executable} program stopped: ${reason}`)
-      showFailure(mod, { id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason })
+      report({ id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason })
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
     }
 

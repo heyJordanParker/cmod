@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { decidePermission, type PermissionRules } from '../../../src/jobs/permissions/decide-permission.js'
 import { findProjectScope, type Workspace } from '../../../src/jobs/permissions/find-project-scope.js'
-import type { ToolCall } from '../../../src/utils/call-effects.js'
+import type { Call } from '../../../src/utils/call-effects.js'
 import { fakeFiles } from '../../../src/testing/fake-files.js'
 
 const home = '/Users/jordan'
@@ -26,7 +26,7 @@ async function dentWorkspace(cwd = root): Promise<Workspace> {
   return { projectRoot: root, cwd, home, fs, scope: await findProjectScope(pluginRoot, home, fs) }
 }
 
-function edit(path: string): ToolCall {
+function edit(path: string): Call {
   return { tool: 'Edit', input: { file_path: path, old_string: '#', new_string: '##' } }
 }
 
@@ -70,46 +70,46 @@ describe('a project-scope plugin acts only on its own repository', () => {
   test("a path in <root>/worktrees/design/Domain.md matches write: 'Domain.md' relative to the design worktree, and /Users/jordan/dotfiles/Domain.md does not", async () => {
     const rules: PermissionRules<null> = { deny: [{ write: 'Domain.md' }] }
     const workspace = await dentWorkspace()
-    expect(await decidePermission(rules, edit(`${root}/worktrees/design/Domain.md`), workspace, () => null)).toEqual({ decision: 'deny' })
-    expect(await decidePermission(rules, edit(`${home}/dotfiles/Domain.md`), workspace, () => null)).toBeUndefined()
-    expect(await decidePermission(rules, edit(`${root}/Domain.md`), workspace, () => null)).toEqual({ decision: 'deny' })
-    expect(await decidePermission(rules, edit(`${root}/docs/Domain.md`), workspace, () => null)).toBeUndefined()
+    expect(await decidePermission(rules, edit(`${root}/worktrees/design/Domain.md`), workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
+    expect(await decidePermission(rules, edit(`${home}/dotfiles/Domain.md`), workspace, null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, edit(`${root}/Domain.md`), workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
+    expect(await decidePermission(rules, edit(`${root}/docs/Domain.md`), workspace, null, (run) => Promise.resolve(run()))).toBeUndefined()
   })
 
   test('a glob that matches anywhere still matches only inside the project', async () => {
     const rules: PermissionRules<null> = { deny: [{ read: '**/.env' }] }
     const workspace = await dentWorkspace()
-    expect(await decidePermission(rules, { tool: 'Read', input: { file_path: `${root}/app/.env` } }, workspace, () => null)).toEqual({ decision: 'deny' })
-    expect(await decidePermission(rules, { tool: 'Read', input: { file_path: `${home}/dotfiles/.env` } }, workspace, () => null)).toBeUndefined()
+    expect(await decidePermission(rules, { tool: 'Read', input: { file_path: `${root}/app/.env` } }, workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
+    expect(await decidePermission(rules, { tool: 'Read', input: { file_path: `${home}/dotfiles/.env` } }, workspace, null, (run) => Promise.resolve(run()))).toBeUndefined()
   })
 
   test('a command rule matches only a command that runs in the project', async () => {
     const rules: PermissionRules<null> = { deny: [{ command: ['bun add', 'git push --force'] }] }
     const workspace = await dentWorkspace()
-    const bash = (command: string): ToolCall => ({ tool: 'Bash', input: { command } })
-    expect(await decidePermission(rules, bash('bun add zod'), workspace, () => null)).toEqual({ decision: 'deny' })
-    expect(await decidePermission(rules, bash('cd worktrees/design && bun add zod'), workspace, () => null)).toEqual({ decision: 'deny' })
-    expect(await decidePermission(rules, bash('cd ~/dotfiles && bun add zod'), workspace, () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash(`git -C ${home}/dotfiles push --force`), workspace, () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash(`git -C ${root}/worktrees/design push --force`), workspace, () => null)).toEqual({ decision: 'deny' })
+    const bash = (command: string): Call => ({ tool: 'Bash', input: { command } })
+    expect(await decidePermission(rules, bash('bun add zod'), workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
+    expect(await decidePermission(rules, bash('cd worktrees/design && bun add zod'), workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
+    expect(await decidePermission(rules, bash('cd ~/dotfiles && bun add zod'), workspace, null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash(`git -C ${home}/dotfiles push --force`), workspace, null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash(`git -C ${root}/worktrees/design push --force`), workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
   })
 
   test("a project-scope command '*' rule leaves a command in another repository alone", async () => {
     const rules: PermissionRules<null> = { ask: [{ command: '*' }] }
-    const bash = (command: string): ToolCall => ({ tool: 'Bash', input: { command } })
-    expect(await decidePermission(rules, bash(`git -C ${home}/dotfiles status`), await dentWorkspace(), () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash('ls'), await dentWorkspace(`${home}/dotfiles`), () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash('eval "$x"'), await dentWorkspace(`${home}/dotfiles`), () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash(`git -C ${root}/worktrees/design status`), await dentWorkspace(`${home}/dotfiles`), () => null)).toEqual({ decision: 'ask' })
-    expect(await decidePermission(rules, bash('ls'), await dentWorkspace(), () => null)).toEqual({ decision: 'ask' })
+    const bash = (command: string): Call => ({ tool: 'Bash', input: { command } })
+    expect(await decidePermission(rules, bash(`git -C ${home}/dotfiles status`), await dentWorkspace(), null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash('ls'), await dentWorkspace(`${home}/dotfiles`), null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash('eval "$x"'), await dentWorkspace(`${home}/dotfiles`), null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash(`git -C ${root}/worktrees/design status`), await dentWorkspace(`${home}/dotfiles`), null, (run) => Promise.resolve(run()))).toEqual({ decision: 'ask' })
+    expect(await decidePermission(rules, bash('ls'), await dentWorkspace(), null, (run) => Promise.resolve(run()))).toEqual({ decision: 'ask' })
   })
 
   test('a project-scope read or write rule leaves an unparsed line in another repository alone', async () => {
     const rules: PermissionRules<null> = { deny: [{ read: '**/.env' }, { write: 'Domain.md' }] }
-    const bash = (command: string): ToolCall => ({ tool: 'Bash', input: { command } })
-    expect(await decidePermission(rules, bash('f=.env; cat "$f"'), await dentWorkspace(`${home}/dotfiles`), () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash('f=Domain.md; echo x > "$f"'), await dentWorkspace(`${home}/dotfiles`), () => null)).toBeUndefined()
-    expect(await decidePermission(rules, bash('f=.env; cat "$f"'), await dentWorkspace(), () => null)).toEqual({ decision: 'deny' })
-    expect(await decidePermission(rules, bash('f=Domain.md; echo x > "$f"'), await dentWorkspace(), () => null)).toEqual({ decision: 'deny' })
+    const bash = (command: string): Call => ({ tool: 'Bash', input: { command } })
+    expect(await decidePermission(rules, bash('f=.env; cat "$f"'), await dentWorkspace(`${home}/dotfiles`), null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash('f=Domain.md; echo x > "$f"'), await dentWorkspace(`${home}/dotfiles`), null, (run) => Promise.resolve(run()))).toBeUndefined()
+    expect(await decidePermission(rules, bash('f=.env; cat "$f"'), await dentWorkspace(), null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
+    expect(await decidePermission(rules, bash('f=Domain.md; echo x > "$f"'), await dentWorkspace(), null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })
   })
 })

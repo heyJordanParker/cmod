@@ -73,9 +73,20 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
   const definition = name.replace(/-([a-z0-9])/g, (_, letter: string) => letter.toUpperCase())
   const state = `${definition.charAt(0).toUpperCase()}${definition.slice(1)}State`
   const files: Record<string, string> = {
-    '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: ['cmod'] }),
+    '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: [{ name: 'cmod', version: `^${coreVersion}` }] }),
     '.gitignore': 'node_modules/\n.claude-plugin/types/\n',
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
+    'CHANGELOG.md': `# Changelog
+
+What changed in each version of ${name}, for the people who use it. cmod publish releases the section for the version, and the Updated toast and /mods show it.
+
+## [Unreleased]
+
+## [0.1.0]
+
+### Added
+- A pane and a line above the prompt that count the prompts of this session.
+`,
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
     'hooks/register.ts': `import type { On, PluginOptions } from 'claude-code'
 import { registerMod } from '../node_modules/@cmodjs/core/register.js'
@@ -85,9 +96,8 @@ export function register(addHook: On, options: PluginOptions): void {
   registerMod(addHook, ${definition}, options)
 }
 `,
-    'src/mod.tsx': `import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+    'src/mod.tsx': `import { AbovePrompt, defineMod, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
 import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
-import { slots } from '../node_modules/@cmodjs/core/ui/slots.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
 import { initialState } from './state.js'
@@ -98,10 +108,10 @@ export const ${definition} = defineMod({
 
   setup(mod) {
     mod.ui.pane(promptsPane)
-    mod.ui.render(slots.AbovePrompt, ({ hasSurvey, Default }) =>
+    mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) =>
       hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
 
-    mod.on('UserPromptSubmit', () => {
+    mod.on(UserPromptSubmit, () => {
       mod.state.session.prompts += 1
     })
   },
@@ -130,29 +140,29 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 `,
     'tests/mod.test.ts': `import { expect, test } from 'bun:test'
 import type { RenderPropsOf } from 'claude-code'
+import { AbovePrompt, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { slots } from '../node_modules/@cmodjs/core/ui/slots.js'
 import { ${definition} } from '../src/mod.js'
 
 const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
 test('each prompt adds one to the count', async () => {
   const tested = testMod(${definition})
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   expect(tested.state.session.prompts).toBe(1)
 })
 
 test('the band shows the prompt count', async () => {
   const tested = testMod(${definition})
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
-  expect(await tested.lines(slots.AbovePrompt, band)).toContain('Prompts this session: 1')
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  expect(await tested.lines(AbovePrompt, band)).toContain('Prompts this session: 1')
 })
 
 test('the band leaves the prompt count out during a survey', async () => {
   const tested = testMod(${definition})
-  await tested.fire('UserPromptSubmit', { prompt: 'hello' })
-  expect(await tested.lines(slots.AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
-  expect(tested.shown.toasts).toEqual([{ type: 'success', message: 'Ready' }])
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  expect(await tested.lines(AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
+  expect(tested.shown.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the ${name} pane, a render of AbovePrompt and a hook on UserPromptSubmit.' }])
 })
 `,
     [`skills/${name}/SKILL.md`]: `---

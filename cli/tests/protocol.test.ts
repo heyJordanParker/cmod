@@ -9,19 +9,20 @@ const folder = await mkdtemp(join(tmpdir(), 'cmod-released-core-'))
 afterAll(() => rm(folder, { recursive: true, force: true }))
 
 const events: readonly RunnerEvent[] = [
-  { kind: 'progress', done: 1, total: 4, label: 'Installing trash' },
-  { kind: 'log', text: 'Bound shift+tab to /mode' },
-  { kind: 'needs-consent', sha256: 'abc123', install: './setup/install.sh', uninstall: './setup/uninstall.sh', keys: 'shift+tab to /mode', permissions: ['network:api.github.com', 'model'] },
-  { kind: 'needs-consent', sha256: 'abc123', install: '', uninstall: '', keys: '', permissions: [] },
-  { kind: 'done', name: 'safe-delete', version: '0.2.0' },
-  { kind: 'missing', name: 'safe-delete' },
-  { kind: 'failed', code: 2, message: 'The install step of safe-delete exited 2: no Homebrew.' },
+  { type: 'progress', done: 1, total: 4, label: 'Installing trash' },
+  { type: 'log', text: 'Bound shift+tab to /mode' },
+  { type: 'needs-consent', sha256: 'abc123', install: './setup/install.sh', uninstall: './setup/uninstall.sh', keys: 'shift+tab to /mode', permissions: ['network:api.github.com', 'model'] },
+  { type: 'needs-consent', sha256: 'abc123', install: '', uninstall: '', keys: '', permissions: [] },
+  { type: 'done', name: 'safe-delete', version: '0.2.0' },
+  { type: 'missing', name: 'safe-delete' },
+  { type: 'failed', code: 2, message: 'The install step of safe-delete exited 2: no Homebrew.' },
 ]
 
 test('each event line this cmod prints reads the same in the last @cmodjs/core on npm, so a mod built on it still sets up', async () => {
   const installed = Bun.spawnSync(['bun', 'add', '--no-save', '@cmodjs/core@latest'], { cwd: folder, stdout: 'pipe', stderr: 'pipe' })
   expect(installed.stderr.toString()).not.toContain('error:')
-  const released = (await import(join(folder, 'node_modules/@cmodjs/core/records.js'))) as { parseEvent(line: string): RunnerEvent }
+  const released = (await import(join(folder, 'node_modules/@cmodjs/core/records.js'))) as { parseEvent(line: string): RunnerEvent | ({ kind: RunnerEvent['type'] } & Record<string, unknown>) }
+  const typed = (parsed: ReturnType<typeof released.parseEvent>) => ('kind' in parsed ? (({ kind, ...fields }) => ({ type: kind, ...fields }))(parsed) : parsed)
 
-  for (const event of events) expect(released.parseEvent(formatEvent(event))).toEqual(event)
+  for (const event of events) expect(typed(released.parseEvent(formatEvent(event)))).toEqual(event)
 }, 60000)

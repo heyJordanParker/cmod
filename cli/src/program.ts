@@ -7,6 +7,7 @@ import { home, ifMissing, readJson, readLink, readText, tilde } from './files.js
 import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
+import { isLinked } from './settings.js'
 import { storePath } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
@@ -85,7 +86,7 @@ export async function buildProgram(program: Program, wanted: readonly string[], 
   progress.step(heading)
   const startedAt = Math.floor(Date.now() / 1000) * 1000
   const result = await runStep(['sh', '-c', program.build], program.folder, { ...environment, CMOD_MACHINES: wanted.join(' ') }, (event) => {
-    if (event.kind === 'progress') progress.update(heading, event.done, event.total, event.label)
+    if (event.type === 'progress') progress.update(heading, event.done, event.total, event.label)
     else progress.log(event.text)
   })
   if (result.exitCode !== 0) {
@@ -109,14 +110,7 @@ export async function buildProgram(program: Program, wanted: readonly string[], 
 }
 
 export async function installProgram(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
-  const built = (await buildProgram(program, [machine], progress, environment))[0] as string
-
-  const target = storePath('bin', program.name, version, program.name)
-  await mkdir(dirname(target), { recursive: true })
-  await copyFile(built, `${target}.${process.pid}.tmp`)
-  await chmod(`${target}.${process.pid}.tmp`, 0o755)
-  await rename(`${target}.${process.pid}.tmp`, target)
-
+  const target = await storeBuild(program, version, progress, environment)
   const entry = await linkProgram(program.name, target)
   progress.succeed(`Installed ${program.name} ${version}: Claude Code runs ${tilde(join(programsFolder(), program.name))}, which runs ${tilde(target)}`)
   const note = terminalNote(program.name, entry)
@@ -124,14 +118,26 @@ export async function installProgram(program: Program, version: string, progress
   else if (entry !== undefined && !(process.env['PATH'] ?? '').split(':').includes(dirname(entry))) progress.note(`Add ~/.local/bin to PATH to run ${program.name} in a terminal.`)
 }
 
+async function storeBuild(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<string> {
+  const built = (await buildProgram(program, [machine], progress, environment))[0] as string
+  const target = storePath('bin', program.name, version, program.name)
+  await mkdir(dirname(target), { recursive: true })
+  await copyFile(built, `${target}.${process.pid}.tmp`)
+  await chmod(`${target}.${process.pid}.tmp`, 0o755)
+  await rename(`${target}.${process.pid}.tmp`, target)
+  return target
+}
+
 export async function fetchProgram(plugin: Plugin, name: string, emit: (event: RunnerEvent) => void): Promise<void> {
   const target = storePath('bin', name, plugin.version, name)
+  const checkout = existsSync(target) || !(await isLinked(plugin.root)) ? undefined : await readProgram(plugin)
+  if (checkout?.name === name) await storeBuild(checkout, plugin.version, reporting(emit), process.env)
   if (!existsSync(target)) {
     if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so cmod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
     const release = `${releaseDownloads(plugin.repository)}/v${plugin.version}`
     const url = `${release}/${name}-${machine}`
     const attach = (file: string) => `Attach ${file} to the v${plugin.version} release, as cmod publish does.`
-    emit({ kind: 'progress', done: 0, total: programSteps, label: `Downloading ${name} ${plugin.version}` })
+    emit({ type: 'progress', done: 0, total: programSteps, label: `Downloading ${name} ${plugin.version}` })
     const sums = new TextDecoder().decode(await download(`${release}/SHA256SUMS`, attach('SHA256SUMS')))
     const expected = sums.split('\n').map((line) => /^([0-9a-f]{64}) [ *](.+)$/.exec(line.trim())).find((match) => match?.[2] === basename(url))?.[1]
     if (expected === undefined) throw new Error(`${release}/SHA256SUMS lists no ${basename(url)}, so cmod cannot check the download. Publish the release with cmod publish, which lists every build.`)
@@ -143,7 +149,7 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
     try {
       await Bun.write(partial, build)
       await chmod(partial, 0o755)
-      emit({ kind: 'progress', done: 1, total: programSteps, label: `Checking ${name} ${plugin.version}` })
+      emit({ type: 'progress', done: 1, total: programSteps, label: `Checking ${name} ${plugin.version}` })
       const check = await capture([partial, '--version']).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
       if (check.exitCode !== 0) {
         const detail = (check.stderr.trim() || check.stdout.trim()).split('\n').at(-1)
@@ -154,11 +160,24 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
       await rm(partial, { force: true })
     }
   }
-  emit({ kind: 'progress', done: 2, total: programSteps, label: `Linking ${name}` })
+  emit({ type: 'progress', done: 2, total: programSteps, label: `Linking ${name}` })
   const entry = await linkProgram(name, target)
   const note = terminalNote(name, entry)
-  if (note !== undefined) emit({ kind: 'log', text: note })
-  emit({ kind: 'progress', done: programSteps, total: programSteps, label: `${name} ${plugin.version} is installed` })
+  if (note !== undefined) emit({ type: 'log', text: note })
+  emit({ type: 'progress', done: programSteps, total: programSteps, label: `${name} ${plugin.version} is installed` })
+}
+
+function reporting(emit: (event: RunnerEvent) => void): Progress {
+  const log = (text: string) => emit({ type: 'log', text })
+  return {
+    step: (heading) => emit({ type: 'progress', done: 0, total: programSteps, label: heading }),
+    update: (_heading, done, total, label) => emit({ type: 'progress', done, total, label }),
+    log,
+    succeed: log,
+    skip: log,
+    fail: log,
+    note: log,
+  }
 }
 
 export async function removeProgram(name: string): Promise<boolean> {

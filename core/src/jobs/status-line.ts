@@ -1,13 +1,10 @@
 import type { Job, Mod } from '../mod.js'
 import type { Deadline } from '../runtime/deadline.js'
+import { engineOf } from '../runtime/engine.js'
+import { usageOf } from '../runtime/sessions.js'
+import type { Usage } from '../session/session.js'
 import { messageOf } from '../utils/text.js'
-import { modWithin } from './context.js'
-
-export type Usage = {
-  model: string
-  context: { tokens?: number; window: number; percent?: number }
-  cost?: { usd: number }
-}
+import { withinDeadline } from './context.js'
 
 const deadline: Deadline = { ms: 2000, job: 'statusLine' }
 
@@ -18,30 +15,21 @@ export function statusLine<State extends object = Record<never, never>>(options:
   const { text, interval = 10000 } = options
   return (job) => {
     const { mod, announce, reserveName } = job
-    const { claude } = mod
+    const { claude, router } = engineOf(mod)
     if (!(interval >= 1)) throw new Error(`${mod.name}: the status line interval is ${interval}. Give it in milliseconds, 1 or more.`)
     reserveName('statusLine', '', `${mod.name}: a status line is already added. A mod has one status line: join the texts in one statusLine.`)
 
-    const textMod = modWithin(job, deadline)
     let shown: string | undefined
     let queue = Promise.resolve()
     const update = async () => {
       try {
-        const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()])
-        const { tokens, window, percent } = usage.context
-        const next = await text(
-          {
-            model,
-            context: { window, ...(tokens === undefined ? {} : { tokens }), ...(percent === undefined ? {} : { percent }) },
-            ...(usage.cost === undefined ? {} : { cost: { usd: usage.cost.usd } }),
-          },
-          textMod,
-        )
+        const usage = await usageOf(claude)
+        const next = await withinDeadline(mod, deadline, 'the status line', () => text(usage, mod))
         if (next === shown) return
         shown = next
         claude.ui.status(next)
       } catch (error) {
-        claude.ui.log(`${mod.name}: the status line kept its last text: ${messageOf(error)}`, { to: 'debug' })
+        mod.log(`the status line kept its last text: ${messageOf(error)}`)
       }
     }
     const refresh = () => {
@@ -49,7 +37,7 @@ export function statusLine<State extends object = Record<never, never>>(options:
     }
 
     announce('a status line')
-    claude.on('session.measure', (e, next) => {
+    router.add('session.measure', (e, next) => {
       refresh()
       return next(e)
     })

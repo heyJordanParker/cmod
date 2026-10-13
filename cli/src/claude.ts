@@ -1,10 +1,10 @@
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isObject } from '@cmodjs/core/src/records.js'
 import { version as cmodVersion } from '../package.json'
-import { writeAtomically } from './files.js'
+import { tilde, writeAtomically } from './files.js'
 import type { Plugin } from './plugin.js'
 import { capture, run, runAttached, spawn, type Captured } from './process.js'
 
@@ -22,6 +22,13 @@ export async function listPlugins(): Promise<InstalledPlugin[]> {
     const errors = Array.isArray(entry['errors']) ? entry['errors'].map(String) : []
     return { id, name: id.slice(0, id.lastIndexOf('@')), version: String(entry['version']), scope: String(entry['scope']), enabled: entry['enabled'] === true, installPath: String(entry['installPath']), errors }
   })
+}
+
+export async function findPlugin(folder: string): Promise<InstalledPlugin> {
+  const real = realpathSync(folder)
+  const found = (await listPlugins()).find((plugin) => existsSync(plugin.installPath) && realpathSync(plugin.installPath) === real)
+  if (found === undefined) throw new Error(`claude plugin list shows no plugin loaded from ${tilde(folder)}. Run the command again once Claude Code loads it.`)
+  return found
 }
 
 export async function listMarketplaces(): Promise<Marketplace[]> {
@@ -79,8 +86,8 @@ export function testPlugin(root: string): Promise<Captured> {
   return capture(['claude', 'plugin', 'test', root])
 }
 
-export function tryPlugins(plugins: readonly Plugin[], args: readonly string[]): Promise<number> {
-  return runAttached(['claude', ...plugins.flatMap((plugin) => ['--plugin-dir', plugin.root]), ...args])
+export function startSession(args: readonly string[]): Promise<number> {
+  return runAttached(['claude', ...args])
 }
 
 export function optionValues(given: readonly string[] | undefined, userConfig: Readonly<Record<string, unknown>>, plugin: string): Record<string, string> {

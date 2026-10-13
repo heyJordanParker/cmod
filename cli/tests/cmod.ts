@@ -22,10 +22,11 @@ case "$*" in
   "plugin marketplace add heyJordanParker/cmod") ;;
   "plugin install cmod@"*" --json") echo '{"outcome":"ok","message":"Installed '"$3"'"}' ;;
   "plugin validate "*" --strict") echo 'Validation passed' ;;
-  "--plugin-dir "*)
+  "plugin "*) exit 1 ;;
+  *)
+    echo "$*" >> "$HOME/claude-sessions"
 ${session}
     ;;
-  *) exit 1 ;;
 esac
 `
 

@@ -6,7 +6,7 @@ export type CallBase = { tool: string; input: Readonly<Record<string, unknown>>;
 export type CommandCall = CallBase & { commands: [string, ...string[]][]; isFullyParsed: boolean }
 export type FileCall = CallBase & { path: string; content?: string; previousContent?: string }
 export type FetchCall = CallBase & { url: string }
-export type ToolCall = CommandCall | FileCall | FetchCall | CallBase
+export type Call = CommandCall | FileCall | FetchCall | CallBase
 
 export type Contents = { content?: string; previousContent?: string }
 export type FileAccess = { path: string; contents: (() => Promise<Contents>) | undefined }

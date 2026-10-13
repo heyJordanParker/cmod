@@ -1,4 +1,4 @@
-export type MetadataFormat = { readonly kind: 'frontmatter' } | { readonly kind: 'comment'; readonly prefix: string } | { readonly kind: 'sidecar' }
+export type MetadataFormat = { readonly type: 'frontmatter' } | { readonly type: 'comment'; readonly prefix: string } | { readonly type: 'sidecar' }
 
 export type ReadMetadata = {
   readonly metadata: Readonly<Record<string, string>>
@@ -26,12 +26,12 @@ export function formatOf(path: string, firstLine: string | undefined): MetadataF
   const name = path.slice(path.lastIndexOf('/') + 1)
   const dot = name.lastIndexOf('.')
   const extension = dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
-  if (markdown.includes(extension)) return { kind: 'frontmatter' }
-  if (hashComments.includes(extension) || hashCommentNames.includes(name)) return { kind: 'comment', prefix: '#' }
-  if (slashComments.includes(extension)) return { kind: 'comment', prefix: '//' }
-  if (dashComments.includes(extension)) return { kind: 'comment', prefix: '--' }
-  if (extension === '' && firstLine?.startsWith('#!') === true) return { kind: 'comment', prefix: '#' }
-  return { kind: 'sidecar' }
+  if (markdown.includes(extension)) return { type: 'frontmatter' }
+  if (hashComments.includes(extension) || hashCommentNames.includes(name)) return { type: 'comment', prefix: '#' }
+  if (slashComments.includes(extension)) return { type: 'comment', prefix: '//' }
+  if (dashComments.includes(extension)) return { type: 'comment', prefix: '--' }
+  if (extension === '' && firstLine?.startsWith('#!') === true) return { type: 'comment', prefix: '#' }
+  return { type: 'sidecar' }
 }
 
 type Region = { readonly start: number; readonly end: number; readonly lines: readonly string[] }
@@ -42,21 +42,21 @@ type Block = { readonly start: number; readonly end: number; readonly entries: r
 
 export function readMetadata(text: string, format: MetadataFormat): ReadMetadata {
   const lines = text.split('\n')
-  if (format.kind === 'comment') {
+  if (format.type === 'comment') {
     const region = commentRegion(lines, format.prefix)
     return { metadata: region === undefined ? {} : asRecord(mapEntries(region.lines, region.start + 2, 0)) }
   }
-  const region = format.kind === 'frontmatter' ? frontmatterRegion(lines) : { start: -1, end: lines.length, lines }
+  const region = format.type === 'frontmatter' ? frontmatterRegion(lines) : { start: -1, end: lines.length, lines }
   if (region === undefined) return { metadata: {} }
   const block = metadataBlock(region)
-  const name = format.kind === 'frontmatter' ? topLevelScalar(region, 'name') : undefined
+  const name = format.type === 'frontmatter' ? topLevelScalar(region, 'name') : undefined
   return { metadata: block === undefined ? {} : asRecord(block.entries), ...(name === undefined ? {} : { name }) }
 }
 
 export function writeMetadata(text: string, format: MetadataFormat, metadata: Readonly<Record<string, string>>): string {
   const lines = text.split('\n')
   const entries = Object.entries(metadata)
-  if (format.kind === 'comment') {
+  if (format.type === 'comment') {
     const { prefix } = format
     const block = entries.length === 0 ? [] : [`${prefix} /// metadata`, ...entries.map(([key, value]) => `${prefix} ${scalar(key)}: ${scalar(value)}`), `${prefix} ///`]
     const region = commentRegion(lines, prefix)
@@ -66,7 +66,7 @@ export function writeMetadata(text: string, format: MetadataFormat, metadata: Re
     return [...lines.slice(0, at), ...block, ...lines.slice(at)].join('\n')
   }
   const map = entries.length === 0 ? [] : ['metadata:', ...entries.map(([key, value]) => `  ${scalar(key)}: ${scalar(value)}`)]
-  if (format.kind === 'sidecar') {
+  if (format.type === 'sidecar') {
     const block = metadataBlock({ start: -1, end: lines.length, lines })
     const rest = block === undefined ? lines : [...lines.slice(0, block.start), ...lines.slice(block.end)]
     const kept = rest.join('\n').trim()

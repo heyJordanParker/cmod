@@ -1,5 +1,5 @@
 import type { Args, ClassicHookInputs, EventResult, Frozen } from 'claude-code'
-import type { HookAnswer, HookInput, ModEvent, ModHook } from '../mod.js'
+import type { Hook, HookAnswer, HookInput, HookListener } from '../mod.js'
 import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
 import type { RoutedHook } from './router.js'
@@ -11,7 +11,7 @@ import { isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 
 export type RoutedEvent =
-  | `classic.${Exclude<ModEvent, 'PreToolUse'>}`
+  | `classic.${Exclude<Hook, 'PreToolUse'>}`
   | 'tool.check'
   | 'tool.call'
   | 'prompt.submit'
@@ -24,6 +24,10 @@ export type RoutedEvent =
   | 'ui.scroll'
   | 'ui.close'
   | 'cmod.call'
+  | 'session.append'
+  | 'session.compact'
+  | 'session.receive'
+  | 'agent.spawn'
 
 export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.PermissionRequest']
 
@@ -33,7 +37,7 @@ type CallFiles = HookInput<'PreToolUse'>['files']
 
 const flags: readonly string[] = ['suppressOriginalPrompt', 'reloadSkills', 'retry']
 
-const readFields: Record<ModEvent, readonly string[]> = {
+const readFields: Record<Hook, readonly string[]> = {
   SessionStart: ['additionalContext', 'initialUserMessage', 'sessionTitle', 'watchPaths', 'reloadSkills'],
   SessionEnd: [],
   UserPromptSubmit: ['additionalContext', 'sessionTitle', 'suppressOriginalPrompt'],
@@ -54,7 +58,7 @@ const readFields: Record<ModEvent, readonly string[]> = {
   FileChanged: [],
 }
 
-export function classicHook<E extends Exclude<ModEvent, 'PreToolUse'>>(name: string, event: E, hook: ModHook<E>, claude: Claude, calls: ToolCalls, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
+export function classicHook<E extends Exclude<Hook, 'PreToolUse'>>(name: string, event: E, hook: HookListener<E>, claude: Claude, calls: ToolCalls, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
   const hookInputOf = async (e: unknown): Promise<unknown> => {
     if (event !== 'PostToolUse' && event !== 'PostToolUseFailure') return e
     const input = e as ClassicHookInputs['PostToolUse' | 'PostToolUseFailure']
@@ -83,7 +87,7 @@ type HeldDecision = { readonly decision: 'allow' | 'ask'; readonly reason?: stri
 
 export type HeldDecisions = Map<string, HeldDecision>
 
-export function preToolUseHook(name: string, hook: ModHook<'PreToolUse'>, claude: Claude, calls: ToolCalls, held: HeldDecisions | undefined): RoutedHook<'tool.call'> {
+export function preToolUseHook(name: string, hook: HookListener<'PreToolUse'>, claude: Claude, calls: ToolCalls, held: HeldDecisions | undefined): RoutedHook<'tool.call'> {
   return async (e, next) => {
     let ours: ClassicFields
     try {
@@ -184,7 +188,7 @@ async function callFiles(name: string, claude: Claude, use: CallBase, cwd: strin
   }
 }
 
-function classicResult(event: ModEvent, answer: HookAnswer): ClassicFields {
+function classicResult(event: Hook, answer: HookAnswer): ClassicFields {
   const result: ClassicFields = {}
   const unread = (field: string) => new Error(`it answered ${field}, which ${event} does not read. Remove it from the answer.`)
   if (event === 'PreToolUse') {

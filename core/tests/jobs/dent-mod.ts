@@ -1,7 +1,7 @@
 import type { ProcessRunResult } from 'claude-code'
 import { check } from '../../src/jobs/check.js'
 import { permissions, type FileCall } from '../../src/jobs/permissions.js'
-import { defineMod, type Mod } from '../../src/mod.js'
+import { defineMod, process } from '../../src/mod.js'
 
 const skipPattern = /\.skip\(|markTestSkipped\(/g
 const addsSkip = (previousContent: string | undefined, content: string) =>
@@ -11,9 +11,10 @@ const tableOf = (path: string) => {
   const match = /create_(\w+?)_table|create_(\w+)\.php$/.exec(path)
   return match?.[1] ?? match?.[2]
 }
-const duplicatesTable = async (call: FileCall, mod: Mod) => {
+const gitStatus = (folder: string) => process.run(['git', 'status', '--porcelain', '-uall'], { cwd: folder })
+const duplicatesTable = async (call: FileCall & { readonly folder: string }) => {
   const table = tableOf(call.path)
-  const { stdout } = await mod.process.run(['git', 'status', '--porcelain', '-uall'])
+  const { stdout } = await gitStatus(call.folder)
   return table !== undefined && stdout.split('\n').some((line) => line.includes('database/migrations/') && tableOf(line) === table && !call.path.endsWith(line.slice(3)))
 }
 
@@ -28,8 +29,8 @@ export const dent = defineMod({
         { write: ['**/*.test.ts', '**/*.spec.ts', '**/*Test.php'], when: (call) => call.content !== undefined && addsSkip(call.previousContent, call.content), reason: 'Fix the test. Do not skip it.' },
         { write: ['**/*.test.ts', '**/*.spec.ts', '**/*Test.php'], when: (call) => call.content === undefined, reason: 'Change test files with Edit or Write, so the test gate can read the change.' },
         { command: 'bun test', when: (call) => call.commands.some(([name]) => ['tail', 'head', 'grep'].includes(name)), reason: 'Read the whole report: bun test --report=json.' },
-        { write: 'Domain.md', when: async (_call, mod) => hasCodeChanges(await mod.process.run(['git', 'status', '--porcelain', '-uall'])), reason: 'Edit Domain.md in its own change, with the Architect.' },
-        { write: 'database/migrations/*.php', when: async (call, mod) => duplicatesTable(call, mod), reason: 'Edit the uncommitted migration for this table.' },
+        { write: 'Domain.md', when: async ({ folder }) => hasCodeChanges(await gitStatus(folder)), reason: 'Edit Domain.md in its own change, with the Architect.' },
+        { write: 'database/migrations/*.php', when: duplicatesTable, reason: 'Edit the uncommitted migration for this table.' },
       ],
     }))
 

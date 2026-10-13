@@ -1,16 +1,20 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
-import { longestMs, messageOf, type Mod } from '../node_modules/@cmodjs/core/mod.js'
-import { consentPath, finishStepsMethod, isObject, openPageMethod, parseConsent, pendingStepsMethod, permissionWords, readRecord, readSteps, settingsPagesMethod, storeFolder } from '../node_modules/@cmodjs/core/records.js'
+import { fs, longestMs, messageOf, process, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { changelogPage, consentPath, finishStepsMethod, isObject, openPageMethod, parseConsent, pendingStepsMethod, permissionWords, readRecord, readSteps, settingsPagesMethod, storeFolder } from '../node_modules/@cmodjs/core/records.js'
+import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
+import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { Tabs } from '../node_modules/@cmodjs/core/ui/components.js'
 import { definePane } from '../node_modules/@cmodjs/core/ui/define-pane.js'
-import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { Box, Button, Input, Markdown, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { changelogSections, unreleased, type ChangelogSection } from '../node_modules/@cmodjs/core/utils/changelog.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
+import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 
 export type ModsState = { readonly memory: { selected: string | null; tab: Tab; notice: string | null; removing: string | null; views: readonly ModView[] } }
 
 export const modsMemory: ModsState['memory'] = { selected: null, tab: 'options', notice: null, removing: null, views: [] }
 
-type Tab = 'options' | 'permissions' | 'keys' | 'pages'
+type Tab = 'options' | 'permissions' | 'keys' | 'pages' | 'changelog'
 
 type Permission = { readonly item: string; readonly isOn: boolean }
 
@@ -24,6 +28,7 @@ export type ModView = {
   readonly options: readonly ConfigRow[]
   readonly pages: readonly { readonly id: string; readonly title: string }[]
   readonly pendingSteps: readonly string[]
+  readonly changelog: readonly ChangelogSection[]
 }
 
 const tabs: readonly { readonly key: Tab; readonly label: string }[] = [
@@ -31,40 +36,49 @@ const tabs: readonly { readonly key: Tab; readonly label: string }[] = [
   { key: 'permissions', label: 'Permissions' },
   { key: 'keys', label: 'Keys' },
   { key: 'pages', label: 'Pages' },
+  { key: 'changelog', label: 'Changelog' },
 ]
 
+const tabsOf = (view: ModView) => tabs.filter(({ key }) => key !== 'changelog' || view.changelog.length > 0)
+
+async function storeOf(mod: object): Promise<string> {
+  const { claude } = engineOf(mod)
+  return storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+}
+
 export async function readConsent<State extends object>(mod: Mod<State>): Promise<ReturnType<typeof parseConsent>> {
-  const path = consentPath(storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() }))
-  return (await mod.fs.exists(path)) ? parseConsent(JSON.parse(await mod.fs.read(path)), path) : {}
+  const path = consentPath(await storeOf(mod))
+  return (await fs.exists(path)) ? parseConsent(JSON.parse(await fs.read(path)), path) : {}
 }
 
 export function modsPanel<State extends ModsState>(mod: Mod<State>) {
   const load = async (): Promise<readonly ModView[]> => {
-    const store = storeFolder({ HOME: await mod.claude.env.home(), XDG_DATA_HOME: await mod.claude.env.dataHome() })
+    const store = await storeOf(mod)
     const consent = await readConsent(mod)
-    const rows = await mod.claude.config.list()
-    const enabledPlugins = (await mod.claude.settings.read())['enabledPlugins']
+    const rows = await engineOf(mod).claude.config.list()
+    const enabledPlugins = (await engineOf(mod).claude.settings.read())['enabledPlugins']
     const turnedOff = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {})
       .filter(([, isEnabled]) => isEnabled === false)
       .map(([id]) => id.replace(/@[^@]*$/, ''))
-    const names = (await mod.fs.exists(`${store}/records`)) ? (await mod.fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)) : []
-    const read = (path: string) => mod.fs.read(path).catch(ifMissing(undefined))
+    const names = (await fs.exists(`${store}/records`)) ? (await fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)) : []
+    const read = (path: string) => fs.read(path).catch(ifMissing(undefined))
     const records = (await Promise.all(names.map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
     const views = await Promise.all(
       records.map(async (record): Promise<ModView> => {
-        const manifest: unknown = await mod.fs.read(`${record.root}/package.json`).then(JSON.parse, ifMissing(undefined))
-        const plugin: unknown = await mod.fs.read(`${record.root}/.claude-plugin/plugin.json`).then(JSON.parse, ifMissing(undefined))
+        const manifest: unknown = await fs.read(`${record.root}/package.json`).then(JSON.parse, ifMissing(undefined))
+        const plugin: unknown = await fs.read(`${record.root}/.claude-plugin/plugin.json`).then(JSON.parse, ifMissing(undefined))
         const declared = (isObject(manifest) ? readSteps(manifest)?.permissions : undefined) ?? []
         const granted = consent[record.name] ?? []
         const ask = async <Value>(method: string): Promise<readonly Value[]> => {
-          const answer = await mod.claude.cmod.call({ to: record.name, method, input: null }).catch((error: unknown) => {
-            mod.claude.ui.log(`cmod: ${record.name} did not answer ${method}: ${messageOf(error)}`, { to: 'debug' })
+          const answer = await engineOf(mod).claude.cmod.call({ to: record.name, method, input: null }).catch((error: unknown) => {
+            mod.log(`${record.name} did not answer ${method}: ${messageOf(error)}`)
             return undefined
           })
           return Array.isArray(answer) ? (answer as Value[]) : []
         }
         const pages = await ask<ModView['pages'][number]>(settingsPagesMethod)
         const pendingSteps = await ask<string>(pendingStepsMethod)
+        const changelog = changelogSections((await read(`${record.root}/CHANGELOG.md`)) ?? '')
         return {
           name: record.name,
           version: record.version,
@@ -75,6 +89,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
           options: rows.filter((row) => row.key.startsWith(`${record.name}.`)),
           pages,
           pendingSteps,
+          changelog,
         }
       }),
     )
@@ -101,33 +116,33 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
     act(async () => {
       const split = item.indexOf(':')
       const words = split === -1 ? [item] : [item.slice(0, split), item.slice(split + 1)]
-      const { exitCode, stdout, stderr } = await mod.process.run(['cmod', 'permission', name, ...words, isOn ? 'off' : 'on'])
-      return exitCode === 0 ? stdout.trim() : stderr.trim()
+      const { exitCode, stdout, stderr } = await process.run(['cmod', 'permission', name, ...words, isOn ? 'off' : 'on'])
+      return exitCode === 0 ? stdout.trim() : `cmod permission ${name} ${formatExit(exitCode, cmodError(stderr, 'permission'))}`
     })
 
   const remove = (name: string) =>
     act(async () => {
       mod.state.memory.removing = null
       mod.state.memory.notice = `Removing ${name}…`
-      const { exitCode, stderr } = await mod.process.run(['cmod', 'remove', name], { timeoutMs: longestMs })
+      const { exitCode, stderr } = await process.run(['cmod', 'remove', name], { timeoutMs: longestMs })
       if (exitCode === 0) return `Removed ${name}. This session stops running it after /reload-plugins.`
-      return `cmod remove ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
+      return `cmod remove ${name} ${formatExit(exitCode, cmodError(stderr, 'remove'))}`
     })
 
   const turn = (name: string, isOn: boolean) =>
     act(async () => {
       const action = isOn ? 'enable' : 'disable'
-      const { exitCode, stderr } = await mod.process.run(['cmod', action, name])
+      const { exitCode, stderr } = await process.run(['cmod', action, name])
       if (exitCode === 0) return `Turned ${name} ${isOn ? 'on' : 'off'}. This session follows after /reload-plugins.`
-      return `cmod ${action} ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
+      return `cmod ${action} ${name} ${formatExit(exitCode, cmodError(stderr, action))}`
     })
 
   const setOption = (name: string, row: ConfigRow, text: string) =>
     act(async () => {
       const value = text.split(',').map((item) => item.trim()).join(',')
-      const { exitCode, stderr } = await mod.process.run(['cmod', 'option', name, row.key.slice(name.length + 1), value])
+      const { exitCode, stderr } = await process.run(['cmod', 'option', name, row.key.slice(name.length + 1), value])
       if (exitCode === 0) return `Saved ${row.label}. ${name} reads it at its next start.`
-      return `cmod option ${name} exited ${exitCode}: ${stderr.trim().split('\n').at(-1) ?? ''}`
+      return `cmod option ${name} ${formatExit(exitCode, cmodError(stderr, 'option'))}`
     })
 
   const drawTab = (view: ModView, tab: Tab): RenderElement => {
@@ -155,8 +170,24 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       if (view.keys.length === 0) return Text({ dimColor: true, children: `${view.name} binds no keys.` })
       return Box({ flexDirection: 'column', children: view.keys.map(([key, command]) => Text({ children: `${key.padEnd(12)}${command}` })) })
     }
+    if (tab === 'changelog') {
+      return Box({
+        flexDirection: 'column',
+        gap: 1,
+        children: view.changelog.map(({ version, date, text }) =>
+          Box({
+            key: `changelog:${version}`,
+            flexDirection: 'column',
+            children: [
+              Text({ children: [Text({ bold: true, children: version }), Text({ dimColor: true, children: `${date === undefined ? '' : ` · ${date}`}${version === view.version ? ' · installed' : ''}` })] }),
+              Markdown({ text: text === '' ? '_No changes listed._' : text }),
+            ],
+          }),
+        ),
+      })
+    }
     if (view.pages.length === 0) return Text({ dimColor: true, children: `${view.name} adds no pages.` })
-    return Box({ gap: 2, children: view.pages.map((page) => Button({ key: `page:${page.id}`, label: page.title, onPress: () => act(async () => (await mod.claude.cmod.call({ to: view.name, method: openPageMethod, input: page.id }), undefined)) })) })
+    return Box({ gap: 2, children: view.pages.map((page) => Button({ key: `page:${page.id}`, label: page.title, onPress: () => act(async () => (await engineOf(mod).claude.cmod.call({ to: view.name, method: openPageMethod, input: page.id }), undefined)) })) })
   }
 
   const pane = definePane<State>({
@@ -167,6 +198,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
       const { selected, tab, notice, removing, views } = current.state.memory
       const view = views.find((each) => each.name === selected) ?? views[0]
       if (view === undefined) return Text({ dimColor: true, children: notice ?? 'No mod is set up yet. Run cmod install <owner/repo> to add one.' })
+      const shownTab = tabsOf(view).some(({ key }) => key === tab) ? tab : 'options'
       const list = Box({
         flexDirection: 'column',
         minWidth: 18,
@@ -223,11 +255,11 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
                   gap: 2,
                   children: [
                     Text({ color: 'warning', children: `Needs setup: ${view.pendingSteps.join(', ')}` }),
-                    Button({ key: 'finish', label: 'Finish setup', onPress: () => act(async () => (await mod.claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null }), undefined)) }),
+                    Button({ key: 'finish', label: 'Finish setup', onPress: () => act(async () => (await engineOf(mod).claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null }), undefined)) }),
                   ],
                 }),
               ]),
-          Tabs({ tabs, selected: tab, onSelect: (key) => void (current.state.memory.tab = key as Tab), children: drawTab(view, tab) }),
+          Tabs({ tabs: tabsOf(view), selected: shownTab, onSelect: (key) => void (current.state.memory.tab = key as Tab), children: drawTab(view, shownTab) }),
           ...(notice === null ? [] : [Text({ dimColor: true, children: notice })]),
         ],
       })
@@ -240,13 +272,20 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
   return {
     async open(name?: string, page?: string) {
       await refresh()
+      const view = mod.state.memory.views.find((each) => each.name === name)
       if (name !== undefined) {
-        if (!mod.state.memory.views.some((view) => view.name === name)) throw new Error(`${name} is not a mod cmod set up. cmod list shows the mods.`)
+        if (view === undefined) throw new Error(`${name} is not a mod cmod set up. cmod list shows the mods.`)
         mod.state.memory.selected = name
-        mod.state.memory.tab = 'options'
+        mod.state.memory.tab = page === changelogPage ? 'changelog' : 'options'
+      }
+      if (view !== undefined && page === changelogPage) {
+        await handle.open({ focus: true })
+        const shown = view.changelog.some(({ version }) => version === view.version) ? view.version : unreleased
+        await mod.ui.scroll({ to: { key: `changelog:${shown}` }, block: 'start' })
+        return
       }
       if (name !== undefined && page !== undefined) {
-        await mod.claude.cmod.call({ to: name, method: openPageMethod, input: page })
+        await engineOf(mod).claude.cmod.call({ to: name, method: openPageMethod, input: page })
         return
       }
       await handle.open({ focus: true })

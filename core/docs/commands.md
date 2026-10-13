@@ -12,7 +12,7 @@ Each command below restates what `cmod <command> --help` prints, for a mod autho
 cmod new <name> [--project]
 ```
 
-Creates a mod in `./<name>`: a `defineMod` with one hook, one pane, and one render of the band above the prompt, a Skill, and a test. Then installs its packages.
+Creates a mod in `./<name>`: a `defineMod` with one hook, one pane, and one render of the band above the prompt, a Skill, a test, and a `CHANGELOG.md` ([mod.md](mod.md#release-notes)). Then installs its packages.
 
 - `<name>` is lowercase letters, digits, and `-`, starting with a letter.
 - `--project` creates a project-scope plugin in `./.claude/skills/<name>/` of the repository in the current folder, which loads for everyone who trusts the repository. Run it in the repository's root.
@@ -28,7 +28,7 @@ cmod link [path] [--yes] [--option key=value]...
 Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
 
 - `--yes` approves the mod's install and uninstall commands without asking.
-- `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
+- `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option, under the id `claude plugin list` shows for the linked checkout, such as `my-mod@inline`. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
 
 ### cmod unlink
 
@@ -68,7 +68,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 cmod try <owner/repo | path>... [--yes] [--option key=value]... [--home <folder>] [-- claude arguments]
 ```
 
-Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then starts one Claude Code session with every mod loaded through `--plugin-dir`.
+Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then links every mod into the home's `settings.json`, as `cmod link` does, starts one Claude Code session, and unlinks each folder it linked when the session ends. With `--home ~`, a session you start meanwhile loads the tried mods too.
 
 - `--option key=value` sets one option of the mod. With several mods, write `--option <mod>.key=value`.
 - The session runs with a new home folder, so it sees only the mods named here and changes none of your Claude Code settings, mods, key bindings, or history. The folder is deleted when the session ends.
@@ -92,13 +92,13 @@ cmod publish [path] [--dry-run]
 
 Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`. It refuses a `plugin.json` whose `userConfig` differs from the options `defineMod` declares, and says to run `cmod check` and commit `.claude-plugin/plugin.json`.
 
-1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, `tsconfig.json`, the README, and the license, the way `npm publish` reads it. `tsconfig.json` holds the JSX settings the bundle in step 2 needs. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
+1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, `tsconfig.json`, the README, the license, and `CHANGELOG.md`, the way `npm publish` reads it. `tsconfig.json` holds the JSX settings the bundle in step 2 needs. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
 2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, writes each control character in it as a `\u` escape, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file.
 3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
 6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin. The cmod entry points at the `release` branch of `heyJordanParker/cmod`, so the mod's `"cmod"` dependency resolves in this marketplace and follows each cmod release with no new publish of the mod.
-7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release. Its notes open with `## Breaking changes`, listing each `BREAKING CHANGE:` footer of a commit since the last `v` tag and the subject of each commit typed with `!`, such as `feat!: mod.claude replaces job.claude`, so the people who use the mod know what to change before they update. `--dry-run` prints that list.
+7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release. Its notes are the version's section of the committed `CHANGELOG.md`, above GitHub's compare link ([mod.md](mod.md#release-notes)). `--dry-run` prints them.
 8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
 
 The release keeps `package.json`, so Claude Code still installs the mod's packages for its install and uninstall steps. It keeps `bun.lock` too, unless a `"files"` list leaves it out. `main` keeps the source only.
@@ -106,6 +106,7 @@ The release keeps `package.json`, so Claude Code still installs the mod's packag
 It needs, and refuses to start without:
 
 - the mod's folder as the root of a git repository with at least one commit, because `git archive` builds from `HEAD`
+- a `## [<version>]` section with notes in the committed `CHANGELOG.md`
 - `node_modules` in the mod's folder, from `bun install`, when the hooks module imports a package
 - a `register` declared as a function in the hooks module, as `cmod new` writes it, because the validator refuses a bundled `register` that is not one
 - the `claude` command, which validates the release
@@ -177,19 +178,31 @@ Lists every plugin Claude Code has installed or linked, with its version. A mod 
 ### cmod history
 
 ```text
-cmod history sessions [--all] [--since 2d] [--project <folder>] [--json]
-cmod history messages [<session>] [--agent <id> | --subagents] [--last <n>] [--after <id>] [--limit <n>] [--follow] [--json]
-cmod history search <text> [--all] [--since 2d] [--project <folder>] [--limit <n>] [--before <session>:<id>] [--json]
+cmod history sessions [--all] [--since 2d] [--running] [--project <folder>] [--json]
+cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--limit <n>] [--before <session>:<id>] [--json]
+cmod history messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
+cmod history turns [<session>] [--context <n>] [--last <n>] [--json]
+cmod history contexts [<session>] [--json]
+cmod history tasks [<session>] [--task <id>] [--json]
+cmod history goal [<session>] [--json]
+cmod history state [<session>] [--json]
+cmod history follow <session>... [--json]
 cmod history index
 ```
 
-Reads every conversation Claude Code saved, as the sessions and messages `mod.history` answers ([mod.md](mod.md#mod-history)), so a person or an agent reads them in a terminal without parsing a transcript.
+Reads every conversation Claude Code saved, as the sessions, contexts, turns, tasks, and messages `sessions` answers a mod ([session.md](session.md)), so a person or an agent reads them in a terminal without parsing a transcript.
 
-- `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, and `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`.
-- `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--agent` reads one of its subagents' conversations, `--subagents` reads the conversation with every subagent's in the order they were saved, `--last` starts that many messages from the end, `--after` starts after a message id, `--limit` stops after that many, and `--follow` keeps printing new messages as they are saved.
-- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters. `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before.
-- `--json` prints the sessions or messages as JSON instead of one line each.
-- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-2.sqlite`, which holds where each message is in its transcript, not a copy of it. While a mod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+- `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`, and `--running` keeps those open in Claude Code now.
+- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--all`, `--since`, and `--running` scope it as they scope `sessions`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before.
+- `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--task` reads a task's messages instead, `--turn` keeps one turn's, `--after` starts after a message id, and `--last` keeps that many from the end.
+- `turns` prints the conversation's turns, each opened by a prompt and closed when Claude finishes. `--context` keeps one context's, and `--last` keeps that many from the end.
+- `contexts` prints the conversation's contexts, a new one after each compaction.
+- `tasks` prints the tasks the conversation started, or with `--task` the tasks that task started.
+- `goal` prints what the conversation is for: the goal a mod set, or its first prompt.
+- `state` prints what a running conversation resumes from.
+- `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. The cmod plugin runs it to hear other running sessions.
+- `--json` prints JSON instead of one line each.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-3.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 ## Run in an install script
 
@@ -211,7 +224,7 @@ cmod runs these itself. A person runs them to see a step's whole log, to finish 
 cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
 ```
 
-Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them.
+Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them.
 
 ### cmod teardown
 
@@ -235,7 +248,7 @@ Turns one permission of a set-up mod on or off, such as `cmod permission ci-watc
 cmod settings <mod> <user|project|local> <json> [--project <folder>]
 ```
 
-Changes Claude Code settings for a set-up mod, as its `mod.claude.settings.update` does ([mod.md](mod.md#mod-settings)), such as `cmod settings keeper user '{"cleanupPeriodDays":365}'`. It writes each top-level key of the JSON object into the user, project, or local settings, and `null` removes the key. The project and local settings are those of `--project`, the current folder when it is left out, and `mcpServers` in the project settings goes to `.mcp.json`. Each key needs the mod's `config` permission for it. cmod keeps every other key and the file's formatting, and `cmod teardown` takes out each value the mod set that is still the same.
+Changes Claude Code settings for a set-up mod, as its `settings.user.update`, `settings.project.update`, and `settings.local.update` do ([mod.md](mod.md#settings-claude-code-s-settings-files)), such as `cmod settings keeper user '{"cleanupPeriodDays":365}'`. It writes each top-level key of the JSON object into the user, project, or local settings, and `null` removes the key. The project and local settings are those of `--project`, the current folder when it is left out, and `mcpServers` in the project settings goes to `.mcp.json`. Each key needs the mod's `config` permission for it. cmod keeps every other key and the file's formatting, and `cmod teardown` takes out each value the mod set that is still the same.
 
 ### cmod option
 

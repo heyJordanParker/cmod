@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { check } from '../../src/jobs/check.js'
 import { defineMod, type Job } from '../../src/mod.js'
+import { engineOf } from '../../src/runtime/engine.js'
 import { testMod } from '../../src/testing.js'
 
 const root = '/test/plugins/typed'
@@ -34,7 +35,7 @@ test('check runs its command after a matching call and reports a failure', async
 
   expect(answer).toEqual({ ...answered, context: [`tsc --noEmit ${root}/a.ts exited with 2:\n${typeError}`] })
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/a.ts`], { timeoutMs: 60000 }]])
-  expect(tested.shown.logs).toEqual(['typed added a check after edits to **/*.ts.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a check after edits to **/*.ts.')
 })
 
 test('a check adds nothing when its command exits 0, and does not run for an unmatched file or a refused call', async () => {
@@ -58,7 +59,7 @@ test('a check after several targets runs its command once, with the matched file
     [['bun', 'test', `${root}/a.ts`], { timeoutMs: 60000 }],
     [['bun', 'test'], { timeoutMs: 60000 }],
   ])
-  expect(tested.shown.logs).toEqual(['typed added a check after edits to **/*.ts and git commit.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a check after edits to **/*.ts and git commit.')
 })
 
 test('a check that passes its deadline tells Claude the check and the deadline', async () => {
@@ -71,13 +72,13 @@ test('a check that passes its deadline tells Claude the check and the deadline',
 
   const answer = await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['The check after edits to **/*.ts failed: mod.process.run passed the 60 s deadline of check'])
+  expect(answer.context).toEqual([`The check after edits to **/*.ts failed: tsc --noEmit ${root}/a.ts passed the 60 s deadline of check`])
 })
 
 test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () => {
   const bashMovesFolder: Job<void> = (job) => {
-    const { claude } = job.mod
-    claude.on('tool.call', async (e, next) => {
+    const { claude, router } = engineOf(job.mod)
+    router.add('tool.call', async (e, next) => {
       claude.session.cwd = async () => `${root}/app`
       return next(e)
     })

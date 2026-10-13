@@ -20,7 +20,7 @@ export type Steps = {
 }
 
 export const listPermissions = ['network', 'run', 'files', 'config'] as const
-export const flagPermissions = ['conversation', 'prompt', 'model', 'agents', 'tools', 'approve'] as const
+export const flagPermissions = ['conversation', 'prompt', 'model', 'tasks', 'tools', 'approve'] as const
 export type ListPermission = (typeof listPermissions)[number]
 export type FlagPermission = (typeof flagPermissions)[number]
 const permissionNames: readonly string[] = [...listPermissions, ...flagPermissions]
@@ -37,12 +37,12 @@ const listItemHint: Readonly<Record<ListPermission, string>> = {
 export type ReadFile = (path: string) => Promise<string | undefined>
 
 export type RunnerEvent =
-  | { kind: 'progress'; done: number; total: number; label: string }
-  | { kind: 'log'; text: string }
-  | { kind: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string; permissions: readonly string[] }
-  | { kind: 'done'; name: string; version?: string }
-  | { kind: 'missing'; name: string }
-  | { kind: 'failed'; code: number; message: string }
+  | { type: 'progress'; done: number; total: number; label: string }
+  | { type: 'log'; text: string }
+  | { type: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string; permissions: readonly string[] }
+  | { type: 'done'; name: string; version?: string }
+  | { type: 'missing'; name: string }
+  | { type: 'failed'; code: number; message: string }
 
 export const pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
@@ -188,8 +188,8 @@ export function permissionWords(item: string): string {
       return 'Add text Claude reads and start turns'
     case 'model':
       return 'Ask a model, which uses your plan'
-    case 'agents':
-      return 'Start agents'
+    case 'tasks':
+      return 'Start tasks that work beside Claude'
     case 'tools':
       return "Use and change Claude's tool calls"
     case 'config':
@@ -202,6 +202,8 @@ export function permissionWords(item: string): string {
 }
 
 export const settingsPagesMethod = 'cmod:settingsPages'
+
+export const changelogPage = 'changelog'
 
 export const openPageMethod = 'cmod:openPage'
 
@@ -247,9 +249,10 @@ function readKeys(keys: unknown): Steps {
   return { keys: commands }
 }
 
-export const coreVersion = '0.3.0'
+export const coreVersion = '1.0.0'
 
 export function oldestCmodFor(steps: Steps): string {
+  if (steps.permissions?.some((item) => item === 'tasks' || item.startsWith('config:')) === true) return '1.0.0'
   if (steps.permissions !== undefined) return '0.2.0'
   return Object.keys(steps.keys ?? {}).length > 0 ? '0.1.12' : '0.0.0'
 }
@@ -312,7 +315,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
 }
 
 export function formatEvent(event: RunnerEvent): string {
-  switch (event.kind) {
+  switch (event.type) {
     case 'progress':
       return `progress ${event.done} ${event.total}${event.label === '' ? '' : ` ${event.label}`}`
     case 'log':
@@ -330,19 +333,19 @@ export function formatEvent(event: RunnerEvent): string {
 
 export function parseEvent(line: string): RunnerEvent {
   const progress = /^progress (\d+) (\d+)(?: (.*))?$/.exec(line)
-  if (progress !== null) return { kind: 'progress', done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? '' }
+  if (progress !== null) return { type: 'progress', done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? '' }
   const consent = /^needs-consent (\S+)\t([^\t]*)\t([^\t]*)(?:\t(.*))?$/.exec(line)
   if (consent !== null) {
     const [keys = '', ...permissions] = (consent[4] ?? '').split('\t')
-    return { kind: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, keys, permissions: permissions.filter((item) => item !== '') }
+    return { type: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, keys, permissions: permissions.filter((item) => item !== '') }
   }
   const done = /^done (\S+)(?: (\S+))?$/.exec(line)
-  if (done !== null) return { kind: 'done', name: done[1] as string, ...(done[2] === undefined ? {} : { version: done[2] }) }
+  if (done !== null) return { type: 'done', name: done[1] as string, ...(done[2] === undefined ? {} : { version: done[2] }) }
   const missing = /^missing (\S+)$/.exec(line)
-  if (missing !== null) return { kind: 'missing', name: missing[1] as string }
+  if (missing !== null) return { type: 'missing', name: missing[1] as string }
   const failed = /^failed (-?\d+)(?:\t(.*))?$/.exec(line)
-  if (failed !== null) return { kind: 'failed', code: Number(failed[1]), message: failed[2] ?? '' }
-  return { kind: 'log', text: line.replace(/^log /, '') }
+  if (failed !== null) return { type: 'failed', code: Number(failed[1]), message: failed[2] ?? '' }
+  return { type: 'log', text: line.replace(/^log /, '') }
 }
 
 export function isAtLeast(version: string, minimum: string): boolean {

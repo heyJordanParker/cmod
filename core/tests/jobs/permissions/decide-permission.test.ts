@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { decidePermission, stricterVerdict, type PermissionRules } from '../../../src/jobs/permissions/decide-permission.js'
 import type { Workspace } from '../../../src/jobs/permissions/find-project-scope.js'
-import type { ToolCall } from '../../../src/utils/call-effects.js'
+import type { Call } from '../../../src/utils/call-effects.js'
 import { fakeFiles } from '../../../src/testing/fake-files.js'
 
 type TestMod = { name: string }
@@ -18,17 +18,17 @@ function workspaceWith(files: Record<string, string> = {}, links: Record<string,
   return { projectRoot: cwd, cwd, home, fs: { ...fs, stat: (path) => fs.stat(path, { resolve: true }) }, scope: undefined }
 }
 
-function bash(command: string): ToolCall {
+function bash(command: string): Call {
   return { tool: 'Bash', input: { command } }
 }
 
-function decide(rules: PermissionRules<TestMod>, use: ToolCall, workspace = workspaceWith()) {
-  return decidePermission(rules, use, workspace, () => mod)
+function decide(rules: PermissionRules<TestMod>, use: Call, workspace = workspaceWith()) {
+  return decidePermission(rules, use, workspace, mod, (run) => Promise.resolve(run()))
 }
 
-function seenCalls(): { calls: ToolCall[]; when: (call: ToolCall) => boolean } {
-  const calls: ToolCall[] = []
-  return { calls, when: (call) => (calls.push(call), true) }
+function seenCalls(): { calls: Call[]; when: (call: Call & { readonly folder: string }) => boolean } {
+  const calls: Call[] = []
+  return { calls, when: ({ folder: _folder, ...call }) => (calls.push(call), true) }
 }
 
 describe('the named behaviors', () => {
@@ -61,7 +61,7 @@ describe('the named behaviors', () => {
   test('an Edit with replace_all: true produces the whole new file as content', async () => {
     const seen = seenCalls()
     const workspace = workspaceWith({ '/work/app/a.ts': 'let a = 1\nlet b = a + a\n' })
-    const edit: ToolCall = { tool: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'x', replace_all: true } }
+    const edit: Call = { tool: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'x', replace_all: true } }
     await decide({ deny: [{ write: '**/*.ts', when: seen.when }] }, edit, workspace)
     expect(seen.calls).toEqual([{ ...edit, path: '/work/app/a.ts', content: 'let x = 1\nlet b = x + x\n', previousContent: 'let a = 1\nlet b = a + a\n' }])
   })
@@ -181,7 +181,7 @@ describe('path targets', () => {
   test('a new file gets the real path of its folder plus its name', async () => {
     const seen = seenCalls()
     const workspace = workspaceWith({ '/vault/secrets/key': 'k' }, { '/work/app/link': '/vault/secrets' })
-    const write: ToolCall = { tool: 'Write', input: { file_path: '/work/app/link/new/file', content: 'x' } }
+    const write: Call = { tool: 'Write', input: { file_path: '/work/app/link/new/file', content: 'x' } }
     await decide({ deny: [{ write: '/vault/**', when: seen.when }] }, write, workspace)
     expect(seen.calls).toEqual([{ ...write, path: '/vault/secrets/new/file', content: 'x' }])
   })
@@ -214,21 +214,21 @@ describe('content of an edit', () => {
     [{ old_string: 'three', new_string: '3' }, { previousContent: 'one two one' }],
   ])('Edit %p gives %p', async (edit, contents) => {
     const seen = seenCalls()
-    const call: ToolCall = { tool: 'Edit', input: { file_path: '/work/app/a.ts', ...edit } }
+    const call: Call = { tool: 'Edit', input: { file_path: '/work/app/a.ts', ...edit } }
     await decide({ deny: [{ write: '**', when: seen.when }] }, call, workspaceWith(file))
     expect(seen.calls).toEqual([{ ...call, path: '/work/app/a.ts', ...contents }])
   })
 
   test('an Edit with an empty old_string creates a new file', async () => {
     const seen = seenCalls()
-    const call: ToolCall = { tool: 'Edit', input: { file_path: '/work/app/new.ts', old_string: '', new_string: 'x' } }
+    const call: Call = { tool: 'Edit', input: { file_path: '/work/app/new.ts', old_string: '', new_string: 'x' } }
     await decide({ deny: [{ write: '**', when: seen.when }] }, call)
     expect(seen.calls).toEqual([{ ...call, path: '/work/app/new.ts', content: 'x' }])
   })
 
   test('a Write gives the content and the previous content', async () => {
     const seen = seenCalls()
-    const call: ToolCall = { tool: 'Write', input: { file_path: '/work/app/a.ts', content: 'new' } }
+    const call: Call = { tool: 'Write', input: { file_path: '/work/app/a.ts', content: 'new' } }
     await decide({ deny: [{ write: '**', when: seen.when }] }, call, workspaceWith(file))
     expect(seen.calls).toEqual([{ ...call, path: '/work/app/a.ts', content: 'new', previousContent: 'one two one' }])
   })
@@ -236,7 +236,7 @@ describe('content of an edit', () => {
   test('a NotebookEdit gives only the previous content', async () => {
     const seen = seenCalls()
     const notebook = { '/work/app/n.ipynb': '{"cells":[]}' }
-    const call: ToolCall = { tool: 'NotebookEdit', input: { notebook_path: '/work/app/n.ipynb', new_source: 'x' } }
+    const call: Call = { tool: 'NotebookEdit', input: { notebook_path: '/work/app/n.ipynb', new_source: 'x' } }
     await decide({ deny: [{ write: '**', when: seen.when }] }, call, workspaceWith(notebook))
     expect(seen.calls).toEqual([{ ...call, path: '/work/app/n.ipynb', previousContent: '{"cells":[]}' }])
   })
@@ -315,11 +315,11 @@ describe('patterns that leave calls out', () => {
 })
 
 describe('the decision', () => {
-  test('the raw input, agentId, and agentType reach when', async () => {
-    const seen = seenCalls()
-    const call: ToolCall = { tool: 'Read', input: { file_path: '/a' }, agentId: 'a4aa369514be1f5cc', agentType: 'explorer' }
-    await decide({ deny: [{ tool: 'Read', when: seen.when }] }, call)
-    expect(seen.calls).toEqual([call])
+  test('the raw input, agentId, agentType, and the folder the call runs in reach when', async () => {
+    const seen: unknown[] = []
+    const call: Call = { tool: 'Read', input: { file_path: '/a' }, agentId: 'a4aa369514be1f5cc', agentType: 'explorer' }
+    await decide({ deny: [{ tool: 'Read', when: (reached) => (seen.push(reached), true) }] }, call)
+    expect(seen).toEqual([{ ...call, folder: '/work/app' }])
   })
 
   test('a when that returns false leaves the decision to the next rule', async () => {

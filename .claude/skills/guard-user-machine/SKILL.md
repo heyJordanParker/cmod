@@ -33,7 +33,7 @@ Example: when the listers skipped links and `read` followed them, a changed file
 SIGINT, SIGHUP from a closed terminal, and SIGTERM each still run the cleanup. `holdSignals` in `cli/src/commands/setup.ts` holds all three. `setupInTerminal`, `teardownInTerminal`, both `--events` paths, `cmod unlink`, and `cmod try` for its whole session share one hold, and the signal is raised again when the last of them ends. Every uninstall step runs under `uninterruptible`, to its end.
 
 ### Never delete what an installed mod still uses
-`cmod try` refuses when another root owns the mod's record. The cmod plugin decides a removal from the user-scope `enabledPlugins` alone (`mod.claude.settings.read({ source: 'user' })`), because Claude Code keeps an uninstalled plugin's folder for 6 hours (`.orphaned_at`).
+`cmod try` refuses when another root owns the mod's record. The cmod plugin decides a removal from the user-scope `enabledPlugins` alone (`settings.user.read()`), because Claude Code keeps an uninstalled plugin's folder for 6 hours (`.orphaned_at`).
 
 ### Put the machine back to what the record names
 Example: a failed upgrade relinks the program version the record names, through `restoreProgram`.

@@ -48,7 +48,7 @@ export async function run(argv: string[]): Promise<number> {
   progress.step(`Adding the marketplace ${tilde(source.text)}`)
   await addMarketplace(source.text)
   const marketplace = (await listMarketplaces()).find((entry) =>
-    source.kind === 'path' ? entry.path !== undefined && existsSync(entry.path) && realpathSync(entry.path) === source.text : entry.repo === source.text,
+    source.type === 'path' ? entry.path !== undefined && existsSync(entry.path) && realpathSync(entry.path) === source.text : entry.repo === source.text,
   )
   if (marketplace?.installLocation === undefined) throw new Error(`Claude Code added ${source.text} but claude plugin marketplace list does not show where it saved it.`)
   progress.succeed(`Added the marketplace ${marketplace.name}`)
@@ -65,7 +65,7 @@ async function installByName(argument: string, choices: Choices, progress: Progr
       return installMod(installed, choices, progress)
     }
     if (installed.scope !== 'session') return installPlugin(installed.id, choices, progress)
-    await setOptions(installed.id, installed.installPath, choices.options, progress)
+    await setOptions(installed, choices.options, progress)
     progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it. Run /reload-plugins in a session that is running.`)
     return 0
   }
@@ -83,7 +83,7 @@ async function installPlugin(id: string, choices: Choices, progress: Progress): 
   if (installed === undefined) throw new Error(`Claude Code installed ${id} but claude plugin list does not show it.`)
   progress.succeed(`Installed ${id} into Claude Code`)
   if (!(await usesCmod(installed.installPath, installed.name))) {
-    await setOptions(id, installed.installPath, choices.options, progress)
+    await setOptions(installed, choices.options, progress)
     return 0
   }
   await installCmodPlugin(progress)
@@ -92,16 +92,17 @@ async function installPlugin(id: string, choices: Choices, progress: Progress): 
 
 export async function installMod(installed: InstalledPlugin, choices: Choices, progress: Progress): Promise<number> {
   const plugin = await readPlugin(installed.installPath)
-  await setOptions(installed.id, plugin.root, choices.options, progress)
+  await setOptions(installed, choices.options, progress)
   const code = await setupInTerminal(plugin, { yes: choices.yes }, progress)
   if (code === 0) noteNextStep(plugin, progress)
   return code
 }
 
-export async function setOptions(id: string, root: string, given: readonly string[], progress: Progress): Promise<void> {
+export async function setOptions(installed: InstalledPlugin, given: readonly string[], progress: Progress): Promise<void> {
   if (given.length === 0) return
-  const declared = await declaredOptions(root)
-  const values = optionValues(given, declared.kind === 'declared' ? declared.userConfig : await manifestOptions(root), id)
+  const { id, installPath } = installed
+  const declared = await declaredOptions(installPath)
+  const values = optionValues(given, declared.type === 'declared' ? declared.userConfig : await manifestOptions(installPath), id)
   progress.step(`Setting the options of ${id}`)
   await configurePlugin(id, values)
   progress.succeed(`Set ${Object.keys(values).join(', ')} for ${id}`)

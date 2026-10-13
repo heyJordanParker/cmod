@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import { program, type Program } from '../../src/jobs/program.js'
-import { defineMod, type Mod } from '../../src/mod.js'
+import { defineMod, http } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 function written(chunks: readonly ProcessSpawnChunk[], exits: boolean, closed: () => void = () => undefined): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -48,7 +48,7 @@ test('a first line unix:/tmp/x.sock resolves ready() to the socket and http://lo
   expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/x.sock' })
   expect(started.state).toBe('running')
   expect(spawned).toEqual([{ argv: ['preview-server', '--port', '0'] }])
-  expect(tested.shown.logs).toEqual(['preview added the preview-server program.'])
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the preview-server program.')
 })
 
 test('a first line 127.0.0.1:53211 resolves ready() to its http URL, even when the line comes in two pieces', async () => {
@@ -168,12 +168,10 @@ test('a program the mod has no grant to run stops at once and names the line to 
 
 test("a mod fetches its own program's address with no network grant, and any other address still needs one", async () => {
   let handle: Program | undefined
-  let mod: Mod | undefined
   const tested = testMod(
     defineMod({
       name: 'modes',
       setup(started) {
-        mod = started
         handle = started.use(program({ command: ['claude-modes'] }))
       },
     }),
@@ -184,6 +182,6 @@ test("a mod fetches its own program's address with no network grant, and any oth
   await tested.start()
   const { url, socketPath } = await (handle as Program).ready()
 
-  expect((await mod!.http.fetch(`${url}/history`, socketPath === undefined ? {} : { socketPath })).status).toBe(200)
-  await expect(mod!.http.fetch(`${url}/history`, { socketPath: '/tmp/modes-1.sock' })).rejects.toThrow('"network": ["/tmp/modes-1.sock"]')
+  expect((await http.fetch(`${url}/history`, socketPath === undefined ? {} : { socketPath })).status).toBe(200)
+  await expect(http.fetch(`${url}/history`, { socketPath: '/tmp/modes-1.sock' })).rejects.toThrow('"network": ["/tmp/modes-1.sock"]')
 })

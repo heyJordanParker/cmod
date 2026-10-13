@@ -41,7 +41,7 @@ describe('the Dent mod of sdk-domain.md', () => {
   test('loads through testMod and lists what it added', async () => {
     const { tested } = dentSession()
     await tested.start()
-    expect(tested.shown.logs).toEqual(['dent added 8 permission rules and a check after edits to **/*.ts, **/*.tsx and **/*.php.'])
+    expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds 8 permission rules and a check after edits to **/*.ts, **/*.tsx and **/*.php.')
   })
 
   test.each([
@@ -81,10 +81,7 @@ describe('the Dent mod of sdk-domain.md', () => {
     expect(await withCode.decide(edit(`${root}/worktrees/design/Domain.md`, '#', '##'))).toEqual(denied)
     expect(await withCode.decide(edit(`${home}/dotfiles/Domain.md`, '#', '##'))).toEqual(allowed)
     expect(await dentSession(' M Domain.md\n').decide(edit(`${root}/Domain.md`, '#', '##'))).toEqual(allowed)
-    expect(withCode.runs().map(([, init]) => init)).toEqual([
-      { cwd: root, timeoutMs: 2000 },
-      { cwd: `${root}/worktrees/design`, timeoutMs: 2000 },
-    ])
+    expect(withCode.runs().map(([, init]) => init)).toEqual([{ cwd: root }, { cwd: `${root}/worktrees/design` }])
   })
 
   test('denies a Domain.md edit when git status passes its deadline, because the rule gives its own decision', async () => {
@@ -96,7 +93,7 @@ describe('the Dent mod of sdk-domain.md', () => {
     }
     expect(await decide(edit(`${root}/Domain.md`, '#', '##'))).toEqual({
       decision: 'deny',
-      reason: 'Edit Domain.md in its own change, with the Architect. Its when check failed: mod.process.run passed the 2 s deadline of permissions',
+      reason: 'Edit Domain.md in its own change, with the Architect. Its when check failed: it passed the 2 s deadline of permissions',
     })
   })
 

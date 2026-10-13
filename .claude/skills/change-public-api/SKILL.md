@@ -7,7 +7,7 @@ description: Change what a mod author writes against, so the `@cmodjs/core` libr
 
 A mod author learns Claude Mod Manager (cmod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
 
-- The Public API is `core/src/mod.ts`, `core/src/options.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/shell.ts`, `core/src/path.ts`, `core/src/ui/`, and `core/src/jobs/`. Every other file under `core/src/` is internal. `shell.ts` and `path.ts` only re-export, so core's own code imports `utils/parse-shell.ts` and `vendor.ts` instead.
+- The Public API is `core/src/mod.ts`, `core/src/options.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/shell.ts`, `core/src/path.ts`, `core/src/ui/`, and `core/src/jobs/`, and the types and constants `mod.ts` re-exports from `core/src/session/` and `core/src/ui/places.ts`. Every other file under `core/src/` is internal. `shell.ts` and `path.ts` only re-export, so core's own code imports `utils/parse-shell.ts` and `vendor.ts` instead.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.
 
 ## 1. Find every place the idea appears
@@ -18,7 +18,7 @@ Example: `trace grep -i "panel" core/src core/docs cli README.md ../file-tree ..
 ### Give one idea one word everywhere
 Rename every straggler in the same change. A second word for one idea, or one word for two ideas, makes the author guess which is meant.
 Example: "pane" in every file, because the Public API says `mod.ui.pane`, `definePane`, and `PaneHandle`.
-Never: "session" for both the conversation's values (`mod.state.session`) and the project folder (`mod.projectRoot`).
+Never: `kind` for what a message is in one type and `type` in another.
 
 ### Delete the old way when you add a new way to do a job
 Example: `check` runs commands and `prompt` adds text, so neither takes an option that does the other's job.
@@ -26,6 +26,7 @@ Example: `check` runs commands and `prompt` adds text, so neither takes an optio
 ## 2. Keep imports flowing one way
 
 - `utils/` imports only `utils/` and the vendored libraries.
+- `session/` builds on `utils/` and `records.ts`, and imports only types from `mod.ts`.
 - `ui/` imports only `ui/`, the vendored libraries, and types from `mod.ts`.
 - `runtime/` builds on `ui/`, `utils/`, and `records.ts`, and imports only types from `mod.ts`.
 - `jobs/` builds on `runtime/` and `utils/`, never `ui/`.
@@ -46,6 +47,7 @@ Claude Code reads a plugin's hooks module and types file before it loads them, a
 - A module that keeps the table `next(e)` returns at `engine.create` for later use.
 - A types file that augments any module but `'claude-code'`. A mod's `api` types add to `CmodDependencies` there.
 - An event registered twice without a matcher, or an event name that is not a string literal.
+- A module that holds `import()`. Every file a hook loads imports with `import` declarations only.
 
 The validator accepts the shape of the hooks `register.ts` registers: each a top-level function in `register.ts`, registered there with `addHook`, sharing one module-level `lifecycle`. A new hook keeps that shape.
 

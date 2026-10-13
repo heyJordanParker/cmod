@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { EngineInterface, On, RenderElement } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
-import { defineMod } from '../src/mod.js'
+import { defineMod, PostToolUse, PreToolUse } from '../src/mod.js'
 import { scriptsSha256 } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
@@ -61,7 +61,7 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
       set: async (key: string, value: unknown) => store.set(key, value),
     },
     env: { get: async (name: string) => env[name] },
-    session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app' },
+    session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app', model: async () => 'test-model', usage: async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [] }) },
     clock: { every: () => ({ cancel: () => undefined }), after: () => ({ cancel: () => undefined }) },
   } as unknown as EngineInterface
   return { $, shown }
@@ -70,7 +70,7 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
 const demo = defineMod({
   name: 'demo',
   setup(mod) {
-    mod.on('PostToolUse', (input) => ({ hookSpecificOutput: { additionalContext: `demo saw ${input.tool_name}` } }))
+    mod.on(PostToolUse, (input) => ({ hookSpecificOutput: { additionalContext: `demo saw ${input.tool_name}` } }))
   },
 })
 
@@ -142,7 +142,7 @@ test('a PreToolUse hook denies through tool.call, with no permission check regis
   const guard = defineMod({
     name: 'demo',
     setup(mod) {
-      mod.on('PreToolUse', () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'No edits here.' } }))
+      mod.on(PreToolUse, () => ({ hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: 'deny', permissionDecisionReason: 'No edits here.' } }))
     },
   })
   registerMod(fake.on, guard, {})
@@ -163,8 +163,8 @@ test('session.start through the engine chain reads the plugin, runs setup, and a
   const answer = await fake.dispatch('classic.PostToolUse', $, { hook_event_name: 'PostToolUse', cwd: '/work/app', tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }, {})
 
   expect(answer).toEqual({ additionalContext: ['demo saw Edit'] })
-  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toBe('>\n✓  demo  Ready  ✕')
-  expect(shown.logs).toEqual(['demo added a hook on PostToolUse.'])
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo  Installed')
+  expect(shown.logs).toEqual([])
 })
 
 test('a mod starts while the plugins below it start, so its start can wait on one of them', async () => {
@@ -177,7 +177,7 @@ test('a mod starts while the plugins below it start, so its start can wait on on
 
   await fake.dispatch('session.start', $, {}, {})
 
-  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toBe('>\n✓  demo  Ready  ✕')
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo  Installed')
 })
 
 test('a pane opened during setup is drawn again once the mod is active', async () => {
@@ -303,4 +303,20 @@ test('CLAUDE_CONFIG_DIR moves the system tier', async () => {
   )
 
   expect(await expand('demo:architecture-diagram')).toEqual({ text: `${baseLine}Rules from the work profile.\n` })
+})
+
+declare const Bun: {
+  Glob: new (pattern: string) => { scan(options: { cwd: string }): AsyncIterable<string> }
+  file(path: string): { text(): Promise<string> }
+}
+
+test('no module a hook loads holds import(), which makes Claude Code refuse the whole hooks module', async () => {
+  const src = `${import.meta.dir}/../src`
+  const holding: string[] = []
+  for await (const path of new Bun.Glob('**/*.{ts,tsx}').scan({ cwd: src })) {
+    if (path === 'testing.ts' || path.startsWith('testing/')) continue
+    if (/\bimport\s*\(/.test(await Bun.file(`${src}/${path}`).text())) holding.push(path)
+  }
+
+  expect(holding).toEqual([])
 })

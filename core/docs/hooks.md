@@ -1,34 +1,44 @@
 # Hooks
 
-`mod.on` runs a function when Claude Code raises an event, such as a prompt or a tool call. The function reads the event's input and may answer to change what Claude Code does next.
+A hook is a point where Claude Code asks its plugins, such as a prompt or a tool call. `mod.on` runs a listener at a hook. The listener reads the hook's input and may answer to change what Claude Code does next.
 
 ## mod.on
 
 ```ts
-mod.on<E extends ModEvent>(event: E, hook: ModHook<E>, options?: { timeoutMs?: number }): void
+mod.on<H extends Hook>(hook: H, listener: HookListener<H>, options?: { timeoutMs?: number }): Disposable
+mod.on<H extends Hook>(hook: H, matcher: Matcher<HookInput<H>>, listener: HookListener<H>, options?: { timeoutMs?: number }): Disposable
 
-type ModHook<E> = (input: HookInput<E>) => HookAnswer | void | Promise<HookAnswer | void>
+type HookListener<H> = (input: HookInput<H>) => HookAnswer | void | Promise<HookAnswer | void>
 ```
 
-Add hooks in `setup`. Each `mod.on` adds one more hook. Several hooks on one event all run.
+Add listeners in `setup`. Each `mod.on` adds one more listener. Several listeners on one hook all run. `dispose()` on the `Disposable` it returns removes the listener ([mod.md](mod.md#disposable)).
 
-A hook that waits on something slow, such as a model call or a server, takes `timeoutMs`. Past it, the event goes on as if the hook were absent, and cmod logs `<mod>: the <event> hook passed its <n> s timeout`. Claude Code also gives a hook's own code 10 seconds, and the time a hook waits on a `mod` call does not count toward those 10 seconds, so `timeoutMs` is the limit on a slow call. `timeoutMs` is a whole number above 0 and at most `2147483647`, and any other value stops `setup` with the fix.
+`mod.js` exports each hook's name as a constant, such as `PreToolUse`, and `mod.on` takes it: `mod.on(PreToolUse, …)`.
+
+A matcher runs the listener only for the inputs it matches. It is a partial copy of the input: a key it names must match, and a key it leaves out matches anything. A string matches the same string, a `RegExp` matches the text it tests true on, and a list matches any one of its items.
 
 ```ts
-mod.on('Stop', async ({ last_assistant_message }) => {
-  const verdict = await mod.model.complete({ model: 'haiku', prompt: `Is this reply complete? Answer yes or no.\n\n${last_assistant_message}` })
+mod.on(PostToolUse, { tool_name: /^(Edit|Write)$/ }, ({ files }) => void (mod.state.session.edited += files.changed.length))
+mod.on(PreToolUse, { tool_name: 'Bash', tool_input: { command: /^rm / } }, () => ({ decision: 'block', reason: 'Use trash instead of rm.' }))
+```
+
+A listener that waits on something slow, such as a model call or a server, takes `timeoutMs`. Past it, the hook goes on as if the listener were absent, and cmod shows the warning toast `The <hook> hook passed its <n> s timeout`. Claude Code also gives a listener's own code 10 seconds, and the time it waits on a call does not count toward those 10 seconds, so `timeoutMs` is the limit on a slow call. `timeoutMs` is a whole number above 0 and at most `2147483647`, and any other value stops `setup` with the fix.
+
+```ts
+mod.on(Stop, async ({ last_assistant_message }) => {
+  const verdict = await model.complete({ model: 'haiku', prompt: `Is this reply complete? Answer yes or no.\n\n${last_assistant_message}` })
   if (verdict.isAnswered && verdict.text.trim().toLowerCase().startsWith('no')) return { decision: 'block', reason: 'Finish the reply.' }
 }, { timeoutMs: 8000 })
 ```
 
-`HookInput<E>`, exported from `mod.js`, is the input a hook on `E` gets, for a hook that lives in a function of its own:
+`HookInput<H>`, exported from `mod.js`, is the input a listener on `H` gets, for a listener that lives in a function of its own:
 
 ```ts
-import type { HookAnswer, HookInput, Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { process, SessionStart, type HookAnswer, type HookInput } from '../node_modules/@cmodjs/core/mod.js'
 
-export async function addBranch(mod: Mod, input: HookInput<'SessionStart'>): Promise<HookAnswer | undefined> {
-  const { stdout } = await mod.process.run(['git', 'branch', '--show-current'], { cwd: input.cwd })
-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `The git branch is ${stdout.trim()}.` } }
+export async function addBranch(input: HookInput<typeof SessionStart>): Promise<HookAnswer | undefined> {
+  const { stdout } = await process.run(['git', 'branch', '--show-current'], { cwd: input.cwd })
+  return { hookSpecificOutput: { hookEventName: SessionStart, additionalContext: `The git branch is ${stdout.trim()}.` } }
 }
 ```
 
@@ -41,25 +51,25 @@ A `PreToolUse` hook runs on Claude Code's `tool.call`, before Claude Code checks
 A hook on `PermissionRequest` takes part in that check too, so a mod with one does not start without `registerPermissionCheck`.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, PreToolUse } from '../node_modules/@cmodjs/core/mod.js'
 
 export const safeDelete = defineMod({
   name: 'safe-delete',
   setup(mod) {
-    mod.on('PreToolUse', (input) => {
+    mod.on(PreToolUse, (input) => {
       const command = input.tool_input['command']
       if (input.tool_name !== 'Bash' || typeof command !== 'string' || !command.startsWith('rm ')) return
-      return { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...input.tool_input, command: command.replace(/^rm /, 'trash ') } } }
+      return { hookSpecificOutput: { hookEventName: PreToolUse, updatedInput: { ...input.tool_input, command: command.replace(/^rm /, 'trash ') } } }
     })
   },
 })
 ```
 
-## Every ModEvent
+## Every hook
 
-`ModEvent` names the 18 events a mod hooks. The input of each is the hook input a `settings.json` hook reads for that event, typed as `ClassicHookInputs['<event>']` in the `claude-code` module, with the changes this table names.
+`Hook` names the 18 hooks a mod listens to. The input of each is the input a `settings.json` hook reads, typed as `ClassicHookInputs['<hook>']` in the `claude-code` module, with the changes this table names.
 
-| Event | Input changes |
+| Hook | Input changes |
 | --- | --- |
 | `SessionStart` | none |
 | `SessionEnd` | none |
@@ -80,13 +90,13 @@ export const safeDelete = defineMod({
 | `CwdChanged` | no `transcript_path` |
 | `FileChanged` | none |
 
-cmod raises `CwdChanged` itself, never Claude Code. It raises it when the working folder changes: after `/cd`, after a Bash or PowerShell call, and at a prompt. `mod.cwd` and `mod.projectRoot` already hold the new folder when the hook runs.
+cmod raises `CwdChanged` itself, never Claude Code. It raises it when the working folder changes: after `/cd`, after a Bash or PowerShell call, and at a prompt. `sessions.current.cwd` and `sessions.current.project` already hold the new folder when the listener runs.
 
 Claude Code raises `FileChanged` when a file it watches changes, with the file's `file_path` and `event`: `'change'`, `'add'`, or `'unlink'`. It watches the paths a `SessionStart` hook answers in `watchPaths`:
 
 ```ts
-mod.on('SessionStart', () => ({ hookSpecificOutput: { hookEventName: 'SessionStart', watchPaths: [`${mod.dataFolder}/history`] } }))
-mod.on('FileChanged', ({ file_path, event }) => mod.ui.toast(`${file_path}: ${event}`))
+mod.on(SessionStart, () => ({ hookSpecificOutput: { hookEventName: SessionStart, watchPaths: [`${mod.dataFolder}/history`] } }))
+mod.on(FileChanged, ({ file_path, event }) => mod.ui.toast(`${file_path}: ${event}`))
 ```
 
 ## files: what a tool call reads and changes
@@ -118,13 +128,14 @@ extname(path): string        relative(from, to): string   isAbsolute(path): bool
 - `folder` is where a command runs, as the line wrote it: `''` for the folder the line starts in, `src` after `cd src`, `/tmp` after `cd /tmp`, and `~/p` after `cd ~/p`. `resolve(input.cwd, folder)` makes it absolute.
 - `input` is the index in `commands` of the command whose output this one reads through `|` or `|&`, and is absent for a command that reads no pipe. `trace read a.ts | head -5` gives `head` the `input` `0`. A wrapper such as `timeout 5 trace read a.ts` writes the output of the command it runs, so `input` names `trace`, not `timeout`.
 - `reads`, `writes`, and `fetches` are the paths and URLs the commands name, as written. A path that holds a shell expansion makes `isFullyParsed` false, and so does a line the parser cannot read.
-- `resolve` has no working folder to start from in Claude Code's hooks, so pass an absolute folder first, such as `resolve(mod.cwd, path)`.
+- `resolve` has no working folder to start from in Claude Code's hooks, so pass an absolute folder first, such as `resolve(sessions.current.cwd, path)`.
 
 ```ts
 import { basename, resolve } from '../node_modules/@cmodjs/core/path.js'
 import { parseShell } from '../node_modules/@cmodjs/core/shell.js'
+import { PreToolUse } from '../node_modules/@cmodjs/core/mod.js'
 
-mod.on('PreToolUse', (input) => {
+mod.on(PreToolUse, (input) => {
   if (input.tool_name !== 'Bash') return
   for (const { argv, folder } of parseShell(String(input.tool_input['command'])).commands) {
     if (basename(argv[0]) === 'trace') mod.ui.toast(`trace runs in ${resolve(input.cwd, folder)}`)
@@ -145,7 +156,7 @@ type HookAnswer = {
   decision?: 'block'
   reason?: string
   hookSpecificOutput?: {
-    hookEventName?: ModEvent
+    hookEventName?: Hook
     additionalContext?: string
     permissionDecision?: 'allow' | 'deny' | 'ask'
     permissionDecisionReason?: string
@@ -193,13 +204,13 @@ Every mod's hooks and Claude Code's own `settings.json` hooks answer the same ev
 - For every other field, the mod's answer replaces the answer of the hooks beneath it.
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, Stop } from '../node_modules/@cmodjs/core/mod.js'
 
 export const keepGoing = defineMod({
   name: 'keep-going',
   state: { session: { hasCheckedTests: false } },
   setup(mod) {
-    mod.on('Stop', () => {
+    mod.on(Stop, () => {
       if (mod.state.session.hasCheckedTests) return
       mod.state.session.hasCheckedTests = true
       return { decision: 'block', reason: 'Run the tests before you stop.' }
@@ -214,7 +225,7 @@ A hook that throws, rejects, or answers a field its event does not read fails:
 
 - On `PreToolUse` the call is denied with `<mod>: the PreToolUse hook failed: <error>`.
 - On `PermissionRequest` the request is denied with `<mod>: the PermissionRequest hook failed: <error>`.
-- On every other event cmod logs `<mod>: the <event> hook failed: <error>`, and the event goes on as if the hook answered nothing.
+- On every other hook cmod shows the error toast `The <hook> hook failed` with the error under it, and the hook goes on as if the listener answered nothing.
 
 ## The first SessionStart
 

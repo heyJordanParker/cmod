@@ -195,7 +195,7 @@ test('the CLI and the SDK hash a mod with a nested setup/lib and a symbolic link
   await writeFiles(root, { 'setup/lib/common.sh': 'echo safe\n', 'setup/lib/shell/zsh.sh': 'echo zsh\n', 'shared/aliases.sh': 'echo aliases\n' })
   await symlink('../../shared/aliases.sh', join(root, 'setup/lib/aliases.sh'))
   const asked = parseEvent((await cmod(home, 'setup', root, '--events')).stdout.trim())
-  if (asked.kind !== 'needs-consent') throw new Error(`cmod setup printed ${asked.kind}, not needs-consent`)
+  if (asked.type !== 'needs-consent') throw new Error(`cmod setup printed ${asked.type}, not needs-consent`)
   expect((await cmod(home, 'setup', root, '--events', '--consent', asked.sha256)).exitCode).toBe(0)
   const { readPlugin } = await import(coreLifecycle)
 
@@ -350,10 +350,10 @@ test('cmod permission turns a permission the mod lists off and on, and refuses o
   expect(await cmod(home, 'permission', 'ci-watch', 'network', 'api.github.com', 'on')).toMatchObject({ stdout: 'Turned on for ci-watch: Connect to api.github.com\n', exitCode: 0 })
   expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'prompt', 'network:api.github.com'] })
 
-  const refused = await cmod(home, 'permission', 'ci-watch', 'agents', 'on')
+  const refused = await cmod(home, 'permission', 'ci-watch', 'tasks', 'on')
 
   expect(refused.exitCode).toBe(1)
-  expect(refused.stderr).toBe('cmod permission: ci-watch does not list agents in its package.json "cmod.permissions", so there is nothing to turn on. It lists: prompt, network:api.github.com.\n')
+  expect(refused.stderr).toBe('cmod permission: ci-watch does not list tasks in its package.json "cmod.permissions", so there is nothing to turn on. It lists: prompt, network:api.github.com.\n')
   expect((await cmod(home, 'permission', 'ci-watch', 'network', 'on')).stderr).toBe('cmod permission: network takes a value, such as cmod permission ci-watch network api.github.com on.\n')
 })
 
@@ -1590,6 +1590,35 @@ test('setup links a program version already in the store, such as one the cmod b
 
   expect(result.stdout).toBe('progress 2 3 Linking hello\nprogress 3 3 hello 0.2.0 is installed\nprogress 4 5 Adding the alias\nprogress 5 5 Finishing\ndone hello-mod 0.2.0\n')
   expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('placed by the bootstrap\n')
+})
+
+test('a linked mod whose version moved past its last release builds its program from the checkout instead of downloading it', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
+  const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
+  const build = `mkdir -p dist && printf '#!/bin/sh\\necho hello from the checkout\\n' > dist/hello-${platform}`
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0', repository: `${server.url.origin}/owner/hello-mod` }),
+    'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
+  })
+  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: root } }) })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toBe(
+    [
+      'progress 0 3 Building hello',
+      `log Built hello: hello-${platform}`,
+      'progress 2 3 Linking hello',
+      'progress 3 3 hello 0.3.0 is installed',
+      'progress 4 5 Adding the alias',
+      'progress 5 5 Finishing',
+      'done hello-mod 0.3.0',
+      '',
+    ].join('\n'),
+  )
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.3.0/hello'))
+  expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello from the checkout\n')
 })
 
 test('teardown --events prints missing for a plugin with no record, deletes its data folder, and exits 0', async () => {

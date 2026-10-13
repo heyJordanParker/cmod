@@ -2,7 +2,7 @@ import type { ElementTable, RenderElement, RenderPropsOf, Timer } from 'claude-c
 import type { Mod, Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
 import { Box, Button, drawWith, Text } from '../ui/elements.js'
 import { coreVersion } from '../records.js'
-import { messageOf } from '../utils/text.js'
+import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 
 export type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
@@ -215,8 +215,4 @@ function describe(error: unknown): string {
     if (!messages.some((earlier) => earlier.includes(text) || text.includes(earlier))) messages.push(text)
   }
   return messages.join('\n')
-}
-
-function firstLine(text: string): string {
-  return text.split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
 }

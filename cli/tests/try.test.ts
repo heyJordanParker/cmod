@@ -85,12 +85,48 @@ test('try prints each step for a mod with no steps, and passes the arguments aft
       '✔ Installed cmod@cmod into Claude Code',
       'Installing demo…',
       '✔ demo 0.1.0 is ready',
-      `claude --plugin-dir ${root} -p hello`,
+      'claude -p hello',
       'Uninstalling demo…',
       '✔ Removed what cmod set up for demo',
       '',
     ].join('\n'),
   )
+})
+
+test('try --home ~ links each mod into your settings for the session and unlinks only what it linked', async () => {
+  const home = await temporaryHome()
+  const tried = join(home, 'demo')
+  const linked = join(home, 'Developer/tracer')
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering(cmodPluginListed, `cat "$HOME/.claude/settings.json" > "${home}/session-settings"`),
+    'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'Developer/tracer/.claude-plugin/plugin.json': JSON.stringify({ name: 'tracer', version: '0.5.0' }),
+    '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/Developer/tracer' } }),
+  })
+
+  const result = await cmod(home, 'try', '--home', '~', tried, linked)
+
+  expect(result.exitCode).toBe(0)
+  expect(JSON.parse(await readFile(join(home, 'session-settings'), 'utf8')).env.CLAUDE_CODE_PLUGIN_DIRS).toBe('~/Developer/tracer:~/demo')
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8')).env.CLAUDE_CODE_PLUGIN_DIRS).toBe('~/Developer/tracer')
+})
+
+test('try --option sets the option under the id Claude Code lists for the linked folder', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  const listed = `[${JSON.stringify(cmodPluginListed[0])},{"id":"demo@inline","version":"0.1.0","scope":"session","enabled":true,"installPath":"${root}"}]`
+  const claude = claudeAnswering(cmodPluginListed, 'true')
+    .replace(/  "plugin list --json"\) echo '.*' ;;/, `  "plugin list --json")\n    if grep -q '${root}' "$HOME/.claude/settings.json" 2>/dev/null; then echo '${listed}'; else echo '${JSON.stringify(cmodPluginListed)}'; fi ;;`)
+    .replace('  "plugin "*) exit 1 ;;', `  "plugin configure demo@inline --values-stdin --json") cat > "${home}/configured" ;;\n  "plugin "*) exit 1 ;;`)
+  await writeFiles(home, {
+    'bin/claude': claude,
+    'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', userConfig: { branch: { type: 'string', title: 'Branch', description: '' } } }),
+  })
+
+  const result = await cmod(home, 'try', root, '--option', 'branch=main')
+
+  expect(result.exitCode).toBe(0)
+  expect(JSON.parse(await readFile(join(home, 'configured'), 'utf8'))).toEqual({ branch: 'main' })
 })
 
 const notesMod = (home: string) => ({
@@ -122,7 +158,7 @@ test('cmod try runs several mods in a new home that it deletes after the session
   expect(result.exitCode).toBe(0)
   expect(await sessionHome()).not.toBe(home)
   expect(existsSync(await sessionHome())).toBe(false)
-  expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe(`--plugin-dir ${join(home, 'notes')} --plugin-dir ${join(home, 'modes')} -p hello\n`)
+  expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe('-p hello\n')
   expect(await readFile(join(home, 'session-records'), 'utf8')).toBe('modes.json\nnotes.json\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   expect(JSON.parse(await readFile(join(home, 'session-keys'), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:mode' } }] })
@@ -173,7 +209,7 @@ echo "$ANTHROPIC_CONFIG_DIR $CLAUDE_SECURESTORAGE_CONFIG_DIR" > "${home}/session
 
   expect(result.exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(home, 'session-settings'), 'utf8'))).toEqual({
-    env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HTTPS_PROXY: 'http://proxy:3128' },
+    env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HTTPS_PROXY: 'http://proxy:3128', CLAUDE_CODE_PLUGIN_DIRS: join(home, 'notes') },
     apiKeyHelper: `${home}/bin/key.sh`,
     forceLoginMethod: 'claudeai',
     permissions: { deny: ['Read(./.env)'] },
@@ -208,7 +244,7 @@ test('cmod try loads a fresh cmod new mod in a home without the cmod plugin', as
 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(
-    `plugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n--plugin-dir ${root}\n`,
+    'plugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n\n',
   )
 }, 15_000)
 
@@ -272,7 +308,7 @@ test('cmod try starts no session and tears nothing down when the mod is not set 
   const result = await cmod(home, 'try', '--home', '~', root)
 
   expect(result.exitCode).toBe(10)
-  expect(result.stdout).not.toContain('claude --plugin-dir')
+  expect(existsSync(join(home, 'claude-sessions'))).toBe(false)
   expect(result.stdout).not.toContain('tear down')
 })
 
@@ -285,8 +321,8 @@ test('Ctrl+C before the session starts skips the session and sets nothing up', a
 echo "$*" >> "$HOME/claude-calls"
 case "$*" in
   "plugin list --json") kill -INT $PPID; sleep 1; echo '${JSON.stringify(cmodPluginListed)}' ;;
-  "--plugin-dir "*) ;;
-  *) exit 1 ;;
+  "plugin "*) exit 1 ;;
+  *) echo "$*" >> "$HOME/claude-sessions" ;;
 esac
 `,
   })
@@ -296,7 +332,7 @@ esac
   const result = await cmod(home, 'try', '--home', '~', root, '--yes')
 
   expect(result.exitCode).toBe(130)
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(existsSync(join(home, 'claude-sessions'))).toBe(false)
   expect(existsSync(join(store, 'records/hello-mod.json'))).toBe(false)
   expect(existsSync(join(store, 'data/hello-mod'))).toBe(false)
   expect(await approvals(home)).toEqual({})
@@ -338,7 +374,7 @@ test('a signal to the process group during the install step of cmod try leaves n
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled on SIGINT. The install step of hello-mod exited 130.')
   expect(result.output).not.toContain('Fix the install step')
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(existsSync(join(home, 'claude-sessions'))).toBe(false)
   expect(leftovers(home)).toEqual([])
   expect(await approvals(home)).toEqual({})
 })
@@ -353,7 +389,7 @@ test('a signal to cmod try during the install step skips the session and tears t
   const result = await cmod(home, 'try', '--home', '~', root, '--yes')
 
   expect(result.exitCode).toBe(129)
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(existsSync(join(home, 'claude-sessions'))).toBe(false)
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   expect(leftovers(home)).toEqual([])
   expect(await approvals(home)).toEqual({})
@@ -370,7 +406,7 @@ test('a throw after the program is linked in cmod try removes the program', asyn
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toStartWith('cmod try: ')
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('--plugin-dir')
+  expect(existsSync(join(home, 'claude-sessions'))).toBe(false)
   expect(leftovers(home)).toEqual([])
   expect(await approvals(home)).toEqual({})
 })
@@ -417,7 +453,7 @@ test('a failed install in cmod try leaves no approval or data', async () => {
   const result = await cmod(home, 'try', '--home', '~', root, '--yes')
 
   expect(result.exitCode).toBe(1)
-  expect(result.stdout).not.toContain('claude --plugin-dir')
+  expect(existsSync(join(home, 'claude-sessions'))).toBe(false)
   expect(result.stdout).not.toContain('tear down')
   for (const path of [join(store, 'data/hello-mod'), join(store, 'records/hello-mod.json'), join(home, '.local/bin/hello')]) {
     expect({ path, exists: existsSync(path) }).toEqual({ path, exists: false })

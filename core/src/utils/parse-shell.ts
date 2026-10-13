@@ -18,7 +18,7 @@ type Scan = { text: string; markers: Marker[]; end: number }
 type Redirect = { operator: string; target: Word }
 type Pipe = { writer: number | undefined }
 type Command = { words: Word[]; redirects: Redirect[]; pipe: Pipe | undefined }
-type Stdin = { kind: 'text'; text: string } | { kind: 'pipe' }
+type Stdin = { type: 'text'; text: string } | { type: 'pipe' }
 type Access = 'reads' | 'writes'
 type OptionSpec = { valued?: string; optional?: string; longValued?: readonly string[] }
 type Option = { name: string; value: Word | undefined }
@@ -547,7 +547,7 @@ function finish(command: Command, operator: string, folder: string, result: Pars
   const [first, ...args] = words
   if (first === undefined || first.text === 'for' || first.text === 'select') return folder
   const here = command.redirects.findLast((redirect) => redirect.operator === '<<<')
-  const stdin: Stdin | undefined = here !== undefined ? { kind: 'text', text: here.target.text } : command.pipe !== undefined ? { kind: 'pipe' } : undefined
+  const stdin: Stdin | undefined = here !== undefined ? { type: 'text', text: here.target.text } : command.pipe !== undefined ? { type: 'pipe' } : undefined
   const reader = result.commands.length
   const changed = addCommand(first, args, folder, stdin, result)
   const read = result.commands[reader]
@@ -630,7 +630,7 @@ function findStarts(args: Word[]): Word[] {
 
 function addWrapper(first: Word, program: string, args: Word[], folder: string, stdin: Stdin | undefined, result: ParsedShell): void {
   const wrapper = wrappers.get(program)!
-  if (program === 'xargs' && stdin?.kind !== 'text') result.isFullyParsed = false
+  if (program === 'xargs' && stdin?.type !== 'text') result.isFullyParsed = false
   const { options, operands } = readArguments(args, wrapper, true)
   let start = args.length - operands.length
   if (options.some((option) => wrapper.stops?.includes(option.name) === true)) start = args.length
@@ -670,8 +670,8 @@ function addEffects(program: string, args: Word[], flags: string[], folder: stri
   else if (inlineFlags !== undefined) {
     if (program === 'perl' && readArguments(args, perl, false).options.some((option) => option.name === '-i')) addFileArguments(perl, args, folder, result)
     const script = args.find((word) => !word.text.startsWith('-') || word.text === '-')
-    const readsCodeFromPipe = stdin?.kind === 'pipe' && (script === undefined || script.text === '-')
-    if (flags.some((flag) => inlineFlags.includes(flag)) || stdin?.kind === 'text' || readsCodeFromPipe) result.isFullyParsed = false
+    const readsCodeFromPipe = stdin?.type === 'pipe' && (script === undefined || script.text === '-')
+    if (flags.some((flag) => inlineFlags.includes(flag)) || stdin?.type === 'text' || readsCodeFromPipe) result.isFullyParsed = false
   }
 }
 
@@ -702,8 +702,8 @@ function addFetches(fetcher: OptionSpec, args: Word[], result: ParsedShell): voi
 }
 
 function addStdinCode(stdin: Stdin | undefined, folder: string, result: ParsedShell): void {
-  if (stdin?.kind === 'text') parseLine(stdin.text, folder, result)
-  if (stdin?.kind === 'pipe') result.isFullyParsed = false
+  if (stdin?.type === 'text') parseLine(stdin.text, folder, result)
+  if (stdin?.type === 'pipe') result.isFullyParsed = false
 }
 
 function addCopy(program: CopyProgram, args: Word[], folder: string, result: ParsedShell): void {
