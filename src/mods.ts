@@ -197,7 +197,7 @@ export function modsPanel<State extends ModsState>(mod: Mod<State>) {
     render(current) {
       const { selected, tab, notice, removing, views } = current.state.memory
       const view = views.find((each) => each.name === selected) ?? views[0]
-      if (view === undefined) return Text({ dimColor: true, children: notice ?? 'No mod is set up yet. Run cmod install <owner/repo> to add one.' })
+      if (view === undefined) return Text({ dimColor: true, children: notice ?? 'No mod is set up yet. Add one with /plugin.' })
       const shownTab = tabsOf(view).some(({ key }) => key === tab) ? tab : 'options'
       const list = Box({
         flexDirection: 'column',

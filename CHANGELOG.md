@@ -4,6 +4,39 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-14
+
+### Added
+- `before` changes or refuses what is about to happen: rewrite or refuse a prompt, a slash command, or another session's message, rewrite a note, a Skill, a reply, a tool result, or a notice, leave out a `CLAUDE.md` file, rewrite, answer, or refuse a tool call, pick the model a task runs on or refuse it, and keep a task, a turn, or a context from ending.
+- `sessions`, every session, its goal, a task, a context, and a turn each have `search`, `on`, and `before`, and each hears what happens inside it, so `turn.on(Reply, …)` hears that turn's replies and `sessions.on(Prompt, …)` hears every running session's prompts.
+- Every session action works on every running session, not only the current one: `send`, `startTask`, the new `callTool`, `usage`, and the new `clients`. `usage` reads an ended session's model and tokens from its transcript.
+- A task's `owner` is the session doing its work, with its own goal, turns, messages, `agentType`, and `model`. A session has `agentType`, `context()`, and `turn()`.
+- `UsageChange` hears a session's new usage.
+- A mod's `rules/` folder of Claude Code rules applies while the mod is on and has the `prompt` permission, and stays out of a project that turned the mod off. A rule that applies everywhere reaches a running session as a note, a rule taken out is withdrawn by a note, and the Installed toast lists the rules.
+- All 33 of Claude Code's hooks are constants, among them `MessageDisplay`, `WorktreeCreate`, `PreModelSwitch`, and `TodoCreated` and `TodoCompleted` for its todo checklist. `HookAnswer` takes `displayContent` and `worktreePath`.
+- A pane's handle says whether the pane `isShown` and `isFocused`.
+- `settings.list()` lists every `/config` row.
+- `fs` reads `$HOME` and `$CLAUDE_CONFIG_DIR` paths.
+- `cmod history search --session` searches one conversation, or one task, turn, context, or goal in it. `cmod history usage` prints a session's model and tokens, and `--task` reads a task's owner like a session. `cmod rules` links the mods' rules. `cmod history follow --running` follows every running session of the project, and each one that starts later.
+- `testMod`'s `startTask` takes a `parent`, to start a subtask.
+- Every failure toast has `Retry` where running the step again can work, `Report`, and `Hide`. `Report` opens its choices inside the toast, with the keys on the first: ask Claude to report the failure to the mod's author, open a filled-in GitHub issue or email, or copy the error. `Hide` keeps the same failure hidden in later sessions.
+- A failed install that waiting can fix retries in the background, from 2 seconds up to every 128 seconds, and clears its toast once it works: a linked checkout's failed build, once the checkout changed, and a release download that got 404 or no answer, as right after a release is published.
+- A mod the person declined has an `Install` button that asks again.
+
+### Changed
+- No message sends the person to a terminal. A call to a mod that is not set up says `<mod> is not set up. Its toast says why.`, and one to a mod that is not installed says `<mod> is not installed. Add it with /plugin.`
+- `cmod publish` creates the GitHub release with every file before it pushes `marketplace.json`, so no update reaches a release without its files.
+- One compaction moves a context once, for the session and for each task, and `ContextEnd` reaches the mods when a session compacts.
+- A guard registered by a session that ended without closing, such as a crashed one, no longer fails every later prompt. It is cleared.
+- Each mod's install and consent popup is its own, so one mod no longer draws another mod's popup.
+- A background install retry keeps the consent the person gave, instead of asking again.
+- A task's `agentType` and `model` moved to its `owner`.
+- A task's messages name their own turn.
+- A matcher's `RegExp` no longer matches a key the payload lacks.
+- The cmod plugin asks for the `prompt` permission, to add the notes of the mods' rules.
+- The conversation index is `history-5.sqlite`, rebuilt from the transcripts on first use.
+- `sessions.on` and `sessions.before` reach every running session of the current project, including those that start later, and no other project's.
+
 ## [1.0.0] - 2026-10-13
 
 ### Added
@@ -32,7 +65,10 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 - The cmod plugin indexes conversations only while a mod holds the `conversation` permission, and turning that permission off stops the mod's `session.on` listeners from the next prompt.
 
 ### Removed
-- `mod.claude`, `mod.history`, `mod.session`, `mod.fs`, `mod.process`, `mod.http`, `mod.model`, `mod.metadata`, `mod.projectRoot`, and `mod.cwd`. Import the matching name from `mod.js`, and read `sessions.current.project` and `sessions.current.cwd` for the folders.
+- `mod.fs`, `mod.process`, `mod.http`, `mod.model`, and `mod.metadata`. Import `fs`, `process`, `http`, `model`, and `metadata` from `mod.js`.
+- `mod.history` and `mod.session`. Read `sessions` from `mod.js`, and `sessions.current` for the session the mod runs in.
+- `mod.projectRoot` and `mod.cwd`. Read `sessions.current.project` and `sessions.current.cwd`.
+- `mod.claude`, Claude Code's raw API. Each use has its own replacement: a slash command is `mod.use(slashCommand(…))`, which works after setup too, `ui.scroll` is `mod.ui.scroll`, `ui.log` is `mod.log`, and `session.id()` is `sessions.current.id`.
 - `ui/slots.js`. Use the place constants from `mod.js` and the markdown places from `ui/markdown.js`.
 - `mod.ui.progress`, `ProgressStep`, and `ProgressBar`. Use a loading toast and `Progress`.
 - The Breaking changes list `cmod publish` built from commit messages. The changelog section replaces it.
