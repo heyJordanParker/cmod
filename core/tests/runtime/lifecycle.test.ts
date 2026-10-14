@@ -215,6 +215,25 @@ test('a call to a mod whose install was declined fails and points at its toast',
   })
 })
 
+test('while the installer waits for the answer, its toast stays still, so no redraw takes a press away', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
+  const spinners: { isRunning: boolean }[] = []
+  fake.fakes.clock.every = () => {
+    const spinner = { isRunning: true }
+    spinners.push(spinner)
+    return { cancel: () => void (spinner.isRunning = false) }
+  }
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  void lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([{ type: 'info', message: 'Installing', description: 'Waiting for your answer' }])
+  expect(spinners.filter((spinner) => spinner.isRunning)).toEqual([])
+})
+
 test('needs-consent opens the installer focused, and Accept runs the setup again with the hash', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   const spawned: ProcessSpawnRequest[] = []
@@ -363,6 +382,61 @@ test('Retry on a failed install runs cmod setup again, and a done setup activate
   expect(lifecycle.failure).toBeUndefined()
   expect(lifecycle.phase).toBe('active')
   expect(runs).toEqual(['setup', 'PostToolUse'])
+})
+
+test('Retry keeps the failure toast in place, with its progress where its buttons were, until the try ends', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  const second = controlledStream()
+  const streams = [finished(['failed 1\tdisk full'], 1), second.stream]
+  fake.fakes.process.spawn = () => streams.shift() ?? finished([], 0)
+  const lifecycle = createLifecycle(trackedMod().definition)
+  const rows = async () => rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  const failed = await rows()
+  const retry = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Retry')
+  if (retry === undefined) throw new Error('The failed install draws no Retry button.')
+
+  void (retry['onPress'] as () => unknown)()
+  await fake.settle()
+  second.print('progress 1 4 Building trace')
+  await fake.settle()
+  const trying = await rows()
+  second.print('failed 1\tdisk full')
+  second.exit(1)
+  await fake.settle()
+
+  expect(trying.length).toBe(failed.length)
+  expect(trying[1]?.slice(1)).toBe(failed[1]?.slice(1))
+  expect(trying.at(-1)).toMatch(/Trying again: .* Building trace/)
+  expect(await rows()).toEqual(failed)
+})
+
+test('Retry on a failure with a description shows its progress in the description, and keeps its buttons', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  fake.fakes.clock.after = () => ({ cancel: () => undefined })
+  const second = controlledStream()
+  const streams = [finished(['failed 1\tdisk full', 'retries later'], 1), second.stream]
+  fake.fakes.process.spawn = () => streams.shift() ?? finished([], 0)
+  const lifecycle = createLifecycle(trackedMod().definition)
+  const rows = async () => rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  const failed = await rows()
+  const retry = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Retry')
+  if (retry === undefined) throw new Error('The failed install draws no Retry button.')
+
+  void (retry['onPress'] as () => unknown)()
+  await fake.settle()
+  const trying = await rows()
+  second.exit(0)
+  await fake.settle()
+
+  expect(failed.slice(2)).toEqual(['                Trying again in 2 s.', '                Retry  Report  Hide'])
+  expect(trying.slice(2)).toEqual(['                Trying again: Installing', '                Retry  Report  Hide'])
+  expect(trying[1]?.slice(1)).toBe(failed[1]?.slice(1))
 })
 
 const changelog = `# Changelog

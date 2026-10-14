@@ -32,6 +32,7 @@ type Entry = {
   readonly hides?: string
   isOpen: boolean
   reporting?: Reporting | undefined
+  trying?: string | RenderElement | undefined
   timer: Timer | undefined
 }
 
@@ -71,7 +72,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   let bandId: string | undefined
 
   const changed = () => {
-    const isLoading = [...entries.values()].some((entry) => entry.type === 'loading')
+    const isLoading = [...entries.values()].some((entry) => entry.type === 'loading' || entry.trying !== undefined)
     if (isLoading && spinning === undefined) {
       spinning = claude.clock.every(spinnerMs, () => {
         frame += 1
@@ -113,6 +114,11 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   const put = (type: ToastType, message: string, options: ToastOptions, actions: readonly Action[], hides?: string): ToastId => {
     const id = options.id ?? (lastId += 1)
     const previous = entries.get(id)
+    if (previous?.trying !== undefined && type === 'loading') {
+      previous.trying = options.description ?? message
+      changed()
+      return id
+    }
     if (previous !== undefined) disarm(previous)
     const reporting = hides !== undefined && previous?.hides === hides ? previous.reporting : undefined
     const entry: Entry = { id, type, message, options, actions, ...(hides === undefined ? {} : { hides }), isOpen: previous?.isOpen ?? false, reporting, timer: undefined }
@@ -192,7 +198,21 @@ export function createToaster(claude: Claude, name: string, version: () => strin
       const focused = await claude.ui.focus({ requestId: bandId, key: `toast:${id}:ask-claude` })
       if ('deny' in focused) claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: 'debug' })
     }
-    const actions = [...(retry === undefined ? [] : [{ label: 'Retry', onClick: retry }]), { label: 'Report', onClick: startReporting }]
+    const tryAgain = async () => {
+      const shown = entries.get(id)
+      if (shown === undefined || retry === undefined || shown.trying !== undefined) return
+      shown.trying = 'Starting'
+      changed()
+      try {
+        await retry()
+      } finally {
+        if (entries.get(id) === shown) {
+          shown.trying = undefined
+          changed()
+        }
+      }
+    }
+    const actions = [...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
     return put('error', message, { id, ...(description === undefined ? {} : { description }), duration: Infinity }, actions, hides)
   }
 
@@ -205,14 +225,16 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   const row = (entry: Entry): RenderElement => {
     const { description } = entry.options
     const isText = typeof description === 'string'
-    const icon = entry.type === 'loading' ? { glyph: spinner[frame % spinner.length] as string, color: 'claude' } : icons[entry.type]
+    const icon = entry.type === 'loading' || entry.trying !== undefined ? { glyph: spinner[frame % spinner.length] as string, color: 'claude' } : icons[entry.type]
     const message = isText ? Button({ plain: true, key: `toast:${entry.id}:open`, label: entry.message, onPress: toggle(entry) }) : Text({ children: entry.message })
     const details = !isText ? description : Text({ dimColor: true, wrap: entry.isOpen ? 'wrap' : 'truncate-end', children: entry.isOpen ? description : firstLine(description) })
     const fixed = (child: RenderElement) => Box({ flexShrink: 0, children: child })
     const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? '✕' : 'Hide', onPress: () => hide(entry) })
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? 'action' : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }))
-    const text = details === undefined ? [message] : [message, details]
-    const under = entry.reporting === undefined ? [Box({ gap: 2, flexWrap: 'wrap', children: [...actions, close] })] : reportChoices(entry, entry.reporting)
+    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, close] })
+    const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: 'Trying again:' }), typeof entry.trying === 'string' ? Text({ dimColor: true, wrap: 'truncate-end', children: entry.trying }) : entry.trying] })
+    const text = details === undefined ? [message] : [message, trying ?? details]
+    const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting)
     return Box({
       gap: 2,
       children: [

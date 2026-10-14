@@ -99,6 +99,21 @@ test('link asks the build for this machine alone in CMOD_MACHINES', async () => 
   expect(await readdir(join(checkout, 'cli/dist'))).toEqual([`hello-${process.platform}-${process.arch}`])
 })
 
+test("two builds of one checkout take turns, so one never clears the other's output", async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer', 'hello-mod')
+  const build = 'echo start >> "$HOME/builds" && rm -rf dist && mkdir dist && sleep 1 && for machine in $CMOD_MACHINES; do printf "#!/bin/sh\\necho hello\\n" > dist/hello-$machine; done && echo end >> "$HOME/builds"'
+  await writeFiles(checkout, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
+    'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
+  })
+
+  const linked = await Promise.all([cmod(home, 'link', checkout), cmod(home, 'link', checkout)])
+
+  expect(linked.map((each) => each.exitCode)).toEqual([0, 0])
+  expect(await readFile(join(home, 'builds'), 'utf8')).toBe('start\nend\nstart\nend\n')
+})
+
 test('link names a Rust program by its one [[bin]], not by its package', async () => {
   const home = await temporaryHome()
   const checkout = join(home, 'Developer', 'greet-mod')

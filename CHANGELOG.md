@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-14
+
+### Fixed
+- `Retry` keeps the failure toast where it is while it runs. The progress shows in place of the toast's description, or of its buttons when it has none, so nothing moves until the try ends.
+- While a mod's install popup waits for the person's answer, its toast no longer spins. Each spin redrew the popup, and a press that landed during a redraw was lost.
+- Two builds of one checkout take turns, so a linked mod's build no longer clears the output of a `cmod publish` running at the same time.
+
 ## [1.5.0] - 2026-10-14
 
 ### Added

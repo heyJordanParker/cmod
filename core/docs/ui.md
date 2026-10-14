@@ -411,7 +411,7 @@ export const indexer = defineMod({
 
 An error cmod catches for a mod, such as a hook that throws, shows as an error toast that stays, with its buttons on a line under the message:
 
-- `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped.
+- `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped. The toast stays where it is, and the step's progress shows in place of its description, or of its buttons when it has none, until the try ends.
 - `Report` replaces the toast's buttons with the ways to tell the mod's author, with the keys on the first, and `Back` returns to the buttons. The same failure happening again keeps them open. `Ask Claude to report it` sends this session a prompt to file the report with the person's own tools, and Claude Code asks before each step. `Report it on GitHub (opens your browser)` opens a filled-in issue on the mod's `supportUrl` or `repository` in its `plugin.json`, or `Email the author (opens your mail app)` writes to its `author.email`. `Copy the error` copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack.
 - `Hide` closes the toast and keeps the same failure hidden in later sessions. A new version of the mod, or a different failure, shows again.
 

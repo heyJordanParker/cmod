@@ -367,7 +367,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       claude().ui.log(`${name} waits for consent to run ${event.install}. Run cmod install ${name} in a terminal.`)
       return
     }
-    installing('Waiting for your answer')
+    runtime?.toaster.toast.info('Installing', { id: installId, description: 'Waiting for your answer', duration: Infinity })
     const updates = await updatesToShow().catch((error: unknown) => {
       toastFailure({ id: 'cmod:updates', message: 'Could not read whether its marketplace updates automatically', error })
       return undefined

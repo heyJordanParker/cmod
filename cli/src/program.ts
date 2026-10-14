@@ -8,7 +8,7 @@ import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { isLinked } from './settings.js'
-import { storePath } from './store.js'
+import { storePath, takeLock } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
 
@@ -82,6 +82,15 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
 }
 
 export async function buildProgram(program: Program, wanted: readonly string[], progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<string[]> {
+  const lock = await takeLock(storePath('builds', `${Bun.hash(resolve(program.folder)).toString(36)}.lock`))
+  try {
+    return await runBuild(program, wanted, progress, environment)
+  } finally {
+    await lock[Symbol.asyncDispose]()
+  }
+}
+
+async function runBuild(program: Program, wanted: readonly string[], progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<string[]> {
   const heading = `Building ${program.name}`
   progress.step(heading)
   const startedAt = Math.floor(Date.now() / 1000) * 1000
