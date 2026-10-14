@@ -227,6 +227,28 @@ test("a changed tool input without tools runs the call as Claude asked, and the 
   ])
 })
 
+test("the cmod plugin passes on a mod's changed tool input, which that mod's own grant already covers", async () => {
+  const seen: unknown[] = []
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'cmod',
+      setup(mod) {
+        engineOf(mod).router.add('tool.call', (e, next) => next({ ...e, command: 'echo safe' } as typeof e))
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, async () => ({ name: 'cmod', root: '/plugins/cmod', version: '1.5.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: ['conversation', 'prompt'] }))
+
+  await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 't1', command: 'rm -rf build' } as never, async (e: unknown) => {
+    seen.push(e)
+    return { result: 'ok' }
+  })
+
+  expect(seen).toEqual([{ tool: 'Bash', tool_use_id: 't1', command: 'echo safe' }])
+  expect(lifecycle.toasts.filter(({ type }) => type === 'warning')).toEqual([])
+})
+
 test('needs-consent carries the permissions the person has not granted yet, after the keys', () => {
   const event = { type: 'needs-consent', sha256: 'abc', install: './setup/install.sh', uninstall: '', keys: 'ctrl+l to /ci', permissions: ['network:api.github.com', 'prompt'] } as const
 

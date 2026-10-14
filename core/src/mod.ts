@@ -2,6 +2,7 @@ import type {
   AskOptions,
   ClassicHookInputs,
   CmodDependencies,
+  ConfigRow,
   FsStatOptions,
   HookStream,
   HttpInit,
@@ -28,11 +29,10 @@ import { Mod as modSender } from './session/context/turn/message/sender.js'
 import type { Sessions } from './session/session.js'
 import type { Pane } from './ui/define-pane.js'
 import type { Place, PlaceProps } from './ui/places.js'
+import type { Disposable } from './utils/disposable.js'
 import type { Matcher } from './utils/matcher.js'
 
-export type Disposable = {
-  dispose(): void
-}
+export type { Disposable }
 
 export type ToastId = string | number
 
@@ -63,6 +63,8 @@ export type PaneHandle = {
   close(): Promise<void>
   toggle(options?: Readonly<Pick<PaneOpenArgs, 'focus'>>): Promise<void>
   readonly isOpen: boolean
+  readonly isShown: boolean
+  readonly isFocused: boolean
 }
 
 export const SessionStart = 'SessionStart'
@@ -83,26 +85,56 @@ export const Stop = 'Stop'
 export const StopFailure = 'StopFailure'
 export const CwdChanged = 'CwdChanged'
 export const FileChanged = 'FileChanged'
+export const UserPromptExpansion = 'UserPromptExpansion'
+export const Setup = 'Setup'
+export const ConfigChange = 'ConfigChange'
+export const DirectoryAdded = 'DirectoryAdded'
+export const PreModelSwitch = 'PreModelSwitch'
+export const PostModelSwitch = 'PostModelSwitch'
+export const PostCompact = 'PostCompact'
+export const MessageDisplay = 'MessageDisplay'
+export const TodoCreated = 'TaskCreated'
+export const TodoCompleted = 'TaskCompleted'
+export const TeammateIdle = 'TeammateIdle'
+export const Elicitation = 'Elicitation'
+export const ElicitationResult = 'ElicitationResult'
+export const WorktreeCreate = 'WorktreeCreate'
+export const WorktreeRemove = 'WorktreeRemove'
 
 export const hooks = [
+  Setup,
   SessionStart,
   SessionEnd,
   UserPromptSubmit,
+  UserPromptExpansion,
   InstructionsLoaded,
+  ConfigChange,
+  DirectoryAdded,
+  PreModelSwitch,
+  PostModelSwitch,
   PreToolUse,
   PermissionRequest,
   PermissionDenied,
   PostToolUse,
   PostToolUseFailure,
   PostToolBatch,
+  MessageDisplay,
   SubagentStart,
   SubagentStop,
+  TodoCreated,
+  TodoCompleted,
+  TeammateIdle,
+  Elicitation,
+  ElicitationResult,
   Notification,
   PreCompact,
+  PostCompact,
   Stop,
   StopFailure,
   CwdChanged,
   FileChanged,
+  WorktreeCreate,
+  WorktreeRemove,
 ] as const
 
 export type Hook = (typeof hooks)[number]
@@ -129,6 +161,8 @@ export type HookAnswer = {
     updatedToolOutput?: unknown
     updatedMCPToolOutput?: unknown
     retry?: boolean
+    displayContent?: string
+    worktreePath?: string
   }
 }
 
@@ -203,9 +237,15 @@ export type SettingsFile = {
   update(values: Readonly<Record<string, unknown>>): Promise<void>
 }
 
+export type Setting = Pick<ConfigRow, 'key' | 'label' | 'kind' | 'value' | 'isLocked'> & {
+  readonly description?: string
+  readonly options?: readonly string[]
+  readonly plugin?: string
+}
+
 export type Imports = {
   readonly sessions: Sessions
-  readonly settings: { readonly user: SettingsFile; readonly project: SettingsFile; readonly local: SettingsFile }
+  readonly settings: { list(): Promise<Setting[]>; readonly user: SettingsFile; readonly project: SettingsFile; readonly local: SettingsFile }
   readonly model: { complete(request: ModelCompleteRequest, options?: ModelCompleteOptions): Promise<ModelCompleteResult> }
   readonly fs: {
     read(path: string): Promise<string>
@@ -232,9 +272,12 @@ export const sessions: Imports['sessions'] = {
   },
   list: (options) => bound().sessions.list(options),
   search: (text, options) => bound().sessions.search(text, options),
+  on: ((...args: Parameters<Imports['sessions']['on']>) => bound().sessions.on(...args)) as Imports['sessions']['on'],
+  before: ((...args: Parameters<Imports['sessions']['before']>) => bound().sessions.before(...args)) as Imports['sessions']['before'],
 }
 
 export const settings: Imports['settings'] = {
+  list: () => bound().settings.list(),
   user: { read: () => bound().settings.user.read(), update: (values) => bound().settings.user.update(values) },
   project: { read: () => bound().settings.project.read(), update: (values) => bound().settings.project.update(values) },
   local: { read: () => bound().settings.local.read(), update: (values) => bound().settings.local.update(values) },
@@ -335,7 +378,7 @@ export function defineMod<State extends StateGroups = Record<never, never>, Name
 export type { Matcher } from './utils/matcher.js'
 export type { Place, PlaceProps } from './ui/places.js'
 export { AbovePrompt, AskUserQuestion, CommandOutput, PromptHint, SessionMode, Spinner, ToolGroup, ToolProgress, TurnDuration } from './ui/places.js'
-export { Session, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type Usage } from './session/session.js'
+export { Session, UsageChange, type BeforeAnswer, type BeforeEvent, type BeforeListener, type Client, type Listener, type RecordPart, type Refusal, type SearchOptions, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from './session/session.js'
 export { ContextEnd, ContextStart, type Context } from './session/context/context.js'
 export { TurnEnd, TurnStart, type Turn } from './session/context/turn/turn.js'
 export { Message, type MessageType } from './session/context/turn/message/message.js'

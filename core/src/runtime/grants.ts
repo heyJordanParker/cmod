@@ -1,9 +1,9 @@
-import { permissionWords } from '../records.js'
+import { isObject, permissionWords } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import type { RoutedEvent } from './hooks.js'
-import { conversationMethods } from './sessions.js'
+import { actPermission, conversationMethods, isAct, toolPermission } from './sessions.js'
 
 export type Grants = {
   readonly name: string
@@ -29,10 +29,6 @@ export function programAddresses(mod: object): Set<string> {
 
 const projectSettingsFiles: readonly string[] = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json']
 
-const startsTurns: readonly string[] = ['CronCreate']
-
-const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
-
 const conversationCalls: Readonly<Record<string, string>> = {
   [conversationMethods.sessions]: 'sessions.list',
   [conversationMethods.search]: 'sessions.search',
@@ -43,7 +39,8 @@ const conversationCalls: Readonly<Record<string, string>> = {
   [conversationMethods.goal]: 'goal',
   [conversationMethods.updateGoal]: 'goal.update',
   [conversationMethods.subscribe]: 'on',
-  [conversationMethods.send]: 'send',
+  [conversationMethods.watchBefore]: 'before',
+  [conversationMethods.act]: 'act',
 }
 
 export async function checkGrant(grants: Grants, call: string, item: string | undefined): Promise<void> {
@@ -115,7 +112,9 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     cmod: {
       async call(args) {
         const named = args.to === cmodPluginName ? conversationCalls[args.method] : undefined
-        if (named !== undefined) await gate(named, args.method === conversationMethods.send ? 'prompt' : 'conversation')
+        const given = args.method === conversationMethods.act && isObject(args.input) ? String(args.input['action']) : undefined
+        const action = given !== undefined && isAct(given) ? given : undefined
+        if (named !== undefined) await gate(action ?? named, action === undefined ? 'conversation' : actPermission(action, isObject(args.input) ? args.input['input'] : undefined))
         return claude.cmod.call(args)
       },
     },
@@ -135,8 +134,7 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     tool: {
       ...claude.tool,
       call: async (input: Parameters<Claude['tool']['call']>[0]) => {
-        const item = startsTurns.includes(input.tool) ? 'prompt' : ownSchedule.includes(input.tool) ? undefined : 'tools'
-        await gate(`tool.call(${input.tool})`, item)
+        await gate(`tool.call(${input.tool})`, toolPermission(input.tool))
         return claude.tool.call(input)
       },
     },

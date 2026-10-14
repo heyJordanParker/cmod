@@ -30,6 +30,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       panes: () => $.ui.panes(),
       scroll: (args) => $.ui.scroll(args),
       copy: (args) => $.ui.copy(args),
+      focus: (args) => $.ui.focus(args),
       resolve: (render) => $.ui.resolve(render),
     },
     process: {
@@ -101,21 +102,36 @@ export function registerMod<State extends object, Declared extends Options>(addH
   registered = definition as ModDefinition<object>
   lifecycle = createLifecycle(definition, () => checksPermissions, options)
   addHook('session.start', startMod)
+  addHook('classic.Setup', routeToMod)
   addHook('classic.SessionStart', routeToMod)
   addHook('classic.SessionEnd', routeToMod)
   addHook('classic.UserPromptSubmit', routeToMod)
+  addHook('classic.UserPromptExpansion', routeToMod)
   addHook('classic.InstructionsLoaded', routeToMod)
+  addHook('classic.ConfigChange', routeToMod)
+  addHook('classic.DirectoryAdded', routeToMod)
+  addHook('classic.PreModelSwitch', routeToMod)
+  addHook('classic.PostModelSwitch', routeToMod)
   addHook('classic.PermissionDenied', routeToMod)
   addHook('classic.PostToolUse', routeToMod)
   addHook('classic.PostToolUseFailure', routeToMod)
   addHook('classic.PostToolBatch', routeToMod)
+  addHook('classic.MessageDisplay', routeToMod)
   addHook('classic.SubagentStart', routeToMod)
   addHook('classic.SubagentStop', routeToMod)
+  addHook('classic.TaskCreated', routeToMod)
+  addHook('classic.TaskCompleted', routeToMod)
+  addHook('classic.TeammateIdle', routeToMod)
+  addHook('classic.Elicitation', routeToMod)
+  addHook('classic.ElicitationResult', routeToMod)
   addHook('classic.Notification', routeToMod)
   addHook('classic.PreCompact', routeToMod)
+  addHook('classic.PostCompact', routeToMod)
   addHook('classic.Stop', routeToMod)
   addHook('classic.StopFailure', routeToMod)
   addHook('classic.FileChanged', routeToMod)
+  addHook('classic.WorktreeCreate', routeToMod)
+  addHook('classic.WorktreeRemove', routeToMod)
   addHook('tool.call', routeToMod)
   addHook('prompt.submit', routeToMod)
   addHook('prompt.context', routeToMod)
@@ -132,6 +148,7 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('session.compact', routeToMod)
   addHook('session.receive', routeToMod)
   addHook('agent.spawn', routeToMod)
+  addHook('prompt.attachment', routeToMod)
 }
 
 export function registerPermissionCheck(addHook: On): void {

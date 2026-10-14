@@ -19,11 +19,11 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 | `"network": ["api.github.com"]` | Connect to api.github.com | `http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"`. The address of the mod's own running `program` job needs none |
 | `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `process.run`, `process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` and the copy in cmod's programs folder |
 | `"files": ["~/.zshrc"]` | Change ~/.zshrc | `fs.write` and `metadata.update` outside the project and the mod's data folder. A folder covers every file below it |
-| `"conversation": true` | Read your Claude Code conversations | Reading `sessions`: their messages, turns, contexts, goals, and tasks, `sessions.list`, `sessions.search`, and a session's `on`. Also reading Claude Code's transcript files |
-| `"prompt": true` | Add text Claude reads and start turns | A session's `send`, the `prompt` and `schedule` jobs, and the hook answers listed below |
+| `"conversation": true` | Read your Claude Code conversations | Reading `sessions`: their messages, turns, contexts, goals, and tasks, `sessions.list`, `search`, `on`, `before`, `usage`, and `clients`. Also reading Claude Code's transcript files |
+| `"prompt": true` | Add text Claude reads and start turns | A session's `send`, a `before` answer that changes or refuses text, the mod's `rules/`, the `prompt` and `schedule` jobs, and the hook answers listed below |
 | `"model": true` | Ask a model, which uses your plan | `model.complete` |
-| `"tasks": true` | Start tasks that work beside Claude | `sessions.current.startTask` |
-| `"tools": true` | Use and change Claude's tool calls | A listener or a job that changes a tool call's input |
+| `"tasks": true` | Start tasks that work beside Claude | A session's `startTask`, and a `before(TaskStart)` or `before(TaskEnd)` answer |
+| `"tools": true` | Use and change Claude's tool calls | A session's `callTool`, a `before(ToolCall)` answer, and a listener or a job that changes a tool call's input |
 | `"config": ["cleanupPeriodDays"]` | Change cleanupPeriodDays in your Claude Code settings | `settings.user.update`, `settings.project.update`, and `settings.local.update` of that setting. `mcpServers` covers the project's `.mcp.json` |
 | `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A deny needs no permission |
 

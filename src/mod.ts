@@ -15,6 +15,12 @@ const cmodSession: CmodPluginState['session'] = { tip: null }
 
 const newestMessages = 8
 
+type SyncedRules = {
+  readonly linked: readonly { readonly mod: string; readonly rules: readonly { readonly name: string; readonly isGlobal: boolean; readonly text: string }[] }[]
+  readonly placed: readonly string[]
+  readonly removed: readonly string[]
+}
+
 async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
   const messages = await engineOf(mod).claude.session.messages()
   if (messages.length === 0) return null
@@ -100,6 +106,34 @@ export const cmodPlugin = defineMod({
 
     mod.on(SessionStart, watchRemovals)
     mod.on(UserPromptSubmit, watchRemovals)
+
+    let applied: ReadonlyMap<string, ReadonlyMap<string, string>> | undefined
+    let following = Promise.resolve()
+    const followRules = async () => {
+      const synced = JSON.parse(await runCmod(claude, ['rules', '--project', await claude.session.root(), '--json'], await claude.session.id())) as SyncedRules
+      const now = new Map(synced.linked.map(({ mod: name, rules }) => [name, new Map(rules.filter((rule) => rule.isGlobal).map((rule) => [rule.name, rule.text]))]))
+      const notes = [...now].flatMap(([name, globals]) => {
+        const before = applied === undefined ? (synced.placed.includes(name) ? undefined : globals) : applied.get(name)
+        const changed = [...globals].filter(([rule, text]) => before?.get(rule) !== text).map(([, text]) => text)
+        const withdrawn = [...(before ?? [])].filter(([rule]) => !globals.has(rule)).map(([, text]) => text)
+        return [
+          ...(changed.length === 0 ? [] : [[before === undefined ? `The ${name} mod adds these rules from now on:` : `The ${name} mod changed these rules, which apply from now on:`, ...changed].join('\n\n')]),
+          ...(withdrawn.length === 0 ? [] : [[`These rules of the ${name} mod no longer apply:`, ...withdrawn].join('\n\n')]),
+        ]
+      })
+      const gone = applied === undefined ? synced.removed : [...applied.keys()].filter((name) => !now.has(name))
+      applied = now
+      for (const text of [...notes, ...gone.map((name) => `The ${name} mod's rules no longer apply.`)]) {
+        const added = await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+        if (added.deny !== undefined) mod.log(`Claude Code refused the rules note: ${added.deny}`)
+      }
+    }
+    const keepRules = () => {
+      following = following.then(followRules).catch((error: unknown) => report({ id: 'rules', message: "Could not link the mods' rules", error }))
+      return following
+    }
+    mod.on(SessionStart, keepRules)
+    mod.on(UserPromptSubmit, keepRules)
 
     const keepTip = async () => {
       mod.state.session.tip = await tipOf(mod)

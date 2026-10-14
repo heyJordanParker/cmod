@@ -120,7 +120,7 @@ test("testMod dependencies fakes another mod's api", async () => {
   expect(tested.calls).toContainEqual({ call: 'cmod.call', args: [{ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } }] })
 })
 
-test('testMod answers a call to a mod it does not fake with the install command', async () => {
+test('testMod answers a call to a mod it does not fake with where to add it', async () => {
   const outline = defineMod({
     name: 'outline',
     setup(mod) {
@@ -128,7 +128,7 @@ test('testMod answers a call to a mod it does not fake with the install command'
     },
   })
 
-  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
+  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Add it with /plugin.' })
 })
 
 const project = '/work/dent'

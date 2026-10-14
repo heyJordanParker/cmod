@@ -136,7 +136,7 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
     if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so cmod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
     const release = `${releaseDownloads(plugin.repository)}/v${plugin.version}`
     const url = `${release}/${name}-${machine}`
-    const attach = (file: string) => `Attach ${file} to the v${plugin.version} release, as cmod publish does.`
+    const attach = (file: string) => `The v${plugin.version} release of ${plugin.name} has no ${file} yet. Its author attaches it with cmod publish.`
     emit({ type: 'progress', done: 0, total: programSteps, label: `Downloading ${name} ${plugin.version}` })
     const sums = new TextDecoder().decode(await download(`${release}/SHA256SUMS`, attach('SHA256SUMS')))
     const expected = sums.split('\n').map((line) => /^([0-9a-f]{64}) [ *](.+)$/.exec(line.trim())).find((match) => match?.[2] === basename(url))?.[1]
@@ -227,9 +227,14 @@ function commandEntry(name: string): string {
   return join(home(), '.local', 'bin', name)
 }
 
-export async function download(url: string, fix: string, onProgress: (received: number, size: number) => void = () => {}): Promise<ArrayBuffer> {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`Downloading ${url} returned ${response.status}. ${fix}`)
+export class DownloadFailed extends Error {}
+
+export async function download(url: string, missing: string, onProgress: (received: number, size: number) => void = () => {}): Promise<ArrayBuffer> {
+  const response = await fetch(url).catch((error: unknown) => {
+    throw new DownloadFailed(`cmod could not reach ${new URL(url).host}: ${messageOf(error)}`)
+  })
+  if (response.status === 404) throw new DownloadFailed(missing)
+  if (!response.ok) throw new DownloadFailed(`Downloading ${url} returned ${response.status}.`)
   const size = Number(response.headers.get('content-length'))
   const chunks: Uint8Array[] = []
   let received = 0

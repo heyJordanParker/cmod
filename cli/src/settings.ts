@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, rm } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { isObject, marketplaceOf, updatesToTurnOn } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse } from 'jsonc-parser'
@@ -243,6 +243,37 @@ export async function removePluginFolder(folder: string): Promise<boolean> {
   if (kept.length === entries.length) return false
   await writeEntries(path, text, kept)
   return true
+}
+
+export async function excludeRules(file: string, pattern: string): Promise<boolean> {
+  let isAdded = false
+  await withSettingsLock(async () => {
+    const { path, text } = await readConfig(file)
+    const excluded = excludesOf(text, path)
+    if (excluded.includes(pattern)) return
+    await writeExcludes(path, text, [...excluded, pattern])
+    isAdded = true
+  })
+  return isAdded
+}
+
+export async function includeRules(file: string, pattern: string): Promise<void> {
+  await withSettingsLock(async () => {
+    const { path, text } = await readConfig(file)
+    const excluded = excludesOf(text, path)
+    if (excluded.includes(pattern)) await writeExcludes(path, text, excluded.filter((each) => each !== pattern))
+  })
+}
+
+function excludesOf(text: string, path: string): string[] {
+  const value = configObject(text, path)['claudeMdExcludes']
+  return Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : []
+}
+
+async function writeExcludes(path: string, text: string, excluded: readonly string[]): Promise<void> {
+  const base = text.trim() === '' ? '{}\n' : text
+  await mkdir(dirname(path), { recursive: true })
+  await writeAtomically(path, applyEdits(base, modify(base, ['claudeMdExcludes'], excluded.length > 0 ? excluded : undefined, { formattingOptions: indentation(base) })))
 }
 
 async function readSettings(): Promise<{ path: string; text: string }> {

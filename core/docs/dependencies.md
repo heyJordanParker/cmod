@@ -88,13 +88,15 @@ export const outline = defineMod({
 A call that cannot answer rejects with one of these reasons:
 
 ```text
-tracer is not installed. Run cmod install tracer.
+tracer is not installed. Add it with /plugin.
+tracer is not set up. Its toast says why.
 tracer is installing. Try again when it's ready.
 tracer has no method signatures.
 tracer: <the message of the error the method threw>
 ```
 
-- `tracer is not installed` covers a provider whose code did not load, one the person declined to install, and one whose install failed.
+- `tracer is not installed` covers a provider whose code did not load.
+- `tracer is not set up` covers a provider the person declined to install and one whose install failed. Its own toast shows why, with `Retry` or `Install`.
 - `tracer is installing` covers a provider that is still running its install step. A provider that is only starting makes the call wait for it, up to 9 seconds.
 - When tracer is disabled, Claude Code unloads the mod that lists it, with its own error: `Dependency "tracer" is disabled — enable it or remove the dependency`.
 - A call fails with `mod.dependencies.tracer.signatures passed its 30 s deadline` when the other mod takes longer than 30 seconds. A job bounds the whole function that makes the call by its own deadline ([jobs.md](jobs.md)), so a slow call inside `slashCommand` can fail the command first, with `/outline passed the 30 s deadline of slashCommand`.
@@ -103,11 +105,11 @@ tracer: <the message of the error the method threw>
 notInstalled(name: string): string
 ```
 
-`notInstalled`, exported from `mod.js`, returns the first reason for a mod name: `<name> is not installed. Run cmod install <name>.` A test uses it to expect that message.
+`notInstalled`, exported from `mod.js`, returns the first reason for a mod name: `<name> is not installed. Add it with /plugin.` A test uses it to expect that message.
 
 ## Test the calls
 
-`testMod(outline, { dependencies: { tracer: { signatures: async () => [] } } })` answers tracer's methods with the functions given. A call to a mod the test does not fake fails with `tracer is not installed. Run cmod install tracer.`, as in Claude Code. [testing.md](testing.md) covers it.
+`testMod(outline, { dependencies: { tracer: { signatures: async () => [] } } })` answers tracer's methods with the functions given. A call to a mod the test does not fake fails with `tracer is not installed. Add it with /plugin.`, as in Claude Code. [testing.md](testing.md) covers it.
 
 A test of the provider's own `api` fires `cmod.call`, as a caller's `mod.dependencies` does. The answer is `{ value }` with what the method returned, or `{ deny }` with the reason it failed:
 

@@ -42,6 +42,7 @@ export type RunnerEvent =
   | { type: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string; permissions: readonly string[] }
   | { type: 'done'; name: string; version?: string }
   | { type: 'missing'; name: string }
+  | { type: 'retries'; when: 'changed' | 'later' }
   | { type: 'failed'; code: number; message: string }
 
 export const pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -249,7 +250,7 @@ function readKeys(keys: unknown): Steps {
   return { keys: commands }
 }
 
-export const coreVersion = '1.0.0'
+export const coreVersion = '1.5.0'
 
 export function oldestCmodFor(steps: Steps): string {
   if (steps.permissions?.some((item) => item === 'tasks' || item.startsWith('config:')) === true) return '1.0.0'
@@ -328,6 +329,8 @@ export function formatEvent(event: RunnerEvent): string {
       return `missing ${event.name}`
     case 'failed':
       return `failed ${event.code}\t${event.message.replace(/\s*\n\s*/g, ' ')}`
+    case 'retries':
+      return `retries ${event.when}`
   }
 }
 
@@ -345,6 +348,8 @@ export function parseEvent(line: string): RunnerEvent {
   if (missing !== null) return { type: 'missing', name: missing[1] as string }
   const failed = /^failed (-?\d+)(?:\t(.*))?$/.exec(line)
   if (failed !== null) return { type: 'failed', code: Number(failed[1]), message: failed[2] ?? '' }
+  const retries = /^retries (changed|later)$/.exec(line)
+  if (retries !== null) return { type: 'retries', when: retries[1] as 'changed' | 'later' }
   return { type: 'log', text: line.replace(/^log /, '') }
 }
 

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
+import { installerPaneOf } from '../../src/runtime/installer.js'
 import { defineStep } from '../../src/installer.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { CwdChanged, defineMod, PermissionRequest, PostToolUse, PreToolUse, SessionStart, sessions, type Mod } from '../../src/mod.js'
@@ -74,8 +75,8 @@ const postToolUse: ClassicHookInputs['PostToolUse'] = {
 
 const promptSubmit = { ...postToolUse, hook_event_name: 'UserPromptSubmit', prompt: 'hi' }
 
-function failed(message: string, description: string): ShownToast[] {
-  return [{ type: 'error', message, description }]
+function failed(message: string, description?: string): ShownToast[] {
+  return [{ type: 'error', message, ...(description === undefined ? {} : { description }) }]
 }
 
 function fire<N extends RoutedEvent>(lifecycle: Pick<Lifecycle<object>, 'route'>, event: N, input: unknown, below: unknown) {
@@ -100,14 +101,14 @@ function trackedMod() {
 
 const abovePrompt = { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: {}, viewport: { columns: 100, rows: 30 } }
 const prompt = { type: 'Text', children: ['>'] } as unknown as RenderElement
-const installerPane = { surface: 'terminal', component: 'Pane', requestId: 'cmod-installer', props: { title: 'Install', isFocused: true, bodyColumns: 80, placement: 'dock' } }
+const installerPaneFor = (name = 'safe-delete') => ({ surface: 'terminal', component: 'Pane', requestId: installerPaneOf(name), props: { title: 'Install', isFocused: true, bodyColumns: 80, placement: 'dock' } })
 
-async function installerText(lifecycle: Pick<Lifecycle<object>, 'route'>): Promise<string> {
-  return textOf(await fire(lifecycle, 'ui.render', installerPane, prompt))
+async function installerText(lifecycle: Pick<Lifecycle<object>, 'route'>, name?: string): Promise<string> {
+  return textOf(await fire(lifecycle, 'ui.render', installerPaneFor(name), prompt))
 }
 
-async function pressInInstaller(lifecycle: Pick<Lifecycle<object>, 'route'>, key: string): Promise<void> {
-  const button = findElement(await fire(lifecycle, 'ui.render', installerPane, prompt), 'Button', key)
+async function pressInInstaller(lifecycle: Pick<Lifecycle<object>, 'route'>, key: string, name?: string): Promise<void> {
+  const button = findElement(await fire(lifecycle, 'ui.render', installerPaneFor(name), prompt), 'Button', key)
   if (button === undefined) throw new Error(`The installer draws no button ${key}.`)
   await (button['onPress'] as () => unknown)()
 }
@@ -166,7 +167,7 @@ test('a call to a mod still installing fails with when to retry', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })).toEqual({
+  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Add it with /plugin.' })).toEqual({
     deny: "safe-delete is installing. Try again when it's ready.",
   })
   expect(await fire(lifecycle, 'cmod.call', { to: 'tracer', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
@@ -179,7 +180,7 @@ test('a call to a mod that is still starting waits for it, then answers', async 
   const plugins: ((plugin: Plugin) => void)[] = []
   const starting = lifecycle.start(fake.claude, () => new Promise<Plugin>((resolve) => void plugins.push(resolve)))
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Add it with /plugin.' })
   await fake.settle()
   plugins.shift()?.({ ...pending, isInstalled: true })
   await starting
@@ -192,13 +193,13 @@ test("a call that comes before the mod's session.start waits for the start, then
   fake.fakes.process.run = cmodOnPath
   const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', api: { restore: () => ['a.ts'] }, setup() {} }))
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Run cmod install safe-delete.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Add it with /plugin.' })
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
 
   expect(await answer).toEqual({ value: ['a.ts'] })
 })
 
-test('a call to a mod whose install was declined fails with the install command', async () => {
+test('a call to a mod whose install was declined fails and points at its toast', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodOnPath
   fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
@@ -210,7 +211,7 @@ test('a call to a mod whose install was declined fails with the install command'
   await fake.settle()
 
   expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: [] })).toEqual({
-    deny: 'safe-delete is not installed. Run cmod install safe-delete.',
+    deny: 'safe-delete is not set up. Its toast says why.',
   })
 })
 
@@ -228,7 +229,7 @@ test('needs-consent opens the installer focused, and Accept runs the setup again
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(fake.calls.find((call) => call.call === 'ui.open')?.args).toEqual([{ id: 'cmod-installer', title: 'Install safe-delete', focus: true, holdToasts: true, closeOnEscape: true }])
+  expect(fake.calls.find((call) => call.call === 'ui.open')?.args).toEqual([{ id: 'installer-safe-delete', title: 'Install safe-delete', focus: true, holdToasts: true, closeOnEscape: true }])
   expect(await installerText(lifecycle)).toContain('safe-delete wants to:')
   expect(await installerText(lifecycle)).toContain('Run ./setup/install.sh now, and ./setup/uninstall.sh when you remove it')
   expect(await installerText(lifecycle)).toContain('Bind shift+tab to /mode')
@@ -322,7 +323,7 @@ test('Not now declines the install with one notice naming cmod install, and setu
   await fake.settle()
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
-  expect(lifecycle.toasts).toEqual([{ type: 'default', message: 'Not installed', description: 'Run cmod install safe-delete to install it.' }])
+  expect(lifecycle.toasts).toEqual([{ type: 'default', message: 'Not installed', description: 'Install it whenever you like.' }])
   expect(runs).toEqual([])
 })
 
@@ -339,7 +340,7 @@ test('a failed install draws the sentence cmod setup wrote and its fix, and setu
 
   expect(runs).toEqual([])
   expect(lifecycle.toasts).toEqual([
-    { type: 'error', message: 'The install step of safe-delete exited 1: brew: command not found.', description: 'Fix the cause, then retry, or run cmod install safe-delete in a terminal.' },
+    { type: 'error', message: 'The install step of safe-delete exited 1: brew: command not found.' },
   ])
 })
 
@@ -534,10 +535,10 @@ test('a stopped mod whose record is unchanged stays stopped across prompts and s
 
   expect(lifecycle.phase).toBe('failed')
   expect(runs).toEqual([])
-  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'disk full', description: 'Fix the cause, then retry, or run cmod install safe-delete in a terminal.' }])
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'disk full' }])
 })
 
-test('an install error longer than the band wraps its message beside the Retry button', async () => {
+test('an install error longer than the band wraps its message across the band, with its buttons on a line under it', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.fakes.process.run = cmodOnPath
   const error = 'cmod bootstrap: cmod is installed at /home/me/.local/bin/cmod, but PATH finds no cmod. Put /home/me/.local/bin first on PATH, then restart Claude Code.'
@@ -550,21 +551,116 @@ test('an install error longer than the band wraps its message beside the Retry b
 
   expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
     '>',
-    '✗  safe-delete  cmod            Retry  ✕',
-    '                bootstrap:',
-    '                cmod is',
+    '✗  safe-delete  cmod bootstrap: cmod is',
     '                installed at',
-    '                /home/me/.loca',
-    '                l/bin/cmod,',
-    '                but PATH finds',
-    '                no cmod. Put',
-    '                /home/me/.loca',
-    '                l/bin first on',
-    '                PATH, then',
-    '                restart Claude',
-    '                Code.',
-    '                Fix the cause…',
+    '                /home/me/.local/bin/cmod',
+    '                , but PATH finds no',
+    '                cmod. Put',
+    '                /home/me/.local/bin',
+    '                first on PATH, then',
+    '                restart Claude Code.',
+    '                Retry  Report  Hide',
   ])
+})
+
+function retryingFake(setups: readonly (readonly string[])[], checkouts: readonly string[] = []) {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.process.run = cmodOnPath
+  const setupsRun: string[][] = []
+  let checkout = 0
+  fake.fakes.process.spawn = (request) => {
+    if (request.argv[0] === 'sh') return finished([checkouts[Math.min(checkout++, checkouts.length - 1)] ?? ''], 0)
+    setupsRun.push([...request.argv])
+    const lines = setups[Math.min(setupsRun.length - 1, setups.length - 1)] ?? []
+    return finished(lines, lines.some((line) => line.startsWith('done')) ? 0 : 1)
+  }
+  const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
+  fake.fakes.clock.after = (ms, fire) => {
+    const made = { ms, fire, isCancelled: false }
+    timers.push(made)
+    return { cancel: () => void (made.isCancelled = true) }
+  }
+  const fire = async (ms: number) => {
+    const made = timers.find((each) => each.ms === ms && !each.isCancelled)
+    if (made === undefined) throw new Error(`No timer of ${ms} ms is waiting.`)
+    made.isCancelled = true
+    made.fire()
+    await fake.settle()
+  }
+  return { fake, setupsRun, timers, fire }
+}
+
+const notYet = 'failed 1\tThe v0.2.0 release of safe-delete has no SHA256SUMS yet. Its author attaches it with cmod publish.'
+
+test('a release download that is not there yet shows the failure at once, retries in the background, and clears the failure when it works', async () => {
+  const { fake, setupsRun, fire } = retryingFake([[notYet, 'retries later'], [notYet, 'retries later'], ['done safe-delete 0.2.0']])
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  const first = lifecycle.toasts
+  await fire(2000)
+  const second = lifecycle.toasts
+  await fire(4000)
+
+  expect(first).toEqual(failed('The v0.2.0 release of safe-delete has no SHA256SUMS yet. Its author attaches it with cmod publish.', 'Trying again in 2 s.'))
+  expect(second).toEqual(failed('The v0.2.0 release of safe-delete has no SHA256SUMS yet. Its author attaches it with cmod publish.', 'Trying again in 4 s.'))
+  expect(setupsRun).toHaveLength(3)
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+})
+
+test('the background retry waits 2 s up to 128 s, then every 128 s', async () => {
+  const { fake, timers, fire } = retryingFake([[notYet, 'retries later']])
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  for (const ms of [2000, 4000, 8000, 16_000, 32_000, 64_000, 128_000, 128_000]) await fire(ms)
+
+  expect(timers.map((made) => made.ms)).toEqual([2000, 4000, 8000, 16_000, 32_000, 64_000, 128_000, 128_000, 128_000])
+})
+
+test('a failure that waiting cannot fix, such as a failed install step of a release, waits for Retry', async () => {
+  const { fake, timers } = retryingFake([['failed 1\tThe install step of safe-delete exited 1.']])
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual(failed('The install step of safe-delete exited 1.'))
+  expect(timers).toEqual([])
+})
+
+test('a retry after the person accepted carries that consent, so it never asks again, and the consent pane closes on Accept', async () => {
+  const broken = 'failed 1\tThe install step of safe-delete exited 1.'
+  const { fake, setupsRun, fire } = retryingFake([['needs-consent abc123\t./setup/install.sh\t'], [broken, 'retries changed'], ['done safe-delete 0.2.0']], ['abc', 'abc\n?? fixed'])
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  await pressInInstaller(lifecycle, 'accept')
+  await fake.settle()
+  await fire(2000)
+
+  expect(setupsRun.map((argv) => argv.slice(-2))).toEqual([[pending.root, '--events'], ['--consent', 'abc123'], ['--consent', 'abc123']])
+  expect(fake.calls.filter((call) => call.call === 'ui.close').map((call) => call.args[0])).toEqual([{ id: 'installer-safe-delete' }])
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+})
+
+test("a linked checkout's failed build runs again only once the checkout changed", async () => {
+  const broken = 'failed 1\tBuilding trace with "cargo xtask dist" exited 101.'
+  const { fake, setupsRun, fire } = retryingFake([[broken, 'retries changed'], ['done safe-delete 0.2.0']], ['abc\n M src/main.rs', 'abc\n M src/main.rs', 'abc\n M src/main.rs\n+fixed'])
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  await fire(2000)
+  const whileUnchanged = setupsRun.length
+  await fire(4000)
+
+  expect(whileUnchanged).toBe(1)
+  expect(setupsRun).toHaveLength(2)
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
 
 test('a waiting mod continues its install once the cmod program appears, with no further event', async () => {
@@ -723,7 +819,7 @@ test('a mod whose setup function throws says its setup function threw, and leave
   await fire(lifecycle, 'classic.PostToolUse', postToolUse, {})
 
   expect(hookRuns).toBe(0)
-  expect(lifecycle.toasts).toEqual(failed('its setup function threw: no config file', 'Fix it, then run /reload-plugins.'))
+  expect(lifecycle.toasts).toEqual(failed('its setup function threw: no config file'))
 })
 
 test('a mod whose state fails to load says its state did not load', async () => {
@@ -733,7 +829,7 @@ test('a mod whose state fails to load says its state did not load', async () => 
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'broken', isInstalled: true }))
 
-  expect(lifecycle.toasts).toEqual(failed('its state did not load: the store file is locked', 'Fix it, then run /reload-plugins.'))
+  expect(lifecycle.toasts).toEqual(failed('its state did not load: the store file is locked'))
 })
 
 test('a missing secret option asks in the installer to set it in /config, and Not now fails with the same fix', async () => {
@@ -744,8 +840,8 @@ test('a missing secret option asks in the installer to set it in /config, and No
   void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
   await fake.settle()
 
-  expect(await installerText(lifecycle)).toContain('Set it in /config, where Claude Code keeps it in your keychain')
-  await pressInInstaller(lifecycle, 'not-now')
+  expect(await installerText(lifecycle, 'ci-watch')).toContain('Set it in /config, where Claude Code keeps it in your keychain')
+  await pressInInstaller(lifecycle, 'not-now', 'ci-watch')
   await fake.settle()
   expect(lifecycle.toasts).toEqual(failed('it needs GitHub token', 'Set it in /config.'))
 })
@@ -765,11 +861,11 @@ test('a missing text option saved in the installer through cmod option starts th
 
   void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
   await fake.settle()
-  const field = findElement(await fire(lifecycle, 'ui.render', installerPane, prompt), 'Input', 'option:branch')
+  const field = findElement(await fire(lifecycle, 'ui.render', installerPaneFor('ci-watch'), prompt), 'Input', 'option:branch')
   if (field === undefined) throw new Error('The installer draws no field for branch.')
   ;(field['onSubmit'] as (value: string) => void)('main')
   await fake.settle()
-  await pressInInstaller(lifecycle, 'next')
+  await pressInInstaller(lifecycle, 'next', 'ci-watch')
   await fake.settle()
 
   expect(saved).toContainEqual(['cmod', 'option', 'ci-watch', 'branch', 'main'])
@@ -791,13 +887,13 @@ test("a mod's own installer step opens after it starts, and Finish waits for isD
   await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
   await fake.settle()
 
-  expect(await installerText(lifecycle)).toContain('Sign in to GitHub  (1 of 1)')
-  await pressInInstaller(lifecycle, 'next')
-  expect(await installerText(lifecycle)).toContain('Finish Sign in to GitHub first.')
+  expect(await installerText(lifecycle, 'ci-watch')).toContain('Sign in to GitHub  (1 of 1)')
+  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  expect(await installerText(lifecycle, 'ci-watch')).toContain('Finish Sign in to GitHub first.')
   isSignedIn = true
-  await pressInInstaller(lifecycle, 'next')
+  await pressInInstaller(lifecycle, 'next', 'ci-watch')
   await fake.settle()
-  expect(fake.calls.filter((call) => call.call === 'ui.close').map((call) => call.args[0])).toEqual([{ id: 'cmod-installer' }])
+  expect(fake.calls.filter((call) => call.call === 'ui.close').map((call) => call.args[0])).toEqual([{ id: 'installer-ci-watch' }])
 })
 
 test("a step whose isDone fails stays pending, shows the failure, and Finish shows it in the installer", async () => {
@@ -814,8 +910,8 @@ test("a step whose isDone fails stays pending, shows the failure, and Finish sho
   await fake.settle()
 
   expect(lifecycle.toasts).toContainEqual({ type: 'error', message: "The Sign in to GitHub step's isDone failed", description: 'gh is not installed' })
-  await pressInInstaller(lifecycle, 'next')
-  expect(await installerText(lifecycle)).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
+  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  expect(await installerText(lifecycle, 'ci-watch')).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
 })
 
 test('a step left on Not now is listed to /mods, and finishing from /mods opens the installer on it again', async () => {
@@ -830,7 +926,7 @@ test('a step left on Not now is listed to /mods, and finishing from /mods opens 
   )
   await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
   await fake.settle()
-  await pressInInstaller(lifecycle, 'not-now')
+  await pressInInstaller(lifecycle, 'not-now', 'ci-watch')
   await fake.settle()
 
   expect(lifecycle.toasts).toContainEqual({ type: 'warning', message: 'Needs one more step', description: 'Starting with Sign in to GitHub. Finish them in /mods ci-watch.' })
@@ -838,9 +934,9 @@ test('a step left on Not now is listed to /mods, and finishing from /mods opens 
 
   const finishing = fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:finishSteps', input: null }, { deny: '' })
   await fake.settle()
-  expect(await installerText(lifecycle)).toContain('Sign in to GitHub  (1 of 1)')
+  expect(await installerText(lifecycle, 'ci-watch')).toContain('Sign in to GitHub  (1 of 1)')
   isSignedIn = true
-  await pressInInstaller(lifecycle, 'next')
+  await pressInInstaller(lifecycle, 'next', 'ci-watch')
   expect(await finishing).toEqual({ value: null })
   expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: [] })
 })
@@ -852,7 +948,7 @@ test('a mod that decides permissions without registerPermissionCheck does not st
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
   expect(lifecycle.toasts).toEqual(
-    failed('it decides permissions on classic.PermissionRequest, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod', 'Fix it, then run /reload-plugins.'),
+    failed('it decides permissions on classic.PermissionRequest, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod'),
   )
 })
 
@@ -892,7 +988,7 @@ test('a mod whose open panes cannot be read says its open panes did not load', a
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'broken', isInstalled: true }))
 
-  expect(lifecycle.toasts).toEqual(failed('its open panes did not load: the pane list is unavailable', 'Fix it, then run /reload-plugins.'))
+  expect(lifecycle.toasts).toEqual(failed('its open panes did not load: the pane list is unavailable'))
 })
 
 test("the cmod plugin runs its bootstrap from its root, and its mod.dataFolder names its data folder", async () => {
@@ -1130,7 +1226,7 @@ test('a plugin.json the mod cannot read fails the start with the read error', as
 
   expect(runs).toEqual([])
   expect(lifecycle.phase).toBe('failed')
-  expect(lifecycle.toasts).toEqual(failed(denied, 'Run cmod install safe-delete in a terminal to see the whole log.'))
+  expect(lifecycle.toasts).toEqual(failed(denied))
 })
 
 test.each(['ENOENT', 'ENOTDIR'])('a path Claude Code fails to stat with %s reads as a missing file', async (errno) => {
@@ -1152,7 +1248,7 @@ test('an error from cmod --version other than not found shows as a failure', asy
   await fake.settle()
 
   expect(runs).toEqual([])
-  expect(lifecycle.toasts).toEqual(failed('cmod --version is still running after 30 s', 'Run cmod install safe-delete in a terminal to see the whole log.'))
+  expect(lifecycle.toasts).toEqual(failed('cmod --version is still running after 30 s'))
 })
 
 test('cmod missing from PATH is waiting, not a failure', async () => {
@@ -1179,7 +1275,7 @@ test('an installer pane that fails to open shows as a failure, not as Not now', 
   await fake.settle()
 
   expect(fake.shown.logs).toEqual([])
-  expect(lifecycle.toasts).toEqual(failed('the installer pane did not open', 'Run cmod install safe-delete in a terminal to see the whole log.'))
+  expect(lifecycle.toasts).toEqual(failed('the installer pane did not open'))
 })
 
 test('a whitespace-only chunk of standard error keeps the last error line', async () => {
@@ -1196,7 +1292,7 @@ test('a whitespace-only chunk of standard error keeps the last error line', asyn
   step.exit(1)
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed('cmod setup exited 1: cmod setup: disk full', 'Fix the cause, then retry, or run cmod install safe-delete in a terminal.'))
+  expect(lifecycle.toasts).toEqual(failed('cmod setup exited 1: cmod setup: disk full'))
 })
 
 test('an empty stderr from cmod setup leaves no bare colon in the session', async () => {
@@ -1208,8 +1304,8 @@ test('an empty stderr from cmod setup leaves no bare colon in the session', asyn
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed('cmod setup exited 1', 'Fix the cause, then retry, or run cmod install safe-delete in a terminal.'))
-  expect((lifecycle.failure as Error).message).toBe('safe-delete: cmod setup exited 1. Fix the cause, then retry, or run cmod install safe-delete in a terminal.')
+  expect(lifecycle.toasts).toEqual(failed('cmod setup exited 1'))
+  expect((lifecycle.failure as Error).message).toBe('safe-delete: cmod setup exited 1.')
 })
 
 test('an empty stderr from the cmod bootstrap leaves no bare colon', async () => {
@@ -1220,7 +1316,7 @@ test('an empty stderr from the cmod bootstrap leaves no bare colon', async () =>
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed('bootstrap exited 1', `Run ./setup/bootstrap.sh in ${root} to see the whole log.`))
+  expect(lifecycle.toasts).toEqual(failed('bootstrap exited 1'))
 })
 
 test('an empty stderr from cmod --version leaves no bare colon', async () => {
@@ -1231,7 +1327,7 @@ test('an empty stderr from cmod --version leaves no bare colon', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed('cmod --version exited 1', 'Run cmod install safe-delete in a terminal to see the whole log.'))
+  expect(lifecycle.toasts).toEqual(failed('cmod --version exited 1'))
 })
 
 test('a reason ending in ? keeps one mark', async () => {
@@ -1243,7 +1339,7 @@ test('a reason ending in ? keeps one mark', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect((lifecycle.failure as Error).message).toBe('safe-delete: Is Homebrew installed? Fix the cause, then retry, or run cmod install safe-delete in a terminal.')
+  expect((lifecycle.failure as Error).message).toBe('safe-delete: Is Homebrew installed?')
 })
 
 type NotesState = { memory: { isTyping: boolean }; session: { draft: string }; global: { notes: string[] } }

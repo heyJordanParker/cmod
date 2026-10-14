@@ -15,7 +15,7 @@ export type Fakes = {
   http: { fetch?: Claude['http']['fetch'] }
   settings: { read?: Claude['settings']['read'] }
   config: { list?: Claude['config']['list'] }
-  ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll']; copy?: Claude['ui']['copy'] }
+  ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll']; copy?: Claude['ui']['copy']; focus?: Claude['ui']['focus'] }
   session: { messages?: Claude['session']['messages']; append?: Claude['session']['append']; send?: Claude['session']['send'] }
   prompt: { submit?: Claude['prompt']['submit'] }
   model: { complete?: Claude['model']['complete'] }
@@ -119,6 +119,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         calls.push({ call: 'ui.open', args: [pane] })
         const answer = fakes.ui.open === undefined ? { isPlaced: true as const } : await fakes.ui.open(pane)
         if (answer.isPlaced) {
+          shown.openPanes.delete(pane.id)
           shown.openPanes.add(pane.id)
           unplacedPanes.delete(pane.id)
           if (pane.focus === true) focusedPane = pane.id
@@ -134,11 +135,12 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         if (focusedPane === pane.id) focusedPane = undefined
       },
       panes: async () => [
-        ...[...shown.openPanes].map((id) => ({ id, title: id, isShown: true, isFocused: id === focusedPane, isPlaced: true })),
+        ...[...shown.openPanes].map((id) => ({ id, title: id, isShown: id === [...shown.openPanes].at(-1), isFocused: id === focusedPane, isPlaced: true })),
         ...[...unplacedPanes].map((id) => ({ id, title: id, isShown: false, isFocused: false, isPlaced: false })),
       ],
       scroll: rejected('ui.scroll', () => fakes.ui.scroll ?? (async () => ({}))),
       copy: rejected('ui.copy', () => fakes.ui.copy ?? (async () => ({ isCopied: true as const }))),
+      focus: rejected('ui.focus', () => fakes.ui.focus ?? (async () => ({}))),
       resolve: () => elements,
     },
     process: {

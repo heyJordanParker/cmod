@@ -46,7 +46,7 @@ type TestOptions<State, Options> = {
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `sessions.current.project` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `sessions.current.cwd` | `projectRoot` |
-| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Run cmod install <name>.` |
+| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Add it with /plugin.` |
 | `files` | The fake file system, absolute path to text | no files |
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
 | `sessions` | The earlier conversations `sessions.list` and `sessions.search` read, each `{ id, messages?, goal?, … }` ([Build a conversation](#build-a-conversation)) | none: only the current session, `test-session` |
@@ -65,7 +65,7 @@ type TestedMod<State> = {
   add(message: MessageDraft, options?: { task?: string }): Promise<Message[]>
   endTurn(): Promise<void>
   compact(): Promise<void>
-  startTask(task: { title: string; agentType?: string; model?: string; openedBy?: string }): Promise<string>
+  startTask(task: { title: string; agentType?: string; model?: string; openedBy?: string; parent?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
   lines(place, props, requestId?): Promise<string[]>
   type(line: string): Promise<CommandReply>
@@ -166,8 +166,8 @@ The current session, `test-session`, starts empty. A test builds the conversatio
 
 - `add(message, { task? })` adds a message and returns it, placed in its context and turn. A `Prompt` opens a new turn. With `task`, the message is that task's.
 - `endTurn()` ends the open turn, as Claude stopping does.
-- `compact()` ends the context and starts the next, as a compaction does.
-- `startTask({ title, agentType?, model?, openedBy? })` starts a task and returns its id.
+- `compact()` records a compaction boundary, which ends the context and starts the next, as a compaction does.
+- `startTask({ title, agentType?, model?, openedBy?, parent? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn.
 
 Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, text, isError? }`, `{ type: Skill, name, text }`, `{ type: Document, path, text }`, or `{ type: Notice, text }`.
 
@@ -189,7 +189,9 @@ test('/recall finds the earlier session about the deploy', async () => {
 })
 ```
 
-`shown.sent` lists what the mod sent to other sessions. `fakes.agent.spawn` answers `startTask`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`.
+`shown.sent` lists what the mod sent to other sessions and to tasks' owners, each with its `session`, and its `task` for an owner. `fakes.agent.spawn` answers the current session's `startTask`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`, and `fakes.tool.call` its `callTool`. Another session's `startTask` starts a task in that fake session.
+
+A `before` listener on the current session answers the event `fire` raises, such as `tested.fire('prompt.submit', { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false })` or `tested.fire('tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'rm -rf build' })`.
 
 ### lines
 

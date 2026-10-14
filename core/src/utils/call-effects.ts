@@ -18,9 +18,9 @@ export type CallEffects = {
   subagent: string | undefined
 }
 
-export function callEffects(use: CallBase, workspace: { cwd: string; home: string; fs: FileSystem }): CallEffects {
+export function callEffects(use: CallBase, workspace: { cwd: string; home: string; configRoot?: string; fs: FileSystem }): CallEffects {
   const { fs } = workspace
-  const absolute = (path: string, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home))
+  const absolute = (path: string, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home, workspace.configRoot))
   const access = (path: string): FileAccess => ({ path: absolute(path), contents: undefined })
   const effects: CallEffects = { shell: undefined, reads: [], writes: [], urls: [], subagent: undefined }
   if (use.tool === 'Bash') {

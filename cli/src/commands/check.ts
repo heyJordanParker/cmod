@@ -139,6 +139,7 @@ async function checkPermissions(plugin: Plugin): Promise<Result> {
     await writeAtomically(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, permissions: { ...declared, approve: true } } }, null, 2)}\n`)
     permissions = [...permissions, 'approve']
   }
+  if (existsSync(join(plugin.root, 'rules')) && !permissions.includes('prompt')) return { status: 'fail', text: 'rules/ holds rules Claude reads, so package.json "cmod" needs "permissions": { "prompt": true }' }
   if (permissions.length === 0) return { status: 'skip', text: 'package.json "cmod" asks for no permissions' }
   const added = isAdded ? 'Added "approve": true to package.json "cmod", because hooks/register.ts calls registerPermissionCheck\n    ' : ''
   return { status: 'pass', text: `${added}At install the person grants: ${permissions.map(permissionWords).join('; ')}` }

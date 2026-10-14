@@ -107,6 +107,15 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
   const panes = new Map<string, Pane<State>>()
   const paneLogs = new Map<string, (failure: string) => void>()
   const openPanes = new Set<string>()
+  const paneStates = new Map<string, { readonly isShown: boolean; readonly isFocused: boolean }>()
+  const syncPanes = async () => {
+    for (const open of await claude.ui.panes()) {
+      if (!panes.has(open.id)) continue
+      if (open.isPlaced) openPanes.add(open.id)
+      paneStates.set(open.id, { isShown: open.isShown, isFocused: open.isFocused })
+    }
+  }
+  const readPanes = () => void syncPanes().catch((error: unknown) => claude.ui.log(`${name} keeps its panes' shown and focused state from before: ${messageOf(error)}`, { to: 'debug' }))
   const requestedSizes = new Map<string, PaneSize>()
   const renders = new Set<string>()
   const markdownRenders = new Map<string, MarkdownRender>()
@@ -197,6 +206,8 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
       const pane = panes.get(e.requestId)
       if (pane === undefined || e.component !== 'Pane') return next(e)
       openPanes.add(pane.id)
+      paneStates.set(pane.id, { isShown: true, isFocused: e.props.isFocused })
+      readPanes()
       const table = claude.ui.resolve(e)
       try {
         return drawWith(table, () => pane.render(mod(), e.props), markdownIn(table))
@@ -214,6 +225,8 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
     })
     router.add('ui.close', async (e, next) => {
       openPanes.delete(e.id)
+      paneStates.delete(e.id)
+      readPanes()
       const closed = await next(e)
       const pane = panes.get(e.id)
       if (pane?.onClose !== undefined) await handle(pane, 'onClose', () => pane.onClose?.(mod(), e))
@@ -241,13 +254,22 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
           get isOpen() {
             return openPanes.has(pane.id)
           },
+          get isShown() {
+            return paneStates.get(pane.id)?.isShown ?? false
+          },
+          get isFocused() {
+            return paneStates.get(pane.id)?.isFocused ?? false
+          },
           async open(options) {
             const { isPlaced } = await openAt(pane, paneSize(pane, mod().state), options?.focus)
             if (isPlaced) openPanes.add(pane.id)
+            await syncPanes()
           },
           async close() {
             await claude.ui.close({ id: pane.id })
             openPanes.delete(pane.id)
+            paneStates.delete(pane.id)
+            await syncPanes()
           },
           toggle: (options) => (openPanes.has(pane.id) ? handle.close() : handle.open(options)),
         }
@@ -316,10 +338,7 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
       })
     },
     async restorePanes() {
-      if (panes.size === 0) return
-      for (const open of await claude.ui.panes()) {
-        if (open.isPlaced && panes.has(open.id)) openPanes.add(open.id)
-      }
+      if (panes.size > 0) await syncPanes()
     },
   }
 }

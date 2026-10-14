@@ -20,9 +20,12 @@ export type FileSystem = {
   exists: (path: string) => Promise<boolean>
 }
 
-export function expandHome(path: string, home: string): string {
-  const prefix = /^(~|\$HOME)(?=\/|$)/.exec(path)?.[0]
-  return prefix === undefined ? path : `${home}${path.slice(prefix.length)}`
+export const homePrefix = /^(~|\$HOME|\$CLAUDE_CONFIG_DIR)(?=\/|$)/
+
+export function expandHome(path: string, home: string, configRoot = `${home}/.claude`): string {
+  const prefix = homePrefix.exec(path)?.[0]
+  if (prefix === undefined) return path
+  return `${prefix === '$CLAUDE_CONFIG_DIR' ? configRoot : home}${path.slice(prefix.length)}`
 }
 
 export function relativePath(base: string, path: string): string | undefined {

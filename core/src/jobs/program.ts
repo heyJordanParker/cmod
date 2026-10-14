@@ -28,7 +28,12 @@ export function program(options: { readonly command: readonly string[]; readonly
     const stop = (reason: string) => {
       state = 'fatal'
       failure = new Error(`${mod.name}: the ${executable} program stopped: ${reason}`)
-      report({ id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason })
+      const retry = () => {
+        exits = 0
+        failure = undefined
+        void start()
+      }
+      report({ id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason, retry })
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
     }
 
@@ -66,7 +71,7 @@ export function program(options: { readonly command: readonly string[]; readonly
       exits += 1
       const wait = backoffSeconds[exits - 1]
       if (wait === undefined) {
-        stop(`it did not start again after ${backoffSeconds.length} tries: ${lastError === '' ? 'no standard error' : lastError}. Fix it, then run /reload-plugins.`)
+        stop(`it did not start again after ${backoffSeconds.length} tries: ${lastError === '' ? 'no standard error' : lastError}.`)
         return
       }
       state = 'backoff'

@@ -1,12 +1,13 @@
 import type { Claude } from './claude.js'
 import type { Router } from './router.js'
+import type { Failure } from './toaster.js'
 import type { ToolCalls } from './tool-calls.js'
 
 export type Engine = {
   readonly claude: Claude
   readonly router: Router
   readonly toolCalls: ToolCalls
-  readonly report: (failure: { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string }) => void
+  readonly report: (failure: Failure) => void
 }
 
 const engines = new WeakMap<object, Engine>()

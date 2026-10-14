@@ -45,7 +45,7 @@ export async function run(argv: string[]): Promise<number> {
   const emit = (done: number, label: string) => printEvent({ type: 'progress', done, total: steps, label })
   emit(0, `Downloading ${program} for ${machine}`)
   let quarter = 0
-  const bytes = await download(chosen.url, 'The install script lists a download that is gone, so the mod needs an update.', (received, size) => {
+  const bytes = await download(chosen.url, `${chosen.url} is gone, so the mod's install script needs an update.`, (received, size) => {
     const reached = size > 0 ? Math.min(4, Math.floor((received * 4) / size)) : 0
     if (reached <= quarter) return
     quarter = reached

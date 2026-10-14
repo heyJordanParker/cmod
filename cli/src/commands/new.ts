@@ -16,7 +16,8 @@ export const help = `Usage: cmod new <name> [--project]
 ${summary}
 
 Creates a mod in ./<name>: a defineMod with one hook, one pane, and one render
-of the band above the prompt, a Skill, and a test. Then installs its packages.
+of the band above the prompt, a Skill, a rule, and a test. Then installs its
+packages.
 
 Options:
   --project  Create a project-scope plugin in ./.claude/skills/<name>/ of the
@@ -86,6 +87,7 @@ What changed in each version of ${name}, for the people who use it. cmod publish
 
 ### Added
 - A pane and a line above the prompt that count the prompts of this session.
+- A rule that tells Claude where to read the count.
 `,
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
     'hooks/register.ts': `import type { On, PluginOptions } from 'claude-code'
@@ -162,7 +164,7 @@ test('the band leaves the prompt count out during a survey', async () => {
   const tested = testMod(${definition})
   await tested.fire(UserPromptSubmit, { prompt: 'hello' })
   expect(await tested.lines(AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
-  expect(tested.shown.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the ${name} pane, a render of AbovePrompt and a hook on UserPromptSubmit.' }])
+  expect(tested.shown.toasts.map(({ message }) => message)).toEqual(['Installed'])
 })
 `,
     [`skills/${name}/SKILL.md`]: `---
@@ -172,7 +174,9 @@ description: Explains what the ${name} mod does. Use when the user asks about th
 
 The ${name} mod counts the prompts of this session and shows the count in its pane and above the prompt.
 `,
-    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
+    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, cmod: { permissions: { prompt: true } }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
+    'rules/prompt-count.md': `When the person asks how many prompts this session has, read the count the ${name} mod shows above the prompt.
+`,
     'tsconfig.json': json({
       extends: './.claude-plugin/types/tsconfig.json',
       compilerOptions: { jsx: 'react', jsxFactory: 'h', jsxFragmentFactory: 'Fragment' },
@@ -191,6 +195,7 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
 - \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only registers it with Claude Code.
 - \`src/panes/\` holds one \`definePane\` per file.
 - \`src/components/\` holds the components panes and slot renders draw with.
+- \`rules/\` holds rules in Claude Code's rule format. cmod links the folder into Claude Code's rules folder while the mod is on and has the \`prompt\` permission.
 - \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.
 - \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release in a temporary folder without pushing, and leaves this checkout as it was.
 `

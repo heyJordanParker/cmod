@@ -67,28 +67,45 @@ export const safeDelete = defineMod({
 
 ## Every hook
 
-`Hook` names the 18 hooks a mod listens to. The input of each is the input a `settings.json` hook reads, typed as `ClassicHookInputs['<hook>']` in the `claude-code` module, with the changes this table names.
+`Hook` names the 33 hooks a mod listens to, every hook Claude Code has. The input of each is the input a `settings.json` hook reads, typed as `ClassicHookInputs['<hook>']` in the `claude-code` module, with the changes this table names.
 
 | Hook | Input changes |
 | --- | --- |
+| `Setup` | none |
 | `SessionStart` | none |
 | `SessionEnd` | none |
 | `UserPromptSubmit` | none |
+| `UserPromptExpansion` | none |
 | `InstructionsLoaded` | none |
+| `ConfigChange` | none |
+| `DirectoryAdded` | none |
+| `PreModelSwitch` | none |
+| `PostModelSwitch` | none |
 | `PreToolUse` | Claude Mod Manager (cmod) builds the input: `session_id`, `cwd`, `hook_event_name`, `tool_name`, `tool_input`, `tool_use_id`, `agent_id` inside a subagent, `agent_type` inside a subagent or when the session started as an agent, and `files`. It has no `transcript_path` and no `permission_mode`. |
 | `PermissionRequest` | none |
 | `PermissionDenied` | none |
 | `PostToolUse` | adds `files` |
 | `PostToolUseFailure` | adds `files` |
 | `PostToolBatch` | none |
+| `MessageDisplay` | none |
 | `SubagentStart` | none |
 | `SubagentStop` | none |
+| `TodoCreated` | none |
+| `TodoCompleted` | none |
+| `TeammateIdle` | none |
+| `Elicitation` | none |
+| `ElicitationResult` | none |
 | `Notification` | none |
 | `PreCompact` | none |
+| `PostCompact` | none |
 | `Stop` | none |
 | `StopFailure` | none |
 | `CwdChanged` | no `transcript_path` |
 | `FileChanged` | none |
+| `WorktreeCreate` | none |
+| `WorktreeRemove` | none |
+
+`TodoCreated` and `TodoCompleted` are Claude Code's `TaskCreated` and `TaskCompleted` hooks, under names that say what they hear: an item added to or checked off Claude Code's todo checklist, which its `TaskCreate`, `TaskUpdate`, and `TaskList` tools keep. A cmod `Task` is work handed to another session ([session.md](session.md#turn-context-goal-and-task)), and these hooks never hear one.
 
 cmod raises `CwdChanged` itself, never Claude Code. It raises it when the working folder changes: after `/cd`, after a Bash or PowerShell call, and at a prompt. `sessions.current.cwd` and `sessions.current.project` already hold the new folder when the listener runs.
 
@@ -170,6 +187,8 @@ type HookAnswer = {
     updatedToolOutput?: unknown
     updatedMCPToolOutput?: unknown
     retry?: boolean
+    displayContent?: string
+    worktreePath?: string
   }
 }
 ```
@@ -186,12 +205,16 @@ Each event reads only some `hookSpecificOutput` fields:
 | --- | --- |
 | `SessionStart` | `additionalContext`, `initialUserMessage`, `sessionTitle`, `watchPaths`, `reloadSkills` |
 | `UserPromptSubmit` | `additionalContext`, `sessionTitle`, `suppressOriginalPrompt` |
+| `UserPromptExpansion` | `additionalContext`, `suppressOriginalPrompt` |
+| `PreModelSwitch` | `permissionDecision`, `permissionDecisionReason` |
 | `PreToolUse` | `additionalContext`, `permissionDecision` (`'allow'` and `'ask'` need `registerPermissionCheck`), `permissionDecisionReason`, `updatedInput` |
 | `PermissionRequest` | `decision` |
 | `PermissionDenied` | `retry` |
 | `PostToolUse` | `additionalContext`, `updatedToolOutput`, `updatedMCPToolOutput` |
-| `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `SubagentStop`, `Stop` | `additionalContext` |
-| `SessionEnd`, `InstructionsLoaded`, `Notification`, `PreCompact`, `StopFailure`, `CwdChanged`, `FileChanged` | none |
+| `MessageDisplay` | `displayContent`: the text the person sees in place of the message |
+| `WorktreeCreate` | `worktreePath`: the worktree the hook made, in place of Claude Code's own |
+| `Setup`, `PostModelSwitch`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `SubagentStop`, `Stop` | `additionalContext` |
+| `SessionEnd`, `InstructionsLoaded`, `ConfigChange`, `DirectoryAdded`, `TodoCreated`, `TodoCompleted`, `TeammateIdle`, `Elicitation`, `ElicitationResult`, `Notification`, `PreCompact`, `PostCompact`, `StopFailure`, `CwdChanged`, `FileChanged`, `WorktreeRemove` | none |
 
 A field the event does not read is an error: `it answered hookSpecificOutput.<field>, which <event> does not read. Remove it from the answer.` A flag set to `false`, such as `retry: false`, counts as unset.
 

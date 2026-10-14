@@ -218,9 +218,13 @@ type PaneHandle = {
   close(): Promise<void>
   toggle(options?: { readonly focus?: true }): Promise<void>
   readonly isOpen: boolean
+  readonly isShown: boolean
+  readonly isFocused: boolean
 }
 ```
 
+- `isShown` is true while the pane is the one Claude Code shows. Claude Code shows one pane at a time and the rest wait as tabs behind it.
+- `isFocused` is true while the person has given the pane the keyboard.
 - `open` asks Claude Code to show the pane. `isOpen` turns true once Claude Code places it. Claude Code may hold a pane back, and then `isOpen` stays false.
 - `{ focus: true }` asks Claude Code to give the pane the keyboard as it opens. Claude Code gives it only while the prompt is empty and holds the keyboard, so typed text, a dialog, or another pane the person is using keeps it. cmod sends `focus` only on that one open, never when it resizes the pane.
 - `mod.ui.pane` only adds the pane. cmod opens it only when the mod calls `open` or `toggle`, and Claude Code shows a pane only once the plugin has opened it. So give the person a way in, such as a slash command whose `reply` calls `pane.toggle()`.
@@ -405,7 +409,11 @@ export const indexer = defineMod({
 })
 ```
 
-An error cmod catches for a mod, such as a hook that throws, shows as an error toast that stays. Its `Copy` button copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack, for a bug report.
+An error cmod catches for a mod, such as a hook that throws, shows as an error toast that stays, with its buttons on a line under the message:
+
+- `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped.
+- `Report` replaces the toast's buttons with the ways to tell the mod's author, with the keys on the first, and `Back` returns to the buttons. The same failure happening again keeps them open. `Ask Claude to report it` sends this session a prompt to file the report with the person's own tools, and Claude Code asks before each step. `Report it on GitHub (opens your browser)` opens a filled-in issue on the mod's `supportUrl` or `repository` in its `plugin.json`, or `Email the author (opens your mail app)` writes to its `author.email`. `Copy the error` copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack.
+- `Hide` closes the toast and keeps the same failure hidden in later sessions. A new version of the mod, or a different failure, shows again.
 
 `mod.ui.copy(text)` puts `text` on the person's clipboard. It rejects with Claude Code's reason when the terminal cannot take it.
 

@@ -9,20 +9,21 @@ import { Skill } from '@cmodjs/core/src/session/context/turn/message/skill.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
 import type { SessionChange, SessionData } from '@cmodjs/core/src/session/conversation.js'
-import { followSessions, foldersIn, listSessions, openHistory, readContexts, readFolders, readGoal, readMessages, readState, readTasks, readTurns, searchMessages, type Scope } from '../history.js'
+import { followSessions, foldersIn, listSessions, openHistory, readContexts, readFolders, readGoal, readMessages, readState, readTasks, readTurns, readUsage, searchMessages, type RecordScope, type Scope } from '../history.js'
 import { storePath, takeLock } from '../store.js'
 
 export const summary = 'Read every saved Claude Code conversation as sessions, turns, tasks, and messages.'
 
 export const help = `Usage: cmod history sessions [--all] [--since 2d] [--running] [--project <folder>] [--json]
-       cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--limit <n>] [--before <session>:<id>] [--json]
+       cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--goal]] [--limit <n>] [--before <session>:<id>] [--json]
        cmod history messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
-       cmod history turns [<session>] [--context <n>] [--last <n>] [--json]
-       cmod history contexts [<session>] [--json]
-       cmod history tasks [<session>] [--task <id>] [--json]
-       cmod history goal [<session>] [--json]
+       cmod history turns [<session>] [--task <id>] [--context <n>] [--last <n>] [--json]
+       cmod history contexts [<session>] [--task <id>] [--json]
+       cmod history tasks [<session>] [--task <id> | --nested] [--json]
+       cmod history goal [<session>] [--task <id>] [--json]
+       cmod history usage [<session>] [--task <id>] [--json]
        cmod history state [<session>] [--json]
-       cmod history follow <session>... [--json]
+       cmod history follow [<session>...] [--running] [--json]
        cmod history index
 
 ${summary}
@@ -37,7 +38,9 @@ text, at least 3 characters, after indexing every conversation it covers. Each
 tool input value is searched in its first 1,024 characters, and tool results
 are not searched. --all, --since, and --running scope it the way they scope
 sessions, --limit changes the 50, and --before <session>:<id> starts after the
-last message of the previous page.
+last message of the previous page. --session searches one conversation, and
+inside it --task searches a task and the tasks it started, --turn one turn,
+--context one context, and --goal the tasks of the conversation or of --task.
 
 messages prints one conversation's messages in order: the session named, or the
 conversation this command runs in when Claude Code sets CLAUDE_CODE_SESSION_ID.
@@ -48,13 +51,17 @@ message id, and --last keeps that many from the end.
 turns prints the conversation's turns, each opened by a prompt and closed when
 Claude finishes. --context keeps one context's, and --last keeps that many from
 the end. contexts prints the conversation's contexts, a new one after each
-compaction. tasks prints the tasks the conversation started, or with --task the
-tasks that task started. goal prints what the conversation is for: the goal a
-mod set, or its first prompt. state prints what a running conversation resumes
-from.
+compaction. tasks prints the tasks the conversation started, with --task the
+tasks that task started, and with --nested every task at any depth. goal prints
+what the conversation is for: the goal a mod set, or its first prompt. usage
+prints the model and the context's tokens as of the last reply. --task reads
+turns, contexts, goal, and usage of the agent a task runs. state prints what a
+running conversation resumes from.
 
 follow prints each message, turn, context, task, and goal change of the
-sessions named as Claude Code saves it, until stopped.
+sessions named as Claude Code saves it, until stopped. With --running it
+follows every running session of the project too, and each one that starts
+later, except the session that runs it.
 
 index indexes every saved conversation.`
 
@@ -67,7 +74,10 @@ export async function run(argv: string[]): Promise<number> {
       since: { type: 'string' },
       running: { type: 'boolean', default: false },
       project: { type: 'string' },
+      session: { type: 'string' },
       task: { type: 'string' },
+      goal: { type: 'boolean', default: false },
+      nested: { type: 'boolean', default: false },
       turn: { type: 'string' },
       context: { type: 'string' },
       before: { type: 'string' },
@@ -94,10 +104,19 @@ export async function run(argv: string[]): Promise<number> {
       return 0
     }
     if (command === 'search' && rest.length === 1) {
+      const record: RecordScope = {
+        ...(values.session === undefined ? {} : { session: values.session }),
+        ...(values.task === undefined ? {} : { task: values.task }),
+        ...(values.turn === undefined ? {} : { turn: values.turn }),
+        ...(values.context === undefined ? {} : { context: countOf('--context', values.context) }),
+        ...(values.goal ? { isGoal: true } : {}),
+      }
+      if (record.session === undefined && Object.keys(record).length > 0) throw new Error('cmod history search takes --task, --turn, --context, and --goal only with --session.')
       const found = searchMessages(db, rest[0] as string, {
         ...scope,
         ...(values.limit === undefined ? {} : { limit: countOf('--limit', values.limit) }),
         ...(values.before === undefined ? {} : { before: cursorOf(values.before) }),
+        record,
       })
       print(found, () => found.map((message) => messageLine(message, true)).join(''))
       return 0
@@ -114,24 +133,30 @@ export async function run(argv: string[]): Promise<number> {
       print(messages, () => messages.map((message) => messageLine(message, false)).join(''))
       return 0
     }
+    const task = values.task === undefined ? {} : { task: values.task }
     if (command === 'turns') {
-      const turns = readTurns(db, { session: sessionOf(), project, ...(values.context === undefined ? {} : { context: countOf('--context', values.context) }), ...(values.last === undefined ? {} : { last: countOf('--last', values.last) }) })
+      const turns = readTurns(db, { session: sessionOf(), project, ...task, ...(values.context === undefined ? {} : { context: countOf('--context', values.context) }), ...(values.last === undefined ? {} : { last: countOf('--last', values.last) }) })
       print(turns, () => turns.map((turn) => `${localTime(turn.openedAt)}  ${turn.closedAt === undefined ? 'open  ' : localTime(turn.closedAt)}  ${firstLine(turn.prompt.text)}\n`).join(''))
       return 0
     }
     if (command === 'contexts') {
-      const contexts = readContexts(db, { session: sessionOf(), project })
+      const contexts = readContexts(db, { session: sessionOf(), project, ...task })
       print(contexts, () => contexts.map((context) => `${context.number}  ${localTime(context.openedAt, true)}${context.closedAt === undefined ? '' : `  to ${localTime(context.closedAt, true)}`}\n`).join(''))
       return 0
     }
     if (command === 'tasks') {
-      const tasks = readTasks(db, { session: sessionOf(), project, ...(values.task === undefined ? {} : { task: values.task }) })
+      const tasks = readTasks(db, { session: sessionOf(), project, ...task, ...(values.nested ? { isNested: true } : {}) })
       print(tasks, () => tasks.map((task) => `${localTime(task.openedAt)}  ${task.closedAt === undefined ? 'open  ' : localTime(task.closedAt)}  ${task.id}  ${task.agentType}  ${task.title}\n`).join(''))
       return 0
     }
     if (command === 'goal') {
-      const goal = readGoal(db, { session: sessionOf(), project })
+      const goal = readGoal(db, { session: sessionOf(), project, ...task })
       print(goal, () => `${goal.text}\n`)
+      return 0
+    }
+    if (command === 'usage') {
+      const usage = readUsage({ session: sessionOf(), project, ...task })
+      print(usage, () => `${usage.model}  ${usage.context.tokens ?? 0} tokens\n`)
       return 0
     }
     if (command === 'state') {
@@ -139,12 +164,12 @@ export async function run(argv: string[]): Promise<number> {
       process.stdout.write(`${JSON.stringify(state)}\n`)
       return 0
     }
-    if (command === 'follow' && rest.length > 0) {
+    if (command === 'follow' && (rest.length > 0 || values.running)) {
       const stop = new AbortController()
       process.once('SIGINT', () => stop.abort())
       process.once('SIGTERM', () => stop.abort())
-      const following = followSessions(db, rest, project, (session, change) => process.stdout.write(values.json ? `${JSON.stringify({ session, change })}\n` : changeLine(session, change)), stop.signal)
-      process.stderr.write(`Following ${rest.join(', ')}. Stop with Ctrl+C.\n`)
+      const following = followSessions(db, { sessions: rest, isEveryRunning: values.running }, project, (session, change, isInProject) => process.stdout.write(values.json ? `${JSON.stringify({ session, isInProject, change })}\n` : changeLine(session, change)), stop.signal)
+      process.stderr.write(`Following ${[...rest, ...(values.running ? ['every running session of the project'] : [])].join(', ')}. Stop with Ctrl+C.\n`)
       await following
       return 0
     }
@@ -158,7 +183,7 @@ export async function run(argv: string[]): Promise<number> {
       }
       return 0
     }
-    throw new Error(`cmod history takes sessions, search <text>, messages, turns, contexts, tasks, goal, state, follow <session>, or index.\n\n${help}`)
+    throw new Error(`cmod history takes sessions, search <text>, messages, turns, contexts, tasks, goal, usage, state, follow <session>, or index.\n\n${help}`)
   } finally {
     db.close()
   }

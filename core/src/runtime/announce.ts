@@ -27,9 +27,11 @@ export async function announcementOf(claude: Claude, plugin: Plugin, granted: Re
   const open = (page?: string) => () => claude.cmod.call({ to: cmodPluginName, method: 'openSettings', input: { mod: plugin.name, ...(page === undefined ? {} : { page }) } })
   if (previous === undefined) {
     const { program, keys } = plugin.steps
+    const rules = (await claude.fs.list(`${plugin.root}/rules`).catch(ifMissing([]))).filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md')).map((entry) => entry.name.slice(0, -'.md'.length)).toSorted()
     const lines = [
       field('description'),
       added.length > 0 ? `Adds ${listed(added)}.` : undefined,
+      rules.length > 0 ? `Adds ${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}: ${listed(rules)}.` : undefined,
       program === undefined ? undefined : `Installed the ${program} program.`,
       ...Object.entries(keys ?? {}).map(([key, command]) => `Binds ${key} to /${command}.`),
       ...[...granted].map((item) => `${permissionWords(item)}.`),

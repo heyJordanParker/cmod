@@ -23,7 +23,9 @@ import type { Options, OptionValues } from './options.js'
 import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
+import { foldAnswers, installBefore } from './runtime/before.js'
 import type { RoutedEvent } from './runtime/hooks.js'
+import { createRouter } from './runtime/router.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
@@ -33,11 +35,13 @@ import type { Message } from './session/context/turn/message/message.js'
 import { Note } from './session/context/turn/message/note.js'
 import { Prompt } from './session/context/turn/message/prompt.js'
 import { Mod, Person } from './session/context/turn/message/sender.js'
+import type { SessionChange } from './session/conversation.js'
+import type { BeforeEvent } from './session/session.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
 import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft } from './testing/fake-sessions.js'
-import { listed } from './utils/text.js'
+import { listed, messageOf } from './utils/text.js'
 import { componentOf, type ComponentPlace, type PlaceProps } from './ui/places.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
@@ -72,7 +76,7 @@ export type TestedMod<State extends object> = {
   add(message: MessageDraft, options?: { readonly task?: string }): Promise<Message[]>
   endTurn(): Promise<void>
   compact(): Promise<void>
-  startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string }): Promise<string>
+  startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
   lines<P extends ComponentPlace>(place: P, props: Omit<PlaceProps<P>, 'Default'>, requestId?: string): Promise<string[]>
   type(line: string): Promise<CommandReply>
@@ -111,6 +115,7 @@ export function testMod<State extends object, Declared extends Options = Options
   fake.claude.session.root = async () => projectRoot
   fake.claude.session.cwd = async () => cwd
   const conversations = fakeSessions({
+    callTool: (args: Parameters<Claude["tool"]["call"]>[0]) => fake.claude.tool.call(args),
     project: () => projectRoot,
     given: options.sessions ?? [],
     push: (mod, session, change) => {
@@ -171,9 +176,24 @@ export function testMod<State extends object, Declared extends Options = Options
     if (lifecycle.phase !== 'active') throw failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)
   }
 
+  const cmodPlugin = createRouter()
+  const askMod = async (event: BeforeEvent, change: SessionChange) => {
+    const asked = { to: name, method: conversationMethods.before, input: { session: sessionId, event, change }, caller: cmodPluginName } as unknown as Frozen<Args<'cmod.call'>>
+    return calledAnswer(cmodPluginName, await lifecycle.route('cmod.call', asked, async () => ({ deny: notInstalled(name) })))
+  }
+  installBefore({
+    claude: fake.claude,
+    router: cmodPlugin,
+    hooks: {
+      place: async () => conversations.place(),
+      wants: async (event) => conversations.wants(name, event),
+      decide: (event, change) => foldAnswers(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })),
+    },
+  })
+
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {
     await start()
-    return lifecycle.route(event, input as Frozen<Args<N>>, async (e) => (below ?? claudeCodeAnswer(event, e)) as EventResult<N>)
+    return cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (below ?? claudeCodeAnswer(event, e)) as EventResult<N>))
   }
 
   const drawPane = async (paneId: string) => {
@@ -360,6 +380,10 @@ function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<
 }
 
 function claudeCodeAnswer(event: RoutedEvent, e: unknown): unknown {
+  if (event === 'agent.spawn') {
+    const { model, parentModel } = e as Args<'agent.spawn'>
+    return { agentId: 'agent-1', model: model ?? parentModel }
+  }
   if (event !== 'prompt.submit') return {}
   const { text, context, origin } = e as Args<'prompt.submit'>
   return { text, ...(context === undefined ? {} : { context }), origin }

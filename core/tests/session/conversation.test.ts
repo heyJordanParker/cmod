@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { ContextEnd, ContextStart } from '../../src/session/context/context.js'
 import { Document } from '../../src/session/context/turn/message/document.js'
-import { Message, rowOfLine, type Row } from '../../src/session/context/turn/message/message.js'
+import { Message, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
 import { Note } from '../../src/session/context/turn/message/note.js'
 import { Notice } from '../../src/session/context/turn/message/notice.js'
 import { Prompt } from '../../src/session/context/turn/message/prompt.js'
@@ -143,6 +143,49 @@ test('a task launched in the background ends at its task notification, not at th
   expect(kinds(launched)).toEqual([ToolResult])
   expect(kinds(notified)).toEqual([Note, TaskEnd])
   expect(notified[0]?.type === Message && notified[0].message).toMatchObject({ text: 'Found the pane.', from: { type: 'task' } })
+})
+
+test("a rewritten task notification keeps the envelope that ends the task, with the new summary", () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Find the pane'))
+  conversation.add(said({ type: 'tool_use', id: 'toolu_9', name: 'Agent', input: { prompt: 'find the pane' } }))
+  conversation.startTask({ id: 'agent-3', title: 'find the pane', agentType: 'explorer', openedBy: 'toolu_9', openedAt: '2026-10-13T10:01:00.000Z' })
+  conversation.add(answered('toolu_9', 'Async agent launched successfully.'))
+  const original = line({ type: 'user', isMeta: true, message: { role: 'user', content: '<task-notification><tool-use-id>toolu_9</tool-use-id><summary>Found the pane.</summary></task-notification>' } })
+
+  const notified = conversation.add({ ...original, content: withTexts(original, new Map([[0, 'Found it in tree.ts.']])) })
+
+  expect(kinds(notified)).toEqual([Note, TaskEnd])
+  expect(notified[0]?.type === Message && notified[0].message).toMatchObject({ text: 'Found it in tree.ts.', from: { type: 'task' } })
+})
+
+test('clearing every text block of a reply clears each one, not only the first', () => {
+  const row = line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'secret one' }, { type: 'text', text: 'secret two' }] } })
+
+  expect(withTexts(row, new Map([[0, ''], [1, '']]))).toEqual([{ type: 'text', text: '' }, { type: 'text', text: '' }])
+})
+
+test("rewriting a tool result's text keeps its images", () => {
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0' } }
+  const row = line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'Screenshot' }, image] }] } })
+
+  expect(withTexts(row, new Map([[0, 'Cleaned screenshot']]))).toEqual([{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'Cleaned screenshot' }, image] }])
+})
+
+test('every task a workflow call started ends when the call returns, and a notification ends only the task it names', () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Review the change'))
+  conversation.add(said({ type: 'tool_use', id: 'workflow-call', name: 'Agent', input: { prompt: 'review' } }))
+  for (const id of ['worker-1', 'worker-2']) conversation.startTask({ id, title: id, agentType: 'reviewer', openedBy: 'workflow-call', openedAt: '2026-10-13T10:01:00.000Z' })
+  conversation.add(said({ type: 'tool_use', id: 'async-call', name: 'Agent', input: { prompt: 'watch' } }))
+  for (const id of ['watcher-1', 'watcher-2']) conversation.startTask({ id, title: id, agentType: 'watcher', openedBy: 'async-call', openedAt: '2026-10-13T10:01:00.000Z' })
+  conversation.add(answered('async-call', 'Async agent launched successfully.'))
+
+  const returned = conversation.add(answered('workflow-call', 'Both reviews are done.'))
+  const notified = conversation.add(line({ type: 'user', isMeta: true, message: { role: 'user', content: '<task-notification><task-id>watcher-2</task-id><tool-use-id>async-call</tool-use-id><summary>Done.</summary></task-notification>' } }))
+
+  expect(returned.flatMap((change) => (change.type === TaskEnd ? [change.task.id] : []))).toEqual(['worker-1', 'worker-2'])
+  expect(notified.flatMap((change) => (change.type === TaskEnd ? [change.task.id] : []))).toEqual(['watcher-2'])
 })
 
 test('a conversation restarted from its saved state keeps its open turn, goal, and tasks', () => {

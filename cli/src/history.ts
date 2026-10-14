@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
 import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
@@ -9,6 +9,7 @@ import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
 import { TaskEnd, TaskStart } from '@cmodjs/core/src/session/goal/task.js'
+import { UsageChange, type Usage } from '@cmodjs/core/src/session/session.js'
 import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type ConversationState, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine } from '@cmodjs/core/src/utils/text.js'
 import { configRoot } from './settings.js'
@@ -40,15 +41,15 @@ create index messages_by_task on messages (session, task, seq);
 create index messages_by_turn on messages (session, turn, seq);
 create index messages_by_time on messages (at);
 create index messages_by_folder on messages (folder, at);
-create table turns (session text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, primary key (session, prompt));
-create table contexts (session text not null, number integer not null, opened_at text not null, closed_at text, primary key (session, number));
+create table turns (session text not null, task text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, primary key (session, prompt));
+create table contexts (session text not null, task text not null default '', number integer not null, opened_at text not null, closed_at text, primary key (session, task, number));
 create table tasks (session text not null, id text not null, title text not null, agent_type text not null, model text, opened_by text not null, opened_at text not null, closed_at text, parent text, context integer not null, primary key (session, id));
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-3.sqlite'
+const indexFile = 'history-5.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite']
 
 const chunkBytes = 65_536
 
@@ -104,16 +105,31 @@ export function foldersIn(scope: Pick<Scope, 'project' | 'everyProject'>): strin
   return existsSync(projectsFolder()) ? readdirSync(projectsFolder(), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(projectsFolder(), entry.name)) : []
 }
 
-export function runningSessions(): Set<string> {
-  const folder = join(configRoot(), 'sessions')
-  if (!existsSync(folder)) return new Set()
-  const running = new Set<string>()
+function runningFolder(): string {
+  return join(configRoot(), 'sessions')
+}
+
+function runningEntries(): { readonly session: string; readonly cwd: string }[] {
+  const folder = runningFolder()
+  if (!existsSync(folder)) return []
+  const running: { session: string; cwd: string }[] = []
   for (const name of readdirSync(folder)) {
     if (!name.endsWith('.json')) continue
     const entry = parsedRow(readFileSync(join(folder, name), 'utf8'))
-    if (typeof entry?.['pid'] === 'number' && typeof entry['sessionId'] === 'string' && isAlive(entry['pid'])) running.add(entry['sessionId'])
+    if (typeof entry?.['pid'] === 'number' && typeof entry['sessionId'] === 'string' && isAlive(entry['pid'])) running.push({ session: entry['sessionId'], cwd: typeof entry['cwd'] === 'string' ? entry['cwd'] : '' })
   }
   return running
+}
+
+export function runningSessions(): Set<string> {
+  return new Set(runningEntries().map(({ session }) => session))
+}
+
+function runningIn(project: string): string[] {
+  const folder = folderOf(project)
+  return runningEntries()
+    .filter(({ session, cwd }) => cwd === project || cwd.startsWith(`${project}${sep}`) || existsSync(join(folder, `${session}.jsonl`)))
+    .map(({ session }) => session)
 }
 
 function isAlive(pid: number): boolean {
@@ -129,7 +145,9 @@ function mainTranscripts(folder: string): Transcript[] {
   if (!existsSync(folder)) return []
   return readdirSync(folder)
     .filter((name) => name.endsWith('.jsonl'))
-    .map((name) => ({ path: join(folder, name), folder, session: name.slice(0, -'.jsonl'.length), task: undefined }))
+    .map((name) => ({ transcript: { path: join(folder, name), folder, session: name.slice(0, -'.jsonl'.length), task: undefined }, born: statSync(join(folder, name)).birthtimeMs }))
+    .sort((first, second) => first.born - second.born || first.transcript.path.localeCompare(second.transcript.path))
+    .map(({ transcript }) => transcript)
 }
 
 function taskTranscripts(main: Transcript): Transcript[] {
@@ -284,13 +302,13 @@ function saveChanges(db: Database, place: { readonly session: string; readonly f
       const text = searchText(message)
       if (added.changes > 0 && text !== '') db.query('insert into message_text (rowid, text) values (?, ?)').run(added.lastInsertRowid, text)
     } else if (change.type === TurnStart) {
-      db.query('insert or replace into turns (session, prompt, context, opened_at) values (?, ?, ?, ?)').run(session, change.turn.prompt.id, change.turn.context, change.turn.openedAt)
+      db.query('insert or replace into turns (session, task, prompt, context, opened_at, closed_at) values (?, ?, ?, ?, ?, ?)').run(session, change.turn.prompt.task ?? '', change.turn.prompt.id, change.turn.context, change.turn.openedAt, change.turn.closedAt ?? null)
     } else if (change.type === TurnEnd) {
       db.query('update turns set closed_at = ? where session = ? and prompt = ?').run(change.turn.closedAt ?? null, session, change.turn.prompt.id)
     } else if (change.type === ContextStart) {
-      db.query('insert or replace into contexts (session, number, opened_at) values (?, ?, ?)').run(session, change.context.number, change.context.openedAt)
+      db.query('insert or replace into contexts (session, task, number, opened_at) values (?, ?, ?, ?)').run(session, change.context.task ?? '', change.context.number, change.context.openedAt)
     } else if (change.type === ContextEnd) {
-      db.query('update contexts set closed_at = ? where session = ? and number = ?').run(change.context.closedAt ?? null, session, change.context.number)
+      db.query('insert into contexts (session, task, number, opened_at, closed_at) values (?, ?, ?, ?, ?) on conflict (session, task, number) do update set closed_at = excluded.closed_at').run(session, change.context.task ?? '', change.context.number, change.context.openedAt, change.context.closedAt ?? null)
     } else if (change.type === TaskStart) {
       const { task } = change
       db.query('insert or replace into tasks (session, id, title, agent_type, model, opened_by, opened_at, parent, context) values (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(session, task.id, task.title, task.agentType, task.model ?? null, task.openedBy, task.openedAt, task.parent ?? null, task.context)
@@ -516,19 +534,19 @@ export function readMessages(db: Database, request: MessagesRequest): SessionMes
   })
 }
 
-export function readTurns(db: Database, request: { readonly session: string; readonly project: string; readonly context?: number; readonly last?: number }): TurnData[] {
+export function readTurns(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string; readonly context?: number; readonly last?: number }): TurnData[] {
   return readTwice(`The transcripts of ${request.session} changed while cmod read them. Run the command again.`, () => {
     readSession(db, sessionTranscripts(request.session, request.project))
-    const inContext = request.context === undefined ? '' : 'and context = ?2'
+    const inContext = request.context === undefined ? '' : 'and context = ?3'
     const rows = db
-      .query<{ prompt: string; context: number; opened_at: string; closed_at: string | null }, (string | number)[]>(`select prompt, context, opened_at, closed_at from turns where session = ?1 ${inContext} order by opened_at`)
-      .all(request.session, ...(request.context === undefined ? [] : [request.context]))
+      .query<{ prompt: string; context: number; opened_at: string; closed_at: string | null }, (string | number)[]>(`select prompt, context, opened_at, closed_at from turns where session = ?1 and task = ?2 ${inContext} order by opened_at`)
+      .all(request.session, request.task ?? '', ...(request.context === undefined ? [] : [request.context]))
     const kept = request.last === undefined ? rows : rows.slice(-request.last)
-    const placeOf = db.query<Place, [string, string]>(`select ${placeColumns} from messages where session = ?1 and task = '' and id = ?2`)
+    const placeOf = db.query<Place, [string, string, string]>(`select ${placeColumns} from messages where session = ?1 and task = ?2 and id = ?3`)
     const prompts = messagesAt(
       db,
       kept.flatMap((turn) => {
-        const place = placeOf.get(request.session, turn.prompt)
+        const place = placeOf.get(request.session, request.task ?? '', turn.prompt)
         return place === null ? [] : [place]
       }),
     )
@@ -541,21 +559,29 @@ export function readTurns(db: Database, request: { readonly session: string; rea
   })
 }
 
-export function readContexts(db: Database, request: { readonly session: string; readonly project: string }): ContextData[] {
+export function readContexts(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string }): ContextData[] {
   readSession(db, sessionTranscripts(request.session, request.project))
-  return db
-    .query<{ number: number; opened_at: string; closed_at: string | null }, [string]>('select number, opened_at, closed_at from contexts where session = ? order by number')
-    .all(request.session)
-    .map((row) => ({ number: row.number, openedAt: row.opened_at, ...(row.closed_at === null ? {} : { closedAt: row.closed_at }) }))
+  const contexts = db
+    .query<{ number: number; opened_at: string; closed_at: string | null }, [string, string]>('select number, opened_at, closed_at from contexts where session = ? and task = ? order by number')
+    .all(request.session, request.task ?? '')
+    .map((row): ContextData => ({ number: row.number, openedAt: row.opened_at, ...(row.closed_at === null ? {} : { closedAt: row.closed_at }), ...(request.task === undefined ? {} : { task: request.task }) }))
+  if (request.task === undefined) return contexts
+  const task = db.query<{ context: number; opened_at: string; closed_at: string | null }, [string, string]>('select context, opened_at, closed_at from tasks where session = ? and id = ?').get(request.session, request.task)
+  if (task === null) throw new Error(`Session ${request.session} has no task ${request.task}.`)
+  const first: ContextData = { number: task.context, openedAt: task.opened_at, task: request.task }
+  const all = contexts.some((context) => context.number === task.context) ? contexts : [first, ...contexts]
+  const last = all.at(-1)
+  return task.closed_at === null || last === undefined || last.closedAt !== undefined ? all : [...all.slice(0, -1), { ...last, closedAt: task.closed_at }]
 }
 
-export function readTasks(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string }): TaskData[] {
+export function readTasks(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string; readonly isNested?: boolean }): TaskData[] {
   readSession(db, sessionTranscripts(request.session, request.project))
+  const under = request.isNested === true ? '' : 'and parent is ?2'
   return db
-    .query<{ id: string; title: string; agent_type: string; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; parent: string | null }, [string, string | null]>(
-      'select id, title, agent_type, model, opened_by, opened_at, closed_at, parent from tasks where session = ?1 and parent is ?2 order by opened_at',
+    .query<{ id: string; title: string; agent_type: string; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; parent: string | null }, (string | null)[]>(
+      `select id, title, agent_type, model, opened_by, opened_at, closed_at, parent from tasks where session = ?1 ${under} order by opened_at`,
     )
-    .all(request.session, request.task ?? null)
+    .all(request.session, ...(request.isNested === true ? [] : [request.task ?? null]))
     .map((row) => ({
       id: row.id,
       title: row.title,
@@ -575,8 +601,41 @@ export function readState(db: Database, request: { readonly session: string; rea
   return goal === undefined ? state : { ...state, goal }
 }
 
-export function readGoal(db: Database, request: { readonly session: string; readonly project: string }): GoalData {
-  return { text: readState(db, request).goal ?? '' }
+export function readGoal(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string }): GoalData {
+  if (request.task === undefined) return { text: readState(db, request).goal ?? '' }
+  const saved = savedGoal(request.task)
+  if (saved !== undefined) return { text: saved }
+  const [first] = readTurns(db, request)
+  return { text: first?.prompt.text ?? '' }
+}
+
+export function readUsage(request: { readonly session: string; readonly project: string; readonly task?: string }): Usage {
+  const transcripts = sessionTranscripts(request.session, request.project)
+  const transcript = transcripts.find((each) => each.task === request.task)
+  if (transcript === undefined) throw new Error(`Session ${request.session} has no task ${request.task ?? ''}.`)
+  const size = sizeOf(transcript.path)
+  let usage: Usage | undefined
+  let tail = Math.max(0, size - tailBytes)
+  while (usage === undefined) {
+    let isPartial = tail > 0
+    readLines(transcript.path, tail, size, (line) => {
+      const raw = isPartial ? undefined : parsedRow(line.bytes.toString('utf8'))
+      isPartial = false
+      usage = usageOfRow(raw) ?? usage
+      return true
+    })
+    if (tail === 0) break
+    tail = Math.max(0, tail - tailBytes)
+  }
+  return usage ?? { model: '', context: {} }
+}
+
+export function usageOfRow(raw: Raw | undefined): Usage | undefined {
+  const message = raw?.['type'] === 'assistant' && isObject(raw['message']) ? raw['message'] : undefined
+  const counts = message !== undefined && isObject(message['usage']) ? message['usage'] : undefined
+  if (message === undefined || counts === undefined || typeof message['model'] !== 'string' || message['model'] === '<synthetic>') return undefined
+  const count = (key: string) => (typeof counts[key] === 'number' ? counts[key] : 0)
+  return { model: message['model'], context: { tokens: count('input_tokens') + count('cache_creation_input_tokens') + count('cache_read_input_tokens') + count('output_tokens') } }
 }
 
 function savedGoal(session: string): string | undefined {
@@ -586,39 +645,77 @@ function savedGoal(session: string): string | undefined {
 
 const searchPaths = { time: 'indexed by messages_by_time', folder: 'indexed by messages_by_folder', matches: 'not indexed' }
 
-export function searchQuery(scope: { readonly isScoped: boolean; readonly isRunning: boolean; readonly hasBefore: boolean; readonly path: keyof typeof searchPaths }): string {
+export type RecordScope = { readonly session?: string; readonly task?: string; readonly turn?: string; readonly context?: number; readonly isGoal?: boolean }
+
+export function searchQuery(scope: { readonly isScoped: boolean; readonly isRunning: boolean; readonly hasBefore: boolean; readonly path: keyof typeof searchPaths; readonly record?: RecordScope }): string {
   const inFolder = scope.isScoped ? 'and folder = (select id from folders where path = ?)' : ''
   const running = scope.isRunning ? 'and session in (select value from json_each(?))' : ''
   const before = scope.hasBefore ? 'and (at, row) < (?, ?)' : ''
   return `select ${placeColumns} from messages ${searchPaths[scope.path]}
-    where row in (select rowid from message_text where message_text match ?) ${inFolder} ${running} and at >= ? ${before}
+    where row in (select rowid from message_text where message_text match ?) ${inFolder} ${running} ${recordFilter(scope.record ?? {})} and at >= ? ${before}
     order by at desc, row desc limit ?`
 }
 
-type SearchScope = Scope & { readonly limit?: number; readonly before?: { readonly session: string; readonly id: string } }
+function recordFilter(record: RecordScope): string {
+  const inSession = record.session === undefined ? '' : 'and session = ?'
+  const tree = `with recursive tree(id) as (select ? union select tasks.id from tasks join tree on tasks.parent = tree.id where tasks.session = ?) select id from tree`
+  const inTask = record.task === undefined ? (record.isGoal === true ? "and task != ''" : '') : `and task in (${tree}${record.isGoal === true ? ' where id != ?' : ''})`
+  const inTurn = record.turn === undefined ? '' : 'and turn = ?'
+  const inContext = record.context === undefined ? '' : 'and context = ? and task = ?'
+  return `${inSession} ${inTask} ${inTurn} ${inContext}`
+}
+
+function recordParams(record: RecordScope): (string | number)[] {
+  const task = record.task === undefined ? [] : [record.task, record.session ?? '', ...(record.isGoal === true ? [record.task] : [])]
+  return [...(record.session === undefined ? [] : [record.session]), ...task, ...(record.turn === undefined ? [] : [record.turn]), ...(record.context === undefined ? [] : [record.context, record.task ?? ''])]
+}
+
+type SearchScope = Scope & { readonly limit?: number; readonly before?: { readonly session: string; readonly id: string }; readonly record?: RecordScope }
 
 export function searchMessages(db: Database, text: string, scope: SearchScope): SessionMessage[] {
   if ([...text].length < 3) throw new Error('cmod history search takes at least 3 characters.')
-  const folders = foldersIn(scope)
+  const session = scope.record?.session
+  const folders = session === undefined ? foldersIn(scope) : []
   const phrase = `"${text.replaceAll('"', '""')}"`
   const scoped = scope.everyProject ? [] : folders
   const running = scope.running === true ? [JSON.stringify([...runningSessions()])] : []
   return readTwice('The transcripts changed while cmod searched them. Run the command again.', () => {
-    readFolders(db, folders, true)
+    if (session === undefined) readFolders(db, folders, true)
+    else readSession(db, sessionTranscripts(session, scope.project))
     const before = scope.before
     const cursor = before === undefined ? undefined : db.query<{ at: string; row: number }, [string, string]>('select at, row from messages where session = ? and id = ? limit 1').get(before.session, before.id)
     if (cursor === null) throw new Error(`No indexed message ${before?.id} is in session ${before?.session}.`)
     const matches = db.query<{ found: number }, [string, number]>('select count(*) as found from (select rowid from message_text where message_text match ? limit ?)').get(phrase, sortedMatches)?.found ?? 0
     const path = matches < sortedMatches ? 'matches' : scoped.length > 0 ? 'folder' : 'time'
-    const query = searchQuery({ isScoped: scoped.length > 0, isRunning: running.length > 0, hasBefore: cursor !== undefined, path })
-    const places = db.query<Place, (string | number)[]>(query).all(phrase, ...scoped, ...running, scope.since ?? '', ...(cursor === undefined ? [] : [cursor.at, cursor.row]), scope.limit ?? searchLimit)
+    const record = scope.record ?? {}
+    const query = searchQuery({ isScoped: scoped.length > 0, isRunning: running.length > 0, hasBefore: cursor !== undefined, path, record })
+    const places = db.query<Place, (string | number)[]>(query).all(phrase, ...scoped, ...running, ...recordParams(record), scope.since ?? '', ...(cursor === undefined ? [] : [cursor.at, cursor.row]), scope.limit ?? searchLimit)
     return messagesAt(db, places)
   })
 }
 
-export async function followSessions(db: Database, sessions: readonly string[], project: string, onChange: (session: string, change: SessionChange) => void, signal: AbortSignal): Promise<void> {
-  const followers = sessions.map((session) => followSession(db, session, project, (change) => onChange(session, change), signal))
-  await Promise.all(followers)
+export async function followSessions(db: Database, { sessions, isEveryRunning }: { readonly sessions: readonly string[]; readonly isEveryRunning: boolean }, project: string, onChange: (session: string, change: SessionChange, isInProject: boolean) => void, signal: AbortSignal): Promise<void> {
+  const own = process.env['CLAUDE_CODE_SESSION_ID']
+  const followed = new Set<string>()
+  const followers: Promise<void>[] = []
+  const add = (session: string) => {
+    if (followed.has(session) || session === own) return
+    followed.add(session)
+    const isInProject = runningIn(project).includes(session) || existsSync(join(folderOf(project), `${session}.jsonl`))
+    followers.push(followSession(db, session, project, (change) => onChange(session, change, isInProject), signal))
+  }
+  for (const session of sessions) add(session)
+  if (!isEveryRunning) {
+    await Promise.all(followers)
+    return
+  }
+  const look = () => {
+    for (const session of runningIn(project)) add(session)
+  }
+  mkdirSync(runningFolder(), { recursive: true })
+  watch(runningFolder(), { signal }).on('change', look).on('error', () => undefined)
+  look()
+  await new Promise<void>((resolve) => (signal.aborted ? resolve() : signal.addEventListener('abort', () => resolve(), { once: true })))
 }
 
 async function followSession(db: Database, session: string, project: string, onChange: (change: SessionChange) => void, signal: AbortSignal): Promise<void> {
@@ -642,8 +739,10 @@ async function followSession(db: Database, session: string, project: string, onC
       offsets = indexed
       return
     }
-    const reached = stepThrough(conversation, transcripts(), offsets, ({ changes }) => {
+    const reached = stepThrough(conversation, transcripts(), offsets, ({ transcript, raw, changes }) => {
       for (const change of changes) onChange(change)
+      const usage = transcript.task === undefined ? usageOfRow(raw) : undefined
+      if (usage !== undefined) onChange({ type: UsageChange, usage })
     })
     for (const [path, offset] of reached) offsets.set(path, offset)
   }

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { readFile } from 'node:fs/promises'
+import { chmod, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
@@ -78,6 +78,28 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(sums).toBe(`${expected.join('\n')}\n`)
   expect(JSON.parse(await readFile(join(dirname(archive), 'marketplace.json'), 'utf8')).plugins[0].source.sha256).toBe(expected[0]?.split('  ')[0])
   expect(await Bun.file(join(root, '.claude-plugin/marketplace.json')).exists()).toBe(false)
+})
+
+test('publish uploads the release files before it pushes the marketplace, so no update reaches a release without them', async () => {
+  const home = await temporaryHome()
+  const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)
+  const remote = join(home, 'remote.git')
+  await Bun.spawn(['git', 'init', '-q', '--bare', remote]).exited
+  await Bun.spawn(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
+  for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await Bun.spawn(['git', '-C', root, 'config', key as string, value as string]).exited
+  await writeFiles(home, { 'bin/gh': `#!/bin/sh\ngit --git-dir="${remote}" for-each-ref --format='%(refname)' > "${home}/refs-at-release"\n` })
+  await chmod(join(home, 'bin/gh'), 0o755)
+
+  const result = await cmod(home, 'publish', root)
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  const atRelease = (await readFile(join(home, 'refs-at-release'), 'utf8')).trim().split('\n')
+  const after = (await new Response(Bun.spawn(['git', '--git-dir', remote, 'for-each-ref', '--format=%(refname)'], { stdout: 'pipe' }).stdout).text()).trim().split('\n')
+  const branch = (await new Response(Bun.spawn(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
+  expect(atRelease).toContain('refs/tags/v0.2.0')
+  expect(atRelease).not.toContain(`refs/heads/${branch}`)
+  expect(after).toContain(`refs/heads/${branch}`)
 })
 
 test("publish writes the version's CHANGELOG.md section as the release notes, and ships the changelog in the release", async () => {

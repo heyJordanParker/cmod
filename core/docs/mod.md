@@ -49,7 +49,7 @@ Claude Code loads the mod at the start of each session. cmod then checks that th
 
 The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit.`, what its install step set up, and each permission the person allowed, with a Settings button for `/mods <name>`. The first time a new version starts, the toast is `Updated to <version>`: the first three changes of that version's `CHANGELOG.md` section, the version the machine ran before, and a Changelog button ([Release notes](#release-notes)). A mod with no changelog lists what it adds now and no longer adds instead. A new session, `/reload-plugins`, and a version the machine already ran show no toast.
 
-When a step fails, or the person declines the install, the mod stays stopped. Once `cmod install <name>` sets it up in a terminal, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
+When a step fails, or the person declines the install, the mod stays stopped. Once another session sets it up, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
 
 When a step fails, the mod does not start. An error toast above the prompt names the failure, with the fix under it:
 
@@ -61,7 +61,24 @@ When a step fails, the mod does not start. An error toast above the prompt names
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
 - `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
 
-Each of these says `Fix it, then run /reload-plugins.`
+Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)).
+
+## Rules
+
+A mod's `rules/` folder holds rules in Claude Code's own rule format: one Markdown file per rule, with an optional `paths` list in its front matter. A rule without `paths` applies to every conversation, and a rule with `paths` applies when Claude reads a matching file.
+
+```
+my-mod/
+└── rules/
+    ├── tests.md        <- applies to every conversation
+    └── sql.md          <- front matter paths: ["**/*.sql"]
+```
+
+While the mod is on and has the `prompt` permission, cmod links the folder into Claude Code's rules folder: a mod the person installed links at `<config>/rules/<mod>`, and a mod turned on for one project at `<project>/.claude/rules/<mod>`. A mod turned off for one project keeps its rules out of that project through `claudeMdExcludes` in the project's `.claude/settings.local.json`. A rule the person excluded with `claudeMdExcludes` stays out of the notes too. Turning the mod off, turning `prompt` off, and removing the mod remove the link, and an update links the new version's folder. cmod changes only the links and exclusions it made.
+
+Claude Code reads rules without `paths` only as a session starts. So when cmod links a mod's rules into a running session, it adds them to the conversation as one note, and when it removes the link, one note says the mod's rules no longer apply. A rule taken out of the folder is withdrawn by a note too. When an update changes a rule without `paths`, one note gives its new text. Claude Code loads rules with `paths` itself, at the read that matches.
+
+The `Installed` toast lists the rules, as in `Adds 2 rules: sql and tests.` `cmod check` fails a mod with a `rules/` folder whose `package.json` `"cmod"` does not ask for `"prompt": true`.
 
 ## Release notes
 
@@ -235,6 +252,7 @@ mod.use(slashCommand({ name: 'ci-runs', description: 'Show the CI runs', reply: 
 ## settings: Claude Code's settings files
 
 ```ts
+settings.list(): Promise<Setting[]>
 settings.user.read(): Promise<Settings>
 settings.user.update(values: Readonly<Record<string, unknown>>): Promise<void>
 settings.project.read(): Promise<Settings>
@@ -242,6 +260,14 @@ settings.project.update(values: Readonly<Record<string, unknown>>): Promise<void
 settings.local.read(): Promise<Settings>
 settings.local.update(values: Readonly<Record<string, unknown>>): Promise<void>
 ```
+
+`settings.list` answers every row of Claude Code's `/config` menu, its own and each plugin's, with the value each holds now:
+
+```ts
+type Setting = { key: string; label: string; description?: string; kind: 'boolean' | 'choice' | 'text' | 'number'; value: boolean | string | number | readonly string[]; options?: readonly string[]; plugin?: string; isLocked: boolean }
+```
+
+`plugin` names the plugin a row belongs to, and Claude Code's own rows have none. `isLocked` is true when a managed setting or the organization's policy holds the value.
 
 `settings.user` is the person's own `~/.claude/settings.json`, `settings.project` is the project's `.claude/settings.json`, and `settings.local` is the project's `.claude/settings.local.json`.
 
@@ -326,7 +352,7 @@ type Entry = { name: string; isFile: boolean; isFolder: boolean; isLink: boolean
 type Stat = { isFile: boolean; isFolder: boolean; isLink: boolean; size: number; modifiedAt: number; realPath?: string }
 ```
 
-- A relative path is under the session's working folder. An absolute path is used as given. `~/.claude` is Claude Code's config folder, and `~` is the home folder. Text is UTF-8.
+- A relative path is under the session's working folder. An absolute path is used as given. `~/.claude` and `$CLAUDE_CONFIG_DIR` are Claude Code's config folder, and `~` and `$HOME` are the home folder. Text is UTF-8.
 - `read` rejects a missing file and a file over 4 MiB.
 - `write` writes the whole file and creates its folders. Writing outside the project and the mod's data folder needs the `files` permission.
 - `list` lists a folder, the working folder without a path. A symbolic link is neither a file nor a folder, with `isLink` true. `modifiedAt` is the time it last changed, in milliseconds since 1970.

@@ -3,10 +3,11 @@ import type { AgentInfo, ClassicHookInputs, EventResult, RenderElement } from 'c
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { CwdChanged, defineMod, FileChanged, fs, messageOf, model, Note, PermissionRequest, Person, PostToolUse, PreToolUse, process, Prompt, Reply, SessionStart, sessions, settings, Stop, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type HookInput, type HookListener, type Job, type Mod, type PaneHandle, type Task } from '../src/mod.js'
+import { CwdChanged, defineMod, FileChanged, fs, MessageDisplay, messageOf, model, Note, PermissionRequest, Person, PostToolUse, PreToolUse, process, Prompt, Reply, SessionStart, sessions, settings, Stop, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type HookInput, type HookListener, type Job, type Mod, type PaneHandle, type Task } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
+import { installerPaneOf } from '../src/runtime/installer.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type FakeSession, type TestedMod } from '../src/testing.js'
 import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
@@ -208,7 +209,7 @@ test("model.complete passes the request and options to Claude Code's model call"
 })
 
 test('a hook past its timeoutMs answers as if it were absent and warns of the timeout', async () => {
-  let passTimeout: () => void = () => undefined
+  let passTimeout: (() => void) | undefined
   const tested = testMod(
     defineMod({
       name: 'babysitter',
@@ -223,8 +224,8 @@ test('a hook past its timeoutMs answers as if it were absent and warns of the ti
   }
 
   const answer = tested.fire(Stop, { stop_hook_active: false, last_assistant_message: 'Done.' } as never, {})
-  await tested.settle()
-  passTimeout()
+  for (let waited = 0; passTimeout === undefined && waited < 100; waited += 1) await tested.settle()
+  passTimeout?.()
 
   expect(await answer).toEqual({})
   expect(tested.shown.toasts).toContainEqual({ type: 'warning', message: 'The Stop hook passed its 8 s timeout' })
@@ -598,32 +599,92 @@ async function pressInBand(tested: TestedMod<object>, label: string): Promise<vo
   await tested.settle()
 }
 
-test("a failure toast's Copy copies the mod and core versions, message, description, and stack, then reads Copied", async () => {
-  const root = '/test/plugins/keep-going'
-  const tested = testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on(Stop, () => Promise.reject(new Error('the test runner is missing'))) }), {
-    files: { [`${root}/.claude-plugin/plugin.json`]: '{ "name": "keep-going", "version": "1.4.0" }' },
+const failingStop = (manifest: string) =>
+  testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on(Stop, () => Promise.reject(new Error('the test runner is missing'))) }), {
+    files: { '/test/plugins/keep-going/.claude-plugin/plugin.json': manifest },
   })
+
+test("a failure toast's Report choices copy the mod and core versions, message, description, and stack", async () => {
+  const tested = failingStop('{ "name": "keep-going", "version": "1.4.0" }')
   await tested.fire(Stop, { stop_hook_active: false } as never)
 
-  await pressInBand(tested, 'Copy')
+  await pressInBand(tested, 'Report')
+  await pressInBand(tested, 'Copy the error')
 
   const [copied] = tested.calls.filter(({ call }) => call === 'ui.copy').map(({ args }) => (args[0] as { text: string }).text)
   expect(copied).toStartWith(`keep-going 1.4.0, @cmodjs/core ${corePackage.version}\nThe Stop hook failed\nthe test runner is missing\n\nError: the test runner is missing\n    at `)
-  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('Copied')
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('Copied the error.')
+})
+
+test("Report opens its choices in the toast with the keys on Ask Claude, which asks Claude to report it to the mod's GitHub issues", async () => {
+  const tested = failingStop('{ "name": "keep-going", "version": "1.4.0", "repository": "https://github.com/acme/keep-going" }')
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+
+  await pressInBand(tested, 'Report')
+  const choices = textOf(await tested.fire('ui.render', toastBand as never, belowBand))
+  const focused = tested.calls.filter(({ call }) => call === 'ui.focus').map(({ args }) => args[0])
+  await pressInBand(tested, 'Ask Claude to report it')
+
+  expect(choices).toContain('Report it on GitHub (opens your browser)')
+  expect(focused).toEqual([{ requestId: 'band', key: 'toast:hook:Stop:ask-claude' }])
+  const [asked] = tested.calls.filter(({ call }) => call === 'prompt.submit').map(({ args }) => args[0] as { text: string; asUser?: boolean })
+  expect(asked?.asUser).toBe(true)
+  expect(asked?.text).toStartWith('The keep-going mod failed. Report it to its author. Report it as an issue on https://github.com/acme/keep-going.')
+  expect(asked?.text).toContain('The Stop hook failed\nthe test runner is missing')
+})
+
+test("one mod's popup pane is its own, so another mod never draws in it", async () => {
+  const shown = { surface: 'terminal', component: 'Pane', requestId: installerPaneOf('keep-going'), props: { title: 'Report keep-going', isFocused: true, bodyColumns: 80, placement: 'dock' } }
+  const tested = testMod(defineMod({ name: 'probe', setup() {} }))
+  await tested.start()
+
+  expect(installerPaneOf('keep-going')).not.toBe(installerPaneOf('probe'))
+  expect(textOf(await tested.fire('ui.render', shown as never, { type: 'Text', children: ['keep-going draws this'] } as never))).toBe('keep-going draws this')
+})
+
+test('Hide keeps a failure hidden when it happens again, and a different failure shows', async () => {
+  let reason = 'the test runner is missing'
+  const tested = testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on(Stop, () => Promise.reject(new Error(reason))) }))
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+
+  await pressInBand(tested, 'Hide')
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+  const afterHide = tested.shown.toasts.filter((toast) => toast.type === 'error')
+  reason = 'the disk is full'
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+
+  expect(afterHide).toEqual([])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The Stop hook failed', description: 'the disk is full' }])
 })
 
 test('coreVersion, which a bundled mod reports in Copy, is the version in core/package.json', () => {
   expect(coreVersion).toBe(corePackage.version)
 })
 
-test('a Copy Claude Code refuses names the reason on the button', async () => {
-  const tested = testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on(Stop, () => Promise.reject(new Error('the test runner is missing'))) }))
+test('the same failure happening again keeps the Report choices open, and a different failure closes them', async () => {
+  let reason = 'the test runner is missing'
+  const tested = testMod(defineMod({ name: 'keep-going', setup: (mod) => mod.on(Stop, () => Promise.reject(new Error(reason))) }))
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+
+  await pressInBand(tested, 'Report')
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+  const again = textOf(await tested.fire('ui.render', toastBand as never, belowBand))
+  reason = 'the disk is full'
+  await tested.fire(Stop, { stop_hook_active: false } as never)
+
+  expect(again).toContain('Ask Claude to report it')
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).not.toContain('Ask Claude to report it')
+})
+
+test('a Copy Claude Code refuses names the reason under the Report choices', async () => {
+  const tested = failingStop('{ "name": "keep-going", "version": "1.4.0" }')
   tested.fakes.ui.copy = async () => ({ isCopied: false, reason: 'no-clipboard' })
   await tested.fire(Stop, { stop_hook_active: false } as never)
 
-  await pressInBand(tested, 'Copy')
+  await pressInBand(tested, 'Report')
+  await pressInBand(tested, 'Copy the error')
 
-  expect(findElement(await tested.fire('ui.render', toastBand as never, belowBand), 'Button', 'Copy failed: no-clipboard')).toBeDefined()
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('Could not copy it: no-clipboard')
 })
 
 test("mod.ui.copy rejects with Claude Code's reason", async () => {
@@ -734,6 +795,14 @@ test('a job added with mod.use answers tool.check, reaches Claude Code calls, an
   expect(handle?.denied).toEqual(['git push --force'])
   expect(tested.shown.commands).toEqual(['pushes'])
   expect(tested.shown.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the /pushes command.' }])
+})
+
+test("the Installed toast names the rules a mod adds", async () => {
+  const tested = testMod(defineMod({ name: 'house-style', setup() {} }), { files: { '/test/plugins/house-style/rules/tests.md': 'Write a test before each fix.\n', '/test/plugins/house-style/rules/sql.md': 'Quote every identifier.\n' } })
+
+  await tested.start()
+
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds 2 rules: sql and tests.')
 })
 
 test("the current session's project and cwd are set before setup runs", async () => {
@@ -1005,6 +1074,59 @@ test('fs.exists and fs.stat answer for files and folders', async () => {
   expect(answers).toEqual({ file: true, folder: true, missing: false, isFolder: true })
 })
 
+test('fs reads a path under $HOME or $CLAUDE_CONFIG_DIR like one under ~', async () => {
+  let read: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'rules',
+      async setup() {
+        read = [await fs.read('$CLAUDE_CONFIG_DIR/CLAUDE.md'), await fs.read('$HOME/notes.md')]
+      },
+    }),
+    { permissions: ['files:~/.claude', 'files:~/notes.md'], files: { '/test/home/.claude/CLAUDE.md': 'config\n', '/test/home/notes.md': 'notes\n' } },
+  )
+
+  await tested.start()
+
+  expect(read).toEqual(['config\n', 'notes\n'])
+})
+
+test('settings.list lists every /config row, naming the plugin that owns a row', async () => {
+  let listed: unknown
+  const tested = testMod(
+    defineMod({
+      name: 'panel',
+      async setup() {
+        listed = await settings.list()
+      },
+    }),
+  )
+  tested.fakes.config.list = async () => [
+    { key: 'theme', label: 'Theme', kind: 'choice', value: 'dark', options: ['dark', 'light'], provider: { plugin: 'engine', tier: 'core' }, isLocked: false },
+    { key: 'tracer.depth', label: 'Depth', description: 'How deep to trace', kind: 'number', value: 3, provider: { plugin: 'tracer', tier: 'user' }, isLocked: true },
+  ] as never
+
+  await tested.start()
+
+  expect(listed).toEqual([
+    { key: 'theme', label: 'Theme', kind: 'choice', value: 'dark', options: ['dark', 'light'], isLocked: false },
+    { key: 'tracer.depth', label: 'Depth', description: 'How deep to trace', kind: 'number', value: 3, isLocked: true, plugin: 'tracer' },
+  ])
+})
+
+test('a hook added in 1.5 hears its event, and MessageDisplay changes what the person sees', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'display',
+      setup(mod) {
+        mod.on(MessageDisplay, () => ({ hookSpecificOutput: { hookEventName: MessageDisplay, displayContent: 'Shortened.' } }))
+      },
+    }),
+  )
+
+  expect(await tested.fire(MessageDisplay, {} as never)).toEqual({ displayContent: 'Shortened.' } as never)
+})
+
 const older: FakeSession = {
   id: 'older',
   title: 'Switch to build mode',
@@ -1119,7 +1241,7 @@ test('a send to an ended session is refused with its id', async () => {
 
   await tested.start()
 
-  expect(failure).toBe('modes: session older has ended, so it takes no messages.')
+  expect(failure).toBe('session older has ended')
 })
 
 test('sessions refuses a mod without the conversation permission and names the fix', async () => {
@@ -1146,7 +1268,7 @@ test('sessions.current.startTask starts a task and returns it', async () => {
 
   await tested.fire(UserPromptSubmit, { prompt: 'go' } as never)
 
-  expect([started?.id, started?.title, started?.agentType, started?.model]).toEqual(['agent-7', 'Read the readme', 'explorer', 'test-model'])
+  expect([started?.id, started?.title, started?.owner.agentType, started?.owner.model]).toEqual(['agent-7', 'Read the readme', 'explorer', 'test-model'])
   expect(tested.calls.filter((call) => call.call === 'agent.spawn').map((call) => call.args)).toEqual([[{ prompt: 'Read README.md.', description: 'Read the readme', name: 'Read the readme', subagentType: 'explorer' }]])
 })
 
@@ -1275,6 +1397,33 @@ test('a pane Claude Code holds back is not open, so the first toggle opens it in
 
   expect(handle?.isOpen).toBe(true)
   expect(tested.calls.filter((call) => call.call === 'ui.open' || call.call === 'ui.close').map((call) => call.call)).toEqual(['ui.open', 'ui.open'])
+})
+
+test('a pane handle says whether its pane is the one shown and whether it has the keyboard', async () => {
+  let first: PaneHandle | undefined
+  let second: PaneHandle | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      setup(mod) {
+        first = mod.ui.pane(drawingPane)
+        second = mod.ui.pane({ ...drawingPane, id: 'legend', title: 'Legend' })
+      },
+    }),
+  )
+  await tested.start()
+
+  await first?.open({ focus: true })
+
+  expect([first?.isShown, first?.isFocused]).toEqual([true, true])
+
+  await second?.open()
+
+  expect([first?.isShown, second?.isShown, second?.isFocused]).toEqual([false, true, false])
+
+  await second?.close()
+
+  expect([first?.isShown, second?.isShown]).toEqual([true, false])
 })
 
 test('the first toggle of a pane setup opened and Claude Code holds back opens it', async () => {
@@ -1479,7 +1628,7 @@ const outline = defineMod({
 })
 
 function relayTo(provider: Pick<TestedMod<object>, 'fire'>): Claude['cmod']['call'] {
-  return async (call) => calledAnswer('outline', await provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Run cmod install ${call.to}.` }))
+  return async (call) => calledAnswer('outline', await provider.fire('cmod.call', call, { deny: `${call.to} is not installed. Add it with /plugin.` }))
 }
 
 test("a mod calls another mod's api and gets its result", async () => {
@@ -1496,7 +1645,7 @@ test('a call to a mod that is not installed fails with the install command', asy
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'file-tree', setup() {} })))
 
-  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Run cmod install tracer.' })
+  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Add it with /plugin.' })
 })
 
 test("a hook whose call is refused shows the refusal once, without Claude Code's prefix", async () => {
@@ -1504,12 +1653,12 @@ test("a hook whose call is refused shows the refusal once, without Claude Code's
 
   await consumer.fire(Stop, { stop_hook_active: false } as never)
 
-  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The Stop hook failed', description: 'tracer is not installed. Run cmod install tracer.' })
+  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The Stop hook failed', description: 'tracer is not installed. Add it with /plugin.' })
 })
 
 test('an unknown method fails naming it', async () => {
   const provider = testMod(tracer)
-  const below = { deny: 'tracer is not installed. Run cmod install tracer.' }
+  const below = { deny: 'tracer is not installed. Add it with /plugin.' }
 
   expect(await provider.fire('cmod.call', { to: 'tracer', method: 'callers', input: { name: 'parse' } }, below)).toEqual({ deny: 'tracer has no method callers.' })
   expect(await provider.fire('cmod.call', { to: 'tracer', method: 'constructor', input: {} }, below)).toEqual({ deny: 'tracer has no method constructor.' })

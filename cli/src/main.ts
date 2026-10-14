@@ -13,6 +13,7 @@ import * as option from './commands/option.js'
 import * as permission from './commands/permission.js'
 import * as publish from './commands/publish.js'
 import * as remove from './commands/remove.js'
+import * as rules from './commands/rules.js'
 import * as settings from './commands/settings.js'
 import * as setup from './commands/setup.js'
 import * as teardown from './commands/teardown.js'
@@ -20,6 +21,7 @@ import * as tryMod from './commands/try.js'
 import * as unlink from './commands/unlink.js'
 import * as update from './commands/update.js'
 import { interruptProgress } from './progress.js'
+import { syncRules } from './rules.js'
 
 type Command = { summary: string; help: string; run(argv: string[]): Promise<number> }
 
@@ -41,9 +43,12 @@ const commands: Record<string, Command> = {
   permission,
   option,
   settings,
+  rules,
   history,
   download,
 }
+
+const changesRules: readonly string[] = ['install', 'update', 'remove', 'enable', 'disable', 'link', 'unlink', 'setup', 'teardown', 'permission']
 
 const overview = `Usage: cmod <command> [arguments]
 
@@ -72,6 +77,7 @@ if (name === '--version' || name === '-v') {
   } else {
     try {
       process.exitCode = await command.run(argv)
+      if (process.exitCode === 0 && changesRules.includes(name)) await syncRules(process.cwd())
     } catch (error) {
       interruptProgress()
       process.stderr.write(`cmod ${name}: ${messageOf(error)}\n`)

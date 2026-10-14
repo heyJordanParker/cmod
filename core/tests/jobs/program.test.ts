@@ -99,7 +99,7 @@ test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
 
   const started = await ready()
   const answered = expect(started.ready()).rejects.toThrow(
-    'preview: the preview-server program stopped: it did not start again after 5 tries: listen EADDRINUSE (start 6). Fix it, then run /reload-plugins.',
+    'preview: the preview-server program stopped: it did not start again after 5 tries: listen EADDRINUSE (start 6).',
   )
   await tested.settle()
 

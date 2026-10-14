@@ -64,7 +64,7 @@ test('messages reads a conversation as typed messages placed in their context an
   const { project } = await writeHistory(home)
 
   expect(await json(home, 'messages', 's1', '--project', project)).toEqual(mainMessages(project))
-  expect(await json(home, 'messages', 's1', '--project', project, '--task', 'a7')).toEqual([{ id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', text: 'find the pane file', from: { type: 'task' } }])
+  expect(await json(home, 'messages', 's1', '--project', project, '--task', 'a7')).toEqual([{ id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', turn: 'x1', text: 'find the pane file', from: { type: 'task' } }])
   expect(ids(await json(home, 'messages', 's1', '--project', project, '--last', '1'))).toEqual(['p1'])
   expect(ids(await json(home, 'messages', 's1', '--project', project, '--after', 'a1:1'))).toEqual(['r1', 'p1'])
   expect(ids(await json(home, 'messages', 's1', '--project', project, '--turn', 'p1'))).toEqual(['p1'])
@@ -82,6 +82,32 @@ test('turns, contexts, tasks, and goal read the shape of a conversation', async 
   expect(await json(home, 'contexts', 's1', '--project', project)).toEqual([{ number: 1, openedAt: at(0) }])
   expect(await json(home, 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', agentType: 'explorer', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5) }])
   expect(await json(home, 'goal', 's1', '--project', project)).toEqual({ text: 'Rename the tree pane' })
+})
+
+test("--task reads the agent a task runs like a conversation: its turns, context, goal, and usage", async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await appendFile(join(home, `${projectFolder(project)}/s1/subagents/agent-a7.jsonl`), lines([{ type: 'assistant', uuid: 'x2', timestamp: at(3), message: { role: 'assistant', model: 'claude-haiku-5', content: [{ type: 'text', text: 'It is src/panes/tree.tsx.' }], usage: { input_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 80, output_tokens: 10 } } }]))
+  const prompt = { id: 'x1', type: 'prompt', at: at(2), session: 's1', context: 1, task: 'a7', turn: 'x1', text: 'find the pane file', from: { type: 'task' } }
+
+  expect(await json(home, 'turns', 's1', '--project', project, '--task', 'a7')).toEqual([{ prompt, context: 1, openedAt: at(2), closedAt: at(5) }])
+  expect(await json(home, 'contexts', 's1', '--project', project, '--task', 'a7')).toEqual([{ number: 1, openedAt: at(1), closedAt: at(5), task: 'a7' }])
+  expect(await json(home, 'goal', 's1', '--project', project, '--task', 'a7')).toEqual({ text: 'find the pane file' })
+  expect(await json(home, 'usage', 's1', '--project', project, '--task', 'a7')).toEqual({ model: 'claude-haiku-5', context: { tokens: 1000 } })
+  expect(await json(home, 'usage', 's1', '--project', project)).toEqual({ model: '', context: {} })
+})
+
+test('search --session keeps one conversation, and --task, --turn, and --goal keep a part of it', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1'))).toEqual(['x1', 'a1:1', 'u1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--task', 'a7'))).toEqual(['x1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--goal'))).toEqual(['x1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--turn', 'u1'))).toEqual(['a1:1', 'u1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--context', '1'))).toEqual(['a1:1', 'u1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--task', 'a7', '--context', '1'))).toEqual(['x1'])
+  expect((await cmod(home, 'history', 'search', 'pane', '--task', 'a7')).stderr).toContain('cmod history search takes --task, --turn, --context, and --goal only with --session.')
 })
 
 test('a compaction closes the context and opens the next, and a turn closes when Claude finishes', async () => {
@@ -172,9 +198,31 @@ test('follow prints each change saved after it started, and nothing saved before
   const { stdout } = await following.done
 
   expect(stdout.trim().split('\n').map((line) => JSON.parse(line) as unknown)).toEqual([
-    { session: 's1', change: { type: 'message', message: { id: 'a2', type: 'reply', at: at(9), session: 's1', context: 1, turn: 'p1', text: 'Build mode is on.' } } },
-    { session: 's1', change: { type: 'turnEnd', turn: { prompt: mainMessages(project)[4], context: 1, openedAt: at(6), closedAt: at(10) } } },
+    { session: 's1', isInProject: true, change: { type: 'message', message: { id: 'a2', type: 'reply', at: at(9), session: 's1', context: 1, turn: 'p1', text: 'Build mode is on.' } } },
+    { session: 's1', isInProject: true, change: { type: 'turnEnd', turn: { prompt: mainMessages(project)[4], context: 1, openedAt: at(6), closedAt: at(10) } } },
   ])
+})
+
+test('follow --running follows a session of the project that starts after it, and no other project', async () => {
+  const home = await temporaryHome()
+  const { project, other } = await writeHistory(home)
+  const following = startCmod(home, 'history', 'follow', '--running', '--project', project, '--json')
+  await following.waitForOutput('Following every running session of the project')
+
+  await writeFiles(home, {
+    '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's2', cwd: project }),
+    '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 's8', cwd: other }),
+  })
+  await Bun.sleep(500)
+  await writeFiles(home, {
+    [`${projectFolder(other)}/s8.jsonl`]: lines([{ type: 'user', uuid: 'w2', timestamp: at(40), cwd: other, origin: { kind: 'human' }, message: { role: 'user', content: 'Ship the site' } }]),
+    [`${projectFolder(project)}/s2.jsonl`]: lines([{ type: 'user', uuid: 'n1', timestamp: at(41), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Add a search pane' } }]),
+  })
+  await following.waitForOutput('"Add a search pane"')
+  following.child.kill()
+  const { stdout } = await following.done
+
+  expect([...new Set(stdout.trim().split('\n').map((line) => (JSON.parse(line) as { session: string }).session))]).toEqual(['s2'])
 })
 
 test('the conversation the command runs in has no messages before its first is saved, and another unsaved session id fails', async () => {
@@ -272,14 +320,25 @@ test('sessions leaves out a session no one prompted, and lists one whose first p
   expect(await json(home, 'sessions', '--project', project)).toEqual([late])
 })
 
-test('an index made by an older cmod is deleted, and the index is history-3.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-5.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  await writeFiles(home, { '.local/share/cmod/history.sqlite': 'an older index\n', '.local/share/cmod/history-2.sqlite': 'an older index\n' })
+  await writeFiles(home, { '.local/share/cmod/history.sqlite': 'an older index\n', '.local/share/cmod/history-2.sqlite': 'an older index\n', '.local/share/cmod/history-3.sqlite': 'an older index\n', '.local/share/cmod/history-4.sqlite': 'an older index\n' })
 
   await json(home, 'sessions', '--project', project)
 
-  expect(['history.sqlite', 'history-2.sqlite', 'history-3.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, true])
+  expect(['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, false, false, true])
+})
+
+test("a task's compaction gives its owner a new context, and contexts --task lists both", async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await appendFile(join(home, `${projectFolder(project)}/s1/subagents/agent-a7.jsonl`), lines([{ type: 'system', subtype: 'compact_boundary', uuid: 'c1', timestamp: at(3) }]))
+
+  expect(await json(home, 'contexts', 's1', '--task', 'a7', '--project', project)).toEqual([
+    { number: 1, openedAt: at(1), closedAt: at(3), task: 'a7' },
+    { number: 2, openedAt: at(3), closedAt: at(5), task: 'a7' },
+  ])
 })
 
 test("a deleted project folder's sessions leave the index after cmod history index", async () => {

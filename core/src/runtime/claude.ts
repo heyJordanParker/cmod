@@ -30,6 +30,8 @@ import type {
   Timer,
   ToolSpec,
   UiCopyArgs,
+  UiFocusArgs,
+  UiFocusResult,
   UiCopyResult,
   UiLogOptions,
   UiOpenResult,
@@ -51,6 +53,7 @@ export type Claude = {
     panes(): Promise<readonly UiPane[]>
     scroll(args: UiScrollArgs): Promise<UiScrollResult>
     copy(args: UiCopyArgs): Promise<UiCopyResult>
+    focus(args: UiFocusArgs): Promise<UiFocusResult>
     resolve(e: ResolveInput): ElementTable<RenderSurface>
   }
   readonly process: {

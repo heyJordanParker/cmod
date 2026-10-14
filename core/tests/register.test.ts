@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { EngineInterface, On, RenderElement } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
-import { defineMod, PostToolUse, PreToolUse } from '../src/mod.js'
+import { CwdChanged, defineMod, hooks, PostToolUse, PreToolUse } from '../src/mod.js'
 import { scriptsSha256 } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
@@ -98,21 +98,36 @@ test('registerMod registers each Claude Code event once, and no permission check
 
   expect(fake.registrations.map((registration) => registration.pattern)).toEqual([
     'session.start',
+    'classic.Setup',
     'classic.SessionStart',
     'classic.SessionEnd',
     'classic.UserPromptSubmit',
+    'classic.UserPromptExpansion',
     'classic.InstructionsLoaded',
+    'classic.ConfigChange',
+    'classic.DirectoryAdded',
+    'classic.PreModelSwitch',
+    'classic.PostModelSwitch',
     'classic.PermissionDenied',
     'classic.PostToolUse',
     'classic.PostToolUseFailure',
     'classic.PostToolBatch',
+    'classic.MessageDisplay',
     'classic.SubagentStart',
     'classic.SubagentStop',
+    'classic.TaskCreated',
+    'classic.TaskCompleted',
+    'classic.TeammateIdle',
+    'classic.Elicitation',
+    'classic.ElicitationResult',
     'classic.Notification',
     'classic.PreCompact',
+    'classic.PostCompact',
     'classic.Stop',
     'classic.StopFailure',
     'classic.FileChanged',
+    'classic.WorktreeCreate',
+    'classic.WorktreeRemove',
     'tool.call',
     'prompt.submit',
     'prompt.context',
@@ -319,4 +334,15 @@ test('no module a hook loads holds import(), which makes Claude Code refuse the 
   }
 
   expect(holding).toEqual([])
+})
+
+test("registerMod names each event as a string literal, which Claude Code's hooks loader requires, and registers every hook a mod hears", async () => {
+  const source = await Bun.file(`${import.meta.dir}/../src/register.ts`).text()
+  const fake = fakeOn()
+  registerMod(fake.on, demo, {})
+  registerPermissionCheck(fake.on)
+  const classic = fake.registrations.map((registration) => registration.pattern).filter((pattern) => pattern.startsWith('classic.'))
+
+  expect([...source.matchAll(/addHook\(\s*([^,]+),/g)].map((match) => match[1]).filter((name) => !/^'[a-zA-Z.]+'$/.test(name ?? ''))).toEqual([])
+  expect(hooks.filter((hook) => hook !== PreToolUse && hook !== CwdChanged && !classic.includes(`classic.${hook}`))).toEqual([])
 })

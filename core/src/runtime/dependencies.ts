@@ -34,5 +34,5 @@ export function withBareRefusals(claude: Claude): Claude {
 }
 
 export function notInstalled(name: string): string {
-  return `${name} is not installed. Run cmod install ${name}.`
+  return `${name} is not installed. Add it with /plugin.`
 }

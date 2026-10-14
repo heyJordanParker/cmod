@@ -98,7 +98,7 @@ Releases the mod at `path` (default: the current folder) at the version in its `
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
 6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin. The cmod entry points at the `release` branch of `heyJordanParker/cmod`, so the mod's `"cmod"` dependency resolves in this marketplace and follows each cmod release with no new publish of the mod.
-7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, and creates the GitHub release. Its notes are the version's section of the committed `CHANGELOG.md`, above GitHub's compare link ([mod.md](mod.md#release-notes)). `--dry-run` prints them.
+7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, creates the GitHub release with every file, then pushes the branch that holds `marketplace.json`. So Claude Code never updates anyone to a release whose files are not up yet. Its notes are the version's section of the committed `CHANGELOG.md`, above GitHub's compare link ([mod.md](mod.md#release-notes)). `--dry-run` prints them.
 8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
 
 The release keeps `package.json`, so Claude Code still installs the mod's packages for its install and uninstall steps. It keeps `bun.lock` too, unless a `"files"` list leaves it out. `main` keeps the source only.
@@ -179,30 +179,33 @@ Lists every plugin Claude Code has installed or linked, with its version. A mod 
 
 ```text
 cmod history sessions [--all] [--since 2d] [--running] [--project <folder>] [--json]
-cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--limit <n>] [--before <session>:<id>] [--json]
+cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--goal]] [--limit <n>] [--before <session>:<id>] [--json]
 cmod history messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
-cmod history turns [<session>] [--context <n>] [--last <n>] [--json]
-cmod history contexts [<session>] [--json]
-cmod history tasks [<session>] [--task <id>] [--json]
-cmod history goal [<session>] [--json]
+cmod history turns [<session>] [--task <id>] [--context <n>] [--last <n>] [--json]
+cmod history contexts [<session>] [--task <id>] [--json]
+cmod history tasks [<session>] [--task <id> | --nested] [--json]
+cmod history goal [<session>] [--task <id>] [--json]
+cmod history usage [<session>] [--task <id>] [--json]
 cmod history state [<session>] [--json]
-cmod history follow <session>... [--json]
+cmod history follow [<session>...] [--running] [--json]
 cmod history index
 ```
 
 Reads every conversation Claude Code saved, as the sessions, contexts, turns, tasks, and messages `sessions` answers a mod ([session.md](session.md)), so a person or an agent reads them in a terminal without parsing a transcript.
 
 - `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`, and `--running` keeps those open in Claude Code now.
-- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--all`, `--since`, and `--running` scope it as they scope `sessions`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before.
+- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--all`, `--since`, and `--running` scope it as they scope `sessions`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before. `--session` searches one conversation, and inside it `--task` searches a task and the tasks it started, `--turn` one turn, `--context` one context, and `--goal` the tasks of the conversation or of `--task`.
 - `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--task` reads a task's messages instead, `--turn` keeps one turn's, `--after` starts after a message id, and `--last` keeps that many from the end.
 - `turns` prints the conversation's turns, each opened by a prompt and closed when Claude finishes. `--context` keeps one context's, and `--last` keeps that many from the end.
 - `contexts` prints the conversation's contexts, a new one after each compaction.
-- `tasks` prints the tasks the conversation started, or with `--task` the tasks that task started.
+- `tasks` prints the tasks the conversation started, with `--task` the tasks that task started, and with `--nested` every task at any depth.
 - `goal` prints what the conversation is for: the goal a mod set, or its first prompt.
+- `usage` prints the model and the context's tokens as of the last reply.
+- `--task` reads `turns`, `contexts`, `goal`, and `usage` of the session a task's owner runs, the way they read the conversation's.
 - `state` prints what a running conversation resumes from.
-- `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. The cmod plugin runs it to hear other running sessions.
+- `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later. The cmod plugin runs it to hear other running sessions.
 - `--json` prints JSON instead of one line each.
-- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-3.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-5.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 ## Run in an install script
 
@@ -249,6 +252,14 @@ cmod settings <mod> <user|project|local> <json> [--project <folder>]
 ```
 
 Changes Claude Code settings for a set-up mod, as its `settings.user.update`, `settings.project.update`, and `settings.local.update` do ([mod.md](mod.md#settings-claude-code-s-settings-files)), such as `cmod settings keeper user '{"cleanupPeriodDays":365}'`. It writes each top-level key of the JSON object into the user, project, or local settings, and `null` removes the key. The project and local settings are those of `--project`, the current folder when it is left out, and `mcpServers` in the project settings goes to `.mcp.json`. Each key needs the mod's `config` permission for it. cmod keeps every other key and the file's formatting, and `cmod teardown` takes out each value the mod set that is still the same.
+
+### cmod rules
+
+```text
+cmod rules [--project <folder>] [--json]
+```
+
+Links the `rules/` folder of each mod that is on and has the `prompt` permission into Claude Code's rules folder, and removes the link of each that is off, lacks the permission, or is removed ([mod.md](mod.md#rules)). A mod the person installed links at `<config>/rules/<mod>`, and one turned on only for `--project`, the current folder when it is left out, links at `<project>/.claude/rules/<mod>`. It prints the rules it linked. With `--json` it prints `{ linked, placed, removed }`, where `placed` and `removed` name the mods whose link this run made or took away. `cmod install`, `update`, `remove`, `enable`, `disable`, `permission`, `setup`, `teardown`, `link`, and `unlink` run it after they succeed, and the cmod plugin runs it at each session's start and each prompt.
 
 ### cmod option
 

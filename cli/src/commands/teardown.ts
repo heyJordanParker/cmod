@@ -7,6 +7,7 @@ import { readText, tilde } from '../files.js'
 import { runStep } from '../process.js'
 import { removeData, removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
+import { unlinkRules } from '../rules.js'
 import { restoreSettings, unbindKeys } from '../settings.js'
 import { modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 import { holdSignals, printEvent, printFailure, stepEnvironment, uninterruptible } from './setup.js'
@@ -95,6 +96,7 @@ async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => 
   await restoreSettings(record.name)
   if (record.program !== null) await removeProgram(record.program)
   await removeData(record.name)
+  await unlinkRules(record.name)
   await revokeApprovals(record.name)
   await rm(recordPath(store, record.name))
   await rm(folder, { recursive: true, force: true })

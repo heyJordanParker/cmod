@@ -32,10 +32,11 @@ the release with claude plugin validate --strict and commits it as the release
 branch. Builds the release archive from that commit and the program cli/
 declares, writes SHA256SUMS for every file of the release, and writes
 .claude-plugin/marketplace.json listing the archive and the cmod plugin. Then
-commits that file, tags v<version>, pushes the tag and the release branch, and
-creates the GitHub release. Its notes are the "## [<version>]" section of the
-committed CHANGELOG.md, which every release ships, and it refuses a version
-with no section. It refuses a package.json that depends on a file: or link:
+commits that file, tags v<version>, pushes the tag and the release branch,
+creates the GitHub release with every file, then pushes the branch with
+marketplace.json, so no update reaches a release without its files. Its notes
+are the "## [<version>]" section of the committed CHANGELOG.md, which every
+release ships, and it refuses a version with no section. It refuses a package.json that depends on a file: or link:
 path, which no user has.
 
 Options:
@@ -151,8 +152,9 @@ export async function run(argv: string[]): Promise<number> {
   await git('add', marketplacePath)
   await git('commit', '--message', `release ${tag}`)
   await git('tag', tag)
-  await git('push', '--atomic', 'origin', 'HEAD', tag, `${release}:refs/heads/${releaseBranch}`)
+  await git('push', '--atomic', 'origin', tag, `${release}:refs/heads/${releaseBranch}`)
   await runCommand(['gh', 'release', 'create', tag, ...assets, '--repo', repository, '--title', `${plugin.name} ${plugin.version}`, '--generate-notes', '--notes', notes])
+  await git('push', 'origin', 'HEAD')
   progress.succeed(`Released ${tag}: https://github.com/${repository}/releases/tag/${tag}`)
   process.stdout.write(`\nTo list ${plugin.name} in Anthropic's plugin directory, open https://claude.ai/directory/manage, select Submit new, and paste this as the Repository:\n  ${directoryLink}\n`)
   return 0

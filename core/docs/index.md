@@ -85,7 +85,7 @@ A mod imports from the files below, and every other file in this package is inte
 | `mod.js` | `sessions`, `Sessions`, `Session`, `SessionScope`, `SessionSend`, `SessionEvent`, `SessionPayload`, `TaskStartArgs`, `Usage`, `Matcher` | [session.md](session.md) |
 | `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `Document`, `Notice`, `Sender`, `SenderType`, `Person`, `Schedule`, `Channel`, `Sdk` | [session.md](session.md#message) |
 | `mod.js` | `Context`, `ContextStart`, `ContextEnd`, `Turn`, `TurnStart`, `TurnEnd`, `Goal`, `GoalChange`, `Task`, `TaskStart`, `TaskEnd` | [session.md](session.md#turn-context-goal-and-task) |
-| `mod.js` | `Hook`, `HookInput`, `HookListener`, `HookOptions`, `HookAnswer`, and one constant per hook, from `SessionStart` to `FileChanged` | [hooks.md](hooks.md) |
+| `mod.js` | `Hook`, `HookInput`, `HookListener`, `HookOptions`, `HookAnswer`, and one constant for each of Claude Code's 33 hooks | [hooks.md](hooks.md) |
 | `mod.js` | `Toast`, `ToastId`, `ToastType`, `ToastOptions` | [ui.md](ui.md#toasts) |
 | `mod.js` | `Place`, `PlaceProps`, `ToolGroup`, `ToolProgress`, `CommandOutput`, `AskUserQuestion`, `Spinner`, `TurnDuration`, `SessionMode`, `PromptHint`, `AbovePrompt` | [ui.md](ui.md#places-change-a-row-claude-code-draws) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |

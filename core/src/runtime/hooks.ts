@@ -16,6 +16,7 @@ export type RoutedEvent =
   | 'tool.call'
   | 'prompt.submit'
   | 'prompt.context'
+  | 'prompt.attachment'
   | 'command.run'
   | 'session.measure'
   | 'skill.prompt'
@@ -38,24 +39,39 @@ type CallFiles = HookInput<'PreToolUse'>['files']
 const flags: readonly string[] = ['suppressOriginalPrompt', 'reloadSkills', 'retry']
 
 const readFields: Record<Hook, readonly string[]> = {
+  Setup: ['additionalContext'],
   SessionStart: ['additionalContext', 'initialUserMessage', 'sessionTitle', 'watchPaths', 'reloadSkills'],
   SessionEnd: [],
   UserPromptSubmit: ['additionalContext', 'sessionTitle', 'suppressOriginalPrompt'],
+  UserPromptExpansion: ['additionalContext', 'suppressOriginalPrompt'],
   InstructionsLoaded: [],
+  ConfigChange: [],
+  DirectoryAdded: [],
+  PreModelSwitch: ['permissionDecision', 'permissionDecisionReason'],
+  PostModelSwitch: ['additionalContext'],
   PreToolUse: ['additionalContext', 'permissionDecision', 'permissionDecisionReason', 'updatedInput'],
   PermissionRequest: ['decision'],
   PermissionDenied: ['retry'],
   PostToolUse: ['additionalContext', 'updatedToolOutput', 'updatedMCPToolOutput'],
   PostToolUseFailure: ['additionalContext'],
   PostToolBatch: ['additionalContext'],
+  MessageDisplay: ['displayContent'],
   SubagentStart: ['additionalContext'],
   SubagentStop: ['additionalContext'],
+  TaskCreated: [],
+  TaskCompleted: [],
+  TeammateIdle: [],
+  Elicitation: [],
+  ElicitationResult: [],
   Notification: [],
   PreCompact: [],
+  PostCompact: [],
   Stop: ['additionalContext'],
   StopFailure: [],
   CwdChanged: [],
   FileChanged: [],
+  WorktreeCreate: ['worktreePath'],
+  WorktreeRemove: [],
 }
 
 export function classicHook<E extends Exclude<Hook, 'PreToolUse'>>(name: string, event: E, hook: HookListener<E>, claude: Claude, calls: ToolCalls, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
@@ -172,9 +188,9 @@ async function preToolUseInput(name: string, envelope: Frozen<Args<'tool.call'>>
 
 async function callFiles(name: string, claude: Claude, use: CallBase, cwd: string): Promise<CallFiles> {
   try {
-    const home = await claude.env.home()
+    const [home, configRoot] = await Promise.all([claude.env.home(), claude.env.configHome()])
     if (home === undefined) throw new Error('HOME is not set, so ~ in a path has no meaning.')
-    const { shell, reads, writes } = callEffects(use, { cwd, home, fs: claude.fs })
+    const { shell, reads, writes } = callEffects(use, { cwd, home, ...(configRoot === undefined ? {} : { configRoot }), fs: claude.fs })
     const known = (accesses: FileAccess[]) => accesses.map(({ path }) => path).filter((path) => shell === undefined || !dynamicPattern.test(path))
     const unchecked = (path: string) => (error: unknown) => {
       if (!isMissing(error)) claude.ui.log(`${name}: the ${use.tool} call reads ${path}, which could not be checked: ${messageOf(error)}`, { to: 'debug' })
@@ -207,10 +223,10 @@ function classicResult(event: Hook, answer: HookAnswer): ClassicFields {
     if (field === 'hookEventName' || value === undefined || (value === false && flags.includes(field))) continue
     if (!readFields[event].includes(field)) throw unread(`hookSpecificOutput.${field}`)
     if (field === 'additionalContext') result['additionalContext'] = [value]
-    else if (field === 'permissionDecision') {
+    else if (field === 'permissionDecision' && event === 'PreToolUse') {
       const reason = specific.permissionDecisionReason ?? ''
       result[value as string] = value === 'allow' ? true : reason
-    } else if (field !== 'permissionDecisionReason') result[field] = value
+    } else if (field !== 'permissionDecisionReason' || event !== 'PreToolUse') result[field] = value
   }
   return result
 }

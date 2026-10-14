@@ -1,29 +1,45 @@
 import type { ElementTable, RenderElement, RenderPropsOf, Timer } from 'claude-code'
-import type { Mod, Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
-import { Box, Button, drawWith, Text } from '../ui/elements.js'
-import { coreVersion } from '../records.js'
+import type { Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
+import { Box, Button, drawWith, Link, Text } from '../ui/elements.js'
+import { coreVersion, isObject } from '../records.js'
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 
 export type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 
-export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string }
+export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown }
 
 export type Toaster = {
   readonly toast: Toast
   copy(text: string): Promise<void>
+  fail(failure: Failure): ToastId
   readonly shown: readonly ShownToast[]
-  draw(drawn: RenderElement, table: ElementTable, band: RenderPropsOf['AbovePrompt']): RenderElement
+  draw(drawn: RenderElement, table: ElementTable, band: RenderPropsOf['AbovePrompt'], bandId: string): RenderElement
 }
+
+type Action = { readonly label: string; readonly onClick: () => unknown }
+
+type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
+
+type Reporting = { readonly contact: Contact | undefined; readonly details: string; readonly status?: string }
 
 type Entry = {
   readonly id: ToastId
   readonly type: ToastType
   readonly message: string
   readonly options: ToastOptions
+  readonly actions: readonly Action[]
+  readonly hides?: string
   isOpen: boolean
+  reporting?: Reporting | undefined
   timer: Timer | undefined
 }
+
+const githubRepository = /^https:\/\/github\.com\/([^/]+\/[^/#?]+?)(?:\.git)?(?:\/issues)?\/?$/
+
+const linkLimit = 2048
+
+const hiddenKey = 'cmod:hidden-failures'
 
 const defaultDuration = 4000
 const visibleToasts = 3
@@ -37,13 +53,22 @@ const icons: Record<Exclude<ToastType, 'loading'>, { readonly glyph: string; rea
   error: { glyph: '✗', color: 'error' },
 }
 
-export function createToaster(claude: Claude, name: string): Toaster {
+export function createToaster(claude: Claude, name: string, version: () => string | undefined): Toaster {
   const entries = new Map<ToastId, Entry>()
+  const hidden = new Map<string, string>()
+  void claude.store.get(hiddenKey).then(
+    (saved) => {
+      if (typeof saved !== 'object' || saved === null) return
+      for (const [id, hides] of Object.entries(saved)) if (typeof hides === 'string' && !hidden.has(id)) hidden.set(id, hides)
+    },
+    (error: unknown) => claude.ui.log(`${name}: could not read the failures you hid: ${messageOf(error)}`, { to: 'debug' }),
+  )
   let lastId = 0
   let frame = 0
   let spinning: Timer | undefined
   let isHeld = false
   let showsAll = false
+  let bandId: string | undefined
 
   const changed = () => {
     const isLoading = [...entries.values()].some((entry) => entry.type === 'loading')
@@ -85,18 +110,29 @@ export function createToaster(claude: Claude, name: string): Toaster {
     changed()
   }
 
+  const put = (type: ToastType, message: string, options: ToastOptions, actions: readonly Action[], hides?: string): ToastId => {
+    const id = options.id ?? (lastId += 1)
+    const previous = entries.get(id)
+    if (previous !== undefined) disarm(previous)
+    const reporting = hides !== undefined && previous?.hides === hides ? previous.reporting : undefined
+    const entry: Entry = { id, type, message, options, actions, ...(hides === undefined ? {} : { hides }), isOpen: previous?.isOpen ?? false, reporting, timer: undefined }
+    if (type === 'error' && previous?.message !== message) claude.ui.log(`${name}: ${message}${typeof options.description === 'string' ? `: ${options.description}` : ''}`, { to: 'debug' })
+    entries.set(id, entry)
+    changed()
+    return id
+  }
+
   const show =
     (type: ToastType) =>
-    (message: string, options: ToastOptions = {}): ToastId => {
-      const id = options.id ?? (lastId += 1)
-      const previous = entries.get(id)
-      if (previous !== undefined) disarm(previous)
-      const entry: Entry = { id, type, message, options, isOpen: previous?.isOpen ?? false, timer: undefined }
-      if (type === 'error' && previous?.message !== message) claude.ui.log(`${name}: ${message}${typeof options.description === 'string' ? `: ${options.description}` : ''}`, { to: 'debug' })
-      entries.set(id, entry)
-      changed()
-      return id
-    }
+    (message: string, options: ToastOptions = {}): ToastId =>
+      put(type, message, options, options.action === undefined ? [] : [options.action])
+
+  const hide = (entry: Entry) => {
+    dismiss(entry.id)
+    if (entry.hides === undefined) return
+    hidden.set(String(entry.id), entry.hides)
+    void claude.store.set(hiddenKey, Object.fromEntries(hidden)).catch((error: unknown) => claude.ui.log(`${name}: could not remember the failure you hid: ${messageOf(error)}`, { to: 'debug' }))
+  }
 
   const toast: Toast = Object.assign(show('default'), {
     success: show('success'),
@@ -132,7 +168,33 @@ export function createToaster(claude: Claude, name: string): Toaster {
   const press = (entry: Entry, run: () => unknown) => () =>
     void Promise.resolve()
       .then(run)
-      .catch((error: unknown) => showFailure({ name, claude, ui: { toast, copy } }, { id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error }))
+      .catch((error: unknown) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error }))
+
+  const fail = ({ id, message, error, description = error === undefined ? undefined : describe(error), retry }: Failure): ToastId => {
+    const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
+    if (hidden.get(id) === hides) return id
+    hidden.delete(id)
+    const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
+    const details = async () => {
+      const modVersion = await claude.fs
+        .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
+        .then((text) => String((JSON.parse(text) as { version?: unknown }).version))
+        .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
+      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
+    }
+    const startReporting = async () => {
+      const shown = entries.get(id)
+      if (shown === undefined) return
+      shown.reporting = { contact: await contactOf(claude), details: await details() }
+      disarm(shown)
+      changed()
+      if (bandId === undefined) return
+      const focused = await claude.ui.focus({ requestId: bandId, key: `toast:${id}:ask-claude` })
+      if ('deny' in focused) claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: 'debug' })
+    }
+    const actions = [...(retry === undefined ? [] : [{ label: 'Retry', onClick: retry }]), { label: 'Report', onClick: startReporting }]
+    return put('error', message, { id, ...(description === undefined ? {} : { description }), duration: Infinity }, actions, hides)
+  }
 
   const toggle = (entry: Entry) => () => {
     entry.isOpen = !entry.isOpen
@@ -141,31 +203,70 @@ export function createToaster(claude: Claude, name: string): Toaster {
   }
 
   const row = (entry: Entry): RenderElement => {
-    const { description, action } = entry.options
+    const { description } = entry.options
     const isText = typeof description === 'string'
     const icon = entry.type === 'loading' ? { glyph: spinner[frame % spinner.length] as string, color: 'claude' } : icons[entry.type]
     const message = isText ? Button({ plain: true, key: `toast:${entry.id}:open`, label: entry.message, onPress: toggle(entry) }) : Text({ children: entry.message })
     const details = !isText ? description : Text({ dimColor: true, wrap: entry.isOpen ? 'wrap' : 'truncate-end', children: entry.isOpen ? description : firstLine(description) })
     const fixed = (child: RenderElement) => Box({ flexShrink: 0, children: child })
+    const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? '✕' : 'Hide', onPress: () => hide(entry) })
+    const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? 'action' : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }))
+    const text = details === undefined ? [message] : [message, details]
+    const under = entry.reporting === undefined ? [Box({ gap: 2, flexWrap: 'wrap', children: [...actions, close] })] : reportChoices(entry, entry.reporting)
     return Box({
       gap: 2,
       children: [
         fixed(Text({ ...(icon.color === undefined ? {} : { color: icon.color }), children: icon.glyph })),
         fixed(Text({ dimColor: true, children: name })),
-        Box({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, children: details === undefined ? [message] : [message, details] }),
-        ...(action === undefined ? [] : [fixed(Button({ plain: true, key: `toast:${entry.id}:action`, label: action.label, onPress: press(entry, action.onClick) }))]),
-        fixed(Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: '✕', onPress: () => dismiss(entry.id) })),
+        Box({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, children: entry.hides === undefined ? text : [...text, ...under] }),
+        ...(entry.hides === undefined ? [...actions.map(fixed), fixed(close)] : []),
       ],
     })
+  }
+
+  const reportChoices = (entry: Entry, { contact, details, status }: Reporting): RenderElement[] => {
+    const say = (said: string) => {
+      entry.reporting = { contact, details, status: said }
+      changed()
+    }
+    const back = () => {
+      entry.reporting = undefined
+      changed()
+    }
+    const askClaude = async () => {
+      await claude.prompt.submit({ text: reportPrompt(name, contact, details), asUser: true })
+      back()
+    }
+    const copyError = async () => {
+      const copied = await claude.ui.copy({ text: details })
+      say(copied.isCopied ? 'Copied the error.' : `Could not copy it: ${copied.reason}`)
+    }
+    const report = contact === undefined ? [] : [Link({ href: reportLink(contact, name, entry.message, details), label: contact.kind === 'github' ? 'Report it on GitHub (opens your browser)' : 'Email the author (opens your mail app)' })]
+    return [
+      Text({ dimColor: true, children: 'Claude writes up the problem and files it with your tools. You approve each step before anything is posted.' }),
+      Box({
+        gap: 2,
+        flexWrap: 'wrap',
+        children: [
+          Button({ plain: true, key: `toast:${entry.id}:ask-claude`, label: 'Ask Claude to report it', onPress: press(entry, askClaude) }),
+          ...report,
+          Button({ plain: true, key: `toast:${entry.id}:copy`, label: 'Copy the error', onPress: press(entry, copyError) }),
+          Button({ plain: true, dimColor: true, key: `toast:${entry.id}:back`, label: 'Back', onPress: back }),
+        ],
+      }),
+      ...(status === undefined ? [] : [Text({ dimColor: true, children: status })]),
+    ]
   }
 
   return {
     toast,
     copy,
+    fail,
     get shown() {
       return [...entries.values()].map(({ type, message, options }) => ({ type, message, ...(typeof options.description === 'string' ? { description: options.description } : {}) }))
     },
-    draw(drawn, table, band) {
+    draw(drawn, table, band, drawnIn) {
+      bandId = drawnIn
       isHeld = band.hasSurvey === true
       if (isHeld || entries.size === 0) return drawn
       const all = [...entries.values()]
@@ -186,28 +287,6 @@ export function createToaster(claude: Claude, name: string): Toaster {
   }
 }
 
-export type FailureTarget = {
-  readonly name: string
-  readonly ui: Pick<Mod['ui'], 'toast' | 'copy'>
-  readonly claude: { readonly plugin: Claude['plugin']; readonly fs: Pick<Claude['fs'], 'read'> }
-}
-
-export function showFailure({ name, ui, claude }: FailureTarget, { id, message, error, description = describe(error) }: Failure): ToastId {
-  const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
-  const show = (label: string): ToastId => ui.toast.error(message, { id, description, duration: Infinity, action: { label, onClick: copy } })
-  const copy = async (): Promise<ToastId> => {
-    const modVersion = await claude.fs
-      .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
-      .then((text) => String((JSON.parse(text) as { version?: unknown }).version))
-      .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
-    return ui.copy(`${name} ${modVersion}, @cmodjs/core ${coreVersion}\n${message}\n${description}${stack}`).then(
-      () => show('Copied'),
-      (failure: unknown) => show(`Copy failed: ${messageOf(failure)}`),
-    )
-  }
-  return show('Copy')
-}
-
 function describe(error: unknown): string {
   const messages: string[] = []
   for (let cause = error; cause !== undefined; cause = cause instanceof Error ? cause.cause : undefined) {
@@ -215,4 +294,41 @@ function describe(error: unknown): string {
     if (!messages.some((earlier) => earlier.includes(text) || text.includes(earlier))) messages.push(text)
   }
   return messages.join('\n')
+}
+
+async function contactOf(claude: Claude): Promise<Contact | undefined> {
+  const manifest: Record<string, unknown> = await claude.fs
+    .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
+    .then((text) => JSON.parse(text) as Record<string, unknown>)
+    .catch((error: unknown) => {
+      claude.ui.log(`${claude.plugin.name}: could not read whom to report to: ${messageOf(error)}`, { to: 'debug' })
+      return {}
+    })
+  const repositoryUrl = isObject(manifest['repository']) ? manifest['repository']['url'] : manifest['repository']
+  const repository = [manifest['supportUrl'], repositoryUrl].map((url) => (typeof url === 'string' ? githubRepository.exec(url)?.[1] : undefined)).find((found) => found !== undefined)
+  if (repository !== undefined) return { kind: 'github', repository }
+  const author = manifest['author']
+  const address = isObject(author) ? author['email'] : undefined
+  return typeof address === 'string' && address !== '' ? { kind: 'email', address } : undefined
+}
+
+function reportLink(contact: Contact, name: string, message: string, details: string): string {
+  const title = `${name}: ${message}`.slice(0, 120)
+  const linkOf = (body: string) =>
+    contact.kind === 'github'
+      ? `https://github.com/${contact.repository}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`
+      : `mailto:${contact.address}?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`
+  let body = details
+  while (linkOf(body).length > linkLimit && body.length > 0) body = `${body.slice(0, Math.floor(body.length * 0.8))}…`
+  return linkOf(body)
+}
+
+function reportPrompt(name: string, contact: Contact | undefined, details: string): string {
+  const where =
+    contact === undefined
+      ? `${name} names no place to report it, so find its author from its plugin.json or its marketplace.`
+      : contact.kind === 'github'
+        ? `Report it as an issue on https://github.com/${contact.repository}.`
+        : `Email it to ${contact.address}.`
+  return `The ${name} mod failed. Report it to its author. ${where} First check whether it is reported already, and add to that report instead of filing a new one. Show me the report before you post it.\n\n${details}`
 }

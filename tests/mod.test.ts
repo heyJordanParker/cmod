@@ -20,12 +20,64 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
     const answer = answers[argv[2] ?? ''] ?? { exitCode: 0, stdout: `missing ${argv[2]}\n`, stderr: '' }
     return { ...answer, isStdoutTruncated: false, isStderrTruncated: false }
   }
+  answerRules(tested, [{ linked: [], placed: [], removed: [] }])
   return { tested, teardowns }
 }
 
+type Synced = { linked: { mod: string; folder: string; rules: { name: string; isGlobal: boolean; text: string }[] }[]; placed: string[]; removed: string[] }
+
+function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]) {
+  tested.fakes.process.spawn = () => {
+    const answer = answers.length > 1 ? answers.shift() : answers[0]
+    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+      yield { stream: 'stdout', text: `${JSON.stringify(answer)}\n` }
+      return { code: 0, signal: null }
+    }
+    return Object.assign(read(), { result: Promise.resolve({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  }
+}
+
+test("a mod's global rules linked after Claude Code started reach Claude as one note, and a later unlink says they no longer apply", async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const rules = [
+    { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' },
+    { name: 'sql', isGlobal: false, text: 'Quote every identifier.' },
+  ]
+  const linked = { linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed: ['house-style'], removed: [] }
+  answerRules(tested, [linked, { ...linked, placed: [] }, { linked: [], placed: [], removed: ['house-style'] }])
+  const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
+
+  await tested.fire(SessionStart, { source: 'startup' })
+  await settled()
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+
+  expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.'])
+
+  await tested.fire(UserPromptSubmit, { prompt: 'again' })
+  await settled()
+
+  expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.', "The house-style mod's rules no longer apply."])
+})
+
+test('a rule taken out of a mod that stays linked is withdrawn by a note, and its other rules keep applying', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const linked = (rules: { name: string; isGlobal: boolean; text: string }[], placed: string[]) => ({ linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed, removed: [] })
+  const tests = { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' }
+  const old = { name: 'old-api', isGlobal: true, text: 'Use the old API.' }
+  answerRules(tested, [linked([tests, old], ['house-style']), linked([tests], [])])
+  const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
+
+  await tested.fire(SessionStart, { source: 'startup' })
+  await settled()
+  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await settled()
+
+  expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.', 'These rules of the house-style mod no longer apply:\n\nUse the old API.'])
+})
+
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the Mods pane, /mods and hooks on SessionStart, UserPromptSubmit, Stop and StopFailure.\nInstalled the cmod program.\nRun cmod on your computer.\nRead your Claude Code conversations.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the Mods pane, /mods and hooks on SessionStart, UserPromptSubmit, Stop and StopFailure.\nInstalled the cmod program.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled', description: 'A session that still runs it stops after /reload-plugins.' } as const
 
@@ -305,7 +357,7 @@ test('cmod.call denies a call no mod takes with the install command', async () =
 
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
 
-  expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Run cmod install tracer.' })
+  expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Add it with /plugin.' })
 })
 
 const readingConsent = { [`${store}/consent.json`]: JSON.stringify({ recall: ['conversation'], notes: ['prompt'] }) }

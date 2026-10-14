@@ -112,7 +112,7 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
     })
   }
   if (row.isSummary) return []
-  const results = row.content.filter((block) => isObject(block) && block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string') as Readonly<Record<string, unknown>>[]
+  const results = row.content.filter(isToolResultBlock)
   if (results.length > 0) return results.map((block) => ({ ...base, type: ToolResult, callId: block['tool_use_id'] as string, text: textOf(block['content']), isError: block['is_error'] === true }))
   if (text === '') return []
   if (text.startsWith(skillPrefix)) return [{ ...base, type: Skill, name: basename(text.slice(skillPrefix.length).split('\n')[0]?.trim() ?? ''), text }]
@@ -120,6 +120,44 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   if (row.isMeta) return [{ ...base, type: Note, text, from: senderOf(row.origin, isInTask) }]
   const prompt = promptText(text)
   return prompt === undefined ? [] : [{ ...base, type: Prompt, text: prompt, from: senderOf(row.origin, isInTask) }]
+}
+
+export function withTexts(row: Row, texts: ReadonlyMap<number, string>): readonly unknown[] {
+  if (row.type === 'assistant') {
+    let index = -1
+    return row.content.map((block) => {
+      if (!isObject(block)) return block
+      const isText = block['type'] === 'text' && typeof block['text'] === 'string' && block['text'].trim() !== ''
+      const isCall = block['type'] === 'tool_use' && typeof block['id'] === 'string' && typeof block['name'] === 'string'
+      if (!isText && !isCall) return block
+      index += 1
+      const text = texts.get(index)
+      return isText && text !== undefined ? { ...block, text } : block
+    })
+  }
+  if (row.type === 'user' && row.content.some(isToolResultBlock)) {
+    let index = -1
+    return row.content.map((block) => {
+      if (!isToolResultBlock(block)) return block
+      index += 1
+      const text = texts.get(index)
+      if (text === undefined) return block
+      return { ...block, content: Array.isArray(block['content']) ? keepingMedia(block['content'], text) : text }
+    })
+  }
+  const text = texts.get(0)
+  if (text === undefined) return row.content
+  const whole = textOf(row.content)
+  if (whole.trim().startsWith('<task-notification') && tagOf(whole, 'summary') !== undefined) return keepingMedia(row.content, whole.replace(/<summary>[\s\S]*?<\/summary>/, () => `<summary>${text}</summary>`))
+  return keepingMedia(row.content, text)
+}
+
+function keepingMedia(content: readonly unknown[], text: string): unknown[] {
+  return [{ type: 'text', text }, ...content.filter((block) => !isObject(block) || block['type'] !== 'text')]
+}
+
+function isToolResultBlock(block: unknown): block is Readonly<Record<string, unknown>> {
+  return isObject(block) && block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string'
 }
 
 export function textOf(content: unknown): string {

@@ -7,7 +7,7 @@ import { Box, Button, drawWith, Input, Text } from '../ui/elements.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 
-export const installerPaneId = 'cmod-installer'
+export const installerPaneOf = (name: string): string => `installer-${name.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 64)
 
 export type Consent = {
   readonly install: string
@@ -33,6 +33,7 @@ export type Installer = {
 }
 
 export function createInstaller(name: string, claude: () => Claude): Installer {
+  const paneId = installerPaneOf(name)
   let page: Page | undefined
   let isOpen = false
 
@@ -48,7 +49,7 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
     })
     if (!isOpen) {
       isOpen = true
-      await claude().ui.open({ id: installerPaneId, title: `Install ${name}`, focus: true, holdToasts: true, closeOnEscape: true })
+      await claude().ui.open({ id: paneId, title: `Install ${name}`, focus: true, holdToasts: true, closeOnEscape: true })
     }
     claude().ui.invalidate('ui.render')
     return answer
@@ -60,12 +61,12 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
   const bullet = (text: string) => Text({ children: [Text({ color: 'claude', children: '◆ ' }), text] })
 
   return {
-    draws: (e) => e.component === 'Pane' && e.requestId === installerPaneId,
+    draws: (e) => e.component === 'Pane' && e.requestId === paneId,
     draw(e) {
       return drawWith(claude().ui.resolve(e), () => page?.draw(e.props as Frozen<RenderPropsOf['Pane']>) ?? Text({ dimColor: true, children: `${name} is installing.` }))
     },
     closed(id) {
-      if (id !== installerPaneId) return
+      if (id !== paneId) return
       isOpen = false
       page?.cancel()
     },
@@ -164,7 +165,7 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
       page = undefined
       if (!isOpen) return
       isOpen = false
-      await claude().ui.close({ id: installerPaneId })
+      await claude().ui.close({ id: paneId })
     },
   }
 }

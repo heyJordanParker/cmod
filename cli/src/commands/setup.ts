@@ -7,10 +7,10 @@ import { dataFolder, formatEvent, keyWords, permissionWords, readRecord, recordP
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
-import { fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
+import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
 import { ifMissing, listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
-import { bindKeys, keybindingsPath, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
+import { bindKeys, isLinked, keybindingsPath, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
 import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
@@ -66,14 +66,19 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function setupWithEvents(root: string, consent: string | undefined): Promise<number> {
+  let failure: unknown
   try {
     const plugin = await readPlugin(root)
     const code = await runSetup(plugin, consent, printEvent)
     if (code === 0) printEvent({ type: 'done', name: plugin.name, version: plugin.version })
-    return code
+    if (code !== 1) return code
   } catch (error) {
-    return printFailure(error)
+    failure = error
+    printFailure(error)
   }
+  if (await isLinked(root)) printEvent({ type: 'retries', when: 'changed' })
+  else if (failure instanceof DownloadFailed) printEvent({ type: 'retries', when: 'later' })
+  return 1
 }
 
 export function printEvent(event: RunnerEvent): void {

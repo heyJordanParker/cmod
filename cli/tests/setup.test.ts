@@ -625,6 +625,17 @@ test("a failed removal's message names the saved step from the record under the 
   expect(result.stdout).toContain('✘ The uninstall step of demo exited 2: zsh: no such file. Fix ~/.local/share/cmod/uninstall/demo/uninstall.sh, then run cmod teardown demo.\n')
 })
 
+test("a linked checkout's failed setup says it retries once the checkout changes", async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nexit 3\n' })
+  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: root } }) })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toEndWith('failed 3\tThe install step of demo exited 3.\nretries changed\n')
+})
+
 test('a failed upgrade keeps only the approval of the version its record names', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
@@ -1489,15 +1500,14 @@ test('a mod whose scripts change while its setup waits asks consent again', asyn
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\n')
 }, 15_000)
 
-test('setup --events prints failed with the fix when the release holds no build for this platform, and writes no record', async () => {
+test('setup --events prints failed when the release holds no build for this platform yet, says it retries later, and writes no record', async () => {
   const home = await temporaryHome()
   using server = serveRelease({ SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
-  const url = `${server.url.origin}${release}/hello-${platform}`
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(result.stdout).toBe(`progress 0 3 Downloading hello 0.2.0\nfailed 1\tDownloading ${url} returned 404. Attach hello-${platform} to the v0.2.0 release, as cmod publish does.\n`)
+  expect(result.stdout).toBe(`progress 0 3 Downloading hello 0.2.0\nfailed 1\tThe v0.2.0 release of hello-mod has no hello-${platform} yet. Its author attaches it with cmod publish.\nretries later\n`)
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod/records/hello-mod.json'))).toBe(false)
   expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)

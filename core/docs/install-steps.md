@@ -37,9 +37,9 @@ cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 Before a step runs for the first time, cmod shows the person the commands, the keys, and the permissions, and asks to run them. cmod hashes the commands, the keys, the permissions, and every file in each script folder, and remembers the hash the person approved with each permission. A change to any of those asks again, and an added permission is the only one it asks about ([permissions.md](permissions.md)).
 
 - In Claude Code, the mod opens the installer pane, `Install <mod>`, focused. It lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it` and `Bind shift+tab to /mode`, naming only what the mod has. `Accept` (a) runs the setup, and a loading toast above the prompt shows the install with a progress bar. `Not now` (n) and Escape decline.
-- In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.`
+- In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.` That person is already in a terminal.
 - In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, the keys, and the permissions, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
-- `Not now` leaves the mod off and logs `<mod> is not installed. Run cmod install <mod> to install it.`
+- `Not now` leaves the mod off with the toast `Not installed` and an `Install` button that asks again.
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
 
@@ -117,7 +117,9 @@ The install step runs again on every new version of the mod and whenever its scr
 
 - When the first install of a mod fails or is stopped, cmod runs the uninstall step to undo it. So the uninstall step must work on a partial install.
 - When the install step of an upgrade fails or is stopped, cmod keeps the version it set up before.
-- The failure shows as an error toast with `Fix the cause, then retry, or run cmod install <mod> in a terminal.` and a `Retry` button that runs the install again.
+- The failure shows at once as an error toast with `Retry`, `Report`, and `Hide` ([ui.md](ui.md#toasts)).
+- When waiting can fix the failure, cmod also retries in the background after 2, 4, 8, 16, 32, 64, and 128 seconds, then every 128 seconds, and the toast says `Trying again in <n> s.` A try that works replaces the toast with `Installed`. Waiting can fix two failures: a linked checkout whose build or install step failed, which cmod tries again once the checkout changed, and a release download that got 404 or no answer, as when a release was published seconds ago. Any other failure waits for `Retry`.
+- Before each try, cmod reads the mod's install record, so a mod another session installed starts without running its install again.
 
 ## The uninstall step
 

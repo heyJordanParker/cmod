@@ -1,6 +1,6 @@
 import type { FileMatch, Metadata } from '../mod.js'
 import { formatOf, MetadataError, readMetadata, sidecarSuffix, writeMetadata, type MetadataFormat } from '../utils/metadata.js'
-import { ifMissing, isMissing } from '../utils/paths.js'
+import { expandHome, homePrefix, ifMissing, isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import { picomatch, resolve } from '../vendor.js'
 import type { Claude } from './claude.js'
@@ -29,9 +29,10 @@ const ownKey = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/
 export function resolvedPath(path: string, places: Places): string {
   const configured = /^~\/\.claude(?=\/|$)/.exec(path)
   if (configured !== null && places.configRoot !== undefined) return resolve(`${places.configRoot}${path.slice(configured[0].length)}`)
-  if (path === '~' || path.startsWith('~/')) {
-    if (places.home === undefined) throw new Error(`${path} starts with ~, and HOME is not set. Start Claude Code with HOME set.`)
-    return resolve(`${places.home}${path.slice(1)}`)
+  const prefix = homePrefix.exec(path)?.[0]
+  if (prefix !== undefined) {
+    if (places.home === undefined) throw new Error(`${path} starts with ${prefix}, and HOME is not set. Start Claude Code with HOME set.`)
+    return resolve(expandHome(path, places.home, places.configRoot))
   }
   return path.startsWith('/') ? resolve(path) : resolve(places.projectRoot(), path)
 }
