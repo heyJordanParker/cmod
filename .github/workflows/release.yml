@@ -84,8 +84,11 @@ jobs:
           version=${{ steps.version.outputs.version }}
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          rm bun.lock
-          until bun install --no-cache; do sleep 10; done
+          until grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
+            rm bun.lock
+            bun install --no-cache || true
+            sleep 10
+          done
           bun test
           bun x tsc --noEmit
           OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
