@@ -10,7 +10,7 @@ import { beforeDeadline } from './deadline.js'
 import { announcedOf, announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
-import { answerCall, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
+import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
 import { keepEngine } from './engine.js'
 import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
 import { checkedAnswer, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
@@ -609,7 +609,7 @@ export function createLifecycle<State extends object, Declared extends Options =
 async function createMod<State extends object, Declared extends Options>(definition: ModDefinition<State, string, Declared>, runtime: ModRuntime): Promise<ActiveMod<State, Declared>> {
   const { router, toaster } = runtime
   const report = (failure: Failure) => void toaster.fail(failure)
-  const claude = withBareRefusals(checkingKeys(runtime.claude, toaster.toast, runtime.steps.keys ?? {}))
+  const claude = answeringOwnCalls(withBareRefusals(checkingKeys(runtime.claude, toaster.toast, runtime.steps.keys ?? {})), router)
   const added: string[] = []
   const hooksAdded: Hook[] = []
   const announce = (feature: string) => {

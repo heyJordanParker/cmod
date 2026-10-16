@@ -1288,6 +1288,24 @@ test('mod.ui.scroll asks Claude Code to bring a row of a pane into view', async 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
 })
 
+test("a mod's call to its own name is answered by its own methods, since Claude Code shows a call only to the plugins above the caller", async () => {
+  let counted: unknown
+  const tested = testMod(
+    defineMod({
+      name: 'notes',
+      api: { count: (input: { readonly in: string }) => (input.in === 'inbox' ? 3 : 0) },
+      setup(mod) {
+        mod.after(1, () => void mod.dependencies['notes']!.count!({ in: 'inbox' }).then((value) => (counted = value)))
+      },
+    }),
+  )
+  await tested.start()
+  await tested.settle()
+
+  expect(counted).toBe(3)
+  expect(tested.calls.filter((call) => call.call === 'cmod.call')).toEqual([])
+})
+
 test('settings.beforeFileChange refuses an edit to the settings files it matches', async () => {
   const heard: unknown[] = []
   const tested = testMod(

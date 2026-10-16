@@ -1,6 +1,7 @@
 import type { Args, CmodDependencies, EventResult, Frozen } from 'claude-code'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import type { Router } from './router.js'
 
 export const cmodPluginName = 'cmod'
 
@@ -30,6 +31,17 @@ export function withBareRefusals(claude: Claude): Claude {
       const message = messageOf(error)
       throw message.startsWith(prefix) ? new Error(message.slice(prefix.length), { cause: error }) : error
     })
+  return { ...claude, cmod: { call } }
+}
+
+export function answeringOwnCalls(claude: Claude, router: Router): Claude {
+  const name = claude.plugin.name
+  const call: Claude['cmod']['call'] = async (input) => {
+    if (input.to !== name) return claude.cmod.call(input)
+    const answer = await router.dispatch('cmod.call', { ...input, caller: name } as Frozen<Args<'cmod.call'>>, async () => ({ deny: `${name} has no method ${input.method}.` }))
+    if (answer.deny !== undefined) throw new Error(answer.deny)
+    return answer.value
+  }
   return { ...claude, cmod: { call } }
 }
 
