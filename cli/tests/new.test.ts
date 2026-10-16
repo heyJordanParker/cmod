@@ -43,7 +43,7 @@ test('new writes the repository layout with a defineMod that has one hook and on
   expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: [{ name: 'cmod', version: `^${coreVersion}` }] })
   const mod = await readFile(join(root, 'src/mod.tsx'), 'utf8')
   expect(mod).toContain('export const myMod = defineMod({')
-  expect(mod).toContain('mod.on(UserPromptSubmit, ')
+  expect(mod).toContain('sessions.current.onPrompt(')
   expect(mod).not.toContain('mod.ui.toast')
   expect(mod).not.toContain('additionalContext')
   expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toContain('registerMod(addHook, myMod, options)')

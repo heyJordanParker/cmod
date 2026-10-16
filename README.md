@@ -99,7 +99,7 @@ src/
 `src/mod.tsx` attaches each part to Claude Code with one line:
 
 ```tsx
-import { AbovePrompt, defineMod, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+import { AbovePrompt, defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
@@ -114,7 +114,7 @@ export const myMod = defineMod({
     mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) =>
       hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
 
-    mod.on(UserPromptSubmit, () => {
+    sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
     })
   },

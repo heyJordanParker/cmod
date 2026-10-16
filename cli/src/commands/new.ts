@@ -98,7 +98,7 @@ export function register(addHook: On, options: PluginOptions): void {
   registerMod(addHook, ${definition}, options)
 }
 `,
-    'src/mod.tsx': `import { AbovePrompt, defineMod, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+    'src/mod.tsx': `import { AbovePrompt, defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { PromptCount } from './components/prompt-count.js'
 import { promptsPane } from './panes/prompts.js'
@@ -113,7 +113,7 @@ export const ${definition} = defineMod({
     mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) =>
       hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
 
-    mod.on(UserPromptSubmit, () => {
+    sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
     })
   },
@@ -142,7 +142,7 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 `,
     'tests/mod.test.ts': `import { expect, test } from 'bun:test'
 import type { RenderPropsOf } from 'claude-code'
-import { AbovePrompt, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+import { AbovePrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { ${definition} } from '../src/mod.js'
 
@@ -150,19 +150,19 @@ const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false,
 
 test('each prompt adds one to the count', async () => {
   const tested = testMod(${definition})
-  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await tested.add({ type: Prompt, text: 'hello' })
   expect(tested.state.session.prompts).toBe(1)
 })
 
 test('the band shows the prompt count', async () => {
   const tested = testMod(${definition})
-  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await tested.add({ type: Prompt, text: 'hello' })
   expect(await tested.lines(AbovePrompt, band)).toContain('Prompts this session: 1')
 })
 
 test('the band leaves the prompt count out during a survey', async () => {
   const tested = testMod(${definition})
-  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await tested.add({ type: Prompt, text: 'hello' })
   expect(await tested.lines(AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
   expect(tested.shown.toasts.map(({ message }) => message)).toEqual(['Installed'])
 })
