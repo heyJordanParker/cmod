@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { CwdChanged, defineMod, Message, Note, PostToolUse, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
+import { CwdChanged, defineMod, Message, Note, PostToolUse, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStart, SubagentStop, TaskStart, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -90,6 +90,23 @@ test("a task refuses its subtask's start", async () => {
   await tested.settle()
 
   expect(await tested.fire('agent.spawn', { prompt: 'Read tree.ts', description: 'Read', tool_use_id: 'toolu_9', parentAgentId: parent, parentModel: 'opus' } as never)).toEqual({ deny: 'No subtasks' })
+})
+
+test("beforePrompt in a task adds a note the subagent reads at its start, with the spawn's prompt", async () => {
+  const prompts: string[] = []
+  const tested = testMod(defineMod({ name: 'modes', setup() {} }), { permissions: ['prompt'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  ;(await sessions.current.goal()).beforePrompt({ task: /./ }, (prompt) => {
+    prompts.push(prompt.text)
+    return { note: 'You are in read-only mode.' }
+  })
+  await tested.settle()
+  await tested.fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
+  const task = await tested.startTask({ title: 'Find', openedBy: 'toolu_9' })
+
+  expect(await tested.fire(SubagentStart, { agent_id: task, agent_type: 'Explore' } as never)).toEqual({ additionalContext: ['You are in read-only mode.'] })
+  expect(prompts).toEqual(['Find the pane'])
 })
 
 test("a goal refuses its session's top-level task starts", async () => {

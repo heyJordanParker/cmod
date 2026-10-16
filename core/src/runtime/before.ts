@@ -13,7 +13,7 @@ import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
 import type { ConversationState, SessionChange, TaskData } from '../session/conversation.js'
-import { TaskEnd, TaskStart } from '../session/goal/task.js'
+import { Task, TaskEnd, TaskStart } from '../session/goal/task.js'
 import type { BeforeEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
@@ -65,6 +65,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
   }
   let title: string | undefined
+  const spawned = new Map<string, string>()
   const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: (e: never) => Promise<unknown>) => {
     if (!(await wants(ToolResult))) return next(e as never)
     const where = await place()
@@ -157,12 +158,23 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return next({ ...reserved, ...answer.input } as Frozen<Args<'tool.call'>>)
     }),
     router.add('agent.spawn', async (e, next) => {
+      spawned.set(e.tool_use_id, e.prompt)
       if (!(await wants(TaskStart))) return next(e)
       const where = await place()
       const task: TaskData = { id: '', title: e.description, agentType: e.subagentType, model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
       const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } })
       if (answer.refuse !== undefined) return { deny: answer.refuse }
       return next(answer.owner === undefined ? e : { ...e, model: answer.owner.model })
+    }),
+    router.add('classic.SubagentStart', async (e, next) => {
+      if (!(await wants(Prompt))) return next(e)
+      const where = await place()
+      const open = where.taskTurns[e.agent_id]?.prompt
+      const openedBy = where.tasks[e.agent_id]?.openedBy
+      const text = open?.text ?? (openedBy === undefined ? undefined : spawned.get(openedBy))
+      if (text === undefined) return next(e)
+      const answer = await asked(Prompt, message(where, { id: open?.id ?? '', at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false))
+      return withNote(await next(e), answer.note)
     }),
     router.add('classic.SubagentStop', async (e, next) => {
       if (!(await wants(TaskEnd)) && !(await wants(TurnEnd))) return next(e)

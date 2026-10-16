@@ -163,7 +163,7 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 
 | Method | The listener can answer | Covers |
 | --- | --- | --- |
-| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session |
+| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session. A task's first prompt reaches `beforePrompt` as the subagent starts, where `note` is the only answer and the subagent reads it before its first step. |
 | `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
 | `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
 | `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
