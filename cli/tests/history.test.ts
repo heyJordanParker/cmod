@@ -97,17 +97,18 @@ test("--task reads the agent a task runs like a conversation: its turns, context
   expect(await json(home, 'usage', 's1', '--project', project)).toEqual({ model: '', contextWindow: {} })
 })
 
-test('search --session keeps one conversation, and --task, --turn, and --goal keep a part of it', async () => {
+test('search --session keeps one conversation, and --task, --turn, and --agent keep a part of it', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
 
   expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1'))).toEqual(['x1', 'a1:1', 'u1'])
   expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--task', 'a7'))).toEqual(['x1'])
-  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--goal'))).toEqual(['x1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--agent'))).toEqual(['a1:1', 'u1'])
+  expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--task', 'a7', '--agent'))).toEqual(['x1'])
   expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--turn', 'u1'))).toEqual(['a1:1', 'u1'])
   expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--context', '1'))).toEqual(['a1:1', 'u1'])
   expect(ids(await json(home, 'search', 'pane', '--project', project, '--session', 's1', '--task', 'a7', '--context', '1'))).toEqual(['x1'])
-  expect((await cmod(home, 'history', 'search', 'pane', '--task', 'a7')).stderr).toContain('cmod history search takes --task, --turn, --context, and --goal only with --session.')
+  expect((await cmod(home, 'history', 'search', 'pane', '--task', 'a7')).stderr).toContain('cmod history search takes --task, --turn, --context, and --agent only with --session.')
 })
 
 test('a compaction closes the context and opens the next, and a turn closes when Claude finishes', async () => {

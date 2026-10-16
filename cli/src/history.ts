@@ -646,7 +646,7 @@ function savedGoal(session: string): string | undefined {
 
 const searchPaths = { time: 'indexed by messages_by_time', folder: 'indexed by messages_by_folder', matches: 'not indexed' }
 
-export type RecordScope = { readonly session?: string; readonly task?: string; readonly turn?: string; readonly context?: number; readonly isGoal?: boolean }
+export type RecordScope = { readonly session?: string; readonly task?: string; readonly turn?: string; readonly context?: number; readonly isAgent?: boolean }
 
 export function searchQuery(scope: { readonly isScoped: boolean; readonly isRunning: boolean; readonly hasBefore: boolean; readonly path: keyof typeof searchPaths; readonly record?: RecordScope }): string {
   const inFolder = scope.isScoped ? 'and folder = (select id from folders where path = ?)' : ''
@@ -660,14 +660,14 @@ export function searchQuery(scope: { readonly isScoped: boolean; readonly isRunn
 function recordFilter(record: RecordScope): string {
   const inSession = record.session === undefined ? '' : 'and session = ?'
   const tree = `with recursive tree(id) as (select ? union select tasks.id from tasks join tree on tasks.parent = tree.id where tasks.session = ?) select id from tree`
-  const inTask = record.task === undefined ? (record.isGoal === true ? "and task != ''" : '') : `and task in (${tree}${record.isGoal === true ? ' where id != ?' : ''})`
+  const inTask = record.isAgent === true ? (record.task === undefined ? "and task = ''" : 'and task = ?') : record.task === undefined ? '' : `and task in (${tree})`
   const inTurn = record.turn === undefined ? '' : 'and turn = ?'
   const inContext = record.context === undefined ? '' : 'and context = ? and task = ?'
   return `${inSession} ${inTask} ${inTurn} ${inContext}`
 }
 
 function recordParams(record: RecordScope): (string | number)[] {
-  const task = record.task === undefined ? [] : [record.task, record.session ?? '', ...(record.isGoal === true ? [record.task] : [])]
+  const task = record.task === undefined ? [] : record.isAgent === true ? [record.task] : [record.task, record.session ?? '']
   return [...(record.session === undefined ? [] : [record.session]), ...task, ...(record.turn === undefined ? [] : [record.turn]), ...(record.context === undefined ? [] : [record.context, record.task ?? ''])]
 }
 

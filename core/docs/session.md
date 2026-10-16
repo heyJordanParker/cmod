@@ -51,7 +51,7 @@ for await (const message of sessions.search('deploy job', { type: Prompt }, { si
 const more = sessions.search('deploy job', { type: Prompt }, { since: '1w', before: found.at(-1) })
 ```
 
-- Its `on` methods hear every running session of the project, this one included ([Listen](#listen-to-a-record)). `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
+- Its `on` methods hear every running session of the project, this one included, and need the `conversation` permission ([Listen](#listen-to-a-record)). `sessions.current`'s methods hear this session with none. `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
 
 While a mod holds the `conversation` permission, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since. The `cmod history` command answers the same questions in a terminal ([commands.md](commands.md#cmod-history)).
 
@@ -178,12 +178,12 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 
 | Method | The listener can answer | Covers |
 | --- | --- | --- |
-| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a command Claude Code sends as a prompt, such as a project's `/review`, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session. A task's first prompt reaches `beforePrompt` as the subagent starts, where `note` is the only answer and the subagent reads it before its first step. A built-in command such as `/model` is never a prompt: `commands.beforeRun` hears every command ([mod.md](mod.md#commands-slash-commands)). |
+| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a command Claude Code sends as a prompt, such as a project's `/review`, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session. A task's first prompt reaches `beforePrompt` as the subagent starts, where `note` is the only answer and the subagent reads it before its first step. To keep a task from starting, refuse it in `beforeTaskStart`. A built-in command such as `/model` is never a prompt: `commands.beforeRun` hears every command ([mod.md](mod.md#commands-slash-commands)). |
 | `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
 | `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
 | `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
 | `beforeReply`, `beforeNotice` | `{ text }` | The text the transcript keeps |
-| `beforeToolResult` | `{ output?, isError?, note? }` | The result Claude reads, after the tool ran. `output` replaces it, `note` adds text beside it, and `isError: true` makes Claude read it as a failure, with the note as the reason. A failed call takes only a note |
+| `beforeToolResult` | `{ output?, isError?, note? }` | The result, after the tool ran. Here `output` is what the tool answered Claude Code, such as `{ stdout, stderr }` for Bash, and an `output` answer replaces it in the same shape, `note` adds text beside it, and `isError: true` makes Claude read it as a failure, with the note as the reason. A failed call takes only a note |
 | `beforeToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
 | `beforeTaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
 | `beforeTurnEnd` | `{ refuse }` | The agent about to stop. `refuse` sends it on with the reason. On `task.owner`, it is the task about to hand back its answer |

@@ -179,7 +179,7 @@ Lists every plugin Claude Code has installed or linked, with its version. A mod 
 
 ```text
 cmod history sessions [--all] [--since 2d] [--running] [--project <folder>] [--json]
-cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--goal]] [--limit <n>] [--before <session>:<id>] [--json]
+cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--agent]] [--limit <n>] [--before <session>:<id>] [--json]
 cmod history messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
 cmod history turns [<session>] [--task <id>] [--context <n>] [--last <n>] [--json]
 cmod history contexts [<session>] [--task <id>] [--json]
@@ -194,7 +194,7 @@ cmod history index
 Reads every conversation Claude Code saved, as the sessions, contexts, turns, tasks, and messages `sessions` answers a mod ([session.md](session.md)), so a person or an agent reads them in a terminal without parsing a transcript.
 
 - `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`, and `--running` keeps those open in Claude Code now.
-- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--all`, `--since`, and `--running` scope it as they scope `sessions`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before. `--session` searches one conversation, and inside it `--task` searches a task and the tasks it started, `--turn` one turn, `--context` one context, and `--goal` the tasks of the conversation or of `--task`.
+- `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--all`, `--since`, and `--running` scope it as they scope `sessions`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before. `--session` searches one conversation, and inside it `--task` searches a task and the tasks it started, `--turn` one turn, `--context` one context, and `--agent` keeps the main agent's messages, or with `--task` that task's own, without the tasks it started.
 - `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--task` reads a task's messages instead, `--turn` keeps one turn's, `--after` starts after a message id, and `--last` keeps that many from the end.
 - `turns` prints the conversation's turns, each opened by a prompt and closed when Claude finishes. `--context` keeps one context's, and `--last` keeps that many from the end.
 - `contexts` prints the conversation's contexts, a new one after each compaction.

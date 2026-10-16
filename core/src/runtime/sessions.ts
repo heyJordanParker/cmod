@@ -289,7 +289,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
 
   const goalOf = (where: () => Scope): Goal =>
     ({
-      search: (text: string, matcher?: unknown) => searched({ text, ...where(), isGoal: true }, matcher),
+      search: (text: string, matcher?: unknown) => searched({ text, ...where() }, matcher),
       ...eventMethods(() => ({ ...where(), isGoal: true }), true),
       text: async () => (await call<GoalData>(conversationMethods.goal, where())).text,
       tasks: async () => {
@@ -422,7 +422,8 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     )
   }
 
-  const processListeners = new Map<string, Set<{ readonly matcher: unknown; readonly listener: (payload: HookFields, time: ListenTime) => unknown; readonly options: ListenOptions }>>()
+  type ProcessListener = { readonly matcher: unknown; readonly listener: (payload: HookFields, time: ListenTime) => unknown; readonly options: ListenOptions }
+  const processListeners = new Map<string, Set<ProcessListener>>()
 
   const raise = async (method: string, payload: HookFields): Promise<HookFields | undefined> => {
     const isBefore = method.startsWith('before')
@@ -463,29 +464,25 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     return { session: current.id, cwd: current.cwd, name: e.command, args: e.args, ...defined({ source }), from: senderOf(e.origin, false) }
   }
 
+  const commandListeners = { beforeRun: new Set<ProcessListener>(), onRun: new Set<ProcessListener>() }
+  for (const [method, held] of Object.entries(commandListeners)) processListeners.set(method, held)
+  routeOn?.('command.run', async (e, next) => {
+    if (commandListeners.beforeRun.size === 0 && commandListeners.onRun.size === 0) return next(e)
+    const run = await commandRun(e)
+    const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise('beforeRun', run)
+    if (typeof answer?.['refuse'] === 'string') return { text: answer['refuse'] }
+    const changes = answer !== undefined && isGranted('prompt') ? answer : undefined
+    if (answer !== undefined && changes === undefined) report('session:beforeRun', 'The beforeRun listener failed', new Error(`${name}: its answer changes a command, which needs the prompt permission.`))
+    if (typeof changes?.['result'] === 'string') return { text: changes['result'], ...(typeof changes['exitCode'] === 'number' ? { exitCode: changes['exitCode'] } : {}) }
+    const args = typeof changes?.['args'] === 'string' ? changes['args'] : e.args
+    const ran = await next(args === e.args ? e : { ...e, args })
+    void raise('onRun', { ...run, args })
+    return typeof changes?.['note'] === 'string' ? { ...ran, context: [...(ran.context ?? []), changes['note']] } : ran
+  })
+
   const listenTo = (method: string, named: string) => {
     if (hookOn === undefined || routeOn === undefined) throw new Error(`${name}: ${method} works only in a mod's own session.`)
     const isBefore = method.startsWith('before')
-    if (named === 'Run') {
-      return routeOn('command.run', async (e, next) => {
-        const run = await commandRun(e)
-        if (!isBefore) {
-          const ran = await next(e)
-          void raise(method, run)
-          return ran
-        }
-        const answer = await raise(method, run)
-        if (answer === undefined) return next(e)
-        if (typeof answer['refuse'] === 'string') return { text: answer['refuse'] }
-        if (!isGranted('prompt')) {
-          report(`session:${method}`, `The ${method} listener failed`, new Error(`${name}: its answer changes a command, which needs the prompt permission.`))
-          return next(e)
-        }
-        if (typeof answer['result'] === 'string') return { text: answer['result'], ...(typeof answer['exitCode'] === 'number' ? { exitCode: answer['exitCode'] } : {}) }
-        const ran = await next(typeof answer['args'] === 'string' ? { ...e, args: answer['args'] } : e)
-        return typeof answer['note'] === 'string' ? { ...ran, context: [...(ran.context ?? []), answer['note']] } : ran
-      })
-    }
     if (named === 'PermissionCheck') {
       return routeOn('tool.check', async (e: ToolCheck, next) => {
         const below = (await next(e)) as ToolCheckVerdict
@@ -514,7 +511,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
   }
 
   const listen = (method: string, args: readonly unknown[]): Disposable => {
-    const entry = listenerOf(name, method, args) as { readonly matcher: unknown; readonly listener: (payload: HookFields, time: ListenTime) => unknown; readonly options: ListenOptions }
+    const entry = listenerOf(name, method, args) as ProcessListener
     const held = processListeners.get(method) ?? new Set()
     if (!processListeners.has(method)) {
       listenTo(method, method.replace(/^(on|before)/, ''))
@@ -682,7 +679,8 @@ export async function spawnTask(claude: Pick<Claude, 'agent'>, task: TaskStartAr
     ...(task.cwd === undefined ? {} : { cwd: task.cwd }),
   })
   if (started.deny !== undefined) throw new Error(`Claude Code refused the task: ${started.deny}`)
-  return { id: started.agentId ?? '', title: task.title, agentType: task.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() }
+  if (started.agentId === undefined) throw new Error('Claude Code answered without starting a task.')
+  return { id: started.agentId, title: task.title, agentType: task.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() }
 }
 
 export function processPayloadOf(named: Exclude<keyof typeof processEvents, 'PermissionCheck'>, input: unknown): HookFields {

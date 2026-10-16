@@ -118,8 +118,9 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
         const given = args.method === conversationMethods.act && isObject(args.input) ? String(args.input['action']) : undefined
         const action = given !== undefined && isAct(given) ? given : undefined
         const isThisSession = isObject(args.input) && args.input['session'] === (await claude.session.id())
+        const isDropping = (args.method === conversationMethods.subscribe || args.method === conversationMethods.watchBefore) && isObject(args.input) && Array.isArray(args.input['subscriptions']) && args.input['subscriptions'].length === 0
         if (named !== undefined && action !== undefined) await gate(action, actPermission(action, isObject(args.input) ? args.input['input'] : undefined))
-        else if (named !== undefined && !isThisSession) await gate(named, 'conversation')
+        else if (named !== undefined && !isThisSession && !isDropping) await gate(named, 'conversation')
         return claude.cmod.call(args)
       },
     },

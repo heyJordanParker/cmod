@@ -376,7 +376,7 @@ export function serveConversations({ claude, router, store, project, report }: {
   const perform = async (caller: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
     await checkAct(caller, action, input)
     await starting
-    if (action === 'abort') return abortTurn(task)
+    if (action === 'abort') return abortTurn(input, task)
     if (task !== undefined) return performInTask(action, input, task)
     if (action === 'usage') return usageOf(claude)
     if (action === 'surfaces') return [...(await claude.session.surfaces())] satisfies Surface[]
@@ -393,9 +393,12 @@ export function serveConversations({ claude, router, store, project, report }: {
     return resultOf(place(), { name, input: toolInput, cwd: await claude.session.cwd() }, await claude.tool.call({ ...toolInput, tool: name } as never))
   }
 
-  const abortTurn = async (task: string | undefined) => {
+  const abortTurn = async (input: unknown, task: string | undefined) => {
     const turnId = engineTurns.get(task ?? '')
     if (turnId === undefined) throw new Error(`no turn is running in ${task === undefined ? `session ${session}` : `task ${task}`}.`)
+    const asked = isObject(input) ? input['turn'] : undefined
+    const open = task === undefined ? conversation.state.turn : conversation.state.taskTurns[task]
+    if (open !== undefined && open.prompt.id !== asked) throw new Error(`turn ${String(asked)} has ended, so there is nothing to abort.`)
     await claude.turn.abort({ turnId })
     return null
   }
@@ -465,7 +468,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     },
     async [conversationMethods.search](request) {
       const before = isObject(request['before']) ? request['before'] : undefined
-      const record = [...textArg('--session', request['session']), ...textArg('--task', request['task']), ...textArg('--turn', request['turn']), ...countArg('--context', request['context']), ...(request['isGoal'] === true ? ['--goal'] : [])]
+      const record = [...textArg('--session', request['session']), ...textArg('--task', request['task']), ...textArg('--turn', request['turn']), ...countArg('--context', request['context']), ...(request['isAgent'] === true ? ['--agent'] : [])]
       return json(['history', 'search', String(request['text']), ...scopeArgs(request), ...record, ...(request['running'] === true ? ['--running'] : []), ...(before === undefined ? [] : ['--before', `${String(before['session'])}:${String(before['id'])}`])])
     },
     async [conversationMethods.messages](request) {

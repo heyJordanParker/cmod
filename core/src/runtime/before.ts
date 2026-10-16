@@ -64,7 +64,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
     return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
   }
-  let title: string | undefined
+  const titles = new Map<string, string>()
   const spawned = new Map<string, string>()
   const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: (e: never) => Promise<unknown>) => {
     if (!(await wants(ToolResult))) return next(e as never)
@@ -86,13 +86,14 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const where = await place()
       const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false))
       if (answer.refuse !== undefined) return { drop: answer.refuse }
-      title = answer.title
+      const text = answer.text ?? e.text
+      if (answer.title !== undefined) titles.set(text, answer.title)
       const context = answer.note === undefined ? e.context : [...(e.context ?? []), answer.note]
-      return next({ ...e, ...(answer.text === undefined ? {} : { text: answer.text }), ...(context === undefined ? {} : { context }) })
+      return next({ ...e, text, ...(context === undefined ? {} : { context }) })
     }),
     router.add('classic.UserPromptSubmit', async (e, next) => {
-      const named = title
-      title = undefined
+      const named = titles.get(e.prompt)
+      titles.delete(e.prompt)
       const below = await next(e)
       return named === undefined ? below : { ...below, sessionTitle: named }
     }),

@@ -137,6 +137,25 @@ test("the cmod plugin's own listener on its session, added in setup, starts no f
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
 
+test('an abort of a turn that ended aborts nothing, while a later turn runs', async () => {
+  const consent = consentPath(storeFolder({ HOME: '/test/home' }))
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: ['prompt'] }) } })
+  const prompt = (uuid: string, text: string) => {
+    const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
+    return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+  }
+  const abort = (turn: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: { turn } }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await prompt('p1', 'Rename the tree pane')
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)
+  await prompt('p2', 'Deploy it')
+  await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy it', turnId: 'turn-2' } as never)
+
+  expect(await abort('p1')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
+  expect(await abort('p2')).toEqual({ value: null })
+  expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-2' }])
+})
+
 test("a turn ends at Stop with Claude's answer, stays open while a mod refuses the stop, and ends with its failure at StopFailure", async () => {
   const ended: unknown[] = []
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ watcher: [], guard: [] }) } })

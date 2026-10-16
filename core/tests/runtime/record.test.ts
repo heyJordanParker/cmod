@@ -258,8 +258,10 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
   await tested.start()
 
   expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['The person asked for a commit.'], origin: { kind: 'composer' } })
-  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
+  await claudeCodeOf(tested).fire('prompt.submit', { text: 'next', origin: { kind: 'composer' }, wait: false })
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'next' })).toEqual({})
+  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
+  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({})
 })
 
 test("beforeToolResult adds a note, rewrites the output, or marks the result failed", async () => {
@@ -352,6 +354,23 @@ test('a turn searches only its own messages', async () => {
 
   expect((await Array.fromAsync(turn!.search('rename'))).map((message) => message.type === Prompt && message.text)).toEqual(['Rename the log pane'])
   expect(await Array.fromAsync(sessions.current.search('rename'))).toHaveLength(2)
+})
+
+test("a session searches its own agent's messages, its goal every agent's, and a task's owner only its own", async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  const task = await tested.startTask({ title: 'Find the pane' })
+  await tested.add({ type: Prompt, text: 'Rename the pane file' }, { task })
+  const sub = await tested.startTask({ title: 'Read the pane', parent: task })
+  await tested.add({ type: Prompt, text: 'Rename nothing yet' }, { task: sub })
+  const [found] = await sessions.current.goal.tasks()
+  const texts = async (messages: AsyncIterable<Message>) => (await Array.fromAsync(messages)).map((message) => message.type === Prompt && message.text)
+
+  expect(await texts(sessions.current.search('rename'))).toEqual(['Rename the tree pane'])
+  expect(await texts(sessions.current.goal.search('rename'))).toEqual(['Rename nothing yet', 'Rename the pane file', 'Rename the tree pane'])
+  expect(await texts(found!.owner.search('rename'))).toEqual(['Rename the pane file'])
+  expect(await texts(found!.search('rename'))).toEqual(['Rename nothing yet', 'Rename the pane file'])
 })
 
 test('a search reads page after page until the loop breaks', async () => {

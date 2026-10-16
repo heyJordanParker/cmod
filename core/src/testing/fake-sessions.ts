@@ -145,8 +145,8 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
         const session = kept.get(message.session)
         const task = request['task']
         if (request['session'] !== undefined && message.session !== request['session']) return false
-        if (typeof task === 'string' && (message.task === undefined || !isUnder(session, message.task, task) || (request['isGoal'] === true && message.task === task))) return false
-        if (task === undefined && request['isGoal'] === true && message.task === undefined) return false
+        if (request['isAgent'] === true && message.task !== task) return false
+        if (typeof task === 'string' && (message.task === undefined || !isUnder(session, message.task, task))) return false
         return (request['turn'] === undefined || message.turn === request['turn']) && (request['context'] === undefined || message.context === request['context'])
       }
       const found = [...kept.values()]

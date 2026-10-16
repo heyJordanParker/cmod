@@ -133,7 +133,7 @@ export const cmodPlugin = defineMod({
       await following
     }
     sessions.current.beforeSessionStart(keepRules)
-    sessions.current.beforePrompt(keepRules)
+    sessions.current.beforePrompt(keepRules, { timeoutMs: 60_000 })
 
     sessions.current.onTurnEnd(async () => {
       mod.state.session.tip = await tipOf(mod)

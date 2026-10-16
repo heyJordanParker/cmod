@@ -184,7 +184,7 @@ export const processEvents = {
   WorktreeCreate: { on: 'WorktreeCreate', before: 'WorktreeCreate' },
   WorktreeRemove: { on: 'WorktreeRemove' },
   Notification: { on: 'Notification' },
-  Elicitation: { on: 'Elicitation' },
+  Elicitation: { on: 'Elicitation', before: 'Elicitation' },
   ElicitationResponse: { on: 'ElicitationResult', before: 'ElicitationResult' },
   PermissionCheck: { on: 'tool.check', before: 'tool.check' },
   PermissionRequest: { on: 'PermissionRequest', before: 'PermissionRequest' },

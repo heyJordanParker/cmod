@@ -257,6 +257,14 @@ test('a beforePermissionRequest answer without allow or refuse leaves the dialog
   expect(await claudeCodeOf(tested).fire('PreModelSwitch', { model: 'haiku', previous_model: 'opus', source: 'command' } as never, {})).toEqual({})
 })
 
+test('beforeElicitation refuses an MCP server question', async () => {
+  const tested = testMod(defineMod({ name: 'quiet', setup: () => void sessions.current.beforeElicitation({ server: 'tracker' }, () => ({ refuse: 'Not during a deploy.' })) }))
+
+  const answer = await claudeCodeOf(tested).fire('Elicitation', { mcp_server_name: 'tracker', message: 'Sign in?', mode: 'form' } as never, {})
+
+  expect(answer).toMatchObject({ block: 'Not during a deploy.' })
+})
+
 test('two beforeToolBatch notes both reach Claude', async () => {
   const tested = testMod(
     defineMod({
@@ -874,14 +882,17 @@ test('fs reads a path under $HOME or $CLAUDE_CONFIG_DIR like one under ~', async
   expect(read).toEqual(['config\n', 'notes\n'])
 })
 
-test('commands.beforeRun refuses a built-in command, and commands.onRun hears each command that ran', async () => {
+test('commands.beforeRun refuses a built-in command, and commands.onRun hears each command that ran, as it ran, whatever order they were added in', async () => {
   const ran: unknown[] = []
   const tested = testMod(
     defineMod({
       name: 'keeper',
-      setup() {
-        commands.beforeRun({ name: 'compact' }, () => ({ refuse: 'Compact after the tests pass.' }))
+      setup(mod) {
+        mod.use(slashCommand({ name: 'keep', description: 'Keep the context', reply: () => 'Kept.' }))
         commands.onRun((run) => void ran.push({ name: run.name, args: run.args, from: run.from }))
+        commands.beforeRun({ name: 'compact' }, () => ({ refuse: 'Compact after the tests pass.' }))
+        commands.beforeRun({ name: 'model' }, () => ({ args: 'opus' }))
+        commands.beforeRun({ name: 'keep' }, () => ({ refuse: 'Not now.' }))
       },
     }),
     { permissions: ['prompt'] },
@@ -891,9 +902,10 @@ test('commands.beforeRun refuses a built-in command, and commands.onRun hears ea
 
   expect(await typed('compact')).toEqual({ text: 'Compact after the tests pass.' })
   expect(await typed('model', 'haiku')).toEqual({ text: 'ran /model' })
+  expect(await typed('keep')).toEqual({ text: 'Not now.' })
   await tested.settle()
 
-  expect(ran).toEqual([{ name: 'model', args: 'haiku', from: { type: Person } }])
+  expect(ran).toEqual([{ name: 'model', args: 'opus', from: { type: Person } }])
 })
 
 test("commands.beforeRun rewrites a command's args and adds a note beside its output", async () => {

@@ -15,7 +15,7 @@ import { storePath, takeLock } from '../store.js'
 export const summary = 'Read every saved Claude Code conversation as sessions, turns, tasks, and messages.'
 
 export const help = `Usage: cmod history sessions [--all] [--since 2d] [--running] [--project <folder>] [--json]
-       cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--goal]] [--limit <n>] [--before <session>:<id>] [--json]
+       cmod history search <text> [--all] [--since 2d] [--running] [--project <folder>] [--session <id> [--task <id>] [--turn <id>] [--context <n>] [--agent]] [--limit <n>] [--before <session>:<id>] [--json]
        cmod history messages [<session>] [--task <id>] [--turn <id>] [--after <id>] [--last <n>] [--json]
        cmod history turns [<session>] [--task <id>] [--context <n>] [--last <n>] [--json]
        cmod history contexts [<session>] [--task <id>] [--json]
@@ -40,7 +40,8 @@ are not searched. --all, --since, and --running scope it the way they scope
 sessions, --limit changes the 50, and --before <session>:<id> starts after the
 last message of the previous page. --session searches one conversation, and
 inside it --task searches a task and the tasks it started, --turn one turn,
---context one context, and --goal the tasks of the conversation or of --task.
+--context one context, and --agent keeps the main agent's messages, or with
+--task that task's own, without the tasks it started.
 
 messages prints one conversation's messages in order: the session named, or the
 conversation this command runs in when Claude Code sets CLAUDE_CODE_SESSION_ID.
@@ -76,7 +77,7 @@ export async function run(argv: string[]): Promise<number> {
       project: { type: 'string' },
       session: { type: 'string' },
       task: { type: 'string' },
-      goal: { type: 'boolean', default: false },
+      agent: { type: 'boolean', default: false },
       nested: { type: 'boolean', default: false },
       turn: { type: 'string' },
       context: { type: 'string' },
@@ -109,9 +110,9 @@ export async function run(argv: string[]): Promise<number> {
         ...(values.task === undefined ? {} : { task: values.task }),
         ...(values.turn === undefined ? {} : { turn: values.turn }),
         ...(values.context === undefined ? {} : { context: countOf('--context', values.context) }),
-        ...(values.goal ? { isGoal: true } : {}),
+        ...(values.agent ? { isAgent: true } : {}),
       }
-      if (record.session === undefined && Object.keys(record).length > 0) throw new Error('cmod history search takes --task, --turn, --context, and --goal only with --session.')
+      if (record.session === undefined && Object.keys(record).length > 0) throw new Error('cmod history search takes --task, --turn, --context, and --agent only with --session.')
       const found = searchMessages(db, rest[0] as string, {
         ...scope,
         ...(values.limit === undefined ? {} : { limit: countOf('--limit', values.limit) }),

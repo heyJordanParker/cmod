@@ -109,6 +109,7 @@ test("startSession starts a new session that has its own session values, and a r
   expect([afterClear, tested.state.session.prompts]).toEqual([0, 1])
   expect(sessions.current.id).toBe('test-session')
   expect(sources).toEqual(['clear', 'resume'])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
 test('type runs a slash command and returns its reply', async () => {
