@@ -88,6 +88,29 @@ test('a Read of a file the test gave contents to lists it in files.read', async 
   ])
 })
 
+test("startSession starts a new session that has its own session values, and a resume brings the old session's back", async () => {
+  const sources: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'counter',
+      state: { session: { prompts: 0 } },
+      setup(mod) {
+        sessions.current.onPrompt(() => void (mod.state.session.prompts += 1))
+        sessions.current.onSessionStart(({ source }) => void sources.push(source))
+      },
+    }),
+  )
+  await tested.add({ type: Prompt, text: 'one' })
+
+  await tested.startSession({ source: 'clear', id: 'cleared-session' })
+  const afterClear = tested.state.session.prompts
+  await tested.startSession({ source: 'resume', id: 'test-session' })
+
+  expect([afterClear, tested.state.session.prompts]).toEqual([0, 1])
+  expect(sessions.current.id).toBe('test-session')
+  expect(sources).toEqual(['clear', 'resume'])
+})
+
 test('type runs a slash command and returns its reply', async () => {
   const tested = testMod(
     defineMod({

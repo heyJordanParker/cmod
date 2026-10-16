@@ -66,6 +66,7 @@ type TestedMod<State> = {
   add(message: MessageDraft, options?: { task?: string }): Promise<Message[]>
   endTurn(ending?: { answer?: string; failure?: { type: string; text: string } }): Promise<void>
   compact(): Promise<void>
+  startSession(start: { source: 'startup' | 'resume' | 'clear' | 'fork'; id?: string }): Promise<void>
   startTask(task: { title: string; agentType?: string; model?: string; openedBy?: string; parent?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
   lines(place, props, requestId?): Promise<string[]>
@@ -177,6 +178,7 @@ The current session, `test-session`, starts empty. A test builds the conversatio
 - `add(message, { task? })` adds a message and returns it, placed in its context and turn. A `Prompt` opens a new turn. With `task`, the message is that task's.
 - `endTurn({ answer?, failure? })` ends the open turn, as Claude stopping does. `answer` is Claude's last words, and `failure` ends it on an error, such as `{ type: 'rate_limit', text: 'Rate limited' }`.
 - `compact()` records a compaction boundary, which ends the context and starts the next, as a compaction does.
+- `startSession({ source, id? })` starts a session as `/clear`, `/resume`, or a fork does, under `id` when it names one. The mod's `session` values are that session's, so a `resume` to `test-session` brings the first session's values back, and `onSessionStart` hears the `source`.
 - `startTask({ title, agentType?, model?, openedBy?, parent? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn.
 
 Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: InstructionFile, path, text }`, or `{ type: Notice, text }`.

@@ -99,6 +99,7 @@ export type TestedMod<State extends object> = {
   add(message: MessageDraft, options?: { readonly task?: string }): Promise<Message[]>
   endTurn(ending?: Pick<Turn, 'answer' | 'failure'>): Promise<void>
   compact(): Promise<void>
+  startSession(start: { readonly source: 'startup' | 'resume' | 'clear' | 'fork'; readonly id?: string }): Promise<void>
   startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
   lines<P extends ComponentPlace>(place: P, props: Omit<PlaceProps<P>, 'Default'>, requestId?: string): Promise<string[]>
@@ -344,6 +345,11 @@ export function testMod<State extends object, Declared extends Options = Options
     compact: async () => {
       await start()
       await settled(conversations.compact())
+    },
+    startSession: async ({ source, id }) => {
+      await start()
+      await fire('SessionStart', { source, ...(id === undefined ? {} : { session_id: id }) })
+      await fake.settle()
     },
     startTask: async (task) => {
       await start()
