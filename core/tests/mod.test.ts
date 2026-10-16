@@ -1288,23 +1288,33 @@ test('mod.ui.scroll asks Claude Code to bring a row of a pane into view', async 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
 })
 
-test('a FileChanged hook gets the path and what happened to it', async () => {
+test('fs.onChange watches a folder from session start and hears each file that changes under it', async () => {
   const changes: unknown[] = []
+  let late: unknown
   const tested = testMod(
     defineMod({
       name: 'reloader',
-      setup(mod) {
-        mod.on(SessionStart, () => ({ hookSpecificOutput: { hookEventName: 'SessionStart', watchPaths: ['/work/app/history'] } }))
-        mod.on(FileChanged, ({ file_path, event }) => void changes.push({ file_path, event }))
+      setup() {
+        fs.onChange({ path: '/work/app/history' }, (change) => {
+          changes.push(change)
+          try {
+            fs.onChange({ path: '/work/app/other' }, () => {})
+          } catch (error) {
+            late = (error as Error).message
+          }
+        })
       },
     }),
   )
 
   const started = await tested.fire(SessionStart, { source: 'startup' } as never)
   await tested.fire(FileChanged, { file_path: '/work/app/history/a.json', event: 'change' })
+  await tested.fire(FileChanged, { file_path: '/work/app/notes.md', event: 'add' })
+  await tested.settle()
 
   expect(started).toEqual({ watchPaths: ['/work/app/history'] })
-  expect(changes).toEqual([{ file_path: '/work/app/history/a.json', event: 'change' }])
+  expect(changes).toEqual([{ path: '/work/app/history/a.json', type: 'change' }])
+  expect(late).toBe('reloader: fs.onChange works only in setup, because Claude Code reads the paths it watches when a session starts.')
 })
 
 test('HookInput names the input of each hook', () => {

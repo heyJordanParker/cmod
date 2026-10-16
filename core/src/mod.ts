@@ -215,6 +215,8 @@ export type Stat = Omit<Entry, 'name'> & {
   readonly realPath?: string
 }
 
+export type FileChange = { readonly path: string; readonly type: 'change' | 'add' | 'unlink' }
+
 export type Allowed = {
   allows(value: string): boolean
 }
@@ -254,6 +256,7 @@ export type Imports = {
     find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
     list(path?: string): Promise<Entry[]>
     stat(path: string, options?: FsStatOptions): Promise<Stat>
+    onChange(matcher: { readonly path: string | readonly string[] }, listener: (change: FileChange) => unknown): Disposable
   }
   readonly metadata: {
     read(path: string): Promise<Metadata>
@@ -293,6 +296,7 @@ export const fs: Imports['fs'] = {
   find: (glob) => bound().fs.find(glob),
   list: (path) => bound().fs.list(path),
   stat: (path, options) => bound().fs.stat(path, options),
+  onChange: (matcher, listener) => bound().fs.onChange(matcher, listener),
 }
 
 export const metadata: Imports['metadata'] = {

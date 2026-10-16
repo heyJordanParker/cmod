@@ -348,9 +348,11 @@ fs.list(path?: string): Promise<Entry[]>
 fs.exists(path: string): Promise<boolean>
 fs.stat(path: string, options?: { resolve: boolean }): Promise<Stat>
 fs.find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
+fs.onChange({ path: string | readonly string[] }, listener: (change: FileChange) => unknown): Disposable
 ```
 
 ```ts
+type FileChange = { path: string; type: 'change' | 'add' | 'unlink' }
 type Entry = { name: string; isFile: boolean; isFolder: boolean; isLink: boolean; size: number; modifiedAt: number }
 type Stat = { isFile: boolean; isFolder: boolean; isLink: boolean; size: number; modifiedAt: number; realPath?: string }
 ```
@@ -361,6 +363,11 @@ type Stat = { isFile: boolean; isFolder: boolean; isLink: boolean; size: number;
 - `list` lists a folder, the working folder without a path. A symbolic link is neither a file nor a folder, with `isLink` true. `modifiedAt` is the time it last changed, in milliseconds since 1970.
 - `exists` answers whether the path leads to a file or a folder.
 - `stat` answers what the path leads to, following a symbolic link, and rejects a missing path. With `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
+- `onChange` hears each file Claude Code sees change, appear, or go at a path or under a folder. Claude Code reads the paths it watches when a session starts, so `onChange` works only in `setup`, and a call later throws. A relative path is under the project. `path` takes strings only, unlike other matchers, because the paths go to Claude Code as they are:
+
+```ts
+fs.onChange({ path: `${mod.dataFolder}/history` }, ({ path, type }) => mod.ui.toast(`${path}: ${type}`))
+```
 
 A file the mod ships is under `mod.folder`. A file the mod keeps for itself belongs in `mod.dataFolder`.
 

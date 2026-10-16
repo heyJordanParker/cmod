@@ -1,6 +1,6 @@
 import type { Args, EventResult, Frozen, HookBudget, PluginOptions, RenderElement, Timer } from 'claude-code'
 import type { Step } from '../installer.js'
-import { hooks, PreToolUse, type Allowed, type Disposable, type Hook, type HookInput, type HookListener, type HookOptions, type Imports, type Mod, type ModDefinition, type PaneHandle, type SettingsFile, type Toast } from '../mod.js'
+import { FileChanged, hooks, PreToolUse, SessionStart, type Allowed, type FileChange, type Disposable, type Hook, type HookInput, type HookListener, type HookOptions, type Imports, type Mod, type ModDefinition, type PaneHandle, type SettingsFile, type Toast } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
 import { changelogPage, consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, recordPath, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
@@ -698,6 +698,8 @@ async function createMod<State extends object, Declared extends Options>(definit
     routeOn: (event, hook) => router.add(event, hook as never),
   })
   let followed: Parameters<typeof client.follow>[0] | undefined
+  let isSetUp = false
+  const watches = new Set<{ readonly paths: readonly string[]; readonly listener: (change: FileChange) => unknown }>()
   const followFolders = (project: string, folder: string) => {
     if (followed === undefined) return
     followed = { ...followed, project, cwd: folder }
@@ -731,6 +733,19 @@ async function createMod<State extends object, Declared extends Options>(definit
       async stat(path, options) {
         const { kind, size, mtimeMs, isLink, realPath } = await checked.fs.stat(expand(path), options)
         return { isFile: kind === 'file', isFolder: kind === 'dir', isLink, size, modifiedAt: mtimeMs, ...(realPath === undefined ? {} : { realPath }) }
+      },
+      onChange({ path }, listener) {
+        if (isSetUp) throw new Error(`${definition.name}: fs.onChange works only in setup, because Claude Code reads the paths it watches when a session starts.`)
+        const paths = [path].flat().map((each) => resolvedPath(each, places))
+        const watch = { paths, listener }
+        watches.add(watch)
+        if (watches.size === 1) {
+          mod.on(SessionStart, () => ({ hookSpecificOutput: { hookEventName: SessionStart, watchPaths: [...new Set([...watches].flatMap((each) => each.paths))] } }))
+          mod.on(FileChanged, ({ file_path, event }) => {
+            for (const each of watches) if (each.paths.some((watched) => relativePath(watched, file_path) !== undefined)) void Promise.resolve(each.listener({ path: file_path, type: event })).catch((error: unknown) => report({ id: 'fs:onChange', message: 'The fs.onChange listener failed', error }))
+          })
+        }
+        return { dispose: () => void watches.delete(watch) }
       },
     },
     metadata: {
@@ -922,6 +937,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   if (missing.length > 0) throw new MissingOptions(missing, missing.map((key) => definition.options?.[key]?.title ?? key))
   await failsAs('the details of its session did not load', () => followCurrent(undefined))
   await failsAs('its setup function threw', () => definition.setup(mod))
+  isSetUp = true
   const permissionHooks = permissionEvents.filter((event) => router.has(event))
   if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
     throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`)
