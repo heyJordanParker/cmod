@@ -93,8 +93,8 @@ test("--task reads the agent a task runs like a conversation: its turns, context
   expect(await json(home, 'turns', 's1', '--project', project, '--task', 'a7')).toEqual([{ prompt, context: 1, openedAt: at(2), closedAt: at(5) }])
   expect(await json(home, 'contexts', 's1', '--project', project, '--task', 'a7')).toEqual([{ number: 1, openedAt: at(1), closedAt: at(5), task: 'a7' }])
   expect(await json(home, 'goal', 's1', '--project', project, '--task', 'a7')).toEqual({ text: 'find the pane file' })
-  expect(await json(home, 'usage', 's1', '--project', project, '--task', 'a7')).toEqual({ model: 'claude-haiku-5', context: { tokens: 1000 } })
-  expect(await json(home, 'usage', 's1', '--project', project)).toEqual({ model: '', context: {} })
+  expect(await json(home, 'usage', 's1', '--project', project, '--task', 'a7')).toEqual({ model: 'claude-haiku-5', contextWindow: { tokenCount: 1000 } })
+  expect(await json(home, 'usage', 's1', '--project', project)).toEqual({ model: '', contextWindow: {} })
 })
 
 test('search --session keeps one conversation, and --task, --turn, and --goal keep a part of it', async () => {
@@ -320,14 +320,15 @@ test('sessions leaves out a session no one prompted, and lists one whose first p
   expect(await json(home, 'sessions', '--project', project)).toEqual([late])
 })
 
-test('an index made by an older cmod is deleted, and the index is history-5.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-6.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  await writeFiles(home, { '.local/share/cmod/history.sqlite': 'an older index\n', '.local/share/cmod/history-2.sqlite': 'an older index\n', '.local/share/cmod/history-3.sqlite': 'an older index\n', '.local/share/cmod/history-4.sqlite': 'an older index\n' })
+  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite']
+  await writeFiles(home, Object.fromEntries(older.map((name) => [`.local/share/cmod/${name}`, 'an older index\n'])))
 
   await json(home, 'sessions', '--project', project)
 
-  expect(['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, false, false, true])
+  expect([...older, 'history-6.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, false, false, false, true])
 })
 
 test("a task's compaction gives its owner a new context, and contexts --task lists both", async () => {

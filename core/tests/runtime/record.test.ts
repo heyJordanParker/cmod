@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
-import { CwdChanged, defineMod, Message, Note, PostToolUse, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStart, SubagentStop, TaskStart, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
+import { defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
+import { Message } from '../../src/session/context/turn/message/message.js'
+import { TaskStart } from '../../src/session/goal/task.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
 
 test("a task's owner is a session: its agent type, its goal from its first prompt, and its own turns", async () => {
@@ -12,12 +15,12 @@ test("a task's owner is a session: its agent type, its goal from its first promp
   await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
   await tested.add({ type: Reply, text: 'In tree.ts.' }, { task: id })
 
-  const [task] = await (await sessions.current.goal()).tasks()
+  const [task] = await sessions.current.goal.tasks()
   const owner = task!.owner
   const [turn] = await owner.turns()
 
   expect([owner.id, owner.agentType, owner.model, owner.isRunning]).toEqual([id, 'Explore', 'haiku', true])
-  expect((await owner.goal()).text).toBe('Find where the tree pane is drawn.')
+  expect(await owner.goal.text()).toBe('Find where the tree pane is drawn.')
   expect((await turn!.messages()).map((message) => message.type)).toEqual([Prompt, Reply])
   expect((await owner.context()).number).toBe(1)
 })
@@ -45,7 +48,7 @@ test("a turn hears only its own messages, a session only its own agent's, and th
       async setup() {
         sessions.current.onTurnStart({ prompt: { text: 'First' } }, (turn: Turn) => void turn.onReply((reply) => void inTurn.push(reply.text)))
         sessions.current.onMessage((message) => void inMain.push(message.type))
-        ;(await sessions.current.goal()).onMessage({ task: /./ }, (message) => void inSession.push(message.type))
+        ;sessions.current.goal.onMessage({ task: /./ }, (message) => void inSession.push(message.type))
       },
     }),
     { permissions: ['conversation'] },
@@ -70,7 +73,7 @@ test("a task hears its subtask's replies, though it listens only for replies", a
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
-  const [task] = await (await sessions.current.goal()).tasks()
+  const [task] = await sessions.current.goal.tasks()
   task!.onReply((reply) => void heard.push(reply.text))
   await tested.settle()
 
@@ -85,11 +88,11 @@ test("a task refuses its subtask's start", async () => {
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
-  const [task] = await (await sessions.current.goal()).tasks()
+  const [task] = await sessions.current.goal.tasks()
   task!.beforeTaskStart(() => ({ refuse: 'No subtasks' }))
   await tested.settle()
 
-  expect(await tested.fire('agent.spawn', { prompt: 'Read tree.ts', description: 'Read', tool_use_id: 'toolu_9', parentAgentId: parent, parentModel: 'opus' } as never)).toEqual({ deny: 'No subtasks' })
+  expect(await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Read tree.ts', description: 'Read', tool_use_id: 'toolu_9', parentAgentId: parent, parentModel: 'opus' } as never)).toEqual({ deny: 'No subtasks' })
 })
 
 test("beforePrompt in a task adds a note the subagent reads at its start, with the spawn's prompt", async () => {
@@ -97,15 +100,15 @@ test("beforePrompt in a task adds a note the subagent reads at its start, with t
   const tested = testMod(defineMod({ name: 'modes', setup() {} }), { permissions: ['prompt'] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
-  ;(await sessions.current.goal()).beforePrompt({ task: /./ }, (prompt) => {
+  ;sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => {
     prompts.push(prompt.text)
     return { note: 'You are in read-only mode.' }
   })
   await tested.settle()
-  await tested.fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
+  await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
   const task = await tested.startTask({ title: 'Find', openedBy: 'toolu_9' })
 
-  expect(await tested.fire(SubagentStart, { agent_id: task, agent_type: 'Explore' } as never)).toEqual({ additionalContext: ['You are in read-only mode.'] })
+  expect(await claudeCodeOf(tested).fire('SubagentStart', { agent_id: task, agent_type: 'Explore' } as never)).toEqual({ additionalContext: ['You are in read-only mode.'] })
   expect(prompts).toEqual(['Find the pane'])
 })
 
@@ -113,10 +116,10 @@ test("a goal refuses its session's top-level task starts", async () => {
   const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
-  ;(await sessions.current.goal()).beforeTaskStart(() => ({ refuse: 'No new tasks' }))
+  ;sessions.current.goal.beforeTaskStart(() => ({ refuse: 'No new tasks' }))
   await tested.settle()
 
-  expect(await tested.fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)).toEqual({ deny: 'No new tasks' })
+  expect(await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)).toEqual({ deny: 'No new tasks' })
 })
 
 test("a task's owner keeps its context through a compaction and its turn through a stop, when its listeners refuse", async () => {
@@ -125,13 +128,13 @@ test("a task's owner keeps its context through a compaction and its turn through
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
   await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
-  const [task] = await (await sessions.current.goal()).tasks()
+  const [task] = await sessions.current.goal.tasks()
   task!.owner.beforeContextEnd(() => ({ refuse: 'Keep the findings' }))
   task!.owner.beforeTurnEnd(() => ({ refuse: 'Name the file first' }))
   await tested.settle()
 
-  expect(await tested.fire('session.compact', { trigger: 'auto', agentId: id } as never)).toEqual({ skip: 'Keep the findings' })
-  expect(await tested.fire(SubagentStop, { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ block: 'Name the file first' })
+  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', agentId: id } as never)).toEqual({ skip: 'Keep the findings' })
+  expect(await claudeCodeOf(tested).fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ block: 'Name the file first' })
 })
 
 test("a message sent to a task meets that task's prompt guard, and never the session's own", async () => {
@@ -139,12 +142,12 @@ test("a message sent to a task meets that task's prompt guard, and never the ses
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
-  const [task] = await (await sessions.current.goal()).tasks()
+  const [task] = await sessions.current.goal.tasks()
   task!.owner.beforePrompt(() => ({ refuse: 'Task guard' }))
   ;(await sessions.current.context()).beforePrompt(() => ({ refuse: 'Main context only' }))
   await tested.settle()
 
-  expect(await tested.fire('session.receive', { origin: { kind: 'peer', plugin: 'other' }, text: 'Deploy production', agentId: id } as never, { text: 'Deploy production' } as never)).toEqual({ consumed: 'Task guard' })
+  expect(await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'other' }, text: 'Deploy production', agentId: id } as never, { text: 'Deploy production' } as never)).toEqual({ consumed: 'Task guard' })
 })
 
 test('a subtask closes when its result reaches the parent task', async () => {
@@ -154,7 +157,7 @@ test('a subtask closes when its result reaches the parent task', async () => {
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
   const child = await tested.startTask({ title: 'Read tree.ts', parent, openedBy: 'toolu_child' })
-  ;(await sessions.current.goal()).onTaskEnd((task) => void ended.push(task.id))
+  ;sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
   await tested.settle()
 
   await tested.add({ type: ToolResult, callId: 'toolu_child', output: 'Read it.', isError: false }, { task: parent })
@@ -183,7 +186,7 @@ test("a task's TurnStart payload reads that task's messages", async () => {
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
-  ;(await sessions.current.goal()).onTurnStart({ prompt: { task: id } }, (turn: Turn) => void turn.messages().then((messages) => read.push(messages.map((message) => message.type))))
+  ;sessions.current.goal.onTurnStart({ prompt: { task: id } }, (turn: Turn) => void turn.messages().then((messages) => read.push(messages.map((message) => message.type))))
   await tested.settle()
 
   await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
@@ -215,8 +218,8 @@ test("beforeSessionStart's note, title, and first prompt reach Claude Code, and 
   )
   await tested.start()
 
-  expect(await tested.fire(SessionStart, { source: 'startup', session_id: 's1' })).toEqual({})
-  expect(await tested.fire(SessionStart, { source: 'compact', session_id: 's1' })).toEqual({ additionalContext: ['Docs held: none.'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'startup', session_id: 's1' })).toEqual({})
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({ additionalContext: ['Docs held: none.'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
 })
 
 test('beforeModelChange refuses a switch, and onCwdChange hears the new folder without answering', async () => {
@@ -234,10 +237,10 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
   await tested.start()
   const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
 
-  expect(await tested.fire(PreModelSwitch, { ...switched, to_model: 'sonnet' } as never)).toEqual({})
-  expect(await tested.fire(PreModelSwitch, { ...switched, to_model: 'haiku' } as never)).toEqual({ permissionDecision: 'deny', permissionDecisionReason: 'This mode keeps opus.' })
-  expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/b', old_cwd: '/work/a', new_cwd: '/work/b' })).toEqual({})
-  expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/c', old_cwd: '/work/b', new_cwd: '/work/c', agent_id: 'a1' } as never)).toEqual({})
+  expect(await claudeCodeOf(tested).fire('PreModelSwitch', { ...switched, to_model: 'sonnet' } as never)).toEqual({})
+  expect(await claudeCodeOf(tested).fire('PreModelSwitch', { ...switched, to_model: 'haiku' } as never)).toEqual({ permissionDecision: 'deny', permissionDecisionReason: 'This mode keeps opus.' })
+  expect(await claudeCodeOf(tested).fire('CwdChanged', { session_id: 's1', cwd: '/work/b', old_cwd: '/work/a', new_cwd: '/work/b' })).toEqual({})
+  expect(await claudeCodeOf(tested).fire('CwdChanged', { session_id: 's1', cwd: '/work/c', old_cwd: '/work/b', new_cwd: '/work/c', agent_id: 'a1' } as never)).toEqual({})
   await tested.settle()
   expect(moved).toEqual([{ cwd: '/work/b', previous: '/work/a' }])
 })
@@ -254,9 +257,9 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
   )
   await tested.start()
 
-  expect(await tested.fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['The person asked for a commit.'], origin: { kind: 'composer' } })
-  expect(await tested.fire(UserPromptSubmit, { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
-  expect(await tested.fire(UserPromptSubmit, { prompt: 'next' })).toEqual({})
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['The person asked for a commit.'], origin: { kind: 'composer' } })
+  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
+  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'next' })).toEqual({})
 })
 
 test("beforeToolResult adds a note, rewrites the output, or marks the result failed", async () => {
@@ -274,9 +277,9 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
   await tested.start()
   const used = (tool_name: string, tool_response: unknown) => ({ session_id: 's1', cwd: '/work', tool_name, tool_input: {}, tool_use_id: 'toolu_1', tool_response }) as never
 
-  expect(await tested.fire(PostToolUse, used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['src/CLAUDE.md says: no default exports.'] })
-  expect(await tested.fire(PostToolUse, used('Bash', 'key=sk-secret'))).toEqual({ updatedToolOutput: 'key=[hidden]' })
-  expect(await tested.fire(PostToolUse, used('Write', {}))).toEqual({ block: 'Write only under src/.' })
+  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['src/CLAUDE.md says: no default exports.'] })
+  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Bash', 'key=sk-secret'))).toEqual({ updatedToolOutput: 'key=[hidden]' })
+  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Write', {}))).toEqual({ block: 'Write only under src/.' })
 })
 
 test('beforePermissionCheck approves a call with approve, and asks or refuses one with no permission', async () => {
@@ -296,12 +299,12 @@ test('beforePermissionCheck approves a call with approve, and asks or refuses on
 
   const allowed = guard(['approve'])
   await allowed.start()
-  expect(await allowed.fire('tool.check', check('Read', { file_path: '/work/a.ts' }))).toEqual({ decision: 'allow' })
-  expect(await allowed.fire('tool.check', check('Bash', { command: 'git push' }))).toEqual({ decision: 'ask', reason: 'Pushing leaves this computer.' })
+  expect(await claudeCodeOf(allowed).fire('tool.check', check('Read', { file_path: '/work/a.ts' }))).toEqual({ decision: 'allow' })
+  expect(await claudeCodeOf(allowed).fire('tool.check', check('Bash', { command: 'git push' }))).toEqual({ decision: 'ask', reason: 'Pushing leaves this computer.' })
 
   const unallowed = guard([])
   await unallowed.start()
-  expect(await unallowed.fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
+  expect(await claudeCodeOf(unallowed).fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
 })
 
 test('abort stops a running turn with the prompt permission, and throws on an ended one', async () => {
@@ -327,7 +330,7 @@ test('onToolResult hears the files a call changed and read, with the tool and it
         sessions.current.onToolResult(({ name, files }) => void heard.push({ name, files }))
       },
     }),
-    { files: { '/test/project/notes.md': 'notes' } },
+    { projectRoot: '/test/project', files: { '/test/project/notes.md': 'notes' } },
   )
   await tested.start()
   await tested.add({ type: Prompt, text: 'Tidy the notes' })
@@ -347,8 +350,24 @@ test('a turn searches only its own messages', async () => {
 
   const turn = await sessions.current.turn()
 
-  expect((await turn!.search('rename')).map((message) => message.type === Prompt && message.text)).toEqual(['Rename the log pane'])
-  expect(await sessions.current.search('rename')).toHaveLength(2)
+  expect((await Array.fromAsync(turn!.search('rename'))).map((message) => message.type === Prompt && message.text)).toEqual(['Rename the log pane'])
+  expect(await Array.fromAsync(sessions.current.search('rename'))).toHaveLength(2)
+})
+
+test('a search reads page after page until the loop breaks', async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  await tested.start()
+  for (let index = 0; index < 120; index += 1) await tested.add({ type: Prompt, text: `Rename pane ${index}` })
+
+  const every = await Array.fromAsync(sessions.current.search('rename'))
+  const firstThree: string[] = []
+  for await (const message of sessions.current.search('rename')) {
+    if (message.type === Prompt) firstThree.push(message.text)
+    if (firstThree.length === 3) break
+  }
+
+  expect(every).toHaveLength(120)
+  expect(firstThree).toEqual(['Rename pane 119', 'Rename pane 118', 'Rename pane 117'])
 })
 
 test('beforePrompt rewrites a typed prompt and refuses another', async () => {
@@ -365,8 +384,8 @@ test('beforePrompt rewrites a typed prompt and refuses another', async () => {
 
   const typed = { origin: { kind: 'composer' }, wait: false } as const
 
-  expect(await tested.fire('prompt.submit', { ...typed, text: 'Fix the login bug' })).toEqual({ text: 'Fix the login bug, with tests', origin: { kind: 'composer' } })
-  expect(await tested.fire('prompt.submit', { ...typed, text: 'Deploy to prod' })).toEqual({ drop: 'No deploys to prod from here.' })
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { ...typed, text: 'Fix the login bug' })).toEqual({ text: 'Fix the login bug, with tests', origin: { kind: 'composer' } })
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { ...typed, text: 'Deploy to prod' })).toEqual({ drop: 'No deploys to prod from here.' })
 })
 
 test('beforeToolCall refuses a call with no permission, and rewrites one only with the tools permission', async () => {
@@ -385,14 +404,14 @@ test('beforeToolCall refuses a call with no permission, and rewrites one only wi
 
   const unallowed = guard([])
   await unallowed.start()
-  expect(await unallowed.fire('tool.call', call('rm -rf build'))).toEqual({ deny: 'Use trash instead of rm.' })
-  expect(await unallowed.fire('tool.call', call('ls'))).toEqual({} as never)
+  expect(await claudeCodeOf(unallowed).fire('tool.call', call('rm -rf build'))).toEqual({ deny: 'Use trash instead of rm.' })
+  expect(await claudeCodeOf(unallowed).fire('tool.call', call('ls'))).toEqual({} as never)
   await unallowed.settle()
-  expect(unallowed.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The before(toolCall) listener failed'])
+  expect(unallowed.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The beforeToolCall listener failed'])
 
   const allowed = guard(['tools'])
   await allowed.start()
-  await allowed.fire('tool.call', call('ls'))
+  await claudeCodeOf(allowed).fire('tool.call', call('ls'))
   await allowed.settle()
   expect(allowed.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
@@ -411,8 +430,8 @@ test('beforeTaskStart picks the model a task runs on', async () => {
 
   const spawn = { tool_use_id: 'toolu_1', prompt: 'Find it.', description: 'Find it', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'opus' }
 
-  expect(await tested.fire('agent.spawn', { ...spawn, subagentType: 'Explore' } as never)).toEqual({ agentId: 'agent-1', model: 'haiku' } as never)
-  expect(await tested.fire('agent.spawn', { ...spawn, subagentType: 'Plan' } as never)).toEqual({ agentId: 'agent-1', model: 'opus' } as never)
+  expect(await claudeCodeOf(tested).fire('agent.spawn', { ...spawn, subagentType: 'Explore' } as never)).toEqual({ agentId: 'agent-1', model: 'haiku' } as never)
+  expect(await claudeCodeOf(tested).fire('agent.spawn', { ...spawn, subagentType: 'Plan' } as never)).toEqual({ agentId: 'agent-1', model: 'opus' } as never)
 })
 
 test('a disposed before listener stops answering', async () => {
@@ -429,7 +448,7 @@ test('a disposed before listener stops answering', async () => {
   await tested.start()
   listening?.dispose()
 
-  expect(await tested.fire('prompt.submit', { text: 'Go', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Go', origin: { kind: 'composer' } })
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'Go', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Go', origin: { kind: 'composer' } })
 })
 
 test('a before listener disposed after /clear stops answering in the new session', async () => {
@@ -444,13 +463,13 @@ test('a before listener disposed after /clear stops answering in the new session
     { permissions: ['conversation', 'prompt'] },
   )
   await tested.start()
-  await tested.fire(SessionStart, { source: 'clear', session_id: 'after-clear' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'clear', session_id: 'after-clear' })
   await tested.settle()
 
   listening?.dispose()
   await tested.settle()
 
-  expect(await tested.fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Continue', origin: { kind: 'composer' } })
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Continue', origin: { kind: 'composer' } })
 })
 
 test('a task heard starting in another running session is running, and a send reaches it', async () => {
@@ -493,16 +512,16 @@ test("a task owner's goal hears its own update", async () => {
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.startTask({ title: 'Find the pane' })
-  const [task] = await (await sessions.current.goal()).tasks()
-  const goal = await task!.owner.goal()
-  goal.onGoalChange((changed) => void heard.push(changed.text))
+  const [task] = await sessions.current.goal.tasks()
+  const goal = task!.owner.goal
+  goal.onGoalChange(async (changed) => void heard.push(await changed.text()))
   await tested.settle()
 
   await goal.update({ text: 'Find where tree.ts draws the pane' })
   await tested.settle()
 
   expect(heard).toEqual(['Find where tree.ts draws the pane'])
-  expect((await task!.owner.goal()).text).toBe('Find where tree.ts draws the pane')
+  expect(await task!.owner.goal.text()).toBe('Find where tree.ts draws the pane')
 })
 
 test("a task goal's event payload updates that task's goal, never the session's", async () => {
@@ -511,8 +530,8 @@ test("a task goal's event payload updates that task's goal, never the session's"
   await tested.start()
   await tested.add({ type: Prompt, text: 'Main goal' })
   await tested.startTask({ title: 'Find the pane' })
-  const [task] = await (await sessions.current.goal()).tasks()
-  const goal = await task!.owner.goal()
+  const [task] = await sessions.current.goal.tasks()
+  const goal = task!.owner.goal
   goal.onGoalChange((changed) => void payloads.push(changed))
   await tested.settle()
   await goal.update({ text: 'Child goal' })
@@ -520,7 +539,7 @@ test("a task goal's event payload updates that task's goal, never the session's"
 
   await payloads[0]?.update({ text: 'Updated through event' })
 
-  expect([(await sessions.current.goal()).text, (await task!.owner.goal()).text]).toEqual(['Main goal', 'Updated through event'])
+  expect([await sessions.current.goal.text(), await task!.owner.goal.text()]).toEqual(['Main goal', 'Updated through event'])
 })
 
 test('callTool with CronList or CronDelete needs the tools permission', async () => {
@@ -538,8 +557,8 @@ test("a task owner's goal hears the owner and the tasks it started", async () =>
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const owner = await tested.startTask({ title: 'Find the pane' })
   const child = await tested.startTask({ title: 'Read tree.ts', parent: owner })
-  const [task] = (await (await sessions.current.goal()).tasks()).filter((each) => each.id === owner)
-  ;(await task!.owner.goal()).onReply((reply) => void heard.push(reply.text))
+  const [task] = (await sessions.current.goal.tasks()).filter((each) => each.id === owner)
+  ;task!.owner.goal.onReply((reply) => void heard.push(reply.text))
   await tested.settle()
 
   await tested.add({ type: Reply, text: 'Owner reply' }, { task: owner })
@@ -575,13 +594,13 @@ test('callTool with CronCreate needs the prompt permission, because a schedule s
   expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
 })
 
-test('clients() names the Claude apps showing the session, and an ended session shows in none', async () => {
+test('surfaces() names the Claude apps showing the session, and an ended session shows in none', async () => {
   const tested = testMod(defineMod({ name: 'compact', setup() {} }), { permissions: ['conversation'], sessions: [{ id: 'older', lastAt: '2026-10-10T09:00:00.000Z', messages: [{ type: Prompt, text: 'Older work' }] }] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Now' })
   const older = (await sessions.list()).find((session) => session.id === 'older')
 
-  expect(await sessions.current.clients()).toEqual(['terminal'])
-  expect(await older!.clients()).toEqual([])
+  expect(await sessions.current.surfaces()).toEqual(['terminal'])
+  expect(await older!.surfaces()).toEqual([])
   expect((await older!.usage()).model).toBe('test-model')
 })

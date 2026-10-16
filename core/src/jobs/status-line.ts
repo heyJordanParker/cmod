@@ -2,21 +2,18 @@ import type { Job, Mod } from '../mod.js'
 import type { Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
 import { usageOf } from '../runtime/sessions.js'
+import { onStateChange } from '../runtime/state.js'
 import type { Usage } from '../session/session.js'
 import { messageOf } from '../utils/text.js'
 import { withinDeadline } from './context.js'
 
 const deadline: Deadline = { ms: 2000, job: 'statusLine' }
 
-export function statusLine<State extends object = Record<never, never>>(options: {
-  readonly text: (usage: Usage, mod: Mod<State>) => string | undefined | Promise<string | undefined>
-  readonly interval?: number
-}): Job<void, State> {
-  const { text, interval = 10000 } = options
+export function statusLine<State extends object = Record<never, never>>(options: { readonly text: (usage: Usage, mod: Mod<State>) => string | undefined | Promise<string | undefined> }): Job<void, State> {
+  const { text } = options
   return (job) => {
     const { mod, announce, reserveName } = job
     const { claude, router } = engineOf(mod)
-    if (!(interval >= 1)) throw new Error(`${mod.name}: the status line interval is ${interval}. Give it in milliseconds, 1 or more.`)
     reserveName('statusLine', '', `${mod.name}: a status line is already added. A mod has one status line: join the texts in one statusLine.`)
 
     let shown: string | undefined
@@ -41,7 +38,7 @@ export function statusLine<State extends object = Record<never, never>>(options:
       refresh()
       return next(e)
     })
-    claude.clock.every(interval, refresh)
+    onStateChange(mod.state, refresh)
     refresh()
   }
 }

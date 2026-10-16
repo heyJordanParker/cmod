@@ -1,7 +1,7 @@
 import type { Args, Frozen } from 'claude-code'
 import type { Disposable } from '../mod.js'
 import { ContextEnd } from '../session/context/context.js'
-import { Document } from '../session/context/turn/message/document.js'
+import { InstructionFile, isRulePath } from '../session/context/turn/message/instruction-file.js'
 import { Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Notice } from '../session/context/turn/message/notice.js'
@@ -13,7 +13,7 @@ import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
 import type { ConversationState, SessionChange, TaskData } from '../session/conversation.js'
-import { Task, TaskEnd, TaskStart } from '../session/goal/task.js'
+import { Task, TaskStart } from '../session/goal/task.js'
 import type { BeforeEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
@@ -82,7 +82,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
   }
   const added: Disposable[] = [
     router.add('prompt.submit', async (e, next) => {
-      if (!(await wants(Prompt)) || e.text.startsWith('/')) return next(e)
+      if (!(await wants(Prompt))) return next(e)
       const where = await place()
       const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false))
       if (answer.refuse !== undefined) return { drop: answer.refuse }
@@ -98,18 +98,6 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     }),
     router.add('classic.PostToolUse', toolResultHook(false) as never),
     router.add('classic.PostToolUseFailure', toolResultHook(true) as never),
-    router.add('command.run', async (e, next) => {
-      if (!(await wants(Prompt))) return next(e)
-      const typed = e.args === '' ? `/${e.command}` : `/${e.command} ${e.args}`
-      const where = await place()
-      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: typed, from: senderOf(e.origin, false) }, undefined, false))
-      if (answer.refuse !== undefined) return { text: answer.refuse }
-      if (answer.text === undefined || answer.text === typed) return next(e)
-      const same = new RegExp(`^/${e.command}(?:\\s+|$)`).exec(answer.text)
-      if (same !== null) return next({ ...e, args: answer.text.slice(same[0].length) })
-      void claude.prompt.submit({ text: answer.text })
-      return {}
-    }),
     router.add('session.receive', async (e, next) => {
       if (!(await wants(Prompt)) || relayOf(e) !== undefined) return next(e)
       const where = await place()
@@ -124,10 +112,10 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return answer.text === undefined ? next(e) : { text: answer.text }
     }),
     router.add('prompt.attachment', async (e, next) => {
-      if (!(await wants(Document)) || e.type !== 'nested_memory') return next(e)
+      if (!(await wants(InstructionFile)) || e.type !== 'nested_memory') return next(e)
       const where = await place()
       const path = /^Contents of (.+?) \(/.exec(e.text)?.[1] ?? ''
-      const answer = await asked(Document, message(where, { id: '', at: now(), type: Document, path, text: e.text }, e.agentId))
+      const answer = await asked(InstructionFile, message(where, { id: '', at: now(), type: InstructionFile, path, text: e.text, isRule: isRulePath(path) }, e.agentId))
       if (answer.refuse !== undefined) return { text: null }
       return answer.text === undefined ? next(e) : { text: answer.text }
     }),
@@ -177,15 +165,12 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return withNote(await next(e), answer.note)
     }),
     router.add('classic.SubagentStop', async (e, next) => {
-      if (!(await wants(TaskEnd)) && !(await wants(TurnEnd))) return next(e)
-      const where = await place()
-      const task = where.tasks[e.agent_id]
-      if (task === undefined) return next(e)
-      const turn = where.taskTurns[e.agent_id]
-      const ending = (await wants(TaskEnd)) ? await asked(TaskEnd, { type: TaskEnd, task: { ...task, closedAt: now() } }) : {}
-      const refuse = ending.refuse ?? ((await wants(TurnEnd)) && turn !== undefined ? (await asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } })).refuse : undefined)
+      if (!(await wants(TurnEnd))) return next(e)
+      const turn = (await place()).taskTurns[e.agent_id]
+      if (turn === undefined) return next(e)
+      const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } })
       const below = await next(e)
-      return refuse === undefined ? below : { ...below, block: refuse }
+      return answer.refuse === undefined ? below : { ...below, block: answer.refuse }
     }),
     router.add('classic.Stop', async (e, next) => {
       if (!(await wants(TurnEnd))) return next(e)
@@ -241,13 +226,12 @@ export function answerOf(event: BeforeEvent, answer: unknown): Partial<Answers> 
     prompt: ['text', 'note', 'title', 'refuse'],
     note: ['text'],
     skill: ['text'],
-    document: ['text', 'refuse'],
+    instructionFile: ['text', 'refuse'],
     reply: ['text'],
     toolCall: ['input', 'result', 'refuse'],
     toolResult: ['output', 'isError', 'note'],
     notice: ['text'],
     taskStart: ['owner', 'refuse'],
-    taskEnd: ['refuse'],
     turnEnd: ['refuse'],
     contextEnd: ['refuse'],
   }

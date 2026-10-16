@@ -1,6 +1,6 @@
 import { isObject } from '../../../../records.js'
 import { Task } from '../../../goal/task.js'
-import { Document } from './document.js'
+import { InstructionFile, isRulePath } from './instruction-file.js'
 import { Note } from './note.js'
 import { Notice } from './notice.js'
 import { Prompt } from './prompt.js'
@@ -12,7 +12,7 @@ import { ToolResult } from './tool-result.js'
 
 export const Message = 'message'
 
-export type MessageType = typeof Prompt | typeof Note | typeof Reply | typeof ToolCall | typeof ToolResult | typeof Skill | typeof Document | typeof Notice
+export type MessageType = typeof Prompt | typeof Note | typeof Reply | typeof ToolCall | typeof ToolResult | typeof Skill | typeof InstructionFile | typeof Notice
 
 export type MessageOf<Type extends MessageType> = {
   readonly id: string
@@ -24,7 +24,7 @@ export type MessageOf<Type extends MessageType> = {
   readonly task?: string
 }
 
-export type Message = Prompt | Note | Reply | ToolCall | ToolResult | Skill | Document | Notice
+export type Message = Prompt | Note | Reply | ToolCall | ToolResult | Skill | InstructionFile | Notice
 
 export type Placed = 'session' | 'context' | 'turn' | 'task'
 
@@ -44,7 +44,7 @@ export type Row = {
   readonly model?: string
 }
 
-export const messageTypes: readonly MessageType[] = [Prompt, Note, Reply, ToolCall, ToolResult, Skill, Document, Notice]
+export const messageTypes: readonly MessageType[] = [Prompt, Note, Reply, ToolCall, ToolResult, Skill, InstructionFile, Notice]
 
 export const skillPrefix = 'Base directory for this skill:'
 
@@ -105,7 +105,7 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   const base = { id: row.id, at: row.at }
   const text = textOf(row.content).trim()
   if (row.type === 'system') return row.name === 'turn_duration' || row.name === 'compact_boundary' || text === '' ? [] : [{ ...base, type: Notice, text }]
-  if (row.type === 'attachment') return row.name === 'nested_memory' ? [{ ...base, type: Document, path: row.path ?? '', text }] : []
+  if (row.type === 'attachment') return row.name === 'nested_memory' ? [{ ...base, type: InstructionFile, path: row.path ?? '', text, isRule: isRulePath(row.path ?? '') }] : []
   if (row.type === 'assistant') {
     return row.content.filter(isObject).flatMap((block): Unplaced[] => {
       if (block['type'] === 'text' && typeof block['text'] === 'string' && block['text'].trim() !== '') return [{ ...base, type: Reply, text: block['text'].trim() }]
@@ -177,7 +177,7 @@ const toolValueChars = 1024
 export function searchText(message: Unplaced): string {
   if (message.type === ToolCall) return [message.name, ...stringsIn(message.input).map((value) => value.slice(0, toolValueChars))].join('\n')
   if (message.type === ToolResult) return ''
-  if (message.type === Document) return `${message.path}\n${message.text}`
+  if (message.type === InstructionFile) return `${message.path}\n${message.text}`
   return message.text
 }
 

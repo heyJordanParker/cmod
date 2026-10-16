@@ -1,6 +1,6 @@
 import type { Args, EventResult, Frozen, HookBudget, PluginOptions, RenderElement, Timer } from 'claude-code'
 import type { Step } from '../installer.js'
-import { ConfigChange, FileChanged, hooks, PreToolUse, SessionStart, type Allowed, type FileChange, type Disposable, type Hook, type HookInput, type HookListener, type HookOptions, type Imports, type Mod, type ModDefinition, type PaneHandle, type SettingsFile, type SettingsFileChange, type SettingsFileChangeListener, type Toast } from '../mod.js'
+import type { Allowed, FileChange, Disposable, Imports, Mod, ModDefinition, PaneHandle, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Toast } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
 import { changelogPage, consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, recordPath, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
@@ -12,7 +12,7 @@ import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
 import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
 import { keepEngine } from './engine.js'
-import { classicHook, heldDecisionHook, permissionEvents, preToolUseHook, userSkillHook, type HeldDecisions, type RoutedEvent } from './hooks.js'
+import { classicHook, permissionEvents, userSkillHook, type Hook, type HookListener, type RoutedEvent } from './hooks.js'
 import { checkedAnswer, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
 import { cmodError, lastLineOf, locatingPrograms, readLines, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
@@ -51,6 +51,7 @@ export type Lifecycle<State extends object> = {
   readonly toasts: readonly ShownToast[]
   start(claude: Claude, read: (claude: Claude) => Promise<Plugin>): Promise<void>
   route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
+  raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
 }
 
 type ModRuntime = {
@@ -70,6 +71,7 @@ type ActiveMod<State extends object, Declared extends Options> = {
   readonly mod: Mod<State, Declared>
   readonly added: readonly string[]
   readonly imports: Imports
+  readonly raise: (method: string, payload: Readonly<Record<string, unknown>>) => Promise<unknown>
 }
 
 
@@ -164,6 +166,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   let activation: Promise<void> | undefined
   let mod: Mod<State> | undefined
   let imports: Imports | undefined
+  let raise: ActiveMod<State, Declared>['raise'] | undefined
   let failure: unknown
   let pluginOptions = options
   const installer = createInstaller(definition.name, () => claude())
@@ -325,6 +328,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     const { added } = active
     mod = active.mod
     imports = active.imports
+    raise = active.raise
     router = activeRouter
     phase = 'active'
     runtime.claude.ui.invalidate('ui.render')
@@ -560,6 +564,11 @@ export function createLifecycle<State extends object, Declared extends Options =
     get toasts() {
       return runtime?.toaster.shown ?? []
     },
+    async raise(method, payload) {
+      if (raise === undefined || imports === undefined) throw new Error(`${definition.name} has not started, so ${method} has no listener yet.`)
+      bind(imports)
+      return raise(method, payload)
+    },
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
       programs = locatingPrograms(claudeCalls)
@@ -611,7 +620,6 @@ async function createMod<State extends object, Declared extends Options>(definit
   const report = (failure: Failure) => void toaster.fail(failure)
   const claude = answeringOwnCalls(withBareRefusals(checkingKeys(runtime.claude, toaster.toast, runtime.steps.keys ?? {})), router)
   const added: string[] = []
-  const hooksAdded: Hook[] = []
   const announce = (feature: string) => {
     added.push(feature)
   }
@@ -680,7 +688,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     }))
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: area.changed, forkParent })
   const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, report, changed: modState.changed })
-  const held: HeldDecisions | undefined = runtime.checksPermissions() ? new Map() : undefined
+  const hookOn = <H extends Hook>(hook: H, listener: HookListener<H>): Disposable => router.add(`classic.${hook}`, classicHook(definition.name, hook, listener, report))
   const expand = (path: string) => (homePrefix.test(path) ? resolvedPath(path, places) : path)
   const settingsFile = (source: 'user' | 'project' | 'local'): SettingsFile => ({
     read: () => checked.settings.read({ source }),
@@ -694,7 +702,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     claude: checked,
     report: (id, message, error) => report({ id, message, error }),
     isGranted: (permission) => flag(permission),
-    hookOn: (hook, listener) => mod.on(hook as Hook, listener as HookListener<Hook>),
+    hookOn: (hook, listener) => hookOn(hook as Hook, listener as HookListener<Hook>),
     routeOn: (event, hook) => router.add(event, hook as never),
   })
   let followed: Parameters<typeof client.follow>[0] | undefined
@@ -707,7 +715,16 @@ async function createMod<State extends object, Declared extends Options>(definit
   }
   const imports: Imports = {
     sessions: client.sessions,
-    settings: {
+    commands: {
+      list: async () => (await checked.command.list()).map(({ name, description, source, plugin }) => ({ name, description, source, ...(plugin === undefined ? {} : { plugin }) })),
+      run: async (command, args) => {
+        const { text, context } = await checked.command.run({ command, ...(args === undefined ? {} : { args }) })
+        return { ...(text === undefined ? {} : { text }), ...(context === undefined || context.length === 0 ? {} : { note: context.join('\n') }) }
+      },
+      beforeRun: (...args: unknown[]) => client.listen('beforeRun', args),
+      onRun: (...args: unknown[]) => client.listen('onRun', args),
+    },
+    config: {
       list: async () =>
         (await checked.config.list()).map(({ key, label, description, kind, value, options, provider, isLocked }) => ({
           key,
@@ -719,13 +736,15 @@ async function createMod<State extends object, Declared extends Options>(definit
           ...(options === undefined ? {} : { options }),
           ...(provider.plugin === 'engine' ? {} : { plugin: provider.plugin }),
         })),
+    },
+    settings: {
       user: settingsFile('user'),
       project: settingsFile('project'),
       local: settingsFile('local'),
       beforeFileChange: (matcherOrListener: unknown, maybeListener?: SettingsFileChangeListener) => {
         const listener = (maybeListener ?? matcherOrListener) as SettingsFileChangeListener
         const matcher = maybeListener === undefined ? undefined : matcherOrListener
-        return mod.on(ConfigChange, async ({ source, file_path }) => {
+        return hookOn('ConfigChange', async ({ source, file_path }) => {
           const change: SettingsFileChange = { source: source === 'skills' ? 'skills' : (source.replace('_settings', '') as SettingsFileChange['source']), ...(file_path === undefined ? {} : { path: file_path }) }
           if (matcher !== undefined && !matches(change, matcher)) return undefined
           const answer = await listener(change)
@@ -750,8 +769,8 @@ async function createMod<State extends object, Declared extends Options>(definit
         const watch = { paths, listener }
         watches.add(watch)
         if (watches.size === 1) {
-          mod.on(SessionStart, () => ({ hookSpecificOutput: { hookEventName: SessionStart, watchPaths: [...new Set([...watches].flatMap((each) => each.paths))] } }))
-          mod.on(FileChanged, ({ file_path, event }) => {
+          hookOn('SessionStart', () => ({ hookSpecificOutput: { watchPaths: [...new Set([...watches].flatMap((each) => each.paths))] } }))
+          hookOn('FileChanged', ({ file_path, event }) => {
             for (const each of watches) if (each.paths.some((watched) => relativePath(watched, file_path) !== undefined)) void Promise.resolve(each.listener({ path: file_path, type: event })).catch((error: unknown) => report({ id: 'fs:onChange', message: 'The fs.onChange listener failed', error }))
           })
         }
@@ -819,19 +838,6 @@ async function createMod<State extends object, Declared extends Options>(definit
       files: allowed('files'),
       config: allowed('config'),
     },
-    on(hook: Hook, matcherOrListener: unknown, listenerOrOptions?: unknown, maybeOptions?: HookOptions): Disposable {
-      const hasMatcher = typeof listenerOrOptions === 'function'
-      const listener = (hasMatcher ? listenerOrOptions : matcherOrListener) as HookListener<Hook>
-      const matcher = hasMatcher ? matcherOrListener : undefined
-      const options = (hasMatcher ? maybeOptions : listenerOrOptions) as HookOptions | undefined
-      if (!hooks.includes(hook)) throw new Error(`${definition.name}: mod.on takes one of Claude Code's hooks, such as PreToolUse, not ${String(hook)}.`)
-      const matched: HookListener<Hook> = matcher === undefined ? listener : (input) => (matches(input, matcher) ? listener(input) : undefined)
-      const bounded = options?.timeoutMs === undefined ? matched : timedHook(hook, matched, checkedMs(definition.name, `the ${hook} hook's timeoutMs`, options.timeoutMs), claude, toaster.toast)
-      if (!hooksAdded.includes(hook)) hooksAdded.push(hook)
-      if (hook === PreToolUse) return router.add('tool.call', preToolUseHook(definition.name, bounded as HookListener<typeof PreToolUse>, claude, agents, held))
-      const classic: Exclude<Hook, typeof PreToolUse> = hook
-      return router.add(`classic.${classic}`, classicHook(definition.name, classic, bounded as HookListener<typeof classic>, claude, agents, report))
-    },
     every: (ms, listener) => timer(ms, 'every', claude.clock.every, listener),
     after: (ms, listener) => timer(ms, 'after', claude.clock.after, listener),
     use: (job) => job({ mod, announce, reserveName }),
@@ -861,8 +867,8 @@ async function createMod<State extends object, Declared extends Options>(definit
       loadedCwd = nextCwd
       if (!hasMovedRoot) area.changed()
       if (nextCwd === oldCwd) return
-      const moved: HookInput<'CwdChanged'> = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
-      await router.dispatch('classic.CwdChanged', moved as Frozen<Args<'classic.CwdChanged'>>, async () => ({}))
+      const moved = { session_id: await claude.session.id(), cwd: nextCwd, hook_event_name: 'CwdChanged', old_cwd: oldCwd, new_cwd: nextCwd }
+      await router.dispatch('classic.CwdChanged', moved as unknown as Frozen<Args<'classic.CwdChanged'>>, async () => ({}))
     } catch (error) {
       report({ id: 'cmod:follow', message: `Keeps the state of ${modState.root} until the next prompt or folder move`, error })
     }
@@ -952,10 +958,8 @@ async function createMod<State extends object, Declared extends Options>(definit
   if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
     throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`)
   }
-  if (held !== undefined && hooksAdded.includes(PreToolUse)) router.add('tool.check', heldDecisionHook(held))
   await failsAs('its open panes did not load', () => area.restorePanes())
-  if (hooksAdded.length > 0) added.push(`${hooksAdded.length === 1 ? 'a hook' : 'hooks'} on ${listed(hooksAdded)}`)
-  return { mod, added, imports }
+  return { mod, added, imports, raise: client.raise }
 }
 
 function checkingKeys(claude: Claude, toast: Toast, keys: Readonly<Record<string, string>>): Claude {
@@ -977,28 +981,6 @@ const longestTimerMs = 2_147_483_647
 function checkedMs(name: string, subject: string, ms: number): number {
   if (!Number.isInteger(ms) || ms <= 0 || ms > longestTimerMs) throw new Error(`${name}: ${subject} is ${ms}. Give a whole number of milliseconds above 0 and at most ${longestTimerMs}.`)
   return ms
-}
-
-function timedHook<H extends Hook>(event: H, hook: HookListener<H>, ms: number, claude: Claude, toast: Toast): HookListener<H> {
-  return (input) =>
-    new Promise((resolve, reject) => {
-      const timer = claude.clock.after(ms, () => {
-        toast.warning(`The ${event} hook passed its ${ms / 1000} s timeout`, { id: `timeout:${event}` })
-        resolve(undefined)
-      })
-      Promise.resolve()
-        .then(() => hook(input))
-        .then(
-          (answer) => {
-            timer.cancel()
-            resolve(answer)
-          },
-          (error: unknown) => {
-            timer.cancel()
-            reject(error)
-          },
-        )
-    })
 }
 
 async function failsAs(subject: string, step: () => unknown): Promise<void> {

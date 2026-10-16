@@ -1,6 +1,6 @@
 import { isObject } from '../records.js'
-import { Document } from '../session/context/turn/message/document.js'
-import { Message, noFiles, searchText, skillPrefix, type Row } from '../session/context/turn/message/message.js'
+import { InstructionFile } from '../session/context/turn/message/instruction-file.js'
+import { Message, messagesOf, noFiles, searchText, skillPrefix, type Row } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Notice } from '../session/context/turn/message/notice.js'
 import { Prompt } from '../session/context/turn/message/prompt.js'
@@ -25,7 +25,7 @@ export type MessageDraft =
   | { readonly type: typeof ToolCall; readonly name: string; readonly input?: Readonly<Record<string, unknown>>; readonly callId?: string }
   | { readonly type: typeof ToolResult; readonly callId: string; readonly output: string; readonly isError?: boolean }
   | { readonly type: typeof Skill; readonly name: string; readonly text: string }
-  | { readonly type: typeof Document; readonly path: string; readonly text: string }
+  | { readonly type: typeof InstructionFile; readonly path: string; readonly text: string }
   | { readonly type: typeof Notice; readonly text: string }
 
 export type FakeSession = Partial<Omit<SessionData, 'id'>> & {
@@ -49,6 +49,7 @@ type Heard = { readonly event: Subscription['event']; readonly matcher: unknown 
 export type FakeSessions = {
   answer(caller: string, method: string, input: unknown): unknown
   add(draft: MessageDraft, task?: string): Message[]
+  draft(draft: MessageDraft, task?: string): Message
   place(): Place
   wants(mod: string, event: string): boolean
   endTurn(ending?: TurnEnding): void
@@ -58,7 +59,7 @@ export type FakeSessions = {
   readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string }[]
 }
 
-export function fakeSessions({ project, given, push, callTool }: { readonly project: () => string; readonly given: readonly FakeSession[]; readonly push: (mod: string, session: string, change: SessionChange) => void; readonly callTool: Claude['tool']['call'] }): FakeSessions {
+export function fakeSessions({ project, cwd, given, push, callTool }: { readonly project: () => string; readonly cwd: () => string; readonly given: readonly FakeSession[]; readonly push: (mod: string, session: string, change: SessionChange) => void; readonly callTool: Claude['tool']['call'] }): FakeSessions {
   const kept = new Map<string, Kept>()
   const heard = new Map<string, Map<string, readonly Heard[]>>()
   const watches = new Map<string, Map<string, readonly string[]>>()
@@ -90,7 +91,7 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
 
   const add = (session: Kept, draft: MessageDraft, task?: string) => {
     const before = session.messages.length
-    record(session, session.conversation.add(rowOf(draft, `message-${(ids += 1)}`, now()), task))
+    record(session, session.conversation.add(rowOf(draft, `message-${(ids += 1)}`, now(), cwd()), task))
     return session.messages.slice(before)
   }
 
@@ -155,7 +156,7 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
         .toSorted((first, second) => second.at.localeCompare(first.at))
       const before = isObject(request['before']) ? request['before'] : undefined
       const start = before === undefined ? 0 : found.findIndex((message) => message.session === before['session'] && message.id === before['id']) + 1
-      return found.slice(start, start + (typeof request['limit'] === 'number' ? request['limit'] : searchLimit))
+      return found.slice(start, start + searchLimit)
     },
     [conversationMethods.messages](request) {
       const session = sessionOf(String(request['session']))
@@ -200,8 +201,8 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
       const input = isObject(request['input']) ? request['input'] : {}
       const task = typeof request['task'] === 'string' ? request['task'] : undefined
       const isLive = task === undefined ? session.data.isRunning : session.data.isRunning && taskOf(session, task).closedAt === undefined
-      if (action === 'usage') return { model: task === undefined ? session.data.model : (taskOf(session, task).model ?? session.data.model), context: {} }
-      if (action === 'clients') return isLive ? ['terminal'] : []
+      if (action === 'usage') return { model: task === undefined ? session.data.model : (taskOf(session, task).model ?? session.data.model), contextWindow: {} }
+      if (action === 'surfaces') return isLive ? ['terminal'] : []
       if (!isLive) throw new Error(`session ${task ?? session.data.id} has ended`)
       if (action === 'abort') return null
       if (action === 'send') {
@@ -210,7 +211,7 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
       }
       if (action === 'startTask') {
         const id = `task-${(ids += 1)}`
-        const data: TaskData = { id, title: typeof input['name'] === 'string' ? input['name'] : '', agentType: typeof input['agentType'] === 'string' ? input['agentType'] : 'general-purpose', openedBy: '', openedAt: now(), ...(typeof input['model'] === 'string' ? { model: input['model'] } : {}) }
+        const data: TaskData = { id, title: typeof input['title'] === 'string' ? input['title'] : '', agentType: typeof input['agentType'] === 'string' ? input['agentType'] : 'general-purpose', openedBy: '', openedAt: now(), ...(typeof input['model'] === 'string' ? { model: input['model'] } : {}) }
         record(session, session.conversation.startTask(data))
         return data
       }
@@ -237,6 +238,14 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
       }
     },
     add: (draft, task) => add(currentSession(), draft, task),
+    draft(draft, task) {
+      const where = place()
+      const [unplaced] = messagesOf(rowOf(draft, `message-${(ids += 1)}`, now(), cwd()), task !== undefined)
+      if (unplaced === undefined) throw new Error(`A ${draft.type} draft makes no message.`)
+      const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
+      const turn = task === undefined ? where.turn : where.taskTurns[task]
+      return { ...unplaced, ...call, session: where.session, context: task === undefined ? where.context : (where.tasks[task]?.context ?? where.context), ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) }
+    },
     place,
     wants: (mod, event) => [current, everySession].some((target) => (watches.get(mod)?.get(target) ?? []).includes(event)),
     endTurn(ending = {}) {
@@ -263,16 +272,16 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
   }
 }
 
-function rowOf(draft: MessageDraft, id: string, at: string): Row {
+function rowOf(draft: MessageDraft, id: string, at: string, cwd: string): Row {
   const base = { id, at, isMeta: false, isSummary: false }
   const text = (value: string) => [{ type: 'text', text: value }]
   const origin = (from: Sender | undefined) => (from === undefined || from.type === Person ? { kind: 'human' } : from.type === Mod ? { kind: 'plugin', name: from.name, ...(from.as === Person ? { asUser: true } : {}) } : from.type === 'session' ? { kind: 'peer' } : from.type === Task ? { kind: 'task-notification' } : { kind: from.type === Schedule ? 'scheduled-trigger' : from.type, ...(from.name === undefined ? {} : { server: from.name }) })
   if (draft.type === Prompt) return { ...base, type: 'user', content: text(draft.text), origin: origin(draft.from) }
   if (draft.type === Note) return { ...base, type: 'user', isMeta: true, content: text(draft.text), origin: origin(draft.from ?? { type: Mod, name: 'test' }) }
   if (draft.type === Reply) return { ...base, type: 'assistant', content: text(draft.text) }
-  if (draft.type === ToolCall) return { ...base, type: 'assistant', content: [{ type: 'tool_use', id: draft.callId ?? `toolu_${id}`, name: draft.name, input: draft.input ?? {} }], cwd: '/test/project' }
+  if (draft.type === ToolCall) return { ...base, type: 'assistant', content: [{ type: 'tool_use', id: draft.callId ?? `toolu_${id}`, name: draft.name, input: draft.input ?? {} }], cwd }
   if (draft.type === ToolResult) return { ...base, type: 'user', content: [{ type: 'tool_result', tool_use_id: draft.callId, content: draft.output, ...(draft.isError === true ? { is_error: true } : {}) }] }
   if (draft.type === Skill) return { ...base, type: 'user', isMeta: true, content: text(`${skillPrefix} /skills/${draft.name}\n\n${draft.text}`) }
-  if (draft.type === Document) return { ...base, type: 'attachment', name: 'nested_memory', content: text(draft.text), path: draft.path }
+  if (draft.type === InstructionFile) return { ...base, type: 'attachment', name: 'nested_memory', content: text(draft.text), path: draft.path }
   return { ...base, type: 'system', name: 'informational', content: text(draft.text) }
 }

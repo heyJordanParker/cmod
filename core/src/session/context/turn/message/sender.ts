@@ -11,7 +11,9 @@ export const Channel = 'channel'
 
 export const Sdk = 'sdk'
 
-export type SenderType = typeof Person | typeof Mod | 'session' | typeof Task | typeof Schedule | typeof Channel | typeof Sdk
+export const Engine = 'engine'
+
+export type SenderType = typeof Person | typeof Mod | 'session' | typeof Task | typeof Schedule | typeof Channel | typeof Sdk | typeof Engine
 
 export type Sender = {
   readonly type: SenderType
@@ -19,7 +21,7 @@ export type Sender = {
   readonly as?: typeof Person
 }
 
-const personOrigins: readonly string[] = ['human', 'composer', 'bridge', 'slack-ping', 'auto-continuation']
+const personOrigins: readonly string[] = ['human', 'composer', 'bridge', 'slack-ping']
 
 const sessionOrigins: readonly string[] = ['peer', 'peer-send-message', 'coordinator', 'projects-relay', 'observer', 'observer-activity']
 
@@ -29,6 +31,7 @@ export function senderOf(origin: unknown, isInTask: boolean): Sender {
   if (kind === undefined) return { type: isInTask ? Task : Person }
   if (personOrigins.includes(kind)) return { type: Person }
   if (sessionOrigins.includes(kind)) return { type: 'session' }
+  if (kind === 'auto-continuation') return { type: Engine }
   if (kind === 'plugin' && typeof fields['name'] === 'string') return { type: Mod, name: fields['name'], ...(fields['asUser'] === true ? { as: Person } : {}) }
   if (kind === 'scheduled-trigger') return { type: Schedule }
   if (kind === 'channel' && typeof fields['server'] === 'string') return { type: Channel, name: fields['server'] }

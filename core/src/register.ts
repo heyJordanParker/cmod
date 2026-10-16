@@ -72,7 +72,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     prompt: { submit: (args) => $.prompt.submit(args) },
     turn: { abort: (args) => $.turn.abort(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
-    command: { register: (command) => $.command.register(command) },
+    command: { register: (command) => $.command.register(command), list: () => $.command.list(), run: (args) => $.command.run(args) },
     tool: { register: (tool) => $.tool.register(tool), call: (input: ToolCallArgs) => $.tool.call(input) },
     agent: {
       list: () => $.agent.list(),

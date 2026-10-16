@@ -7,20 +7,18 @@ import { callEffects, type Call } from '../utils/call-effects.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
 import { afterCall, inFolder, targetWords, withinDeadline } from './context.js'
 
-type PromptInput = { userPrompt?: string; call?: Call & { readonly folder: string } }
+type PromptInput = { call?: Call & { readonly folder: string } }
 
 type PromptOptions<State extends object> = {
   name: string
   prompt: string | ((input: PromptInput, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
-  when?: RegExp | ((userPrompt: string) => boolean)
   after?: Target | Target[]
 }
 
 const deadline: Deadline = { ms: 5000, job: 'prompt' }
 
-export function prompt<State extends object = Record<never, never>>({ name, prompt: text, when, after }: PromptOptions<State>): Job<void, State> {
+export function prompt<State extends object = Record<never, never>>({ name, prompt: text, after }: PromptOptions<State>): Job<void, State> {
   if (name.trim() === '') throw new Error('prompt: give the block a name. Claude reads the text under it.')
-  if (when !== undefined && after !== undefined) throw new Error(`prompt "${name}": use when or after, not both. Add a second prompt for the other trigger.`)
   const targets = after === undefined ? [] : Array.isArray(after) ? after : [after]
   for (const target of targets) targetOf(target)
 
@@ -43,10 +41,7 @@ export function prompt<State extends object = Record<never, never>>({ name, prom
       return value === undefined ? undefined : `# ${name}\n${value}`
     }
 
-    if (when !== undefined) {
-      addAfterUserPrompts(job, when, (userPrompt) => headedText({ userPrompt }), log)
-      job.announce(`the ${name} prompt after matching user prompts`)
-    } else if (targets.length > 0) {
+    if (targets.length > 0) {
       addAfterCalls(job, targets, headedText, log)
       job.announce(`the ${name} prompt after ${listed(targets.map(targetWords))}`)
     } else {
@@ -93,18 +88,6 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
     if (isQueued) return
     isQueued = true
     updates = updates.then(update).catch((error: unknown) => log(messageOf(error)))
-  })
-}
-
-function addAfterUserPrompts<State extends object>(job: JobContext<State>, when: RegExp | ((userPrompt: string) => boolean), textFor: (userPrompt: string) => Promise<string | undefined>, log: (reason: string) => void): void {
-  engineOf(job.mod).router.add('prompt.submit', async (e, next) => {
-    let value: string | undefined
-    try {
-      if (typeof when === 'function' ? when(e.text) : e.text.search(when) >= 0) value = await textFor(e.text)
-    } catch (error) {
-      log(`its when check failed: ${messageOf(error)}`)
-    }
-    return next(value === undefined ? e : { ...e, context: [...(e.context ?? []), value] })
   })
 }
 

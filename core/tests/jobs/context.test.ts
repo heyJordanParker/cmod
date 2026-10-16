@@ -6,6 +6,7 @@ import { slashCommand } from '../../src/jobs/slash-command.js'
 import { tool } from '../../src/jobs/tool.js'
 import { defineMod, process, sessions } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 const root = '/work/dent'
 const files = {
@@ -56,7 +57,7 @@ test("a prompt callback gets the work tree that holds the edited file as the cal
   const edit = { tool: 'Edit', file_path: `${root}/worktrees/design/Domain.md`, old_string: '#', new_string: '##', tool_use_id: 'toolu_1' } as never
   const answered = { result: { filePath: `${root}/worktrees/design/Domain.md` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 
-  const answer = await tested.fire('tool.call', edit, answered)
+  const answer = await claudeCodeOf(tested).fire('tool.call', edit, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.spawn').map((call) => call.args)).toEqual([[{ argv: ['git', 'status'], cwd: `${root}/worktrees/design` }]])
   expect(answer.context).toEqual(['# status\nOn branch design\n'])

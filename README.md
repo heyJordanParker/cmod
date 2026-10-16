@@ -4,7 +4,7 @@
 
 <h1 align="center">Claude Mod Manager</h1>
 
-Claude Mod Manager (cmod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can add hooks, panes, slash commands, tools, and permission rules, and it can run its own install step. cmod installs mods, runs their install and uninstall steps with your consent, and helps you build and publish your own.
+Claude Mod Manager (cmod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can hear and change what happens in a session, and add panes, slash commands, tools, and permission rules, and it can run its own install step. cmod installs mods, runs their install and uninstall steps with your consent, and helps you build and publish your own.
 
 ## Install a mod
 
@@ -154,12 +154,11 @@ Start `claude`, and the mod counts every prompt. `cmod check` checks the layout,
 The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@cmodjs/core`. So every mod's `node_modules/@cmodjs/core/docs/` holds the docs of the version it installed. The `.claude/CLAUDE.md` that `cmod new` writes points coding agents there. A project plugin, made with `cmod new --project`, gets no `.claude/CLAUDE.md`.
 
 - [index.md](core/docs/index.md): what a mod is, and which file answers which question
-- [mod.md](core/docs/mod.md): `defineMod`, `setup`, and what `mod` can call
+- [mod.md](core/docs/mod.md): `defineMod`, `setup`, what `mod` can call, and the imports, `commands` and `config` included
 - [state.md](core/docs/state.md): state groups and Skill overrides
 - [options.md](core/docs/options.md): options a person sets, typed in code, stored by Claude Code
 - [permissions.md](core/docs/permissions.md): the hosts, programs, and files a mod may reach, granted by the person
-- [hooks.md](core/docs/hooks.md): `mod.on`, every hook, and what a listener can answer
-- [session.md](core/docs/session.md): `sessions`, the conversation as contexts, turns, messages, a goal, and tasks
+- [session.md](core/docs/session.md): `sessions`, the conversation as contexts, turns, messages, a goal, and tasks, and every `on` and `before` method
 - [ui.md](core/docs/ui.md): panes, places, markdown places, elements, toasts, the clipboard, questions, and notices
 - [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, status lines, and programs
 - [dependencies.md](core/docs/dependencies.md): calling another mod

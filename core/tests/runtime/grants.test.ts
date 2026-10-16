@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
-import { defineMod, fs, http, model, process, Prompt, SessionStart, sessions, settings, Stop, UserPromptSubmit, type Mod } from '../../src/mod.js'
+import { defineMod, fs, http, model, process, Prompt, sessions, settings, type Mod } from '../../src/mod.js'
 import { formatEvent, oldestCmodFor, parseEvent, permissionWords, readSteps, scriptsSha256 } from '../../src/records.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
@@ -39,11 +40,11 @@ test('readSteps names the fix for each permission it cannot use', () => {
 test('a call the mod does not declare fails with the line to add to package.json', async () => {
   let failure = ''
   const tested = testMod(
-    defineMod({ name: 'ci-watch', setup: (mod) => mod.on(SessionStart, () => http.fetch('https://api.github.com/repos').then(() => undefined, (error: Error) => void (failure = error.message))) }),
+    defineMod({ name: 'ci-watch', setup: () => void sessions.current.onSessionStart(() => http.fetch('https://api.github.com/repos').then(() => undefined, (error: Error) => void (failure = error.message))) }),
     { permissions: [] },
   )
 
-  await tested.fire(SessionStart, { source: 'startup' })
+  await tested.raise.onSessionStart({ source: 'startup' })
 
   expect(failure).toBe('ci-watch calls http.fetch(https://api.github.com/repos), which needs "permissions": { "network": ["api.github.com"] } in package.json "cmod".')
 })
@@ -76,7 +77,7 @@ test('a write inside the project or the data folder needs no grant, one to a Cla
   const notes = defineMod({
     name: 'notes',
     setup: (mod) =>
-      mod.on(SessionStart, async () => {
+      void sessions.current.onSessionStart(async () => {
         const project = sessions.current.project
         for (const path of [`${project}/notes.md`, `${mod.dataFolder}/cache.json`, `${project}/.claude/settings.json`, '/test/home/.claude/settings.json', '/test/home/.zshrc', '/test/home/.config/notes/rc']) {
           await fs.write(path, 'x').then(
@@ -88,7 +89,7 @@ test('a write inside the project or the data folder needs no grant, one to a Cla
   })
   const tested = testMod(notes, { projectRoot: '/work/app', permissions: ['files:~/.config/notes', 'files:~/.claude'] })
 
-  await tested.fire(SessionStart, { source: 'startup' })
+  await tested.raise.onSessionStart({ source: 'startup' })
 
   expect(writes).toEqual([
     'wrote /work/app/notes.md',
@@ -127,25 +128,14 @@ test('run:* covers every program', async () => {
   expect((await process.run(['/usr/bin/make', 'all'])).exitCode).toBe(0)
 })
 
-test('a hook answer part without its grant is dropped, and cmod logs once which grant it needs', async () => {
-  const tested = testMod(
-    defineMod({
-      name: 'nudge',
-      setup(mod) {
-        mod.on(UserPromptSubmit, () => ({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Be brief.', sessionTitle: 'Nudged' } }))
-        mod.on(Stop, () => ({ decision: 'block', reason: 'Keep going.' }))
-      },
-    }),
-    { permissions: [] },
-  )
+test('an answer part without its grant is dropped, and cmod logs once which grant it needs', async () => {
+  const tested = testMod(defineMod({ name: 'nudge', setup: () => void sessions.current.beforeSessionStart(() => ({ note: 'Be brief.', title: 'Nudged' })) }), { permissions: [] })
 
-  const first = (await tested.fire(UserPromptSubmit, { prompt: 'hi' })) as Record<string, unknown>
-  await tested.fire(UserPromptSubmit, { prompt: 'again' })
-  const stopped = (await tested.fire(Stop, { stop_hook_active: false } as never)) as Record<string, unknown>
+  const first = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as Record<string, unknown>
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
 
   expect(first['additionalContext']).toBeUndefined()
   expect(first['sessionTitle']).toBe('Nudged')
-  expect(stopped['block']).toBeUndefined()
   expect(tested.shown.toasts.filter(({ type }) => type === 'warning')).toEqual([
     {
       type: 'warning',
@@ -157,9 +147,9 @@ test('a hook answer part without its grant is dropped, and cmod logs once which 
 
 test('a program run without its grant names the line to add', async () => {
   let failure = ''
-  const tested = testMod(defineMod({ name: 'preview', setup: (mod) => mod.on(SessionStart, () => process.run(['preview-server']).then(() => undefined, (error: Error) => void (failure = error.message))) }), { permissions: [] })
+  const tested = testMod(defineMod({ name: 'preview', setup: () => void sessions.current.onSessionStart(() => process.run(['preview-server']).then(() => undefined, (error: Error) => void (failure = error.message))) }), { permissions: [] })
 
-  await tested.fire(SessionStart, { source: 'startup' })
+  await tested.raise.onSessionStart({ source: 'startup' })
 
   expect(failure).toBe('preview calls process.run(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod".')
 })
@@ -209,12 +199,10 @@ test('a config grant names a key path, and covers each value at or below it', as
   expect([mod?.permissions.config.allows('env.ANTHROPIC_BASE_URL'), mod?.permissions.config.allows('env'), mod?.permissions.config.allows('permissions.deny'), mod?.permissions.config.allows('permissionsX')]).toEqual([true, false, true, false])
 })
 
-test('a hook answer part with its grant reaches Claude Code', async () => {
-  const tested = testMod(defineMod({ name: 'nudge', setup: (mod) => mod.on(UserPromptSubmit, () => ({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Be brief.' } })) }), {
-    permissions: ['prompt'],
-  })
+test('an answer part with its grant reaches Claude Code', async () => {
+  const tested = testMod(defineMod({ name: 'nudge', setup: () => void sessions.current.beforeSessionStart(() => ({ note: 'Be brief.' })) }), { permissions: ['prompt'] })
 
-  const answer = (await tested.fire(UserPromptSubmit, { prompt: 'hi' })) as Record<string, unknown>
+  const answer = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as Record<string, unknown>
 
   expect(answer['additionalContext']).toEqual(['Be brief.'])
 })

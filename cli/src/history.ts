@@ -48,9 +48,9 @@ create table tasks (session text not null, id text not null, title text not null
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-5.sqlite'
+const indexFile = 'history-6.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite']
 
 const chunkBytes = 65_536
 
@@ -628,7 +628,7 @@ export function readUsage(request: { readonly session: string; readonly project:
     if (tail === 0) break
     tail = Math.max(0, tail - tailBytes)
   }
-  return usage ?? { model: '', context: {} }
+  return usage ?? { model: '', contextWindow: {} }
 }
 
 export function usageOfRow(raw: Raw | undefined): Usage | undefined {
@@ -636,7 +636,7 @@ export function usageOfRow(raw: Raw | undefined): Usage | undefined {
   const counts = message !== undefined && isObject(message['usage']) ? message['usage'] : undefined
   if (message === undefined || counts === undefined || typeof message['model'] !== 'string' || message['model'] === '<synthetic>') return undefined
   const count = (key: string) => (typeof counts[key] === 'number' ? counts[key] : 0)
-  return { model: message['model'], context: { tokens: count('input_tokens') + count('cache_creation_input_tokens') + count('cache_read_input_tokens') + count('output_tokens') } }
+  return { model: message['model'], contextWindow: { tokenCount: count('input_tokens') + count('cache_creation_input_tokens') + count('cache_read_input_tokens') + count('output_tokens') } }
 }
 
 function savedGoal(session: string): string | undefined {

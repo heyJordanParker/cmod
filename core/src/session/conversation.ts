@@ -5,7 +5,7 @@ import { Prompt } from './context/turn/message/prompt.js'
 import { ToolCall } from './context/turn/message/tool-call.js'
 import { ToolResult } from './context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart, type Turn } from './context/turn/turn.js'
-import { GoalChange, type Goal } from './goal/goal.js'
+import { GoalChange } from './goal/goal.js'
 import { Task, TaskEnd, TaskStart } from './goal/task.js'
 import type { UsageChange, Usage } from './session.js'
 
@@ -32,7 +32,7 @@ export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'cl
 
 export type RunningTask = TaskData & { readonly context: number; readonly contextOpenedAt?: string }
 
-export type GoalData = Pick<Goal, 'text'> & { readonly task?: string }
+export type GoalData = { readonly text: string; readonly task?: string }
 
 export type SessionChange =
   | { readonly type: typeof Message; readonly message: Message }

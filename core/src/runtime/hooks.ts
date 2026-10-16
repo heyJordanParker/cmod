@@ -1,17 +1,38 @@
-import type { Args, ClassicHookInputs, EventResult, Frozen } from 'claude-code'
-import type { Hook, HookAnswer, HookInput, HookListener } from '../mod.js'
+import type { ClassicHookEvent, ClassicHookInputs, PermissionRequestDecision } from 'claude-code'
 import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
 import type { RoutedHook } from './router.js'
 import type { Failure } from './toaster.js'
-import { reservedKeys, toolInputOf, type ToolCalls } from './tool-calls.js'
-import { callEffects, inputOf, type CallBase, type FileAccess } from '../utils/call-effects.js'
+import { callEffects, type CallBase, type FileAccess } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
 import { isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 
+export type Hook = Exclude<ClassicHookEvent, 'PreToolUse'>
+
+export type HookAnswer = {
+  decision?: 'block'
+  reason?: string
+  hookSpecificOutput?: {
+    hookEventName?: Hook
+    additionalContext?: string
+    permissionDecision?: 'deny' | 'ask'
+    permissionDecisionReason?: string
+    sessionTitle?: string
+    initialUserMessage?: string
+    watchPaths?: string[]
+    reloadSkills?: boolean
+    decision?: PermissionRequestDecision
+    retry?: boolean
+    displayContent?: string
+    worktreePath?: string
+  }
+}
+
+export type HookListener<H extends Hook> = (input: ClassicHookInputs[H]) => HookAnswer | void | Promise<HookAnswer | void>
+
 export type RoutedEvent =
-  | `classic.${Exclude<Hook, 'PreToolUse'>}`
+  | `classic.${Hook}`
   | 'tool.check'
   | 'tool.call'
   | 'prompt.submit'
@@ -35,25 +56,24 @@ export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.
 
 type ClassicFields = Record<string, unknown>
 
-type CallFiles = HookInput<'PreToolUse'>['files']
+type CallFiles = { readonly read: string[]; readonly changed: string[] }
 
-const flags: readonly string[] = ['suppressOriginalPrompt', 'reloadSkills', 'retry']
+const flags: readonly string[] = ['reloadSkills', 'retry']
 
 const readFields: Record<Hook, readonly string[]> = {
   Setup: ['additionalContext'],
   SessionStart: ['additionalContext', 'initialUserMessage', 'sessionTitle', 'watchPaths', 'reloadSkills'],
   SessionEnd: [],
-  UserPromptSubmit: ['additionalContext', 'sessionTitle', 'suppressOriginalPrompt'],
-  UserPromptExpansion: ['additionalContext', 'suppressOriginalPrompt'],
+  UserPromptSubmit: ['additionalContext', 'sessionTitle'],
+  UserPromptExpansion: ['additionalContext'],
   InstructionsLoaded: [],
   ConfigChange: [],
   DirectoryAdded: [],
   PreModelSwitch: ['permissionDecision', 'permissionDecisionReason'],
   PostModelSwitch: ['additionalContext'],
-  PreToolUse: ['additionalContext', 'permissionDecision', 'permissionDecisionReason', 'updatedInput'],
   PermissionRequest: ['decision'],
   PermissionDenied: ['retry'],
-  PostToolUse: ['additionalContext', 'updatedToolOutput', 'updatedMCPToolOutput'],
+  PostToolUse: ['additionalContext'],
   PostToolUseFailure: ['additionalContext'],
   PostToolBatch: ['additionalContext'],
   MessageDisplay: ['displayContent'],
@@ -75,78 +95,22 @@ const readFields: Record<Hook, readonly string[]> = {
   WorktreeRemove: [],
 }
 
-export function classicHook<E extends Exclude<Hook, 'PreToolUse'>>(name: string, event: E, hook: HookListener<E>, claude: Claude, calls: ToolCalls, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
-  const hookInputOf = async (e: unknown): Promise<unknown> => {
-    if (event !== 'PostToolUse' && event !== 'PostToolUseFailure') return e
-    const input = e as ClassicHookInputs['PostToolUse' | 'PostToolUseFailure']
-    const cwd = calls.cwdOf(input.tool_use_id) ?? input.cwd
-    return { ...input, files: await callFiles(name, claude, { tool: input.tool_name, input: inputOf(input.tool_input) }, cwd) }
-  }
-  const resultOf = async (e: unknown): Promise<ClassicFields | undefined> => {
-    const answer = await hook((await hookInputOf(e)) as HookInput<E>)
-    if (answer === undefined) return undefined
-    if (answer.systemMessage !== undefined) claude.ui.log(answer.systemMessage)
-    return classicResult(event, answer)
-  }
+export function classicHook<H extends Hook>(name: string, event: H, hook: HookListener<H>, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
   const routed = async (e: unknown, next: (e: unknown) => Promise<unknown>) => {
-    const ours = await resultOf(e).catch((error: unknown): ClassicFields | undefined => {
-      if (event === 'PermissionRequest') return { decision: { behavior: 'deny', message: `${name}: the ${event} hook failed: ${messageOf(error)}` } }
-      report({ id: `hook:${event}`, message: `The ${event} hook failed`, error })
-      return undefined
-    })
+    const ours = await Promise.resolve()
+      .then(async () => {
+        const answer = await hook(e as ClassicHookInputs[H])
+        return answer === undefined ? undefined : classicResult(event, answer)
+      })
+      .catch((error: unknown): ClassicFields | undefined => {
+        if (event === 'PermissionRequest') return { decision: { behavior: 'deny', message: `${name}: the ${event} listener failed: ${messageOf(error)}` } }
+        report({ id: `hook:${event}`, message: `The ${event} listener failed`, error })
+        return undefined
+      })
     if (ours === undefined) return next(e)
     return mergeClassic((await next(e)) as ClassicFields, ours)
   }
   return routed as unknown as RoutedHook<RoutedEvent>
-}
-
-type HeldDecision = { readonly decision: 'allow' | 'ask'; readonly reason?: string }
-
-export type HeldDecisions = Map<string, HeldDecision>
-
-export function preToolUseHook(name: string, hook: HookListener<'PreToolUse'>, claude: Claude, calls: ToolCalls, held: HeldDecisions | undefined): RoutedHook<'tool.call'> {
-  return async (e, next) => {
-    let ours: ClassicFields
-    try {
-      const answer = await hook(await preToolUseInput(name, e, claude, calls.agentOf))
-      if (answer?.systemMessage !== undefined) claude.ui.log(answer.systemMessage)
-      ours = answer === undefined ? {} : classicResult('PreToolUse', answer)
-    } catch (error) {
-      return { deny: `${name}: the PreToolUse hook failed: ${messageOf(error)}` }
-    }
-    if (typeof ours['deny'] === 'string') return { deny: ours['deny'] }
-    const decided = heldDecisionOf(ours)
-    if (decided !== undefined && held === undefined) {
-      return { deny: `${name}: the PreToolUse hook answered permissionDecision "${decided.decision}", so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.` }
-    }
-    const updated = ours['updatedInput'] as Record<string, unknown> | undefined
-    const reserved = Object.fromEntries(Object.entries(e).filter(([key]) => reservedKeys.includes(key)))
-    const earlier = held?.get(e.tool_use_id)
-    if (decided !== undefined) held?.set(e.tool_use_id, earlier !== undefined && strictness.indexOf(earlier.decision) >= strictness.indexOf(decided.decision) ? earlier : decided)
-    let result: EventResult<'tool.call'>
-    try {
-      result = await next(updated === undefined ? e : ({ ...reserved, ...updated } as Frozen<Args<'tool.call'>>))
-    } finally {
-      if (decided !== undefined) held?.delete(e.tool_use_id)
-    }
-    const context = ours['additionalContext'] as string[] | undefined
-    if (context === undefined || result.deny !== undefined) return result
-    return { ...result, context: [...(result.context ?? []), ...context] }
-  }
-}
-
-export function heldDecisionHook(held: HeldDecisions): RoutedHook<'tool.check'> {
-  return async (e, next) => {
-    const below = await next(e)
-    const ours = e.tool_use_id === undefined ? undefined : held.get(e.tool_use_id)
-    return ours === undefined || below.decision === 'deny' ? below : ours
-  }
-}
-
-function heldDecisionOf(ours: ClassicFields): HeldDecision | undefined {
-  if (ours['allow'] !== undefined) return { decision: 'allow' }
-  if (typeof ours['ask'] !== 'string') return undefined
-  return ours['ask'] === '' ? { decision: 'ask' } : { decision: 'ask', reason: ours['ask'] }
 }
 
 const frontmatter = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/
@@ -170,23 +134,6 @@ export function userSkillHook(claude: Claude): RoutedHook<'skill.prompt'> {
   }
 }
 
-async function preToolUseInput(name: string, envelope: Frozen<Args<'tool.call'>>, claude: Claude, agentOf: ToolCalls['agentOf']): Promise<HookInput<'PreToolUse'>> {
-  const { tool, tool_use_id } = envelope
-  const [session_id, cwd, { agentId, agentType }] = await Promise.all([claude.session.id(), claude.session.cwd(), agentOf(tool_use_id)])
-  const tool_input = toolInputOf(envelope)
-  return {
-    session_id,
-    cwd,
-    hook_event_name: 'PreToolUse',
-    tool_name: tool,
-    tool_input,
-    tool_use_id,
-    ...(agentId === undefined ? {} : { agent_id: agentId }),
-    ...(agentType === undefined ? {} : { agent_type: agentType }),
-    files: await callFiles(name, claude, { tool, input: tool_input }, cwd),
-  }
-}
-
 export async function callFiles(name: string, claude: Claude, use: CallBase, cwd: string): Promise<CallFiles> {
   try {
     const [home, configRoot] = await Promise.all([claude.env.home(), claude.env.configHome()])
@@ -207,27 +154,12 @@ export async function callFiles(name: string, claude: Claude, use: CallBase, cwd
 
 function classicResult(event: Hook, answer: HookAnswer): ClassicFields {
   const result: ClassicFields = {}
-  const unread = (field: string) => new Error(`it answered ${field}, which ${event} does not read. Remove it from the answer.`)
-  if (event === 'PreToolUse') {
-    if (answer.continue === false || answer.stopReason !== undefined) throw unread('continue or stopReason')
-    if (answer.decision === 'block') result['deny'] = answer.reason ?? ''
-  } else {
-    if (answer.continue === false) result['preventContinuation'] = true
-    if (answer.stopReason !== undefined) result['stopReason'] = answer.stopReason
-    if (answer.decision === 'block') result['block'] = answer.reason ?? ''
-  }
+  if (answer.decision === 'block') result['block'] = answer.reason ?? ''
   const specific = answer.hookSpecificOutput ?? {}
-  if (specific.hookEventName !== undefined && specific.hookEventName !== event) {
-    throw new Error(`it answered hookSpecificOutput.hookEventName "${specific.hookEventName}". Set it to "${event}" or leave it out.`)
-  }
   for (const [field, value] of Object.entries(specific)) {
-    if (field === 'hookEventName' || value === undefined || (value === false && flags.includes(field))) continue
-    if (!readFields[event].includes(field)) throw unread(`hookSpecificOutput.${field}`)
-    if (field === 'additionalContext') result['additionalContext'] = [value]
-    else if (field === 'permissionDecision' && event === 'PreToolUse') {
-      const reason = specific.permissionDecisionReason ?? ''
-      result[value as string] = value === 'allow' ? true : reason
-    } else if (field !== 'permissionDecisionReason' || event !== 'PreToolUse') result[field] = value
+    if (field === 'hookEventName' || (value === false && flags.includes(field))) continue
+    if (!readFields[event].includes(field)) throw new Error(`it answered ${field}, which ${event} does not read.`)
+    result[field] = field === 'additionalContext' ? [value] : value
   }
   return result
 }

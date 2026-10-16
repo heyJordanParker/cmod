@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { EngineCreateResult, HookStream, On, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { PreToolUse, SessionStart, Stop } from '../node_modules/@cmodjs/core/mod.js'
+import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
@@ -25,9 +25,9 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
 }
 
 async function prompt(tested: ReturnType<typeof testMod>, text: string) {
-  await tested.fire('prompt.submit', { text, origin: { kind: 'composer' } } as never, { turnId: `turn-${text}` } as never)
+  await claudeCodeOf(tested).fire('prompt.submit', { text, origin: { kind: 'composer' } } as never, { turnId: `turn-${text}` } as never)
   const appended = { uuid: `prompt-${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
-  await tested.fire('session.append', appended as never, appended as never)
+  await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
 }
 
 type Synced = { linked: { mod: string; folder: string; rules: { name: string; isGlobal: boolean; text: string }[] }[]; placed: string[]; removed: string[] }
@@ -53,7 +53,7 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   answerRules(tested, [linked, { ...linked, placed: [] }, { linked: [], placed: [], removed: ['house-style'] }])
   const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await settled()
   await prompt(tested, 'hello')
 
@@ -73,7 +73,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
   answerRules(tested, [linked([tests, old], ['house-style']), linked([tests], [])])
   const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await settled()
   await prompt(tested, 'hello')
   await settled()
@@ -83,13 +83,13 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the Mods pane, /mods and a hook on SessionStart.\nInstalled the cmod program.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the Mods pane and /mods.\nInstalled the cmod program.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled', description: 'A session that still runs it stops after /reload-plugins.' } as const
 
 test("a removed enabledPlugins key runs cmod teardown --events with that plugin's name, and the uninstall toast tells the user to reload", async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'progress 1 1 Removing the alias\ndone four-step\n', stderr: '' } })
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
@@ -99,7 +99,7 @@ test("a removed enabledPlugins key runs cmod teardown --events with that plugin'
 
 test('a removal noticed at session start toasts that a session still running it stops after /reload-plugins', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'done four-step\n', stderr: '' } })
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
   expect(tested.shown.toasts).toEqual([ready, uninstalled])
@@ -108,7 +108,7 @@ test('a removal noticed at session start toasts that a session still running it 
 test('the cmod plugin tears down only keys removed from user settings', async () => {
   const user = { 'cmod@fixtures': true, 'four-step@fixtures': true }
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], user, {}, { 'cmod@fixtures': true, 'project-mod@team': true })
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await settled()
   expect(teardowns).toEqual([])
   expect(tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
@@ -124,7 +124,7 @@ test('a key set to false runs nothing', async () => {
 
 test('a tool call reads no settings and tears nothing down', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
-  await tested.fire(PreToolUse, { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
+  await claudeCodeOf(tested).fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
   await settled()
   expect(tested.calls.filter((call) => call.call === 'settings.read')).toEqual([])
   expect(teardowns).toEqual([])
@@ -132,7 +132,7 @@ test('a tool call reads no settings and tears nothing down', async () => {
 
 test('the first snapshot after install removes nothing', async () => {
   const { tested, teardowns } = testRemovals(null, { 'cmod@fixtures': true })
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await settled()
   expect(teardowns).toEqual([])
   expect(tested.state.global.installedPlugins).toEqual(['cmod'])
@@ -140,7 +140,7 @@ test('the first snapshot after install removes nothing', async () => {
 
 test('a removed plugin that is not a cmod mod answers missing and shows nothing', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'other-plugin'], { 'cmod@fixtures': true })
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await settled()
   expect(teardowns).toEqual(['cmod teardown other-plugin --events'])
@@ -152,13 +152,13 @@ test('a failed removal is not retried in the next session and its toast names th
   const message = 'The uninstall step of four-step exited 2: zsh: no such file: ~/.zshrc.d/four-step. Fix ~/.local/share/cmod/uninstall/four-step/uninstall.sh, then run cmod teardown four-step.'
   const failed = { 'four-step': { exitCode: 1, stdout: `log removing the alias\nfailed 2\t${message}\n`, stderr: '' } }
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, failed)
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await settled()
   expect(tested.shown.toasts).toEqual([ready, { type: 'error', message: 'Could not uninstall four-step', description: message }])
 
   const next = testRemovals(tested.state.global.installedPlugins, { 'cmod@fixtures': true }, failed)
-  await next.tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(next.tested).fire('SessionStart', { source: 'startup' })
   await settled()
   expect(next.teardowns).toEqual([])
   expect(next.tested.shown.toasts).toEqual([ready])
@@ -167,12 +167,12 @@ test('a failed removal is not retried in the next session and its toast names th
 test('a removal interrupted before its teardown answers is torn down by the next session', async () => {
   const interrupted = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
   interrupted.tested.fakes.process.run = () => new Promise(() => {})
-  await interrupted.tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(interrupted.tested).fire('SessionStart', { source: 'startup' })
   await settled()
   expect(interrupted.tested.state.global.installedPlugins).toEqual(['cmod', 'four-step'])
 
   const next = testRemovals(interrupted.tested.state.global.installedPlugins, { 'cmod@fixtures': true }, { 'four-step': { exitCode: 0, stdout: 'done four-step\n', stderr: '' } })
-  await next.tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(next.tested).fire('SessionStart', { source: 'startup' })
   await settled()
   expect(next.teardowns).toEqual(['cmod teardown four-step --events'])
   expect(next.tested.state.global.installedPlugins).toEqual(['cmod'])
@@ -184,7 +184,7 @@ test('a prompt while a removal is pending starts no second teardown in the same 
     teardowns.push(argv.join(' '))
     return new Promise(() => {})
   }
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await settled()
   expect(teardowns).toEqual(['cmod teardown four-step --events'])
@@ -192,7 +192,7 @@ test('a prompt while a removal is pending starts no second teardown in the same 
 
 test('a teardown that fails before any event shows its last line of standard error', async () => {
   const { tested } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true }, { 'four-step': { exitCode: 1, stdout: '', stderr: 'cmod teardown: records/four-step.json is not JSON\n' } })
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await settled()
   expect(tested.shown.toasts).toEqual([ready, { type: 'error', message: 'Could not uninstall four-step', description: 'cmod teardown exited 1: records/four-step.json is not JSON' }])
@@ -400,13 +400,13 @@ test("the sessions service runs cmod history in this session with each request a
 
   expect(await askCmod(tested, 'recall', 'cmod:sessions', { since: '2026-10-09T00:00:00.000Z', everyProject: true, running: true })).toEqual({ value: [session] })
   expect(await askCmod(tested, 'recall', 'cmod:messages', { session: 's1', task: 'a7', after: 'm9', last: 5 })).toEqual({ value: [] })
-  expect(await askCmod(tested, 'recall', 'cmod:search', { text: 'deploy', limit: 20, before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
+  expect(await askCmod(tested, 'recall', 'cmod:search', { text: 'deploy', before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
 
   expect(spawned).toEqual([
     ['cmod', 'history', 'index'],
     ['cmod', 'history', 'sessions', '--since', '2026-10-09T00:00:00.000Z', '--all', '--running', '--json', '--project', '/work/app'],
     ['cmod', 'history', 'messages', 's1', '--task', 'a7', '--after', 'm9', '--last', '5', '--json', '--project', '/work/app'],
-    ['cmod', 'history', 'search', 'deploy', '--limit', '20', '--before', 's1:m9', '--json', '--project', '/work/app'],
+    ['cmod', 'history', 'search', 'deploy', '--before', 's1:m9', '--json', '--project', '/work/app'],
   ])
   expect(sessions).toEqual(['test-session', 'test-session', 'test-session', 'test-session'])
 })
@@ -452,11 +452,11 @@ test('forkParent names the session whose last turn ended on this conversation, a
   expect(await forkParent()).toEqual({ value: null })
 
   tested.fakes.session.messages = (async () => conversation) as unknown as Claude['session']['messages']
-  await tested.fire(SessionStart, { source: 'startup' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
-  await tested.fire(Stop, { stop_hook_active: false })
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
   await settled()
-  await tested.fire(SessionStart, { source: 'fork', session_id: 'forked-elsewhere' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'fork', session_id: 'forked-elsewhere' })
 
   expect(await forkParent()).toEqual({ value: 'test-session' })
 })

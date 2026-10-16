@@ -5,6 +5,9 @@ import type {
   Args,
   EngineInterface,
   AskOptions,
+  CommandInfo,
+  CommandRunArgs,
+  CommandRunResult,
   CommandSpec,
   ConfigRow,
   ElementTable,
@@ -95,7 +98,7 @@ export type Claude = {
   readonly prompt: { submit: EngineInterface['prompt']['submit'] }
   readonly turn: { abort: EngineInterface['turn']['abort'] }
   readonly model: { complete: EngineInterface['model']['complete'] }
-  readonly command: { register(command: CommandSpec): Promise<{ command: string }> }
+  readonly command: { register(command: CommandSpec): Promise<{ command: string }>; list(): Promise<readonly CommandInfo[]>; run(args: CommandRunArgs): Promise<CommandRunResult> }
   readonly tool: { register(tool: ToolSpec): Promise<{ tool: string }>; call: EngineInterface['tool']['call'] }
   readonly agent: {
     list(): Promise<AgentInfo[]>

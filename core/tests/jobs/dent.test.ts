@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { dent } from './dent-mod.js'
 
 type Use = { tool: string; input: Record<string, unknown> }
@@ -27,8 +28,8 @@ function dentSession(gitStatus = '') {
   const tested = testMod(dent, { scope: 'project', projectRoot: root, files, permissions: ['run:git', 'run:bun'] })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: gitStatus, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   let calls = 0
-  const decide = (use: Use) => tested.fire('tool.check', { ...use, tool_use_id: `toolu_${(calls += 1)}` } as never, allowed)
-  const after = (use: Use) => tested.fire('tool.call', { tool: use.tool, ...use.input, tool_use_id: `toolu_${(calls += 1)}` } as never, answered)
+  const decide = (use: Use) => claudeCodeOf(tested).fire('tool.check', { ...use, tool_use_id: `toolu_${(calls += 1)}` } as never, allowed)
+  const after = (use: Use) => claudeCodeOf(tested).fire('tool.call', { tool: use.tool, ...use.input, tool_use_id: `toolu_${(calls += 1)}` } as never, answered)
   const runs = () => tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)
   return { tested, decide, after, runs }
 }

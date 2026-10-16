@@ -21,7 +21,7 @@ test("cmod new writes a CHANGELOG.md whose section for the first version cmod pu
   expect(sections[1]?.text).toStartWith('### Added\n- ')
 })
 
-test('new writes the repository layout with a defineMod that has one hook and one pane, and installs its packages', async () => {
+test('new writes the repository layout with a defineMod that has one listener and one pane, and installs its packages', async () => {
   const home = await temporaryHome()
   const root = join(home, 'my-mod')
 

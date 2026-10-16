@@ -5,10 +5,11 @@ import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { statusLine } from '../src/jobs/status-line.js'
 import { tool } from '../src/jobs/tool.js'
-import { CwdChanged, defineMod, fs, PostToolUse, process, PromptHint, Reply, sessions, Stop, UserPromptSubmit, type Mod } from '../src/mod.js'
+import { defineMod, fs, process, Prompt, PromptHint, Reply, sessions, type Mod } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type TestOptions } from '../src/testing.js'
+import { claudeCodeOf } from '../src/testing/claude-code.js'
 import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Input, Markdown, Select, Text } from '../src/ui/elements.js'
 import { Heading } from '../src/ui/markdown.js'
@@ -52,14 +53,14 @@ test('fire fills the tool_use_id Claude Code gives each tool call', async () => 
   const tested = testMod(
     defineMod({
       name: 'reads',
-      setup(mod) {
-        mod.on(PostToolUse, (input) => void seen.push(input.tool_use_id))
+      setup() {
+        sessions.current.beforeToolResult((result) => void seen.push(result.callId))
       },
     }),
   )
 
-  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/a.ts' }, tool_response: {} })
-  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/b.ts' }, tool_response: {} })
+  await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/a.ts' }, tool_response: {} })
+  await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/b.ts' }, tool_response: {} })
 
   expect(seen).toEqual(['toolu_1', 'toolu_2'])
 })
@@ -69,16 +70,16 @@ test('a Read of a file the test gave contents to lists it in files.read', async 
   const tested = testMod(
     defineMod({
       name: 'reads',
-      setup(mod) {
-        mod.on(PostToolUse, (input) => void seen.push(input.files))
+      setup() {
+        sessions.current.beforeToolResult((result) => void seen.push(result.files))
       },
     }),
     { files: { '/work/notes.md': '' } },
   )
 
-  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/notes.md' }, tool_response: {} })
-  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work' }, tool_response: {} })
-  await tested.fire(PostToolUse, { tool_name: 'Read', tool_input: { file_path: '/work/gone.md' }, tool_response: {} })
+  await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/notes.md' }, tool_response: {} })
+  await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work' }, tool_response: {} })
+  await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/gone.md' }, tool_response: {} })
 
   expect(seen).toEqual([
     { read: ['/work/notes.md'], changed: [] },
@@ -92,12 +93,12 @@ test('type runs a slash command and returns its reply', async () => {
     defineMod({
       name: 'file-tree',
       setup(mod) {
-        mod.use(slashCommand({ name: 'tree', description: 'Show the tree', reply: ({ positionals }) => ({ text: `Showing ${positionals.join(' and ')}`, context: 'The user opened the tree.' }) }))
+        mod.use(slashCommand({ name: 'tree', description: 'Show the tree', reply: ({ positionals }) => ({ text: `Showing ${positionals.join(' and ')}`, note: 'The user opened the tree.' }) }))
       },
     }),
   )
 
-  expect(await tested.type('/tree src docs')).toEqual({ text: 'Showing src and docs', context: 'The user opened the tree.' })
+  expect(await tested.type('/tree src docs')).toEqual({ text: 'Showing src and docs', note: 'The user opened the tree.' })
   await expect(tested.type('/trees')).rejects.toThrow("file-tree has no slash command /trees. Add it in setup with mod.use(slashCommand({ name: 'trees', … })).")
 })
 
@@ -155,8 +156,8 @@ test('testMod scope project makes the mod a project plugin, and projectRoot alon
   const editInWorktree = { tool: 'Edit', input: { file_path: `${project}/worktrees/design/Domain.md`, old_string: '#', new_string: '##' }, tool_use_id: 'toolu_1' }
   const allowed = { decision: 'allow' } as const
 
-  expect(await domainGuard({ projectRoot: project, scope: 'project' }).fire('tool.check', editInWorktree, allowed)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
-  expect(await domainGuard({ projectRoot: project }).fire('tool.check', editInWorktree, allowed)).toEqual(allowed)
+  expect(await claudeCodeOf(domainGuard({ projectRoot: project, scope: 'project' })).fire('tool.check', editInWorktree, allowed)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
+  expect(await claudeCodeOf(domainGuard({ projectRoot: project })).fire('tool.check', editInWorktree, allowed)).toEqual(allowed)
 })
 
 type NotesState = { global: { notes: readonly string[] } }
@@ -328,14 +329,14 @@ test("a read after testMod's fake write sees the new text", async () => {
 
 test("two tested mods in one test each read their own fake files through the fs import", async () => {
   const seen: string[] = []
-  const reader = (name: string) => defineMod({ name, setup: (mod) => void mod.on(UserPromptSubmit, async () => void seen.push(await fs.read('/test/project/x.txt'))) })
+  const reader = (name: string) => defineMod({ name, setup: () => void sessions.current.onPrompt(async () => void seen.push(await fs.read('/test/project/x.txt'))) })
   const a = testMod(reader('a'), { files: { '/test/project/x.txt': 'A' }, projectRoot: '/test/project' })
   const b = testMod(reader('b'), { files: { '/test/project/x.txt': 'B' }, projectRoot: '/test/project' })
   await a.start()
   await b.start()
 
-  await a.fire(UserPromptSubmit, { prompt: 'hi' })
-  await b.fire(UserPromptSubmit, { prompt: 'hi' })
+  await a.add({ type: Prompt, text: 'hi' })
+  await b.add({ type: Prompt, text: 'hi' })
 
   expect(seen).toEqual(['A', 'B'])
 })
@@ -395,8 +396,10 @@ test('clock.every in testMod fires only when the test ticks it', async () => {
   let branch = 'main'
   const branchLine = defineMod({
     name: 'branch-line',
+    state: { memory: { branch: 'main' } },
     setup(mod) {
-      mod.use(statusLine({ text: () => branch, interval: 1 }))
+      mod.every(1, () => void (mod.state.memory.branch = branch))
+      mod.use(statusLine({ text: (_usage, mod) => mod.state.memory.branch }))
     },
   })
   const unticked = testMod(branchLine)
@@ -435,14 +438,15 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
       name: 'git-letters',
       setup(mod) {
         clock = engineOf(mod).claude.clock
-        mod.on(Stop, () => void showGitLetters(mod))
+        sessions.current.onTurnEnd(() => void showGitLetters(mod))
       },
     }),
     { permissions: ['run:git'] },
   )
   tested.fakes.process.run = (argv) => new Promise((resolve) => clock?.after(0, () => resolve(gitAnswer(argv))))
 
-  await tested.fire(Stop, { stop_hook_active: false })
+  await tested.add({ type: Prompt, text: 'Commit it' })
+  await tested.endTurn()
   await tested.settle()
 
   expect(tested.shown.toasts).toContainEqual({ type: 'default', message: '/work/shop: M README.md' })
@@ -450,10 +454,11 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
 
 test('settle returns while a fake is held open by the test', async () => {
   const answers: (() => void)[] = []
-  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => mod.on(Stop, () => void showGitLetters(mod)) }), { permissions: ['run:git'] })
+  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => sessions.current.onTurnEnd(() => void showGitLetters(mod)) }), { permissions: ['run:git'] })
   tested.fakes.process.run = (argv) => new Promise((resolve) => answers.push(() => resolve(gitAnswer(argv))))
 
-  await tested.fire(Stop, { stop_hook_active: false })
+  await tested.add({ type: Prompt, text: 'Commit it' })
+  await tested.endTurn()
   await tested.settle()
 
   expect(answers).toHaveLength(1)
@@ -465,8 +470,8 @@ function folderWatchIn(projectRoot: string) {
   const tested = testMod(
     defineMod({
       name: 'folder-watch',
-      setup(mod) {
-        mod.on(CwdChanged, (input) => void seen.push({ old: input.old_cwd, new: input.new_cwd, cwd: sessions.current.cwd, projectRoot: sessions.current.project }))
+      setup() {
+        sessions.current.onCwdChange((change) => void seen.push({ old: change.previous, new: change.cwd, cwd: sessions.current.cwd, projectRoot: sessions.current.project }))
       },
     }),
     { projectRoot },
@@ -501,7 +506,7 @@ test("after /cd while Claude Code still reports the old cwd, the mod's cwd is th
 
   expect(seen).toEqual([moved])
 
-  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'hello' })
 
   expect(seen).toEqual([moved])
 })
@@ -515,7 +520,7 @@ test('after moveTo another project, Claude Code reports the new root at once and
 
   expect(await reported()).toEqual(['/work/b', '/work/a'])
 
-  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'hello' })
 
   expect(await reported()).toEqual(['/work/b', '/work/b'])
 })
@@ -557,4 +562,73 @@ test("fire('cmod.call') answers a method of the mod's api with { value }, as dep
   const tested = testMod(tracer, { files: { '/work/a.ts': 'export function greet() {}\n' } })
 
   expect(await tested.fire('cmod.call', { to: 'tracer', method: 'signatures', input: { path: '/work/a.ts' } })).toEqual({ value: [{ name: 'greet', line: 1 }] })
+})
+
+test('raise.beforeToolCall asks every beforeToolCall listener with the call and returns the merged answer', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'guard',
+      setup() {
+        sessions.current.beforeToolCall({ name: 'Bash' }, (call) => (String(call.input['command']).startsWith('rm ') ? { refuse: 'Move it to the trash instead.' } : undefined))
+      },
+    }),
+    { permissions: ['tools'] },
+  )
+
+  expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })).toEqual({ refuse: 'Move it to the trash instead.' })
+  expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'ls' } })).toBeUndefined()
+  expect(await tested.raise.beforeToolCall({ name: 'Read', input: { file_path: '/work/a.ts' } })).toBeUndefined()
+})
+
+test('raise.beforePrompt gives the listener a Prompt placed in the open turn, and returns its note', async () => {
+  const seen: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'release',
+      setup() {
+        sessions.current.beforePrompt({ text: /\brelease\b/i }, (prompt) => {
+          seen.push({ type: prompt.type, text: prompt.text, from: prompt.from.type })
+          return { note: 'Run bun run release.' }
+        })
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+
+  expect(await tested.raise.beforePrompt({ text: 'Cut a release' })).toEqual({ note: 'Run bun run release.' })
+  expect(await tested.raise.beforePrompt({ text: 'Fix the bug' })).toBeUndefined()
+  expect(seen).toEqual([{ type: Prompt, text: 'Cut a release', from: 'person' }])
+})
+
+test("raise.onSessionStart runs the mod's listeners with the session and cwd filled in", async () => {
+  const seen: unknown[] = []
+  const tested = testMod(defineMod({ name: 'greeter', setup: () => void sessions.current.onSessionStart((start) => void seen.push(start)) }), { projectRoot: '/work/shop' })
+
+  await tested.raise.onSessionStart({ source: 'startup' })
+
+  expect(seen).toEqual([{ session: 'test-session', cwd: '/work/shop', source: 'startup' }])
+})
+
+test('raise.beforeSessionStart returns the note every listener gives, the last title, and a refusal over both', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'briefing',
+      setup() {
+        sessions.current.beforeSessionStart({ source: 'startup' }, () => ({ note: 'The build is red.', title: 'Fix the build' }))
+        sessions.current.beforeSessionStart(() => ({ title: 'Morning' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+
+  expect(await tested.raise.beforeSessionStart({ source: 'startup' })).toEqual({ note: 'The build is red.', title: 'Morning' })
+  expect(await tested.raise.beforeSessionStart({ source: 'resume' })).toEqual({ title: 'Morning' })
+})
+
+test('raise.beforeTurnEnd asks about the open turn, and says how to open one when none is open', async () => {
+  const tested = testMod(defineMod({ name: 'reviewer', setup: () => void sessions.current.beforeTurnEnd((turn) => (turn.prompt.text === 'Ship it' ? { refuse: 'Run the tests first.' } : undefined)) }), { permissions: ['prompt'] })
+
+  await expect(tested.raise.beforeTurnEnd()).rejects.toThrow("reviewer has no turn open to end. Open one with tested.add({ type: Prompt, text: '…' }).")
+  await tested.add({ type: Prompt, text: 'Ship it' })
+  expect(await tested.raise.beforeTurnEnd()).toEqual({ refuse: 'Run the tests first.' })
 })

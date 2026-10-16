@@ -24,17 +24,17 @@ type ModDefinition<State, Name, Options> = {
 - `options` declares what a person sets, such as a token, and types `mod.options`. [options.md](options.md) explains them.
 - `api` holds the methods other mods call. [dependencies.md](dependencies.md) explains it.
 - `installer` lists the steps the person finishes in Claude Code after the permissions and the options, such as signing in. [install-steps.md](install-steps.md#steps-in-claude-code) explains them.
-- `setup` runs once when the mod starts. It adds hooks, panes, renders, and jobs. It may be `async`.
+- `setup` runs once when the mod starts. It adds listeners, panes, renders, and jobs. It may be `async`.
 
 ```tsx
-import { defineMod, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const greeter = defineMod({
   name: 'greeter',
   state: { session: { isGreeted: false } },
 
   setup(mod) {
-    mod.on(UserPromptSubmit, () => {
+    sessions.current.onPrompt(() => {
       if (mod.state.session.isGreeted) return
       mod.state.session.isGreeted = true
       mod.ui.toast(`Hello from ${mod.name}`)
@@ -47,7 +47,7 @@ export const greeter = defineMod({
 
 Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod the person has not accepted yet opens the installer pane, `Install <name>`, which lists its permissions and the changes it makes to the computer, and waits for Accept ([install-steps.md](install-steps.md)). An option with no default and no value is asked on the next page of the same pane. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the pane again for each `installer` step the mod declares that is not done.
 
-The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, a render of AbovePrompt and a hook on UserPromptSubmit.`, what its install step set up, and each permission the person allowed, with a Settings button for `/mods <name>`. The first time a new version starts, the toast is `Updated to <version>`: the first three changes of that version's `CHANGELOG.md` section, the version the machine ran before, and a Changelog button ([Release notes](#release-notes)). A mod with no changelog lists what it adds now and no longer adds instead. A new session, `/reload-plugins`, and a version the machine already ran show no toast.
+The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, a render of AbovePrompt and /deploy.`, what its install step set up, and each permission the person allowed, with a Settings button for `/mods <name>`. The first time a new version starts, the toast is `Updated to <version>`: the first three changes of that version's `CHANGELOG.md` section, the version the machine ran before, and a Changelog button ([Release notes](#release-notes)). A mod with no changelog lists what it adds now and no longer adds instead. A new session, `/reload-plugins`, and a version the machine already ran show no toast.
 
 When a step fails, or the person declines the install, the mod stays stopped. Once another session sets it up, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
 
@@ -59,7 +59,7 @@ When a step fails, the mod does not start. An error toast above the prompt names
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
-- `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a hook on `PermissionRequest`, or a job that decides permissions, and `register.ts` does not register the permission check.
+- `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a `beforePermissionCheck` or `beforePermissionRequest` listener, or a job that decides permissions, and `register.ts` does not register the permission check.
 
 Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)).
 
@@ -123,9 +123,9 @@ registerPermissionCheck(addHook: On): void
 registeredMod(): ModDefinition | undefined
 ```
 
-`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. `options` is what Claude Code passes `register`: the values of the mod's options ([options.md](options.md)). `registeredMod` returns the definition `registerMod` got, for `cmod check` to read the mod's options without starting it. A `PreToolUse` hook runs on `tool.call`, which `registerMod` registers ([hooks.md](hooks.md)). It leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
+`registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. `options` is what Claude Code passes `register`: the values of the mod's options ([options.md](options.md)). `registeredMod` returns the definition `registerMod` got, for `cmod check` to read the mod's options without starting it. `registerMod` leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
 
-A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers a `PreToolUse` hook that answers `permissionDecision: 'allow'` or `'ask'`, a hook on `PermissionRequest`, the `permissions` job, and a job of your own on `tool.check`:
+A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers `sessions.current.beforePermissionCheck`, `sessions.current.beforePermissionRequest`, and the `permissions` job:
 
 ```ts
 export function register(addHook: On, options: PluginOptions): void {
@@ -136,11 +136,11 @@ export function register(addHook: On, options: PluginOptions): void {
 
 Such a mod also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its error toast names the line to add.
 
-Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. The plugin directory reads the bundled module too, and flags it when the name of `register`'s first parameter is declared anywhere else in the bundle. `@cmodjs/core` declares `on` as the method `mod.on`, so name that parameter `addHook`. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
+Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. The plugin directory reads the bundled module too, and flags it when the name of `register`'s first parameter is declared anywhere else in the bundle. `@cmodjs/core` declares `on` as a key, so name that parameter `addHook`. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
 
 ## mod: this mod
 
-`setup` gets `mod`, of type `Mod<State, Options>`. Every hook, render, and job gets the same `mod`. `mod` holds what belongs to this mod: its name, its folders, its values, its grants, and what it adds to Claude Code.
+`setup` gets `mod`, of type `Mod<State, Options>`. Every listener, render, and job gets the same `mod`. `mod` holds what belongs to this mod: its name, its folders, its values, its grants, and what it adds to Claude Code.
 
 ```ts
 type Mod<State, Options> = {
@@ -150,8 +150,6 @@ type Mod<State, Options> = {
   readonly state: Readonly<State>
   readonly options: OptionValues<Options>
   readonly permissions: Permissions
-  on(hook, listener, options?): Disposable
-  on(hook, matcher, listener, options?): Disposable
   every(ms, listener): Disposable
   after(ms, listener): Disposable
   use(job): Handle
@@ -170,7 +168,6 @@ type Mod<State, Options> = {
 | `state` | The mod's values. Assign to a key to change it. | [state.md](state.md) |
 | `options` | The values a person set for the mod's options, typed from their declaration. Read-only. | [options.md](options.md) |
 | `permissions` | Says whether the person granted each permission. | [permissions.md](permissions.md) |
-| `on` | Listens to a Claude Code hook, such as `PreToolUse`. | [hooks.md](hooks.md) |
 | `every` and `after` | Run a listener on a timer while the session runs. | below |
 | `use` | Adds a job, such as a slash command or a tool, and returns its handle. | [jobs.md](jobs.md) |
 | `log` | Writes a line, under the mod's name, to Claude Code's debug log. | below |
@@ -181,13 +178,15 @@ type Mod<State, Options> = {
 Everything that is Claude Code's or the computer's rather than the mod's is an import from `mod.js`, so a function in any file calls it without being handed `mod`:
 
 ```ts
-import { fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
+import { commands, config, fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
 ```
 
 | Import | What it is | Docs |
 | --- | --- | --- |
-| `sessions` | The conversations: the one the mod runs in, every other one, and search across them. | [session.md](session.md) |
+| `sessions` | The conversations: the one the mod runs in, every other one, and search across them. Everything that happens in a session, from a prompt to a permission dialog, is a method on it. | [session.md](session.md) |
+| `commands` | Every slash command: lists them, runs one, and hears or changes each run. | below |
 | `settings` | Claude Code's `settings.json` files: the person's, the project's, and the project's local one. | below |
+| `config` | The rows of Claude Code's `/config` menu. | below |
 | `model` | Asks a model one question, outside the conversation. | below |
 | `fs` | Reads, writes, lists, and finds files. | below |
 | `metadata` | Reads and changes the mod's keys in one file's metadata. | below |
@@ -198,14 +197,14 @@ Each import works once the mod has started, in `setup` and anything it adds. Eac
 
 ### Disposable
 
-`mod.on`, `mod.every`, `mod.after`, `mod.ui.render`, and a session's `on` each return a `Disposable`. `dispose()` takes back what the call added, so a mod turns a feature off and on while it runs. Everything a mod adds is taken back when the mod stops, so a mod that keeps a feature for the whole session ignores the `Disposable`.
+`mod.every`, `mod.after`, `mod.ui.render`, and every `on` and `before` method each return a `Disposable`. `dispose()` takes back what the call added, so a mod turns a feature off and on while it runs. Everything a mod adds is taken back when the mod stops, so a mod that keeps a feature for the whole session ignores the `Disposable`.
 
 ```ts
 type Disposable = { dispose(): void }
 ```
 
 ```ts
-const watching = mod.on(PostToolUse, { tool_name: 'Edit' }, () => void (mod.state.session.edits += 1))
+const watching = sessions.current.onToolCall({ name: 'Edit' }, () => void (mod.state.session.edits += 1))
 mod.use(slashCommand({ name: 'stop-counting', description: 'Stop counting edits', reply: () => watching.dispose() }))
 ```
 
@@ -251,10 +250,34 @@ mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: (current) => <
 mod.use(slashCommand({ name: 'ci-runs', description: 'Show the CI runs', reply: () => void mod.settings.open('runs') }))
 ```
 
+## commands: slash commands
+
+```ts
+commands.list(): Promise<CommandInfo[]>
+commands.run(name: string, args?: string): Promise<{ text?: string; note?: string }>
+commands.beforeRun(matcher?, listener: (run: CommandRun) => Answer | void, options?): Disposable
+commands.onRun(matcher?, listener: (run: CommandRun) => unknown, options?): Disposable
+
+type CommandInfo = { name: string; description: string; source: 'builtin' | 'plugin' | 'user' | 'mcp'; plugin?: string }
+type CommandRun = { name: string; args: string; source?: 'builtin' | 'plugin' | 'user' | 'mcp'; from: Sender; session: string; cwd: string }
+```
+
+- `list` answers every command the person can type: Claude Code's own, each plugin's, the person's and the project's, and each MCP server's prompts.
+- `run` runs a command, a built-in such as `compact` included, the way the person typing `/<name> <args>` would. It resolves the text the command printed and the note it left Claude. It needs the `prompt` permission.
+- `beforeRun` runs just before any command runs, typed or run by a mod, and its answer changes it: `{ args?, note? }` runs it with new arguments and adds a note Claude reads after its output, `{ result, exitCode? }` answers in its place without running it, and `{ refuse }` runs nothing and shows the reason as its output. An answer needs the `prompt` permission. `exitCode` is what a `claude -p "/lint"` run exits with.
+- `onRun` hears each command once it ran.
+- A command a project or a plugin writes as a Markdown prompt, such as `/review`, also reaches `beforePrompt` after `beforeRun`, as its text goes to Claude ([session.md](session.md#change-what-happens)). A built-in such as `/model` reaches only these two.
+
+```ts
+commands.beforeRun({ name: 'compact' }, () => (mod.state.session.isDeploying ? { refuse: 'Compact once the deploy finishes.' } : undefined))
+commands.onRun({ name: 'model' }, (run) => mod.log(`model set to ${run.args}`))
+```
+
+A command of the mod's own is a `slashCommand` job ([jobs.md](jobs.md#slashcommand)).
+
 ## settings: Claude Code's settings files
 
 ```ts
-settings.list(): Promise<Setting[]>
 settings.user.read(): Promise<Settings>
 settings.user.update(values: Readonly<Record<string, unknown>>): Promise<void>
 settings.project.read(): Promise<Settings>
@@ -263,14 +286,6 @@ settings.local.read(): Promise<Settings>
 settings.local.update(values: Readonly<Record<string, unknown>>): Promise<void>
 settings.beforeFileChange(matcher?, listener: (change: SettingsFileChange) => { refuse: string } | void): Disposable
 ```
-
-`settings.list` answers every row of Claude Code's `/config` menu, its own and each plugin's, with the value each holds now:
-
-```ts
-type Setting = { key: string; label: string; description?: string; kind: 'boolean' | 'choice' | 'text' | 'number'; value: boolean | string | number | readonly string[]; options?: readonly string[]; plugin?: string; isLocked: boolean }
-```
-
-`plugin` names the plugin a row belongs to, and Claude Code's own rows have none. `isLocked` is true when a managed setting or the organization's policy holds the value.
 
 `settings.user` is the person's own `~/.claude/settings.json`, `settings.project` is the project's `.claude/settings.json`, and `settings.local` is the project's `.claude/settings.local.json`.
 
@@ -296,6 +311,16 @@ type SettingsFileChange = { source: 'user' | 'project' | 'local' | 'policy' | 's
 settings.beforeFileChange({ source: /^(user|project)$/ }, () => ({ refuse: 'Settings are locked while the deploy runs.' }))
 ```
 
+## config: the /config menu
+
+```ts
+config.list(): Promise<ConfigRow[]>
+
+type ConfigRow = { key: string; label: string; description?: string; kind: 'boolean' | 'choice' | 'text' | 'number'; value: boolean | string | number | readonly string[]; options?: readonly string[]; plugin?: string; isLocked: boolean }
+```
+
+`config.list` answers every row of Claude Code's `/config` menu, its own and each plugin's, with the value each holds now. `plugin` names the plugin a row belongs to, and Claude Code's own rows have none. `isLocked` is true when a managed setting or the organization's policy holds the value.
+
 ## model: one question outside the conversation
 
 ```ts
@@ -306,12 +331,12 @@ model.complete(request: ModelCompleteRequest, options?: { signal?: AbortSignal }
 
 The call never rejects for what the model did. The result's `isAnswered` is true with the reply's `text`, or false with a `reason`, such as `'api-error'` or `'aborted'`.
 
-Put a limit on the listener too, with `mod.on`'s `timeoutMs` ([hooks.md](hooks.md#mod-on)), which also covers the work around the call:
+Give the listener that waits on it time too, with its `timeoutMs` ([session.md](session.md#give-a-listener-time)), which also covers the work around the call:
 
 ```ts
-mod.on(Stop, async ({ last_assistant_message }) => {
-  const verdict = await model.complete({ model: 'haiku', prompt: `Does this reply ask the person to do work Claude could do itself? Answer yes or no.\n\n${last_assistant_message}`, timeoutMs: 8000 })
-  if (verdict.isAnswered && verdict.text.trim().toLowerCase().startsWith('yes')) return { decision: 'block', reason: 'Do that work yourself, then reply.' }
+sessions.current.beforeTurnEnd(async (turn, { signal }) => {
+  const verdict = await model.complete({ model: 'haiku', prompt: `Does this reply ask the person to do work Claude could do itself? Answer yes or no.\n\n${turn.answer ?? ''}`, timeoutMs: 8000 }, { signal })
+  if (verdict.isAnswered && verdict.text.trim().toLowerCase().startsWith('yes')) return { refuse: 'Do that work yourself, then reply.' }
 }, { timeoutMs: 9000 })
 ```
 
@@ -336,15 +361,15 @@ Both run a program without a shell. `argv[0]` is the program and the rest are it
 A job's deadline bounds the whole callback that makes these calls ([jobs.md](jobs.md#deadlines)).
 
 ```ts
-import { defineMod, process, SessionStart, sessions } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, process, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const branchNote = defineMod({
   name: 'branch-note',
-  setup(mod) {
-    mod.on(SessionStart, async () => {
+  setup() {
+    sessions.current.beforeSessionStart(async () => {
       const { exitCode, stdout } = await process.run(['git', 'branch', '--show-current'], { cwd: sessions.current.project })
       if (exitCode !== 0) return
-      return { hookSpecificOutput: { hookEventName: SessionStart, additionalContext: `The git branch is ${stdout.trim()}.` } }
+      return { note: `The git branch is ${stdout.trim()}.` }
     })
   },
 })
@@ -461,16 +486,48 @@ messageOf(error: unknown): string
 Returns an `Error`'s `message`, or the value as text. Use it in a `catch`, where the error is `unknown`.
 
 ```ts
-import { defineMod, fs, messageOf, Stop } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, fs, messageOf, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const notes = defineMod({
   name: 'notes',
   setup(mod) {
-    mod.on(Stop, async () => {
+    sessions.current.onTurnEnd(async () => {
       await fs.write(`${mod.dataFolder}/last-stop.txt`, new Date().toISOString()).catch((error: unknown) => {
         mod.ui.toast.error('Could not save the last stop', { description: messageOf(error) })
       })
     })
   },
+})
+```
+
+## shell.js and path.js: read a command line
+
+`shell.js` reads a Bash line the way cmod does for a tool call's `files` ([session.md](session.md#files-what-a-tool-call-reads-and-changes)), and `path.js` is `node:path`'s POSIX functions, which a mod cannot import from Node:
+
+```ts
+parseShell(line: string): ParsedShell
+
+type ParsedShell = { commands: ShellCommand[]; reads: string[]; writes: string[]; fetches: string[]; isFullyParsed: boolean }
+type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number }
+
+resolve(...paths): string   join(...paths): string   dirname(path): string   basename(path, suffix?): string
+extname(path): string        relative(from, to): string   isAbsolute(path): boolean   normalize(path): string
+```
+
+- `commands` lists every command the line runs, those inside `sudo`, `bash -c`, `$(…)`, and heredocs included, with flags such as `-rf` split into `-r` and `-f`.
+- `folder` is where a command runs, as the line wrote it: `''` for the folder the line starts in, `src` after `cd src`, `/tmp` after `cd /tmp`, and `~/p` after `cd ~/p`. `resolve(call.cwd, folder)` makes it absolute.
+- `input` is the index in `commands` of the command whose output this one reads through `|` or `|&`, and is absent for a command that reads no pipe. `trace read a.ts | head -5` gives `head` the `input` `0`. A wrapper such as `timeout 5 trace read a.ts` writes the output of the command it runs, so `input` names `trace`, not `timeout`.
+- `reads`, `writes`, and `fetches` are the paths and URLs the commands name, as written. A path that holds a shell expansion makes `isFullyParsed` false, and so does a line the parser cannot read.
+- `resolve` has no working folder to start from in Claude Code, so pass an absolute folder first, such as `resolve(sessions.current.cwd, path)`.
+
+```ts
+import { basename, resolve } from '../node_modules/@cmodjs/core/path.js'
+import { parseShell } from '../node_modules/@cmodjs/core/shell.js'
+import { sessions } from '../node_modules/@cmodjs/core/mod.js'
+
+sessions.current.onToolCall({ name: 'Bash' }, (call) => {
+  for (const { argv, folder } of parseShell(String(call.input['command'])).commands) {
+    if (basename(argv[0]) === 'trace') mod.ui.toast(`trace runs in ${resolve(call.cwd, folder)}`)
+  }
 })
 ```

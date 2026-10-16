@@ -4,7 +4,7 @@ import { Message, rowOfAppend, type Row } from '../session/context/turn/message/
 import { Note } from '../session/context/turn/message/note.js'
 import { Person } from '../session/context/turn/message/sender.js'
 import { createConversation, emptyConversation, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
-import { Session, UsageChange, type BeforeEvent, type Client, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
+import { Session, UsageChange, type BeforeEvent, type Surface, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
 import { GoalChange } from '../session/goal/goal.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { ifMissing } from '../utils/paths.js'
@@ -14,7 +14,7 @@ import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import { readLines, runCmod } from './programs.js'
 import type { Router } from './router.js'
-import { actPermission, conversationMethods, everySession, isAct, isHeardBy, resultOf, usageOf, type Act, type Subscription } from './sessions.js'
+import { actPermission, conversationMethods, everySession, isAct, isHeardBy, resultOf, spawnTask, usageOf, type Act, type Subscription } from './sessions.js'
 
 type Request = Readonly<Record<string, unknown>>
 
@@ -379,7 +379,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     if (action === 'abort') return abortTurn(task)
     if (task !== undefined) return performInTask(action, input, task)
     if (action === 'usage') return usageOf(claude)
-    if (action === 'clients') return [...(await claude.session.surfaces())] satisfies Client[]
+    if (action === 'surfaces') return [...(await claude.session.surfaces())] satisfies Surface[]
     if (action === 'send') {
       const { type, text, as } = input as SessionSend
       if (as === Session) throw new Error(`session ${session} cannot send as itself to itself.`)
@@ -388,18 +388,7 @@ export function serveConversations({ claude, router, store, project, report }: {
       if ('drop' in delivered && typeof delivered.drop === 'string') throw new Error(`Claude Code dropped the prompt: ${delivered.drop}`)
       return null
     }
-    if (action === 'startTask') {
-      const args = input as TaskStartArgs
-      const started = await claude.agent.spawn({
-        prompt: args.prompt,
-        ...(args.name === undefined ? {} : { description: args.name, name: args.name }),
-        ...(args.agentType === undefined ? {} : { subagentType: args.agentType }),
-        ...(args.model === undefined ? {} : { model: args.model }),
-        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-      })
-      if (started.deny !== undefined) throw new Error(`Claude Code refused the task: ${started.deny}`)
-      return { id: started.agentId ?? '', title: args.name ?? '', agentType: args.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() } satisfies TaskData
-    }
+    if (action === 'startTask') return spawnTask(claude, input as TaskStartArgs)
     const { name, input: toolInput } = input as ToolCallArgs
     return resultOf(place(), { name, input: toolInput, cwd: await claude.session.cwd() }, await claude.tool.call({ ...toolInput, tool: name } as never))
   }
@@ -414,7 +403,7 @@ export function serveConversations({ claude, router, store, project, report }: {
   const performInTask = async (action: Act, input: unknown, task: string): Promise<unknown> => {
     const running = conversation.state.tasks[task]
     if (action === 'usage') return json(['history', 'usage', session, '--task', task])
-    if (action === 'clients') return running === undefined || running.closedAt !== undefined ? [] : [...(await claude.session.surfaces())]
+    if (action === 'surfaces') return running === undefined || running.closedAt !== undefined ? [] : [...(await claude.session.surfaces())]
     if (action !== 'send') throw new Error(`cmod: ${action} runs only on a session's own main loop.`)
     if (running === undefined || running.closedAt !== undefined) throw ended(task)
     const sent = await claude.session.send({ to: { agentId: task }, text: (input as SessionSend).text })
@@ -426,7 +415,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     await checkAct(caller, action, input)
     const isLive = await isRunning(target)
     if (!isLive && action === 'usage') return json(['history', 'usage', target, ...(task === undefined ? [] : ['--task', task])])
-    if (!isLive && action === 'clients') return []
+    if (!isLive && action === 'surfaces') return []
     if (!isLive) throw ended(task ?? target)
     if (action === 'send' && task === undefined && (input as SessionSend).as === Session) {
       const sent = await claude.session.send({ to: { sessionId: target }, text: (input as SessionSend).text })
@@ -477,7 +466,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     async [conversationMethods.search](request) {
       const before = isObject(request['before']) ? request['before'] : undefined
       const record = [...textArg('--session', request['session']), ...textArg('--task', request['task']), ...textArg('--turn', request['turn']), ...countArg('--context', request['context']), ...(request['isGoal'] === true ? ['--goal'] : [])]
-      return json(['history', 'search', String(request['text']), ...scopeArgs(request), ...record, ...(request['running'] === true ? ['--running'] : []), ...countArg('--limit', request['limit']), ...(before === undefined ? [] : ['--before', `${String(before['session'])}:${String(before['id'])}`])])
+      return json(['history', 'search', String(request['text']), ...scopeArgs(request), ...record, ...(request['running'] === true ? ['--running'] : []), ...(before === undefined ? [] : ['--before', `${String(before['session'])}:${String(before['id'])}`])])
     },
     async [conversationMethods.messages](request) {
       const id = String(request['session'])

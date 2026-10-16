@@ -1,7 +1,8 @@
 import type { Disposable } from '../utils/disposable.js'
 import type { Matcher } from '../utils/matcher.js'
+import type { Sender } from './context/turn/message/sender.js'
 import type { Context, ContextEnd, ContextStart } from './context/context.js'
-import type { Document } from './context/turn/message/document.js'
+import type { InstructionFile } from './context/turn/message/instruction-file.js'
 import type { Message, MessageType } from './context/turn/message/message.js'
 import type { Note } from './context/turn/message/note.js'
 import type { Notice } from './context/turn/message/notice.js'
@@ -29,7 +30,7 @@ export type SessionPayload = {
   readonly toolCall: ToolCall
   readonly toolResult: ToolResult
   readonly skill: Skill
-  readonly document: Document
+  readonly instructionFile: InstructionFile
   readonly notice: Notice
   readonly contextStart: Context
   readonly contextEnd: Context
@@ -47,13 +48,12 @@ export type BeforeAnswer = {
   readonly prompt: { readonly text?: string; readonly note?: string; readonly title?: string } | Refusal
   readonly note: { readonly text: string }
   readonly skill: { readonly text: string }
-  readonly document: { readonly text: string } | Refusal
+  readonly instructionFile: { readonly text: string } | Refusal
   readonly reply: { readonly text: string }
   readonly toolCall: { readonly input: Readonly<Record<string, unknown>> } | { readonly result: string } | Refusal
   readonly toolResult: { readonly output?: unknown; readonly isError?: true; readonly note?: string }
   readonly notice: { readonly text: string }
   readonly taskStart: { readonly owner: { readonly model: string } } | Refusal
-  readonly taskEnd: Refusal
   readonly turnEnd: Refusal
   readonly contextEnd: Refusal
 }
@@ -62,11 +62,11 @@ export type BeforeEvent = keyof BeforeAnswer
 
 export type Usage = {
   readonly model: string
-  readonly context: { readonly tokens?: number; readonly window?: number; readonly percent?: number }
+  readonly contextWindow: { readonly tokenCount?: number; readonly size?: number; readonly percent?: number }
   readonly cost?: { readonly usd: number }
 }
 
-export type Client = 'terminal' | 'desktop' | 'mobile' | 'vscode'
+export type Surface = 'terminal' | 'desktop' | 'mobile' | 'vscode'
 
 export const sessionEvents = {
   Message: 'message',
@@ -76,7 +76,7 @@ export const sessionEvents = {
   ToolCall: 'toolCall',
   ToolResult: 'toolResult',
   Skill: 'skill',
-  InstructionFile: 'document',
+  InstructionFile: 'instructionFile',
   Notice: 'notice',
   ContextStart: 'contextStart',
   ContextEnd: 'contextEnd',
@@ -88,38 +88,42 @@ export const sessionEvents = {
   UsageChange: 'usageChange',
 } as const satisfies Readonly<Record<string, SessionEvent>>
 
-export const beforeEvents = ['Prompt', 'Note', 'Skill', 'InstructionFile', 'Reply', 'ToolCall', 'ToolResult', 'Notice', 'TaskStart', 'TaskEnd', 'TurnEnd', 'ContextEnd'] as const satisfies readonly (keyof typeof sessionEvents)[]
+export const beforeEvents = ['Prompt', 'Note', 'Skill', 'InstructionFile', 'Reply', 'ToolCall', 'ToolResult', 'Notice', 'TaskStart', 'TurnEnd', 'ContextEnd'] as const satisfies readonly (keyof typeof sessionEvents)[]
 
-type EventName = keyof typeof sessionEvents
+export type EventName = keyof typeof sessionEvents
 
-type BeforeName = (typeof beforeEvents)[number]
+export type BeforeName = (typeof beforeEvents)[number]
 
-type PayloadOf<Name extends EventName> = SessionPayload[(typeof sessionEvents)[Name]]
+export type PayloadOf<Name extends EventName> = SessionPayload[(typeof sessionEvents)[Name]]
 
-type AnswerOf<Name extends BeforeName> = (typeof sessionEvents)[Name] extends BeforeEvent ? BeforeAnswer[(typeof sessionEvents)[Name]] : never
+export type AnswerOf<Name extends BeforeName> = (typeof sessionEvents)[Name] extends BeforeEvent ? BeforeAnswer[(typeof sessionEvents)[Name]] : never
 
-type OnMethod<Payload> = {
-  (listener: (payload: Payload) => unknown): Disposable
-  (matcher: Matcher<Payload>, listener: (payload: Payload) => unknown): Disposable
+export type ReadOptions = { readonly timeoutMs?: number }
+
+export type AnswerOptions = ReadOptions & { readonly onFailure?: 'pass' | 'refuse' }
+
+export type ListenerTime = { readonly deadline: number; readonly signal: AbortSignal }
+
+export type Listener<Payload, Answer = void> = (payload: Payload, time: ListenerTime) => Answer | void | Promise<Answer | void>
+
+export type OnMethod<Payload> = {
+  (listener: Listener<Payload, unknown>, options?: ReadOptions): Disposable
+  (matcher: Matcher<Payload>, listener: Listener<Payload, unknown>, options?: ReadOptions): Disposable
 }
 
-type BeforeMethod<Payload, Answer> = {
-  (listener: (payload: Payload) => Answer | void | Promise<Answer | void>): Disposable
-  (matcher: Matcher<Payload>, listener: (payload: Payload) => Answer | void | Promise<Answer | void>): Disposable
+export type BeforeMethod<Payload, Answer> = {
+  (listener: Listener<Payload, Answer>, options?: AnswerOptions): Disposable
+  (matcher: Matcher<Payload>, listener: Listener<Payload, Answer>, options?: AnswerOptions): Disposable
 }
 
 export type OnMethods = { readonly [Name in EventName as `on${Name}`]: OnMethod<PayloadOf<Name>> }
 
 export type BeforeMethods = { readonly [Name in BeforeName as `before${Name}`]: BeforeMethod<PayloadOf<Name>, AnswerOf<Name>> }
 
-export type SearchOptions = {
-  readonly limit?: number
-  readonly before?: Pick<Message, 'session' | 'id'>
-}
 
 export type RecordPart = OnMethods &
   BeforeMethods & {
-    search(text: string, options?: SearchOptions): Promise<Message[]>
+    search(text: string, matcher?: Matcher<Message>): AsyncIterable<Message>
   }
 
 export type SessionSend = {
@@ -132,6 +136,7 @@ export type TaskStartArgs = {
   readonly prompt: string
   readonly agentType?: string
   readonly model?: string
+  readonly title: string
   readonly name?: string
   readonly cwd?: string
 }
@@ -152,7 +157,7 @@ export type Session = RecordPart & {
   readonly startedAt: string
   readonly lastAt: string
   readonly forkedFrom?: string
-  goal(): Promise<Goal>
+  readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>
   turn(): Promise<Turn | undefined>
@@ -162,7 +167,7 @@ export type Session = RecordPart & {
   startTask(task: TaskStartArgs): Promise<Task>
   callTool(call: ToolCallArgs): Promise<ToolResult>
   usage(): Promise<Usage>
-  clients(): Promise<Client[]>
+  surfaces(): Promise<Surface[]>
 }
 
 export type TaskOwner = Omit<Session, 'startTask' | 'callTool'>
@@ -273,6 +278,10 @@ export type Todo = Placement & { readonly id: string; readonly subject: string; 
 
 export type ReplyDisplay = Placement & { readonly replyId: string; readonly index: number; readonly isLast: boolean; readonly text: string }
 
+export type CommandRun = Placement & { readonly name: string; readonly args: string; readonly source?: 'builtin' | 'plugin' | 'user' | 'mcp'; readonly from: Sender }
+
+export type CommandRunAnswer = { readonly args?: string; readonly note?: string } | { readonly result: string; readonly exitCode?: number } | Refusal
+
 export type ProcessPayload = {
   readonly ProjectSetup: ProjectSetup
   readonly SessionStart: SessionStarted
@@ -312,7 +321,7 @@ export type ProcessAnswer = {
   readonly ReplyDisplay: { readonly text: string }
 }
 
-type ProcessName = keyof typeof processEvents
+export type ProcessName = keyof typeof processEvents
 
 export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: OnMethod<ProcessPayload[Name]> }
 
@@ -326,8 +335,10 @@ export type SessionScope = {
   readonly everyProject?: boolean
 }
 
+export type SearchOptions = SessionScope & { readonly before?: Pick<Message, 'session' | 'id'> }
+
 export type Sessions = OnMethods & {
   readonly current: CurrentSession
   list(options?: SessionScope): Promise<Session[]>
-  search(text: string, options?: SessionScope & SearchOptions): Promise<Message[]>
+  search(text: string, matcher?: Matcher<Message>, options?: SearchOptions): AsyncIterable<Message>
 }

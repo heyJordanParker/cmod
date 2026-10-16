@@ -31,21 +31,24 @@ Every part of the record answers the same three calls: `search` finds its messag
 
 ```ts
 type Sessions = {
-  readonly current: Session
+  readonly current: CurrentSession
   list(options?: { running?: boolean; since?: string; everyProject?: boolean }): Promise<Session[]>
-  search(text: string, options?: { running?: boolean; since?: string; everyProject?: boolean; limit?: number; before?: Message }): Promise<Message[]>
-  onMessage(matcher?, listener): Disposable   // and every on method below
+  search(text: string, matcher?: Matcher<Message>, options?: { running?: boolean; since?: string; everyProject?: boolean; before?: Message }): AsyncIterable<Message>
+  onMessage(matcher?, listener, options?): Disposable   // and every on method below
 }
 ```
 
 - `current` is the session the mod runs in. It is there from `setup` on, and follows `/clear`, `/resume`, a fork, `/cd`, and a `cd` in a Bash or PowerShell call.
 - `list` lists the project's sessions, the most recent first. `everyProject` lists every project's, `running` keeps the sessions still open in a Claude Code window, and `since` keeps those active since a time, written as `30m`, `6h`, `2d`, `1w`, or a date such as `2026-10-01`.
-- `search` answers the newest 50 messages whose text contains `text`, any case, in the project's sessions or, with `everyProject`, every project's. `text` is at least 3 characters. `limit` changes the 50, and `before` takes the last message of a page to answer the page after it. A tool call is searched by its name and the first 1,024 characters of each input value, a document by its path and text, and a tool result is not searched.
+- `search` yields the messages whose text contains `text`, any case, newest first, in the project's sessions or, with `everyProject`, every project's. `text` is at least 3 characters. It reads the index a page at a time as the loop asks for more, and `break` stops it. A matcher keeps the messages it matches, and `before` starts after a message, so a "load more" picks up where a loop broke. A tool call is searched by its name and the first 1,024 characters of each input value, an instruction file by its path and text, and a tool result is not searched.
 
 ```ts
-const earlier = await sessions.search('deploy job', { since: '1w' })
-const last = earlier.at(-1)
-const older = last === undefined ? [] : await sessions.search('deploy job', { since: '1w', before: last })
+const found: Message[] = []
+for await (const message of sessions.search('deploy job', { type: Prompt }, { since: '1w' })) {
+  found.push(message)
+  if (found.length === 20) break
+}
+const more = sessions.search('deploy job', { type: Prompt }, { since: '1w', before: found.at(-1) })
 ```
 
 - Its `on` methods hear every running session of the project, this one included ([Listen](#listen-to-a-record)). `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
@@ -66,20 +69,20 @@ type Session = {
   readonly startedAt: string
   readonly lastAt: string
   readonly forkedFrom?: string
-  goal(): Promise<Goal>
+  readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>
   turn(): Promise<Turn | undefined>
   turns(options?: { last?: number }): Promise<Turn[]>
   messages(options?: { after?: string; last?: number }): Promise<Message[]>
-  search(text: string, options?: { limit?: number; before?: Message }): Promise<Message[]>
-  onMessage(matcher?, listener): Disposable         // and every on method below
-  beforePrompt(matcher?, listener): Disposable      // and every before method below
+  search(text: string, matcher?: Matcher<Message>): AsyncIterable<Message>
+  onMessage(matcher?, listener, options?): Disposable      // and every on method below
+  beforePrompt(matcher?, listener, options?): Disposable   // and every before method below
   send(message: { type: Prompt | Note; text: string; as?: Person | Session }): Promise<void>
-  startTask(task: { prompt: string; agentType?: string; model?: string; name?: string; cwd?: string }): Promise<Task>
+  startTask(task: { prompt: string; title: string; agentType?: string; model?: string; name?: string; cwd?: string }): Promise<Task>
   callTool(call: { name: string; input: Record<string, unknown> }): Promise<ToolResult>
   usage(): Promise<Usage>
-  clients(): Promise<Client[]>
+  surfaces(): Promise<Surface[]>
 }
 ```
 
@@ -92,16 +95,16 @@ type Session = {
 
 ### Read a record
 
-- `goal` answers its goal. The goal's `tasks()` answers the tasks the session handed on, and each task's `owner` reads like any session.
+- `goal` is its goal. `sessions.current.goal` follows the session the mod runs in, as `sessions.current` does, so a listener added on it in `setup` keeps hearing across `/clear`, `/resume`, and a fork. The goal's `text()` reads its text now, and its `tasks()` answers the tasks the session handed on. Each task's `owner` reads like any session.
 - `context` answers the context it is in now, and `contexts` all of them in order. A context's `turns()` answers its own.
 - `turn` answers the turn running now, and nothing between turns. `turns` answers its turns in order, `last` keeping that many from the end. A turn's `messages()` answers its own.
 - `messages` answers its messages in order, those of its tasks left out. `last` keeps that many from the end, and `after` starts after a message's `id`.
-- `search` finds its messages whose text contains `text`, newest first, the way `sessions.search` does. A goal's, a task's, a context's, and a turn's `search` find only their own.
+- `search` yields its messages whose text contains `text`, newest first, the way `sessions.search` does. A goal's, a task's, a context's, and a turn's `search` find only their own.
 
 ```ts
 const [last] = await sessions.current.turns({ last: 1 })
 const calls = (await last?.messages() ?? []).filter((message) => message.type === ToolCall)
-const explorers = (await (await sessions.current.goal()).tasks()).filter((task) => task.owner.agentType === 'Explore')
+const explorers = (await sessions.current.goal.tasks()).filter((task) => task.owner.agentType === 'Explore')
 ```
 
 A session that has ended keeps its record, so every read works on it.
@@ -109,8 +112,8 @@ A session that has ended keeps its record, so every read works on it.
 ### Listen to a record
 
 ```ts
-part.on<Event>(listener: (payload) => unknown): Disposable
-part.on<Event>(matcher: Matcher<payload>, listener: (payload) => unknown): Disposable
+part.on<Event>(listener: (payload, time: { deadline: number; signal: AbortSignal }) => unknown, options?: { timeoutMs?: number }): Disposable
+part.on<Event>(matcher: Matcher<payload>, listener, options?): Disposable
 ```
 
 Each event has its own method, such as `onReply` or `onTaskStart`, which runs `listener` for each new message, turn, context, task, goal change, or usage change, as it happens. `sessions`, a session, its goal, a task, a context, and a turn each have every `on` method, and each hears what happens inside it: an event reaches the part it happens in and every part above it.
@@ -123,7 +126,7 @@ Turn ──> Context ──> Session ──> that session's Task ──> each Ta
 
 The goal belongs to the main agent, so the main agent's events reach it too. So:
 - `sessions.current.onToolCall(…)` hears the main agent's tool calls only.
-- `(await sessions.current.goal()).onToolCall(…)` hears every agent's in the session.
+- `sessions.current.goal.onToolCall(…)` hears every agent's in the session.
 - `task.onMessage(…)` hears every message of the task's owner and of the tasks it handed on, and `task.owner.onMessage(…)` hears the owner's alone.
 - `turn.onReply(…)` hears the replies of that turn only, and `sessions.onPrompt(…)` hears every prompt of every running session in the project.
 
@@ -150,20 +153,32 @@ sessions.current.onToolCall({ name: /^(Edit|Write)$/ }, (call) => void (mod.stat
 sessions.current.onTaskStart({ owner: { agentType: 'Explore' } }, (task) => mod.log(`Exploring: ${task.title}`))
 ```
 
-A listener that throws shows the error toast `The <event> listener failed`. `dispose()` on the `Disposable` stops the listener.
+A listener that throws shows the error toast `The <method> listener failed`, such as `The onReply listener failed`. `dispose()` on the `Disposable` stops the listener.
+
+### Give a listener time
+
+A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, so a slow call such as `http.fetch` can stop with it:
+
+```ts
+sessions.current.onTurnEnd(async (turn, { signal }) => {
+  await http.fetch('https://hooks.example.com/turn', { method: 'POST', body: turn.answer ?? '', signal })
+}, { timeoutMs: 30_000 })
+```
+
+An `on` listener that passes its time stops quietly. A `before` listener that passes its time shows the error toast, and what was about to happen goes on as it was. With `onFailure: 'refuse'`, a `before` listener that throws or passes its time refuses instead, with the error as the reason, for a gate that must hold even when it breaks.
 
 ### Change what happens
 
 ```ts
-part.before<Event>(listener: (payload) => Answer | void): Disposable
-part.before<Event>(matcher: Matcher<payload>, listener: (payload) => Answer | void): Disposable
+part.before<Event>(listener: (payload, time) => Answer | void, options?: { timeoutMs?: number; onFailure?: 'pass' | 'refuse' }): Disposable
+part.before<Event>(matcher: Matcher<payload>, listener, options?): Disposable
 ```
 
 Each `before` method, such as `beforeToolCall`, runs `listener` just before something happens, and its answer changes or refuses it. Returning nothing lets it happen as it was. Each part except `sessions` has every `before` method, and hears what is about to happen inside it, the way `on` methods do.
 
 | Method | The listener can answer | Covers |
 | --- | --- | --- |
-| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session. A task's first prompt reaches `beforePrompt` as the subagent starts, where `note` is the only answer and the subagent reads it before its first step. |
+| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a command Claude Code sends as a prompt, such as a project's `/review`, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session. A task's first prompt reaches `beforePrompt` as the subagent starts, where `note` is the only answer and the subagent reads it before its first step. A built-in command such as `/model` is never a prompt: `commands.beforeRun` hears every command ([mod.md](mod.md#commands-slash-commands)). |
 | `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
 | `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
 | `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
@@ -171,8 +186,7 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 | `beforeToolResult` | `{ output?, isError?, note? }` | The result Claude reads, after the tool ran. `output` replaces it, `note` adds text beside it, and `isError: true` makes Claude read it as a failure, with the note as the reason. A failed call takes only a note |
 | `beforeToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
 | `beforeTaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
-| `beforeTaskEnd` | `{ refuse }` | A task about to end. `refuse` sends its owner on with the reason |
-| `beforeTurnEnd` | `{ refuse }` | The agent about to stop. `refuse` sends it on with the reason |
+| `beforeTurnEnd` | `{ refuse }` | The agent about to stop. `refuse` sends it on with the reason. On `task.owner`, it is the task about to hand back its answer |
 | `beforeContextEnd` | `{ refuse }` | A compaction about to start. `refuse` keeps the context |
 
 ```ts
@@ -181,7 +195,7 @@ sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ o
 sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { refuse: 'The tests fail. Fix them before you stop.' }))
 ```
 
-An answer that changes text needs the `prompt` permission, a `ToolCall` answer needs `tools`, and a `TaskStart` or `TaskEnd` answer needs `tasks`. Without it the answer changes nothing, and the toast `The before(<event>) listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
+An answer that changes text needs the `prompt` permission, a `beforeToolCall` answer needs `tools`, and a `beforeTaskStart` answer needs `tasks`. Without it the answer changes nothing, and the toast `The <method> listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
 ### The session's own events
 
@@ -225,12 +239,12 @@ Every action works on the current session and on every other running session. cm
   - A `Prompt` is the next prompt, so the agent answers it as a turn of its own. Claude Code holds it until the session is idle, so it never cuts into a turn, and frames it as `The <mod> plugin sent a message:`. With `as: Person`, the agent reads it bare, as the person's own words, while every hook still sees that the mod sent it. It rejects with `<mod>: Claude Code dropped the prompt: <reason>` when a plugin drops it.
   - `as: Session` sends it to another session as a message from this one, which Claude Code shows as one session writing to another.
   - To a task's owner, `send` delivers the text to that running subagent.
-- `startTask` starts a task in the session, the way the Agent tool starts one, and resolves the `Task` once it started. It does not wait for the task to finish. `agentType` names the owner's agent type, such as `Explore`, `name` titles the task, and `model` and `cwd` change what it runs on and where. It needs the `tasks` permission, and rejects with `<mod>: Claude Code refused the task: <reason>` when a hook refuses it.
+- `startTask` starts a task in the session, the way the Agent tool starts one, and resolves the `Task` once it started. It does not wait for the task to finish. `title` is the task's title, `agentType` names the owner's agent type, such as `Explore`, `name` is the address a teammate's `SendMessage` reaches it by, and `model` and `cwd` change what it runs on and where. It needs the `tasks` permission, and rejects with `<mod>: Claude Code refused the task: <reason>` when a hook refuses it.
 - `callTool` runs a tool in the session, such as `{ name: 'Bash', input: { command: 'bun test' } }`, and resolves its `ToolResult`. It needs the `tools` permission.
-- `usage` answers the session's model, its context window's fill, and its cost so far, as the status line shows them: `{ model, context: { tokens?, window?, percent? }, cost?: { usd } }`. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript.
-- `clients` answers the Claude apps showing the session now: `'terminal'`, `'desktop'`, `'mobile'`, and `'vscode'`. An ended session shows in none.
+- `usage` answers the session's model, its context window's fill, and its cost so far, as the status line shows them: `{ model, contextWindow: { tokenCount?, size?, percent? }, cost?: { usd } }`. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript.
+- `surfaces` answers the Claude apps showing the session now: `'terminal'`, `'desktop'`, `'mobile'`, and `'vscode'`. An ended session shows in none.
 
-A task's owner is a `TaskOwner`, a session without `startTask` and `callTool`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `clients`. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
+A task's owner is a `TaskOwner`, a session without `startTask` and `callTool`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `surfaces`. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
 
 A prompt that comes on a clock, such as every 10 minutes, belongs in a `schedule` job instead, which Claude Code shows as one `Running scheduled task` row ([jobs.md](jobs.md#schedule)).
 
@@ -246,12 +260,18 @@ mod.every(60_000, async () => {
 The task's answer arrives once it finishes, on an `onTaskEnd` listener:
 
 ```ts
-mod.on(UserPromptSubmit, { prompt: /^\/summarize/ }, async () => {
-  const task = await sessions.current.startTask({ prompt: 'Summarize README.md in one line.', agentType: 'Explore', name: 'Summarize the README' })
-  const ended = await new Promise<Task>((resolve) => task.onTaskEnd(resolve))
-  const [answer] = await ended.owner.messages({ last: 1 })
-  return { hookSpecificOutput: { hookEventName: UserPromptSubmit, additionalContext: answer?.type === Reply ? answer.text : '' } }
-})
+mod.use(slashCommand({
+  name: 'summarize',
+  description: 'Summarize the README in one line',
+  async reply() {
+    const task = await sessions.current.startTask({ prompt: 'Summarize README.md in one line.', title: 'Summarize the README', agentType: 'Explore' })
+    task.onTaskEnd(async (ended) => {
+      const [answer] = await ended.owner.messages({ last: 1 })
+      if (answer?.type === Reply) mod.ui.toast(answer.text)
+    })
+    return 'Summarizing the README.'
+  },
+}))
 ```
 
 ## Message
@@ -277,16 +297,29 @@ type MessageOf<Type> = {
 
 | Type | Constant | Its own fields |
 | --- | --- | --- |
-| `'prompt'` | `Prompt` | `text`, `from`: the prompt that opens a turn. A slash command reads as the command typed, such as `/review 12`. |
+| `'prompt'` | `Prompt` | `text`, `from`: the prompt that opens a turn. A command Claude Code sends as a prompt reads as typed, such as `/review 12`. |
 | `'note'` | `Note` | `text`, `from`: text Claude reads that is not a prompt, such as a mod's note or a task's notification. |
 | `'reply'` | `Reply` | `text`: what Claude said. |
 | `'toolCall'` | `ToolCall` | `callId`, `name`, `input`, `cwd`, `files`: a tool Claude called, the folder it called it in, and the files it reads and changes. |
 | `'toolResult'` | `ToolResult` | `callId`, `name`, `input`, `cwd`, `files`, `output`, `isError`: the call's tool, input, folder, and files, and what the tool answered. `output` is the text Claude read, or the tool's own result for `callTool`. |
-
-`files` is `{ read, changed }`, each a list of absolute paths. cmod reads them from the call's input, a Bash command line included, and `read` lists only paths that are files.
 | `'skill'` | `Skill` | `name`, `text`: a Skill Claude Code loaded. |
-| `'document'` | `Document` | `path`, `text`: a `CLAUDE.md` file Claude Code read for a folder. |
+| `'instructionFile'` | `InstructionFile` | `path`, `text`, `isRule`: a `CLAUDE.md` file or a rule file Claude Code read. `isRule` is true for a file in a `.claude/rules/` folder. |
 | `'notice'` | `Notice` | `text`: a line Claude Code added, such as a model switch. |
+
+### files: what a tool call reads and changes
+
+A `ToolCall`'s and a `ToolResult`'s `files` is `{ read: string[]; changed: string[] }`, absolute paths that cmod works out from the call:
+
+- `Read` reads its `file_path`. `Edit`, `Write`, and `NotebookEdit` change their path.
+- `Grep` counts its `path`, or the working folder when it names none, and `Glob` counts its `pattern` joined to its `path`. Since `read` lists only files, a `Grep` of a folder and every `Glob` usually leave `read` empty.
+- A `Bash` command reads and changes the files its commands name, such as `cat a.ts > b.ts`. A path that holds a shell expansion, such as `$HOME`, is left out.
+- `read` lists only paths that are files now. `changed` lists every path the call writes, whether it exists or not.
+- A path cmod cannot check, such as one it has no permission to read, is left out of `read`, and cmod writes the path and the reason to Claude Code's debug log.
+- When cmod cannot work the files out, both lists are empty, and the reason goes to Claude Code's debug log.
+
+```ts
+sessions.current.onToolResult(({ files }) => void (mod.state.session.edited += files.changed.length))
+```
 
 `Message` is any of these, and `message.type` tells them apart:
 
@@ -313,6 +346,7 @@ type Sender = { readonly type: SenderType; readonly name?: string; readonly as?:
 | `Schedule` (`'schedule'`) | A scheduled prompt. |
 | `Channel` (`'channel'`) | A channel, such as Slack, named by `name`. |
 | `Sdk` (`'sdk'`) | A program driving Claude Code through the SDK. |
+| `Engine` (`'engine'`) | Claude Code itself, such as the prompt that keeps a turn going after it hit its output limit. |
 
 ## Turn, Context, Goal, and Task
 
@@ -332,7 +366,7 @@ type Turn = {
 
 type Context = { readonly number: number; readonly openedAt: string; readonly closedAt?: string; turns(): Promise<Turn[]>; search; on…; before… }
 
-type Goal = { readonly text: string; tasks(): Promise<Task[]>; search; on…; before…; update(change: { text: string }): Promise<void> }
+type Goal = { text(): Promise<string>; tasks(): Promise<Task[]>; search; on…; before…; update(change: { text: string }): Promise<void> }
 
 type Task = {
   readonly id: string
@@ -357,7 +391,7 @@ sessions.current.onTurnEnd((turn) => {
 ```
 - `abort()` stops a turn while it runs, a task's turn included, and needs the `prompt` permission. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.
 - A context's `number` counts from 1. Its `closedAt` is set at the compaction that ended it.
-- A goal's `text` starts as the session's first prompt. `update` replaces it, and `onGoalChange` hears the new text.
+- A goal's text starts as the session's first prompt, and `text()` reads it. `update` replaces it, and `onGoalChange` hears the goal, whose `text()` reads the new text.
 - A task's `owner` is a `TaskOwner`: the session doing the work, which can't start tasks or call tools. Its goal is the task's prompt, its `agentType` and `model` are what the task runs, and its turns and messages are the task's own. Claude Code's checklist tools, `TaskCreate`, `TaskUpdate`, and `TaskList`, are not tasks: they are its todo list, which `onTodoCreate` and `onTodoComplete` hear.
 - A task's `openedBy` is the `callId` of the Agent call that started it, and empty for a task a mod started. Its `closedAt` is set once it answered.
 

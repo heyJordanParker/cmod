@@ -6,7 +6,7 @@ import { engineOf } from '../runtime/engine.js'
 import { messageOf } from '../utils/text.js'
 import { withinDeadline } from './context.js'
 
-export type CommandReply = string | { text?: string; context?: string } | undefined
+export type CommandReply = string | { text?: string; note?: string } | undefined
 
 const deadline: Deadline = { ms: 30000, job: 'slashCommand' }
 
@@ -57,7 +57,7 @@ export function slashCommand<State extends object = Record<never, never>>(option
 function answerOf(reply: CommandReply | void): CommandRunResult {
   if (reply === undefined) return {}
   if (typeof reply === 'string') return { text: reply }
-  return { ...(reply.text === undefined ? {} : { text: reply.text }), ...(reply.context === undefined ? {} : { context: [reply.context] }) }
+  return { ...(reply.text === undefined ? {} : { text: reply.text }), ...(reply.note === undefined ? {} : { context: [reply.note] }) }
 }
 
 function splitWords(args: string): string[] {

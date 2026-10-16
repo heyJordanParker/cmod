@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { Message, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
-import { Document } from '@cmodjs/core/src/session/context/turn/message/document.js'
+import { InstructionFile } from '@cmodjs/core/src/session/context/turn/message/instruction-file.js'
 import { Note } from '@cmodjs/core/src/session/context/turn/message/note.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person, type Sender } from '@cmodjs/core/src/session/context/turn/message/sender.js'
@@ -156,7 +156,7 @@ export async function run(argv: string[]): Promise<number> {
     }
     if (command === 'usage') {
       const usage = readUsage({ session: sessionOf(), project, ...task })
-      print(usage, () => `${usage.model}  ${usage.context.tokens ?? 0} tokens\n`)
+      print(usage, () => `${usage.model}  ${usage.contextWindow.tokenCount ?? 0} tokens\n`)
       return 0
     }
     if (command === 'state') {
@@ -223,7 +223,7 @@ function labelOf(message: SessionMessage): string {
 
 function lineText(message: SessionMessage): string {
   if (message.type === ToolCall) return `${message.name}  ${JSON.stringify(message.input)}`
-  if (message.type === Document) return message.path
+  if (message.type === InstructionFile) return message.path
   if (message.type === ToolResult) return typeof message.output === 'string' ? message.output : JSON.stringify(message.output)
   return message.text
 }

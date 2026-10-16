@@ -18,26 +18,29 @@ import type {
   UiSelectArgument,
 } from 'claude-code'
 import type { CommandReply } from './jobs/slash-command.js'
-import type { Hook, ModDefinition } from './mod.js'
+import type { ModDefinition } from './mod.js'
 import type { Options, OptionValues } from './options.js'
 import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
 import { foldAnswers, installBefore } from './runtime/before.js'
 import type { RoutedEvent } from './runtime/hooks.js'
+import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
 import { createRouter } from './runtime/router.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
 import { conversationMethods } from './runtime/sessions.js'
 import type { ShownToast } from './runtime/toaster.js'
-import type { Message } from './session/context/turn/message/message.js'
+import { Message } from './session/context/turn/message/message.js'
 import { Note } from './session/context/turn/message/note.js'
 import { Prompt } from './session/context/turn/message/prompt.js'
 import { Mod, Person } from './session/context/turn/message/sender.js'
 import type { SessionChange } from './session/conversation.js'
-import type { Turn } from './session/context/turn/turn.js'
-import type { BeforeEvent } from './session/session.js'
+import { TurnEnd, type Turn } from './session/context/turn/turn.js'
+import { beforeEvents, processEvents, sessionEvents, type AnswerOf, type BeforeEvent, type BeforeName, type CommandRun, type CommandRunAnswer, type Placement, type ProcessAnswer, type ProcessAsked, type ProcessName, type ProcessPayload } from './session/session.js'
+import { ContextEnd } from './session/context/context.js'
+import { TaskStart } from './session/goal/task.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
@@ -65,14 +68,33 @@ export type TestOptions<State extends object, Declared extends Options = Options
   readonly sessions?: readonly FakeSession[]
 }
 
-type FilledField = 'session_id' | 'transcript_path' | 'cwd' | 'hook_event_name' | 'tool_use_id'
+type Placed<Payload> = Omit<Payload, keyof Placement> & Partial<Placement>
 
-export type TestInput<H extends Hook> = Omit<ClassicHookInputs[H], FilledField> & Partial<Pick<ClassicHookInputs[H], FilledField & keyof ClassicHookInputs[H]>>
+type MessageBefore = Exclude<BeforeName, 'TaskStart' | 'TurnEnd' | 'ContextEnd'>
+
+type DraftOf<Name extends MessageBefore> = Omit<Extract<MessageDraft, { readonly type: (typeof sessionEvents)[Name] }>, 'type'>
+
+export type Raise = {
+  readonly [Name in MessageBefore as `before${Name}`]: (message: DraftOf<Name>, options?: { readonly task?: string }) => Promise<AnswerOf<Name> | undefined>
+} & {
+  beforeTaskStart(task: { readonly title: string; readonly agentType?: string; readonly model?: string }): Promise<AnswerOf<'TaskStart'> | undefined>
+  beforeTurnEnd(ending?: Pick<Turn, 'answer' | 'failure'>): Promise<AnswerOf<'TurnEnd'> | undefined>
+  beforeContextEnd(): Promise<AnswerOf<'ContextEnd'> | undefined>
+} & {
+  readonly [Name in ProcessName as `on${Name}`]: (payload: Placed<ProcessPayload[Name]>) => Promise<void>
+} & {
+  readonly [Name in keyof ProcessAnswer as `before${Name}`]: (payload: Placed<ProcessAsked[Name]>) => Promise<ProcessAnswer[Name] | undefined>
+} & {
+  onRun(run: Placed<CommandRun>): Promise<void>
+  beforeRun(run: Placed<CommandRun>): Promise<CommandRunAnswer | undefined>
+}
+
+type FiredEvent = 'ui.render' | 'ui.scroll' | 'ui.close' | 'cmod.call' | 'tool.check' | 'prompt.context'
 
 export type TestedMod<State extends object> = {
   start(): Promise<void>
-  fire<H extends Hook>(hook: H, input: TestInput<H>, below?: EventResult<`classic.${H}`>): Promise<EventResult<`classic.${H}`>>
-  fire<N extends RoutedEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
+  readonly raise: Raise
+  fire<N extends FiredEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
   settle(): Promise<void>
   add(message: MessageDraft, options?: { readonly task?: string }): Promise<Message[]>
   endTurn(ending?: Pick<Turn, 'answer' | 'failure'>): Promise<void>
@@ -98,7 +120,7 @@ const defaultRows = 24
 
 const presentation: CommandPresentation = { isFullscreen: false, columns: defaultColumns }
 
-const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'] satisfies readonly Hook[]
+const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied']
 
 export function testMod<State extends object, Declared extends Options = Options>(definition: ModDefinition<State, string, Declared>, options: TestOptions<State, Declared> = {}): TestedMod<State> {
   installJsx()
@@ -118,6 +140,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const conversations = fakeSessions({
     callTool: (args: Parameters<Claude["tool"]["call"]>[0]) => fake.claude.tool.call(args),
     project: () => projectRoot,
+    cwd: () => cwd,
     given: options.sessions ?? [],
     push: (mod, session, change) => {
       if (mod !== name) return
@@ -240,9 +263,44 @@ export function testMod<State extends object, Declared extends Options = Options
     const transcript = `/test/transcripts/${sessionId}.jsonl`
     const filled = { session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event, ...toolUse, ...input }
     if (event === 'SessionStart' && !('transcript_path' in input)) return files.write(transcript, '').then(() => route('classic.SessionStart', filled, below))
-    if (event !== 'PreToolUse') return route(`classic.${event as Exclude<Hook, 'PreToolUse'>}`, filled, below)
+    if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
-  }) as TestedMod<State>['fire']
+  }) as ClaudeCode['fire']
+
+  const asked = async (event: BeforeEvent, change: SessionChange) => {
+    await start()
+    return (await askMod(event, change)) ?? undefined
+  }
+
+  const raise = Object.fromEntries([
+    ...beforeEvents
+      .filter((named) => named !== 'TaskStart' && named !== 'TurnEnd' && named !== 'ContextEnd')
+      .map((named) => [`before${named}`, async (draft: object, placed?: { readonly task?: string }) => {
+        await start()
+        return asked(sessionEvents[named], { type: Message, message: conversations.draft({ ...draft, type: sessionEvents[named] } as MessageDraft, placed?.task) })
+      }]),
+    ['beforeTaskStart', async ({ title, agentType = 'general-purpose', model }: { readonly title: string; readonly agentType?: string; readonly model?: string }) => {
+      await start()
+      return asked(TaskStart, { type: TaskStart, task: { id: '', title, agentType, openedBy: '', openedAt: new Date().toISOString(), context: conversations.place().context, ...(model === undefined ? {} : { model }) } })
+    }],
+    ['beforeTurnEnd', async (ending: Pick<Turn, 'answer' | 'failure'> = {}) => {
+      await start()
+      const { turn } = conversations.place()
+      if (turn === undefined) throw new Error(`${name} has no turn open to end. Open one with tested.add({ type: Prompt, text: '…' }).`)
+      return asked(TurnEnd, { type: TurnEnd, turn: { ...turn, ...ending, closedAt: new Date().toISOString() } })
+    }],
+    ['beforeContextEnd', async () => {
+      await start()
+      const { context, contextOpenedAt } = conversations.place()
+      return asked(ContextEnd, { type: ContextEnd, context: { number: context, openedAt: contextOpenedAt, closedAt: new Date().toISOString() } })
+    }],
+    ...[...Object.entries(processEvents).flatMap(([named, event]) => [`on${named}`, ...('before' in event ? [`before${named}`] : [])]), 'onRun', 'beforeRun'].map((method) => [method, async (payload: object) => {
+      await start()
+      const answer = await lifecycle.raise(method, { session: sessionId, cwd, ...payload })
+      await fake.settle()
+      return answer
+    }]),
+  ]) as Raise
 
   const firePreToolUse = async ({ tool_name, tool_input, tool_use_id, agent_id, agent_type }: ClassicHookInputs['PreToolUse'], below: { deny?: string } | undefined) => {
     await start()
@@ -270,8 +328,9 @@ export function testMod<State extends object, Declared extends Options = Options
     return value
   }
 
-  return {
+  const tested: TestedMod<State> = {
     start,
+    raise,
     fire,
     settle: fake.settle,
     add: async (message, added) => {
@@ -354,7 +413,7 @@ export function testMod<State extends object, Declared extends Options = Options
     },
     get state() {
       const mod = lifecycle.mod
-      if (mod === undefined) throw new Error(`${name} has not started. Await tested.start() or tested.fire(…) first.`)
+      if (mod === undefined) throw new Error(`${name} has not started. Await tested.start() first.`)
       return mod.state
     },
     calls: fake.calls,
@@ -367,6 +426,8 @@ export function testMod<State extends object, Declared extends Options = Options
       sent: conversations.sent,
     },
   }
+  keepClaudeCode(tested, { fire })
+  return tested
 }
 
 function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions): Claude['cmod']['call'] {
@@ -396,7 +457,7 @@ function plainOutput({ component, props }: Args<'ui.render'>): RenderElement {
 }
 
 function replyOf({ text, context }: CommandRunResult): CommandReply {
-  return { ...(text === undefined ? {} : { text }), ...(context === undefined ? {} : { context: context.join('\n') }) }
+  return { ...(text === undefined ? {} : { text }), ...(context === undefined ? {} : { note: context.join('\n') }) }
 }
 
 async function modSteps(): Promise<Steps> {

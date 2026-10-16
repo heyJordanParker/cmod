@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
 import { ContextEnd, ContextStart } from '../../src/session/context/context.js'
-import { Document } from '../../src/session/context/turn/message/document.js'
+import { InstructionFile } from '../../src/session/context/turn/message/instruction-file.js'
 import { Message, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
 import { Note } from '../../src/session/context/turn/message/note.js'
 import { Notice } from '../../src/session/context/turn/message/notice.js'
 import { Prompt } from '../../src/session/context/turn/message/prompt.js'
 import { Reply } from '../../src/session/context/turn/message/reply.js'
-import { Channel, Person, Schedule } from '../../src/session/context/turn/message/sender.js'
+import { Channel, Engine, Person, Schedule } from '../../src/session/context/turn/message/sender.js'
 import { Skill } from '../../src/session/context/turn/message/skill.js'
 import { ToolCall } from '../../src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '../../src/session/context/turn/message/tool-result.js'
@@ -96,16 +96,17 @@ test('each origin names its sender', () => {
   expect(senderOf(typed('on a schedule', { kind: 'scheduled-trigger' }))).toEqual([{ type: Schedule }])
   expect(senderOf(typed('from Slack', { kind: 'channel', server: 'slack' }))).toEqual([{ type: Channel, name: 'slack' }])
   expect(senderOf(typed('from another session', { kind: 'peer' }))).toEqual([{ type: 'session' }])
+  expect(senderOf(typed('keep going', { kind: 'auto-continuation' }))).toEqual([{ type: Engine }])
 })
 
-test('a meta row is a Note, a skill row a Skill, a nested CLAUDE.md a Document, and a system line a Notice', () => {
+test('a meta row is a Note, a skill row a Skill, a nested CLAUDE.md an InstructionFile, and a system line a Notice', () => {
   const conversation = createConversation(emptyConversation('s1'))
   conversation.add(typed('Start'))
   const messageOf = (row: Row) => conversation.add(row).flatMap((change) => (change.type === Message ? [change.message] : []))[0]
 
   expect(messageOf(line({ type: 'user', isMeta: true, origin: { kind: 'plugin', name: 'ci-watch' }, message: { role: 'user', content: 'CI failed on main.' } }))).toMatchObject({ type: Note, text: 'CI failed on main.', from: { type: 'mod', name: 'ci-watch' } })
   expect(messageOf(line({ type: 'user', isMeta: true, message: { role: 'user', content: 'Base directory for this skill: /skills/review\n\nReview the diff.' } }))).toMatchObject({ type: Skill, name: 'review' })
-  expect(messageOf(line({ type: 'attachment', attachment: { type: 'nested_memory', path: '/work/src/CLAUDE.md', content: 'Use tabs.' } }))).toMatchObject({ type: Document, path: '/work/src/CLAUDE.md', text: 'Use tabs.' })
+  expect(messageOf(line({ type: 'attachment', attachment: { type: 'nested_memory', path: '/work/src/CLAUDE.md', content: 'Use tabs.' } }))).toMatchObject({ type: InstructionFile, path: '/work/src/CLAUDE.md', text: 'Use tabs.', isRule: false })
   expect(messageOf(line({ type: 'system', subtype: 'informational', content: 'Model switched to haiku.' }))).toMatchObject({ type: Notice, text: 'Model switched to haiku.' })
 })
 

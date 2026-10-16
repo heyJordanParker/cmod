@@ -4,6 +4,7 @@ import { check } from '../../src/jobs/check.js'
 import { defineMod, type Job } from '../../src/mod.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 const root = '/test/plugins/typed'
 const answered = { result: { filePath: `${root}/a.ts` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
@@ -31,7 +32,7 @@ const typeCheck = check({ after: { write: '**/*.ts' }, run: ['tsc', '--noEmit'] 
 test('check runs its command after a matching call and reports a failure', async () => {
   const tested = typed(typeCheck)
 
-  const answer = await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
+  const answer = await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
   expect(answer).toEqual({ ...answered, context: [`tsc --noEmit ${root}/a.ts exited with 2:\n${typeError}`] })
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/a.ts`], { timeoutMs: 60000 }]])
@@ -42,9 +43,9 @@ test('a check adds nothing when its command exits 0, and does not run for an unm
   const tested = typed(typeCheck)
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: 'ok', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  expect(await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)).toEqual(answered)
-  expect(await tested.fire('tool.call', editOf(`${root}/README.md`, 'toolu_2'), answered)).toEqual(answered)
-  expect(await tested.fire('tool.call', editOf(`${root}/b.ts`, 'toolu_3'), { deny: 'No.' })).toEqual({ deny: 'No.' })
+  expect(await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)).toEqual(answered)
+  expect(await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/README.md`, 'toolu_2'), answered)).toEqual(answered)
+  expect(await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/b.ts`, 'toolu_3'), { deny: 'No.' })).toEqual({ deny: 'No.' })
   expect(tested.calls.filter((call) => call.call === 'process.run')).toHaveLength(1)
 })
 
@@ -52,8 +53,8 @@ test('a check after several targets runs its command once, with the matched file
   const tested = typed(check({ after: [{ write: '**/*.ts' }, { command: 'git commit' }], run: ['bun', 'test'] }))
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await tested.fire('tool.call', { tool: 'Bash', command: 'echo x > a.ts && git commit -am x', tool_use_id: 'toolu_1' } as never, answered)
-  await tested.fire('tool.call', { tool: 'Bash', command: 'git commit -m x', tool_use_id: 'toolu_2' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'echo x > a.ts && git commit -am x', tool_use_id: 'toolu_1' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'git commit -m x', tool_use_id: 'toolu_2' } as never, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([
     [['bun', 'test', `${root}/a.ts`], { timeoutMs: 60000 }],
@@ -70,7 +71,7 @@ test('a check that passes its deadline tells Claude the check and the deadline',
     return { cancel: () => undefined }
   }
 
-  const answer = await tested.fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
+  const answer = await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
   expect(answer.context).toEqual([`The check after edits to **/*.ts failed: tsc --noEmit ${root}/a.ts passed the 60 s deadline of check`])
 })
@@ -87,7 +88,7 @@ test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () =>
   tested.fakes.fs.exists = async (path) => path === `${root}/app/cart.ts`
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await tested.fire('tool.call', { tool: 'Bash', command: 'cd app && echo x > cart.ts', tool_use_id: 'toolu_1' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'cd app && echo x > cart.ts', tool_use_id: 'toolu_1' } as never, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/app/cart.ts`], { timeoutMs: 60000 }]])
 })
@@ -105,7 +106,7 @@ test('a check after edits to src/** still runs after cd src', async () => {
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await tested.fire('tool.call', editOf(`${root}/src/a.ts`, 'toolu_1'), answered)
+  await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/src/a.ts`, 'toolu_1'), answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/src/a.ts`], { timeoutMs: 60000 }]])
 })
@@ -113,7 +114,7 @@ test('a check after edits to src/** still runs after cd src', async () => {
 test('a shell write that names several matching files runs one command with each file once', async () => {
   const tested = typed(typeCheck)
 
-  await tested.fire('tool.call', { tool: 'Bash', command: 'sed -i s/a/b/ a.ts b.ts README.md a.ts', tool_use_id: 'toolu_1' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'sed -i s/a/b/ a.ts b.ts README.md a.ts', tool_use_id: 'toolu_1' } as never, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/a.ts`, `${root}/b.ts`], { timeoutMs: 60000 }]])
 })
@@ -122,7 +123,7 @@ test('a write check does not run when no matched file still exists', async () =>
   const tested = typed(typeCheck)
   tested.fakes.fs.exists = async () => false
 
-  await tested.fire('tool.call', { tool: 'Bash', command: 'rm gone.ts', tool_use_id: 'toolu_1' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'rm gone.ts', tool_use_id: 'toolu_1' } as never, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.run')).toEqual([])
 })
@@ -150,8 +151,8 @@ test('a command check in a project runs in the work tree the matched command run
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await tested.fire('tool.call', { tool: 'Bash', command: 'cd worktrees/design && git commit -m x', tool_use_id: 'toolu_1' } as never, answered)
-  await tested.fire('tool.call', { tool: 'Bash', command: 'git add -A && git commit -m x', tool_use_id: 'toolu_2' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'cd worktrees/design && git commit -m x', tool_use_id: 'toolu_1' } as never, answered)
+  await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'git add -A && git commit -m x', tool_use_id: 'toolu_2' } as never, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([
     [['bun', 'run', 'test:smoke'], { cwd: `${project}/worktrees/design`, timeoutMs: 60000 }],

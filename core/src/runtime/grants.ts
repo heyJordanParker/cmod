@@ -105,6 +105,13 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
         return claude.prompt.submit(args)
       },
     },
+    command: {
+      ...claude.command,
+      run: async (args: Parameters<Claude['command']['run']>[0]) => {
+        await gate(`commands.run(${args.command})`, 'prompt')
+        return claude.command.run(args)
+      },
+    },
     cmod: {
       async call(args) {
         const named = args.to === cmodPluginName ? conversationCalls[args.method] : undefined

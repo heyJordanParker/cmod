@@ -5,7 +5,6 @@ export type Agent = { agentId?: string; agentType?: string }
 
 export type ToolCalls = {
   agentOf(toolUseId: string | undefined): Promise<Agent>
-  cwdOf(toolUseId: string): string | undefined
 }
 
 export const reservedKeys: readonly string[] = ['tool', 'tool_use_id', 'consent', 'agentId']
@@ -16,12 +15,9 @@ export function toolInputOf(envelope: object): Record<string, unknown> {
 
 type AgentFields = { readonly agent_id?: string; readonly agent_type?: string }
 
-const keptCalls = 100
-
 export function toolCalls(claude: Claude, router: Router): ToolCalls {
   let mainAgentType: string | undefined
   const agentIds = new Map<string, string>()
-  const cwds = new Map<string, string>()
   const noteAgent = (e: AgentFields) => {
     if (e.agent_id === undefined) mainAgentType = e.agent_type
   }
@@ -34,11 +30,6 @@ export function toolCalls(claude: Claude, router: Router): ToolCalls {
     return next(e)
   })
   router.add('tool.call', async (e, next) => {
-    cwds.set(e.tool_use_id, await claude.session.cwd())
-    for (const oldest of cwds.keys()) {
-      if (cwds.size <= keptCalls) break
-      cwds.delete(oldest)
-    }
     if (e.agentId === undefined) return next(e)
     agentIds.set(e.tool_use_id, e.agentId)
     try {
@@ -47,21 +38,11 @@ export function toolCalls(claude: Claude, router: Router): ToolCalls {
       agentIds.delete(e.tool_use_id)
     }
   })
-  for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
-    router.add(event, async (e, next) => {
-      try {
-        return await next(e)
-      } finally {
-        cwds.delete(e.tool_use_id)
-      }
-    })
-  }
   return {
     async agentOf(toolUseId) {
       const agentId = toolUseId === undefined ? undefined : agentIds.get(toolUseId)
       const agentType = agentId === undefined ? mainAgentType : (await claude.agent.list()).find((agent) => agent.id === agentId)?.type
       return { ...(agentId === undefined ? {} : { agentId }), ...(agentType === undefined ? {} : { agentType }) }
     },
-    cwdOf: (toolUseId) => cwds.get(toolUseId),
   }
 }

@@ -3,6 +3,7 @@ import type { Args } from 'claude-code'
 import { tool } from '../../src/jobs/tool.js'
 import { defineMod, http, process } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 test('a call without the required title is denied with title named, and execute never runs', async () => {
   const executed: unknown[] = []
@@ -77,7 +78,7 @@ test('execute gets the input without the keys Claude Code adds, and an object re
     }),
   )
 
-  const answer = await tested.fire('tool.call', { tool: 'mcp__tickets__ticket', tool_use_id: 'toolu_1', agentId: 'a1', consent: 'yes', title: 'Crash' } as Args<'tool.call'>)
+  const answer = await claudeCodeOf(tested).fire('tool.call', { tool: 'mcp__tickets__ticket', tool_use_id: 'toolu_1', agentId: 'a1', consent: 'yes', title: 'Crash' } as Args<'tool.call'>)
 
   expect(answer).toEqual({ result: '{"a":1}' })
   expect(executed).toEqual([{ title: 'Crash' }])
@@ -104,7 +105,7 @@ test('a call of another tool passes on, and an execute that throws is denied wit
   )
 
   const below = { result: 'other plugin' }
-  expect(await tested.fire('tool.call', { tool: 'mcp__other__ticket', tool_use_id: 'toolu_2' } as Args<'tool.call'>, below)).toBe(below)
+  expect(await claudeCodeOf(tested).fire('tool.call', { tool: 'mcp__other__ticket', tool_use_id: 'toolu_2' } as Args<'tool.call'>, below)).toBe(below)
   expect(await tested.callTool('ticket', {})).toEqual({ deny: 'The ticket tool failed: the tracker is down' })
 })
 

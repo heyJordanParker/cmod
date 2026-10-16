@@ -15,7 +15,7 @@ export const help = `Usage: cmod new <name> [--project]
 
 ${summary}
 
-Creates a mod in ./<name>: a defineMod with one hook, one pane, and one render
+Creates a mod in ./<name>: a defineMod with one listener, one pane, and one render
 of the band above the prompt, a Skill, a rule, and a test. Then installs its
 packages.
 

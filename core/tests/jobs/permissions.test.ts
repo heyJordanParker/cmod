@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
 import type { EventResult } from 'claude-code'
 import { permissions, type PermissionRules } from '../../src/jobs/permissions.js'
-import { defineMod, process, UserPromptSubmit, type Job } from '../../src/mod.js'
+import { defineMod, process, type Job } from '../../src/mod.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 const bashCheck = (command: string, toolUseId: string) => ({ tool: 'Bash', input: { command }, tool_use_id: toolUseId })
 const allowedInBypassMode: EventResult<'tool.check'> = { decision: 'allow' }
@@ -18,10 +19,10 @@ test('a deny rule refuses a Bash call in bypassPermissions mode, and its reason 
     }),
   )
 
-  const answer = await tested.fire('tool.check', bashCheck('git push --force origin main', 'toolu_1'), allowedInBypassMode)
+  const answer = await claudeCodeOf(tested).fire('tool.check', bashCheck('git push --force origin main', 'toolu_1'), allowedInBypassMode)
 
   expect(answer).toEqual({ decision: 'deny', reason: 'Force pushes rewrite shared history.' })
-  expect(await tested.fire('tool.check', bashCheck('git push origin main', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', bashCheck('git push origin main', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds 1 permission rule.')
 })
 
@@ -36,7 +37,7 @@ test('rules read from state judge each call by the state at that call', async ()
     }),
     { projectRoot: '/work' },
   )
-  const write = (path: string, toolUseId: string) => tested.fire('tool.check', { tool: 'Write', input: { file_path: path, content: 'x' }, tool_use_id: toolUseId }, allowedInBypassMode)
+  const write = (path: string, toolUseId: string) => claudeCodeOf(tested).fire('tool.check', { tool: 'Write', input: { file_path: path, content: 'x' }, tool_use_id: toolUseId }, allowedInBypassMode)
 
   expect(await write('/work/src/a.ts', 'toolu_1')).toEqual({ decision: 'deny', reason: 'Propose mode writes plans only.' })
   expect(await write('/work/docs/plans/a.md', 'toolu_2')).toEqual(allowedInBypassMode)
@@ -55,7 +56,7 @@ test('rules from state that throw deny the call with the reason', async () => {
     }),
   )
 
-  expect(await tested.fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)).toEqual({
+  expect(await claudeCodeOf(tested).fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)).toEqual({
     decision: 'deny',
     reason: `The permission rules of broken-rules failed, so it denies the call: A write target needs a pattern without "!" for its "!" patterns to leave calls out of, such as ['**', '!docs/**'].`,
   })
@@ -84,13 +85,13 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
   )
   tested.fakes.agent.list = async () => [{ id: 'a4aa369514be1f5cc', type: 'explorer', description: 'Map the router', status: 'running' }]
 
-  const subagentCall = tested.fire('tool.call', { tool: 'Bash', command: 'rm -rf build', tool_use_id: 'toolu_sub', agentId: 'a4aa369514be1f5cc' }, { deny: 'refused' })
+  const subagentCall = claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', command: 'rm -rf build', tool_use_id: 'toolu_sub', agentId: 'a4aa369514be1f5cc' }, { deny: 'refused' })
   await reachedBelow
-  const inSubagent = await tested.fire('tool.check', bashCheck('rm -rf build', 'toolu_sub'), allowedInBypassMode)
+  const inSubagent = await claudeCodeOf(tested).fire('tool.check', bashCheck('rm -rf build', 'toolu_sub'), allowedInBypassMode)
   finishCall()
   await subagentCall
-  const afterTheCall = await tested.fire('tool.check', bashCheck('rm -rf build', 'toolu_sub'), allowedInBypassMode)
-  const onMainLoop = await tested.fire('tool.check', bashCheck('rm -rf build', 'toolu_main'), allowedInBypassMode)
+  const afterTheCall = await claudeCodeOf(tested).fire('tool.check', bashCheck('rm -rf build', 'toolu_sub'), allowedInBypassMode)
+  const onMainLoop = await claudeCodeOf(tested).fire('tool.check', bashCheck('rm -rf build', 'toolu_main'), allowedInBypassMode)
 
   expect(inSubagent).toEqual({ decision: 'deny', reason: 'Explorers only read.' })
   expect(afterTheCall).toEqual(allowedInBypassMode)
@@ -108,9 +109,9 @@ test("a when check gets the mod's own typed state, so a rule follows state witho
     }),
   )
 
-  expect(await tested.fire('tool.check', bashCheck('git push origin main', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Pushes are frozen.' })
+  expect(await claudeCodeOf(tested).fire('tool.check', bashCheck('git push origin main', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Pushes are frozen.' })
   tested.state.project.frozen = false
-  expect(await tested.fire('tool.check', bashCheck('git push origin main', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', bashCheck('git push origin main', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
 test("the main loop's agentType is the session's Agent, read from the classic hook input", async () => {
@@ -124,8 +125,8 @@ test("the main loop's agentType is the session's Agent, read from the classic ho
     }),
   )
 
-  await tested.fire(UserPromptSubmit, { prompt: 'hi', agent_type: 'cto' })
-  await tested.fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'hi', agent_type: 'cto' })
+  await claudeCodeOf(tested).fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)
 
   expect(seen).toEqual(['cto'])
 })
@@ -148,7 +149,7 @@ test('a when check that passes the 2 s deadline gives the rule its own decision'
     return { cancel: () => undefined }
   }
 
-  const answer = await tested.fire('tool.check', bashCheck('git commit -m x', 'toolu_1'), allowedInBypassMode)
+  const answer = await claudeCodeOf(tested).fire('tool.check', bashCheck('git commit -m x', 'toolu_1'), allowedInBypassMode)
 
   expect(answer).toEqual({ decision: 'deny', reason: 'Commit a clean tree. Its when check failed: it passed the 2 s deadline of permissions' })
   expect(timers).toEqual([2000])
@@ -187,10 +188,10 @@ test('a project-scope rule matches Domain.md inside the project and not outside 
   const tested = inProject({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] })
   const denied: EventResult<'tool.check'> = { decision: 'deny', reason: 'Edit Domain.md with the Architect.' }
 
-  expect(await tested.fire('tool.check', editCheck(`${project}/Domain.md`, 'toolu_1'), allowedInBypassMode)).toEqual(denied)
-  expect(await tested.fire('tool.check', editCheck(`${project}/worktrees/design/Domain.md`, 'toolu_2'), allowedInBypassMode)).toEqual(denied)
-  expect(await tested.fire('tool.check', editCheck(`${project}/docs/Domain.md`, 'toolu_3'), allowedInBypassMode)).toEqual(allowedInBypassMode)
-  expect(await tested.fire('tool.check', editCheck('/test/home/dotfiles/Domain.md', 'toolu_4'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/Domain.md`, 'toolu_1'), allowedInBypassMode)).toEqual(denied)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/worktrees/design/Domain.md`, 'toolu_2'), allowedInBypassMode)).toEqual(denied)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/docs/Domain.md`, 'toolu_3'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/test/home/dotfiles/Domain.md', 'toolu_4'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
 test('a user-scope deny on Domain.md still denies after Claude runs cd docs', async () => {
@@ -204,16 +205,16 @@ test('a user-scope deny on Domain.md still denies after Claude runs cd docs', as
     { projectRoot: '/work/app', cwd: '/work/app/docs' },
   )
 
-  expect(await tested.fire('tool.check', editCheck('/work/app/Domain.md', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
-  expect(await tested.fire('tool.check', editCheck('/work/app/docs/Domain.md', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/work/app/Domain.md', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/work/app/docs/Domain.md', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
 test("a command rule's when gets the work tree the command cds into as its folder", async () => {
   const tested = inProject({ deny: [{ command: 'git commit', when: async ({ folder }) => (await process.run(['git', 'status'], { cwd: folder })).stdout !== '', reason: 'Commit a clean tree.' }] })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await tested.fire('tool.check', bashCheck('cd worktrees/design && git commit -m x', 'toolu_1'), allowedInBypassMode)
-  await tested.fire('tool.check', bashCheck('git commit -m x', 'toolu_2'), allowedInBypassMode)
+  await claudeCodeOf(tested).fire('tool.check', bashCheck('cd worktrees/design && git commit -m x', 'toolu_1'), allowedInBypassMode)
+  await claudeCodeOf(tested).fire('tool.check', bashCheck('git commit -m x', 'toolu_2'), allowedInBypassMode)
 
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])).toEqual([{ cwd: `${project}/worktrees/design` }, { cwd: project }])
 })

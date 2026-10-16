@@ -14,12 +14,12 @@ import { todo } from '../src/mod.js'
 test('/todo adds the item to the project list', async () => {
   const tested = testMod(todo)
 
-  expect(await tested.type('/todo buy milk')).toEqual({ text: 'Added: buy milk', context: 'The to-do list is now: buy milk' })
+  expect(await tested.type('/todo buy milk')).toEqual({ text: 'Added: buy milk', note: 'The to-do list is now: buy milk' })
   expect(tested.state.project.items).toEqual(['buy milk'])
 })
 ```
 
-Assert what a person or Claude sees: `tested.lines(...)`, `tested.shown`, `tested.state`, and what `tested.fire(...)`, `tested.type(...)`, and `tested.callTool(...)` return.
+Assert what a person or Claude sees: `tested.lines(...)`, `tested.shown`, `tested.state`, and what `tested.raise...`, `tested.type(...)`, and `tested.callTool(...)` return.
 
 ## TestOptions
 
@@ -60,10 +60,11 @@ The fake session's id is `test-session`, its model is `test-model`, and its home
 ```ts
 type TestedMod<State> = {
   start(): Promise<void>
+  readonly raise: Raise
   fire(event, input, below?): Promise<EventResult>
   settle(): Promise<void>
   add(message: MessageDraft, options?: { task?: string }): Promise<Message[]>
-  endTurn(): Promise<void>
+  endTurn(ending?: { answer?: string; failure?: { type: string; text: string } }): Promise<void>
   compact(): Promise<void>
   startTask(task: { title: string; agentType?: string; model?: string; openedBy?: string; parent?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
@@ -83,24 +84,41 @@ type TestedMod<State> = {
 
 ### start
 
-Starts the mod: loads its state, runs `setup`, and adds its hooks, panes, and jobs. `fire`, `lines`, `type`, `callTool`, `press`, `input`, `select`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
+Starts the mod: loads its state, runs `setup`, and adds its listeners, panes, and jobs. `raise`, `fire`, `lines`, `type`, `callTool`, `press`, `input`, `select`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
+
+### raise
+
+`raise.<method>(payload)` runs the mod's listeners of that `on` or `before` method of `sessions.current`, and of `commands`, and returns the answer they combine to, as Claude Code would get it.
+
+- Each process method takes its payload without `session` and `cwd`, which `raise` fills: `raise.beforeModelChange({ model: 'haiku', previous: 'opus', source: 'command', … })`, `raise.onCwdChange({ previous: '/work/old' })`, `raise.beforeRun({ name: 'compact', args: '', from: { type: Person } })`.
+- Each message `before` method takes a `MessageDraft` without its `type`, placed in the open turn: `raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })` and `raise.beforePrompt({ text: 'Deploy to prod' })`. `{ task }` places it in a task.
+- `raise.beforeTaskStart({ title, agentType?, model? })` asks about a task about to start.
+- `raise.beforeTurnEnd({ answer?, failure? })` asks about the open turn ending. It rejects when no turn is open: add a `Prompt` first.
+- `raise.beforeContextEnd()` asks about a compaction of the open context.
+
+```ts
+test('a force push is refused', async () => {
+  const tested = testMod(guard)
+  await tested.add({ type: Prompt, text: 'Push it' })
+
+  expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'git push --force' } })).toEqual({ refuse: 'Force pushes rewrite shared history.' })
+})
+```
+
+The `on` methods of the conversation, such as `onPrompt` and `onTurnEnd`, run when the test builds the conversation ([Build a conversation](#build-a-conversation)).
 
 ### fire
 
 ```ts
-fire<H extends Hook>(hook: H, input: TestInput<H>, below?): Promise<EventResult<`classic.${H}`>>
-fire<N extends RoutedEvent>(event: N, input: Args<N>, below?): Promise<EventResult<N>>
+fire(event: 'tool.check' | 'prompt.context' | 'cmod.call' | 'ui.render' | 'ui.scroll' | 'ui.close', input: Args<event>, below?): Promise<EventResult<event>>
 ```
 
-- `fire(UserPromptSubmit, { prompt: 'hello' })` runs the mod's listeners on a hook. `TestInput<H>` is the hook's input without the fields `fire` fills: `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and a new `tool_use_id` for each tool event.
-- A `SessionStart` that names no `transcript_path` also writes its transcript as an empty file in the test's files, so the session's `session` values last as they do in Claude Code ([state.md](state.md)).
-- For a tool event, `files` is worked out from the call and the test's `files`, as in Claude Code.
-- `fire(PreToolUse, …)` runs the call's `tool.call`, and its `tool.check` inside it, as Claude Code does. `testMod` runs a mod as if `register.ts` calls `registerPermissionCheck`, so it returns `allow: true` or `ask` with the reason when the mod's hooks or `permissions` job decided the permission. A `PreToolUse` with `agent_id` and `agent_type`, such as `fire(PreToolUse, { tool_name: 'Read', tool_input: { file_path: 'a.ts' }, agent_id: 'agent-7', agent_type: 'explorer' })`, runs as that subagent's call. It returns `updatedInput` when the hooks rewrote the input, `additionalContext` as a list, and `deny` when a hook or Claude Code refused the call. Its `below` is `{ deny }` to test a call Claude Code refuses, and Claude Code runs the call otherwise.
-- On every other event, `below` is what the hooks beneath the mod answered. Pass it to test how the mod's answer combines with another. When nothing in the mod answers, `fire` returns `below` as it is.
-- Left out, `below` is `{}`, except on `prompt.submit`, where it is what Claude Code answers: the prompt that entered, `{ text, context, origin }`, with the `context` the mod's hooks added.
-- It returns the combined answer in Claude Code's own field names: `additionalContext` is a list, and `decision: 'block'` is `block`.
-- `fire('tool.check', { tool: 'Edit', input: { … }, tool_use_id: 'toolu_1' }, { decision: 'allow' })` asks the mod's permission rules about any call. A name with a dot fires that Claude Code hook-module event as it is.
+`fire` raises the Claude Code events no method covers:
+
+- `fire('tool.check', { tool: 'Edit', input: { … }, tool_use_id: 'toolu_1' }, { decision: 'allow' })` asks the mod's `permissions` job and `beforePermissionCheck` listeners about any call. `below` is Claude Code's own verdict.
+- `fire('prompt.context', { blocks: [] }, { blocks: [] })` starts the conversation's context, which gives each `prompt` job its first block.
 - `fire('cmod.call', { to, method, input })` calls a method of the mod's `api`, as another mod's `mod.dependencies` does, and returns `{ value }` with what the method returned, or `{ deny }` with the reason it failed.
+- `ui.render`, `ui.scroll`, and `ui.close` are what `lines` and a pane's own events raise. `lines` is the way to draw.
 
 ```ts
 expect(await tested.fire('cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } })).toEqual({ value: { restored: true } })
@@ -120,21 +138,17 @@ test('a force push is denied with the reason', async () => {
 })
 ```
 
-### Test a prompt with when
+### Test a note on matching prompts
 
-A `prompt` with `when` runs on the hook-module event `prompt.submit`, not on `UserPromptSubmit`, so `fire(UserPromptSubmit, …)` never reaches it. `fire('prompt.submit', …)` returns the prompt that entered, with the text the prompt added in its `context`:
-
-- The `prompt.submit` input is `{ text, wait, origin }`. A prompt the person typed has `wait: false` and `origin: { kind: 'composer' }`.
-- `context` is a list of strings, each `# <name>\n<text>`. The answer has no `context` when no prompt added anything.
+A mod that adds a note to the prompts about a release answers `beforePrompt`, and `raise.beforePrompt` asks it:
 
 ```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
-import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'
+import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const release = defineMod({
   name: 'release',
-  setup(mod) {
-    mod.use(prompt({ name: 'release-steps', prompt: 'Run bun run release, then push the tag.', when: /\brelease\b/i }))
+  setup() {
+    sessions.current.beforePrompt({ text: /\brelease\b/i }, () => ({ note: 'Run bun run release, then push the tag.' }))
   },
 })
 ```
@@ -146,30 +160,26 @@ import { release } from '../src/mod.js'
 
 test('a prompt about a release gets the release steps, and another prompt gets nothing', async () => {
   const tested = testMod(release)
-  const typed = { wait: false, origin: { kind: 'composer' } } as const
 
-  const aboutRelease = await tested.fire('prompt.submit', { text: 'Cut a release', ...typed })
-  const aboutBug = await tested.fire('prompt.submit', { text: 'Fix the bug', ...typed })
-
-  expect(aboutRelease).toEqual({ text: 'Cut a release', context: ['# release-steps\nRun bun run release, then push the tag.'], origin: typed.origin })
-  expect(aboutBug).toEqual({ text: 'Fix the bug', origin: typed.origin })
+  expect(await tested.raise.beforePrompt({ text: 'Cut a release' })).toEqual({ note: 'Run bun run release, then push the tag.' })
+  expect(await tested.raise.beforePrompt({ text: 'Fix the bug' })).toBeUndefined()
 })
 ```
 
 ### settle
 
-Waits until the work a hook started without awaiting it has run, such as a `void` call in a `Stop` hook. It returns while a fake the test holds open has not answered.
+Waits until the work a listener started without awaiting it has run, such as a `void` call in an `onTurnEnd` listener. It returns while a fake the test holds open has not answered.
 
 ### Build a conversation
 
 The current session, `test-session`, starts empty. A test builds the conversation the mod reads through `sessions` ([session.md](session.md)), the way Claude Code would write it:
 
 - `add(message, { task? })` adds a message and returns it, placed in its context and turn. A `Prompt` opens a new turn. With `task`, the message is that task's.
-- `endTurn()` ends the open turn, as Claude stopping does.
+- `endTurn({ answer?, failure? })` ends the open turn, as Claude stopping does. `answer` is Claude's last words, and `failure` ends it on an error, such as `{ type: 'rate_limit', text: 'Rate limited' }`.
 - `compact()` records a compaction boundary, which ends the context and starts the next, as a compaction does.
 - `startTask({ title, agentType?, model?, openedBy?, parent? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn.
 
-Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: Document, path, text }`, or `{ type: Notice, text }`.
+Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: InstructionFile, path, text }`, or `{ type: Notice, text }`.
 
 The `sessions` option gives the earlier conversations, each a `FakeSession`: an `id`, its `messages` as drafts, its `goal`, and any `Session` field, such as `title`, `project`, or `isRunning`. A session that names no `project` is in the test's project.
 
@@ -191,7 +201,7 @@ test('/recall finds the earlier session about the deploy', async () => {
 
 `shown.sent` lists what the mod sent to other sessions and to tasks' owners, each with its `session`, and its `task` for an owner. `fakes.agent.spawn` answers the current session's `startTask`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`, and `fakes.tool.call` its `callTool`. Another session's `startTask` starts a task in that fake session.
 
-A `before` listener on the current session answers the event `fire` raises, such as `tested.fire('prompt.submit', { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false })` or `tested.fire('tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'rm -rf build' })`.
+A `before` listener on the current session answers what `raise` asks, such as `tested.raise.beforePrompt({ text: 'Deploy to prod' })` or `tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })`.
 
 ### lines
 
@@ -202,7 +212,7 @@ A `before` listener on the current session answers the event `fire` raises, such
 ```ts
 import { expect, test } from 'bun:test'
 import type { RenderPropsOf } from 'claude-code'
-import { AbovePrompt, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+import { AbovePrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { hints } from '../src/mod.js'
 
@@ -210,7 +220,7 @@ const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false,
 
 test('the band shows the prompt count', async () => {
   const tested = testMod(hints)
-  await tested.fire(UserPromptSubmit, { prompt: 'hello' })
+  await tested.add({ type: Prompt, text: 'hello' })
 
   expect(await tested.lines(AbovePrompt, band)).toContain('Prompts: 1')
 })
@@ -218,7 +228,7 @@ test('the band shows the prompt count', async () => {
 
 ### type
 
-`type('/<command> <arguments>')` runs a slash command as the person types it and returns its reply, `{ text?, context? }`. It rejects a line that does not start with `/`, and a command the mod does not add.
+`type('/<command> <arguments>')` runs a slash command as the person types it and returns its reply, `{ text?, note? }`. The mod's `commands.beforeRun` listeners hear it first, so `type('/compact')` tests a listener that refuses a built-in. It rejects a line that does not start with `/`, and a command nothing in the mod answers.
 
 ### callTool
 
@@ -241,7 +251,7 @@ expect(await tested.lines('history')).toContain('deploy by explorer')
 
 ### moveTo
 
-`moveTo(projectRoot, cwd?)` moves the session. A new `projectRoot` runs a `/cd` there, so the mod loads that project's state. A `cwd` then runs a Bash `cd` there. The mod's `CwdChanged` listeners run for each move, and `sessions.current` follows it.
+`moveTo(projectRoot, cwd?)` moves the session. A new `projectRoot` runs a `/cd` there, so the mod loads that project's state. A `cwd` then runs a Bash `cd` there. The mod's `onCwdChange` listeners run for each move, and `sessions.current` follows it.
 
 ### state
 
@@ -259,7 +269,8 @@ type Fakes = {
   fs: { read?, write?, list?, exists?, stat? }
   http: { fetch? }
   settings: { read? }
-  config: { list?, set? }
+  config: { list? }
+  command: { list?, run? }
   ui: { ask?, open?, scroll? }
   session: { messages?, append? }
   prompt: { submit? }
@@ -283,6 +294,7 @@ Set a fake to answer a call:
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
 - `settings.read` answers `{}` by default, as Claude Code does with no `settings.json` files.
 - `config.list` answers no `/config` rows by default. A `config.list` fake that answers a row with `isLocked: true` locks that option as managed settings do.
+- `command.list` answers the slash commands the mod added by default, and `command.run` answers `{}`, a command that printed nothing.
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 - `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `fs.find` or `metadata.update` follows it as a real file system does.
 - `testMod` runs no installer pane: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.
@@ -290,7 +302,7 @@ Set a fake to answer a call:
 
 ```ts
 import { expect, test } from 'bun:test'
-import { Stop } from '../node_modules/@cmodjs/core/mod.js'
+import { Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { committer } from '../src/mod.js'
 
@@ -299,7 +311,9 @@ test('a Commit answer commits', async () => {
   tested.fakes.ui.ask = async () => 'Commit'
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await tested.fire(Stop, { stop_hook_active: false })
+  await tested.add({ type: Prompt, text: 'Fix the bug' })
+  await tested.endTurn()
+  await tested.settle()
 
   expect(tested.calls.filter(({ call }) => call === 'process.run').map(({ args }) => args[0])).toEqual([['git', 'commit', '-am', 'wip']])
 })
@@ -339,7 +353,7 @@ test('the Mode prompt follows the mode', async () => {
 })
 ```
 
-`testing.js` exports the types `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, and `TestCall`, so a test helper can take them.
+`testing.js` exports the types `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, and `TestCall`, so a test helper can take them.
 
 ## Run the tests
 

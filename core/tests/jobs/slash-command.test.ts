@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { defineMod, http } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 test('/tree a b reaches reply with the args and their words, and the string reply is shown', async () => {
   const seen: unknown[] = []
@@ -80,7 +81,7 @@ test('a command of another plugin passes on, and a reply that throws shows /<nam
   )
 
   const compact = { command: 'compact', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } as const
-  expect(await tested.fire('command.run', compact, { text: 'Compacted' })).toEqual({ text: 'Compacted' })
+  expect(await claudeCodeOf(tested).fire('command.run', compact, { text: 'Compacted' })).toEqual({ text: 'Compacted' })
   expect(await tested.type('/tree')).toEqual({ text: '/tree failed: git is not installed' })
 })
 

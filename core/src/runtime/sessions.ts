@@ -1,20 +1,23 @@
-import type { Disposable, Hook, HookAnswer } from '../mod.js'
+import type { Args, CommandRunResult } from 'claude-code'
+import type { Disposable } from '../mod.js'
 import { ContextEnd, ContextStart, type Context } from '../session/context/context.js'
 import { Message, noFiles } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
-import { Person } from '../session/context/turn/message/sender.js'
+import { Person, senderOf } from '../session/context/turn/message/sender.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
-import type { ContextData, GoalData, SessionChange, SessionData, TaskData, TurnData } from '../session/conversation.js'
+import { searchLimit, type ContextData, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
-import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type Placement, type BeforeMethods, type Client, type OnMethods, type ProcessBeforeMethods, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
-import { matches, sentMatcher, type SentMatcher } from '../utils/matcher.js'
+import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
+import { matches, sentMatcher, type Matcher, type SentMatcher } from '../utils/matcher.js'
 import { foldAnswers, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
-import { callFiles } from './hooks.js'
+import { messageOf } from '../utils/text.js'
+import { listenerOf, PassedTimeout, withinTime, type ListenOptions, type ListenTime } from './deadline.js'
+import { callFiles, type Hook, type HookAnswer } from './hooks.js'
 
 export type Subscription = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined }
 
@@ -37,17 +40,19 @@ export const conversationMethods = {
   before: 'cmod:before',
 } as const
 
-export type Act = 'send' | 'startTask' | 'callTool' | 'usage' | 'clients' | 'abort'
+export type Act = 'send' | 'startTask' | 'callTool' | 'usage' | 'surfaces' | 'abort'
 
-const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', usage: 'conversation', clients: 'conversation', abort: 'prompt' }
+const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', usage: 'conversation', surfaces: 'conversation', abort: 'prompt' }
 
 const startsTurns: readonly string[] = ['CronCreate']
 
 const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
 
-export const beforePermission = (event: BeforeEvent): string => (event === 'toolCall' ? 'tools' : event === TaskStart || event === TaskEnd ? 'tasks' : 'prompt')
+export const beforePermission = (event: BeforeEvent): string => (event === 'toolCall' ? 'tools' : event === TaskStart ? 'tasks' : 'prompt')
 
-export const isAct =(action: string): action is Act => action === 'callTool' || action in actPermissions
+const methodOf = (prefix: 'on' | 'before', event: SessionEvent): string => `${prefix}${Object.entries(sessionEvents).find(([, each]) => each === event)?.[0] ?? event}`
+
+export const isAct = (action: string): action is Act => action === 'callTool' || action in actPermissions
 
 export function toolPermission(tool: string): string | undefined {
   return startsTurns.includes(tool) ? 'prompt' : ownSchedule.includes(tool) ? undefined : 'tools'
@@ -63,18 +68,20 @@ export type SessionsClient = {
   readonly sessions: Sessions
   changed(session: string, change: SessionChange, isInProject: boolean): void
   answerBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean): Promise<unknown>
+  raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
+  listen(method: string, args: readonly unknown[]): Disposable
   /** An empty title keeps the title the session already has. */
   follow(current: Omit<SessionData, 'isRunning' | 'lastAt'>): void
 }
 
-type Listening = { scope: Scope; readonly event: SessionEvent; readonly matcher: unknown; readonly listener: (payload: never) => unknown }
+type Listening = { scope: Scope; readonly event: SessionEvent; readonly method: string; readonly matcher: unknown; readonly listener: (payload: never, time: ListenTime) => unknown; readonly options: ListenOptions }
 
 type Owned = { readonly session: string; readonly task: string }
 
 export async function usageOf(claude: Pick<Claude, 'session'>): Promise<Usage> {
   const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()])
   const { tokens, window, percent } = usage.context
-  return { model, context: { ...(tokens === undefined ? {} : { tokens }), window, ...(percent === undefined ? {} : { percent }) }, ...(usage.cost === undefined ? {} : { cost: { usd: usage.cost.usd } }) }
+  return { model, contextWindow: { ...(tokens === undefined ? {} : { tokenCount: tokens }), size: window, ...(percent === undefined ? {} : { percent }) }, ...(usage.cost === undefined ? {} : { cost: { usd: usage.cost.usd } }) }
 }
 
 export function payloadOf(change: SessionChange): unknown {
@@ -168,11 +175,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     if (change.type === TaskStart) parents.get(session)?.set(change.task.id, change.task.parent)
   }
 
-  const add = (into: Map<string, Set<Listening>>, scope: Scope, event: SessionEvent, matcherOrListener: unknown, maybeListener: unknown, onChange: (key: string) => void): Disposable => {
-    const listener = (maybeListener ?? matcherOrListener) as (payload: never) => unknown
-    const matcher = maybeListener === undefined ? undefined : matcherOrListener
+  const add = (into: Map<string, Set<Listening>>, scope: Scope, event: SessionEvent, method: string, args: readonly unknown[], onChange: (key: string) => void): Disposable => {
     const key = keyOf(scope)
-    const entry: Listening = { scope, event, matcher, listener }
+    const entry: Listening = { scope, event, method, ...listenerOf(name, method, args) }
     const set = into.get(key) ?? new Set()
     set.add(entry)
     into.set(key, set)
@@ -198,17 +203,22 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       .map((entry) => async (latest: SessionChange) => {
         if (!isInScope(entry.scope, session, latest, isUnderIn(session))) return undefined
         if (entry.matcher !== undefined && !matches(payloadOf(latest), entry.matcher)) return undefined
-        const answer = await entry.listener((await payloadFor(session, latest)) as never)
+        const payload = await payloadFor(session, latest)
+        const answer = await withinTime(claude.clock, entry.method, entry.options, (time) => entry.listener(payload as never, time)).catch((error: unknown) => {
+          if (entry.options.onFailure !== 'refuse') throw error
+          report(`session:${entry.method}`, `The ${entry.method} listener failed`, error)
+          return { refuse: `${name}: ${messageOf(error)}` }
+        })
         if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer) || isGranted(beforePermission(event))) return answer
-        throw new Error(`Its before(${event}) answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`)
+        throw new Error(`Its ${entry.method} answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`)
       })
-    return foldAnswers(event, change, askers, (error) => report(`before:${event}`, `The before(${event}) listener failed`, error))
+    return foldAnswers(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
   }
 
   const eventMethods = (scopeOf: () => Scope, hasBefore: boolean, ended?: string): OnMethods & Partial<BeforeMethods> => {
-    const method = (into: Map<string, Set<Listening>>, named: string, event: SessionEvent) => (matcherOrListener: unknown, maybeListener?: unknown) => {
+    const method = (into: Map<string, Set<Listening>>, named: string, event: SessionEvent) => (...args: unknown[]) => {
       if (ended !== undefined) throw new Error(`${name}: ${ended} has ended, so its ${named} never fires. Listen on its Session.`)
-      return add(into, scopeOf(), event, matcherOrListener, maybeListener, subscribe)
+      return add(into, scopeOf(), event, named, args, subscribe)
     }
     return Object.fromEntries([
       ...Object.entries(sessionEvents).map(([named, event]) => [`on${named}`, method(listening, `on${named}`, event)]),
@@ -223,9 +233,22 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
 
   const messagesFrom = async (method: string, input: unknown) => Promise.all((await call<Message[]>(method, input)).map(withFiles))
 
+  const searched = (request: Readonly<Record<string, unknown>>, matcher: unknown): AsyncIterable<Message> => ({
+    async *[Symbol.asyncIterator]() {
+      let before = request['before']
+      for (;;) {
+        const page = await messagesFrom(conversationMethods.search, { ...request, ...(before === undefined ? {} : { before }) })
+        for (const message of page) if (matcher === undefined || matches(message, matcher)) yield message
+        const last = page.at(-1)
+        if (last === undefined || page.length < searchLimit) return
+        before = { session: last.session, id: last.id }
+      }
+    },
+  })
+
   const recordPart = (scope: Scope, ended?: string): RecordPart =>
     ({
-      search: (text: string, options: SearchOptions = {}) => messagesFrom(conversationMethods.search, { text, ...scope, ...optionsOf(options) }),
+      search: (text: string, matcher?: unknown) => searched({ text, ...scope }, matcher),
       ...eventMethods(() => scope, true, ended),
     }) as RecordPart
 
@@ -264,15 +287,21 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     messages: () => messagesFrom(conversationMethods.messages, { session, task: data.id }),
   })
 
-  const goalOf = (scope: Scope, data: GoalData): Goal => ({
-    ...data,
-    ...recordPart({ ...scope, isGoal: true }),
-    tasks: async () => (await call<TaskData[]>(conversationMethods.tasks, { session: scope.session, ...(scope.task === undefined ? {} : { task: scope.task }) })).map((task) => taskOf(scope.session ?? current.id, task)),
-    update: async ({ text }) => {
-      if (text.trim() === '') throw new Error(`${name}: a goal needs text.`)
-      await call(conversationMethods.updateGoal, { session: scope.session ?? current.id, ...(scope.task === undefined ? {} : { task: scope.task }), text })
-    },
-  })
+  const goalOf = (where: () => Scope): Goal =>
+    ({
+      search: (text: string, matcher?: unknown) => searched({ text, ...where(), isGoal: true }, matcher),
+      ...eventMethods(() => ({ ...where(), isGoal: true }), true),
+      text: async () => (await call<GoalData>(conversationMethods.goal, where())).text,
+      tasks: async () => {
+        const { session = current.id, task } = where()
+        return (await call<TaskData[]>(conversationMethods.tasks, { session, ...(task === undefined ? {} : { task }) })).map((each) => taskOf(session, each))
+      },
+      update: async ({ text }: { readonly text: string }) => {
+        if (text.trim() === '') throw new Error(`${name}: a goal needs text.`)
+        const { session = current.id, task } = where()
+        await call(conversationMethods.updateGoal, { session, ...(task === undefined ? {} : { task }), text })
+      },
+    }) as Goal
 
   const payloadFor = async (session: string, change: SessionChange): Promise<unknown> => {
     const scope = { session }
@@ -281,7 +310,8 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     if ('context' in change) return contextOf(scope, change.context)
     if ('task' in change) return taskOf(session, change.task)
     if ('usage' in change) return change.usage
-    return goalOf({ session, ...(change.goal.task === undefined ? {} : { task: change.goal.task }) }, { text: change.goal.text })
+    const { task } = change.goal
+    return goalOf(() => ({ session, ...(task === undefined ? {} : { task }) }))
   }
 
   const act = <Answer>(session: string, action: Act, input: unknown, owned?: Owned) => call<Answer>(conversationMethods.act, { session: owned?.session ?? session, action, input, ...(owned === undefined ? {} : { task: owned.task }) })
@@ -297,19 +327,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     if ('drop' in submitted && typeof submitted.drop === 'string') throw new Error(`${name}: Claude Code dropped the prompt: ${submitted.drop}`)
   }
 
-  const startHere = async (task: TaskStartArgs): Promise<Task> => {
-    const started = await claude.agent.spawn({
-      prompt: task.prompt,
-      ...(task.name === undefined ? {} : { description: task.name, name: task.name }),
-      ...(task.agentType === undefined ? {} : { subagentType: task.agentType }),
-      ...(task.model === undefined ? {} : { model: task.model }),
-      ...(task.cwd === undefined ? {} : { cwd: task.cwd }),
-    })
-    if (started.deny !== undefined) throw new Error(`${name}: Claude Code refused the task: ${started.deny}`)
-    return taskOf(current.id, { id: started.agentId ?? '', title: task.name ?? '', agentType: task.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() })
-  }
+  const startHere = async (task: TaskStartArgs): Promise<Task> => taskOf(current.id, await spawnTask(claude, task).catch((error: unknown) => Promise.reject(new Error(`${name}: ${messageOf(error)}`))))
 
-  const clientsHere = async (): Promise<Client[]> => [...(await claude.session.surfaces())]
+  const surfacesHere = async (): Promise<Surface[]> => [...(await claude.session.surfaces())]
 
   const sessionOf = (read: () => SessionData, owned?: Owned) => {
     const id = () => read().id
@@ -349,9 +369,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       get forkedFrom() {
         return read().forkedFrom
       },
-      search: (text: string, options: SearchOptions = {}) => recordPart(scope()).search(text, options),
+      search: (text: string, matcher?: Matcher<Message>) => recordPart(scope()).search(text, matcher),
       ...eventMethods(scope, true),
-      goal: async () => goalOf(where(), await call<GoalData>(conversationMethods.goal, where())),
+      goal: goalOf(where),
       context: async () => {
         const all = await contextsOf()
         const last = all.at(-1)
@@ -366,7 +386,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       turns: turnsOf,
       messages: (options: { readonly after?: string; readonly last?: number } = {}) => messagesFrom(conversationMethods.messages, { ...where(), ...options }),
       usage: async (): Promise<Usage> => (isHere() ? usageOf(claude) : act<Usage>(id(), 'usage', null, owned)),
-      clients: async (): Promise<Client[]> => (isHere() ? clientsHere() : act<Client[]>(id(), 'clients', null, owned)),
+      surfaces: async (): Promise<Surface[]> => (isHere() ? surfacesHere() : act<Surface[]>(id(), 'surfaces', null, owned)),
       async send(message: SessionSend) {
         if (message.text.trim() === '') throw new Error(`${name}: send needs text.`)
         if (isHere() && message.as !== Session) return sendHere(message)
@@ -402,44 +422,111 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     )
   }
 
-  const processMethods = (): ProcessOnMethods & ProcessBeforeMethods => {
-    const method = (named: string, hook: string, isBefore: boolean) => (matcherOrListener: unknown, maybeListener?: unknown) => {
-      const listener = (maybeListener ?? matcherOrListener) as (payload: unknown) => unknown
-      const matcher = maybeListener === undefined ? undefined : matcherOrListener
-      if (hookOn === undefined || routeOn === undefined) throw new Error(`${name}: ${isBefore ? 'before' : 'on'}${named} works only in a mod's own session.`)
-      const heard = (payload: HookFields) => payload['task'] === undefined && (matcher === undefined || matches(payload, matcher))
-      const tell = (payload: HookFields) =>
-        void Promise.resolve()
-          .then(() => listener(payload))
-          .catch((error: unknown) => report(`session:on${named}`, `The on${named} listener failed`, error))
-      if (named === 'PermissionCheck') {
-        return routeOn('tool.check', async (e: ToolCheck, next) => {
-          const below = (await next(e)) as ToolCheckVerdict
-          const payload = { session: current.id, cwd: current.cwd, ...defined({ task: e.agentId, callId: e.tool_use_id, reason: below.reason, rule: below.rule, ceiling: e.ceiling === undefined ? undefined : verdictName(e.ceiling) }), name: e.tool, input: recordOf(e.input), decision: verdictName(below.decision) }
-          if (!heard(payload)) return below
-          if (!isBefore) {
-            tell(payload)
-            return below
-          }
-          const answer = (await listener(payload)) as Partial<{ readonly allow: true; readonly ask: string; readonly refuse: string }> | null | undefined
-          if (answer === undefined || answer === null || below.decision === 'deny') return below
-          if (answer.refuse !== undefined) return { decision: 'deny', reason: answer.refuse }
-          if (answer.ask !== undefined) return { decision: 'ask', reason: answer.ask }
-          return answer.allow === true ? { decision: 'allow' } : below
-        })
+  const processListeners = new Map<string, Set<{ readonly matcher: unknown; readonly listener: (payload: HookFields, time: ListenTime) => unknown; readonly options: ListenOptions }>>()
+
+  const raise = async (method: string, payload: HookFields): Promise<HookFields | undefined> => {
+    const isBefore = method.startsWith('before')
+    const heard = [...(processListeners.get(method) ?? [])].filter(({ matcher }) => payload['task'] === undefined && (matcher === undefined || matches(payload, matcher)))
+    if (!isBefore) {
+      await Promise.all(
+        heard.map(({ listener, options }) =>
+          withinTime(claude.clock, method, options, (time) => listener(payload, time)).catch((error: unknown) => {
+            if (!(error instanceof PassedTimeout)) report(`session:${method}`, `The ${method} listener failed`, error)
+          }),
+        ),
+      )
+      return undefined
+    }
+    const takes = answerKeys[method.slice('before'.length)] ?? []
+    let merged: HookFields | undefined
+    for (const { listener, options } of heard) {
+      try {
+        const answer = (await withinTime(claude.clock, method, options, (time) => listener(payload, time))) as HookFields | null | undefined
+        if (answer === undefined || answer === null) continue
+        const unread = Object.keys(answer).filter((key) => !takes.includes(key))
+        if (unread.length > 0) throw new Error(`it answered ${unread.join(' and ')}, which ${method} does not take. It takes ${takes.map((key) => `{ ${key} }`).join(', ') || 'no answer'}.`)
+        merged = { ...merged, ...answer }
+        if (typeof answer['refuse'] === 'string') return merged
+      } catch (error) {
+        report(`session:${method}`, `The ${method} listener failed`, error)
+        if (options.onFailure === 'refuse' || method === 'beforePermissionRequest') return { refuse: `${name}: ${messageOf(error)}` }
       }
-      return hookOn(hook, async (input: unknown) => {
-        const payload = processPayloadOf(named as Exclude<keyof typeof processEvents, 'PermissionCheck'>, input)
-        if (!heard(payload) || (named === 'SessionStart' && !isBefore && payload['source'] === 'compact')) return undefined
-        if (!isBefore) return tell(payload)
-        const answer = await listener(payload)
-        return answer === undefined || answer === null ? undefined : hookAnswerOf(named, hook, answer as Readonly<Record<string, unknown>>)
+    }
+    return merged
+  }
+
+  const permissionCheck = (e: ToolCheck, below: ToolCheckVerdict): HookFields => ({ session: current.id, cwd: current.cwd, ...defined({ task: e.agentId, callId: e.tool_use_id, reason: below.reason, rule: below.rule, ceiling: e.ceiling === undefined ? undefined : verdictName(e.ceiling) }), name: e.tool, input: recordOf(e.input), decision: verdictName(below.decision) })
+
+  const commandRun = async (e: Args<'command.run'>): Promise<HookFields> => {
+    const source = (await claude.command.list()).find((command) => command.name === e.command)?.source
+    return { session: current.id, cwd: current.cwd, name: e.command, args: e.args, ...defined({ source }), from: senderOf(e.origin, false) }
+  }
+
+  const listenTo = (method: string, named: string) => {
+    if (hookOn === undefined || routeOn === undefined) throw new Error(`${name}: ${method} works only in a mod's own session.`)
+    const isBefore = method.startsWith('before')
+    if (named === 'Run') {
+      return routeOn('command.run', async (e, next) => {
+        const run = await commandRun(e)
+        if (!isBefore) {
+          const ran = await next(e)
+          void raise(method, run)
+          return ran
+        }
+        const answer = await raise(method, run)
+        if (answer === undefined) return next(e)
+        if (typeof answer['refuse'] === 'string') return { text: answer['refuse'] }
+        if (!isGranted('prompt')) {
+          report(`session:${method}`, `The ${method} listener failed`, new Error(`${name}: its answer changes a command, which needs the prompt permission.`))
+          return next(e)
+        }
+        if (typeof answer['result'] === 'string') return { text: answer['result'], ...(typeof answer['exitCode'] === 'number' ? { exitCode: answer['exitCode'] } : {}) }
+        const ran = await next(typeof answer['args'] === 'string' ? { ...e, args: answer['args'] } : e)
+        return typeof answer['note'] === 'string' ? { ...ran, context: [...(ran.context ?? []), answer['note']] } : ran
       })
     }
-    return Object.fromEntries(
-      Object.entries(processEvents).flatMap(([named, event]) => [[`on${named}`, method(named, event.on, false)], ...('before' in event ? [[`before${named}`, method(named, event.before, true)]] : [])]),
-    ) as ProcessOnMethods & ProcessBeforeMethods
+    if (named === 'PermissionCheck') {
+      return routeOn('tool.check', async (e: ToolCheck, next) => {
+        const below = (await next(e)) as ToolCheckVerdict
+        if (!isBefore) {
+          void raise(method, permissionCheck(e, below))
+          return below
+        }
+        const answer = await raise(method, permissionCheck(e, below))
+        if (answer === undefined || below.decision === 'deny') return below
+        if (typeof answer['refuse'] === 'string') return { decision: 'deny', reason: answer['refuse'] }
+        if (typeof answer['ask'] === 'string') return { decision: 'ask', reason: answer['ask'] }
+        return answer['allow'] === true ? { decision: 'allow' } : below
+      })
+    }
+    const event: { readonly on: string; readonly before?: string } = processEvents[named as ProcessName]
+    const hook = (isBefore ? event.before : undefined) ?? event.on
+    return hookOn(hook, async (input: unknown) => {
+      const payload = processPayloadOf(named as Exclude<ProcessName, 'PermissionCheck'>, input)
+      if (!isBefore) {
+        if (named !== 'SessionStart' || payload['source'] !== 'compact') void raise(method, payload)
+        return undefined
+      }
+      const answer = await raise(method, payload)
+      return answer === undefined ? undefined : hookAnswerOf(named, hook, answer)
+    })
   }
+
+  const listen = (method: string, args: readonly unknown[]): Disposable => {
+    const entry = listenerOf(name, method, args) as { readonly matcher: unknown; readonly listener: (payload: HookFields, time: ListenTime) => unknown; readonly options: ListenOptions }
+    const held = processListeners.get(method) ?? new Set()
+    if (!processListeners.has(method)) {
+      listenTo(method, method.replace(/^(on|before)/, ''))
+      processListeners.set(method, held)
+    }
+    held.add(entry)
+    return { dispose: () => void held.delete(entry) }
+  }
+
+  const processMethods = (): ProcessOnMethods & ProcessBeforeMethods =>
+    Object.fromEntries(
+      Object.entries(processEvents).flatMap(([named, event]) => [`on${named}`, ...('before' in event ? [`before${named}`] : [])]).map((method) => [method, (...args: unknown[]) => listen(method, args)]),
+    ) as ProcessOnMethods & ProcessBeforeMethods
 
   const currentSession = Object.assign(sessionOf(() => current), processMethods())
   const every = eventMethods(() => ({}), false)
@@ -460,21 +547,25 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
           if (current.title === '') current = { ...current, title: data.title }
           return currentSession
         }),
-      search: (text, options = {}) => messagesFrom(conversationMethods.search, { text, ...optionsOf(options), ...(options.running === undefined ? {} : { running: options.running }), ...(options.since === undefined ? {} : { since: options.since }), ...(options.everyProject === undefined ? {} : { everyProject: options.everyProject }) }),
+      search: (text, matcher, options = {}) => searched({ text, ...searchOptionsOf(options) }, matcher),
       ...every,
     },
     changed(session, change, isInProject) {
       remember(session, change)
       for (const key of isInProject ? [session, everySession] : [session]) {
-        for (const { scope, event, matcher, listener } of listening.get(key) ?? []) {
+        for (const { scope, event, method, matcher, listener, options } of listening.get(key) ?? []) {
           if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session))) continue
-          void Promise.resolve()
-            .then(async () => listener((await payloadFor(session, change)) as never))
-            .catch((error: unknown) => report(`session:${event}`, `The ${event} listener failed`, error))
+          void payloadFor(session, change)
+            .then((payload) => withinTime(claude.clock, method, options, (time) => listener(payload as never, time)))
+            .catch((error: unknown) => {
+              if (!(error instanceof PassedTimeout)) report(`session:${method}`, `The ${method} listener failed`, error)
+            })
         }
       }
     },
     answerBefore,
+    raise,
+    listen,
     follow(next) {
       const moved = next.id !== current.id && current.id !== ''
       const previous = current.id
@@ -500,7 +591,10 @@ type ToolCheck = { readonly tool: string; readonly input: unknown; readonly tool
 
 type ToolCheckVerdict = { readonly decision: 'allow' | 'ask' | 'deny'; readonly reason?: string; readonly rule?: string }
 
-export type RouteOn = (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>) => Disposable
+export type RouteOn = {
+  (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>): Disposable
+  (event: 'command.run', hook: (e: Args<'command.run'>, next: (e: Args<'command.run'>) => Promise<CommandRunResult>) => Promise<CommandRunResult>): Disposable
+}
 
 const verdictName = (decision: 'allow' | 'ask' | 'deny') => (decision === 'deny' ? 'refuse' : decision)
 
@@ -523,6 +617,23 @@ const modelChangeOf = (input: HookFields) => ({
   cacheWriteUsd: input['estimated_cache_write_usd'],
   pricing: input['pricing'],
 })
+
+const answerKeys: Readonly<Record<string, readonly string[]>> = {
+  Run: ['args', 'note', 'result', 'exitCode', 'refuse'],
+  ProjectSetup: [],
+  SessionStart: ['note', 'title', 'reloadSkills', 'firstPrompt'],
+  ModelChange: ['ask', 'refuse'],
+  WorktreeCreate: ['result'],
+  Elicitation: ['refuse'],
+  ElicitationResponse: ['refuse'],
+  PermissionCheck: ['allow', 'ask', 'refuse'],
+  PermissionRequest: ['allow', 'input', 'updates', 'refuse', 'interrupt'],
+  PermissionDenial: ['retry'],
+  ToolBatch: ['note'],
+  TodoCreate: ['refuse'],
+  TodoComplete: ['refuse'],
+  ReplyDisplay: ['text'],
+}
 
 const todoOf = (input: HookFields) => ({ id: input['task_id'], subject: input['task_subject'], description: input['task_description'], teammate: input['teammate_name'] })
 
@@ -559,6 +670,20 @@ const processFields: { readonly [Name in Exclude<keyof typeof processEvents, 'Pe
   ReplyDisplay: (input) => ({ replyId: input['message_id'], index: input['index'], isLast: input['final'], text: input['delta'] }),
 }
 
+export async function spawnTask(claude: Pick<Claude, 'agent'>, task: TaskStartArgs): Promise<TaskData> {
+  if (task.title.trim() === '') throw new Error('a task needs a title.')
+  const started = await claude.agent.spawn({
+    prompt: task.prompt,
+    description: task.title,
+    ...(task.name === undefined ? {} : { name: task.name }),
+    ...(task.agentType === undefined ? {} : { subagentType: task.agentType }),
+    ...(task.model === undefined ? {} : { model: task.model }),
+    ...(task.cwd === undefined ? {} : { cwd: task.cwd }),
+  })
+  if (started.deny !== undefined) throw new Error(`Claude Code refused the task: ${started.deny}`)
+  return { id: started.agentId ?? '', title: task.title, agentType: task.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() }
+}
+
 export function processPayloadOf(named: Exclude<keyof typeof processEvents, 'PermissionCheck'>, input: unknown): HookFields {
   const fields = recordOf(input)
   return { ...placementOf(fields), ...defined(processFields[named](fields)) }
@@ -586,6 +711,11 @@ export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, cal
   return { ...base, output: answered.result ?? answered.text, isError: answered.isError === true }
 }
 
-function optionsOf(options: SearchOptions): Readonly<Record<string, unknown>> {
-  return { ...(options.limit === undefined ? {} : { limit: options.limit }), ...(options.before === undefined ? {} : { before: { session: options.before.session, id: options.before.id } }) }
+function searchOptionsOf({ running, since, everyProject, before }: SearchOptions): Readonly<Record<string, unknown>> {
+  return {
+    ...(running === undefined ? {} : { running }),
+    ...(since === undefined ? {} : { since }),
+    ...(everyProject === undefined ? {} : { everyProject }),
+    ...(before === undefined ? {} : { before: { session: before.session, id: before.id } }),
+  }
 }

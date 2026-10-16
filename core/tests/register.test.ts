@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import type { EngineInterface, On, RenderElement } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
-import { CwdChanged, defineMod, hooks, PostToolUse, PreToolUse } from '../src/mod.js'
+import { defineMod, sessions } from '../src/mod.js'
+import { processEvents } from '../src/session/session.js'
 import { scriptsSha256 } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
@@ -62,15 +63,15 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
     },
     env: { get: async (name: string) => env[name] },
     session: { id: async () => 'session-1', root: async () => '/work/app', cwd: async () => '/work/app', model: async () => 'test-model', usage: async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [] }) },
-    clock: { every: () => ({ cancel: () => undefined }), after: () => ({ cancel: () => undefined }) },
+    clock: { now: async () => 0, every: () => ({ cancel: () => undefined }), after: () => ({ cancel: () => undefined }) },
   } as unknown as EngineInterface
   return { $, shown }
 }
 
 const demo = defineMod({
   name: 'demo',
-  setup(mod) {
-    mod.on(PostToolUse, (input) => ({ hookSpecificOutput: { additionalContext: `demo saw ${input.tool_name}` } }))
+  setup() {
+    sessions.current.beforeToolBatch((batch) => ({ note: `demo saw ${batch.calls.map((call) => call.name).join(', ')}` }))
   },
 })
 
@@ -151,31 +152,13 @@ test('registerPermissionCheck registers tool.check and PermissionRequest once ea
   expect(fake.registrations.map((registration) => registration.pattern).slice(-2)).toEqual(['tool.check', 'classic.PermissionRequest'])
 })
 
-test('a PreToolUse hook denies through tool.call, with no permission check registered', async () => {
-  const fake = fakeOn()
-  const { $ } = engine(files)
-  const guard = defineMod({
-    name: 'demo',
-    setup(mod) {
-      mod.on(PreToolUse, () => ({ hookSpecificOutput: { hookEventName: PreToolUse, permissionDecision: 'deny', permissionDecisionReason: 'No edits here.' } }))
-    },
-  })
-  registerMod(fake.on, guard, {})
-  await fake.dispatch('session.start', $, {}, {})
-
-  const answer = await fake.dispatch('tool.call', $, { tool: 'Edit', tool_use_id: 't', file_path: 'a.ts' }, { result: '' })
-
-  expect(answer).toEqual({ deny: 'No edits here.' })
-  expect(fake.registrations.map((registration) => registration.pattern)).not.toContain('classic.PreToolUse')
-})
-
 test('session.start through the engine chain reads the plugin, runs setup, and announces the mod once', async () => {
   const fake = fakeOn()
   const { $, shown } = engine(files)
   registerMod(fake.on, demo, {})
 
   await fake.dispatch('session.start', $, {}, {})
-  const answer = await fake.dispatch('classic.PostToolUse', $, { hook_event_name: 'PostToolUse', cwd: '/work/app', tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }, {})
+  const answer = await fake.dispatch('classic.PostToolBatch', $, { hook_event_name: 'PostToolBatch', session_id: 'session-1', cwd: '/work/app', tool_calls: [{ tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }] }, {})
 
   expect(answer).toEqual({ additionalContext: ['demo saw Edit'] })
   expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo  Installed')
@@ -344,5 +327,6 @@ test("registerMod names each event as a string literal, which Claude Code's hook
   const classic = fake.registrations.map((registration) => registration.pattern).filter((pattern) => pattern.startsWith('classic.'))
 
   expect([...source.matchAll(/addHook\(\s*([^,]+),/g)].map((match) => match[1]).filter((name) => !/^'[a-zA-Z.]+'$/.test(name ?? ''))).toEqual([])
-  expect(hooks.filter((hook) => hook !== PreToolUse && hook !== CwdChanged && !classic.includes(`classic.${hook}`))).toEqual([])
+  const heard = Object.values(processEvents).flatMap((event): string[] => ['before' in event ? [event.on, event.before] : [event.on]].flat())
+  expect([...heard, 'ConfigChange', 'FileChanged'].filter((hook) => !hook.includes('.') && hook !== 'CwdChanged' && !classic.includes(`classic.${hook}`))).toEqual([])
 })

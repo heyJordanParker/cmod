@@ -258,25 +258,22 @@ It needs `"prompt": true`. Without the grant it adds nothing and logs once which
 ```ts
 prompt<State>(options: {
   name: string
-  prompt: string | ((input: { userPrompt?: string; call?: Call & { folder: string } }, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
-  when?: RegExp | ((userPrompt: string) => boolean)
+  prompt: string | ((input: { call?: Call & { folder: string } }, mod: Mod<State>) => string | undefined | Promise<string | undefined>)
   after?: Target | Target[]
 }): Job<void, State>
 ```
 
-`prompt` adds text that Claude reads. `when` and `after` pick when:
+`prompt` adds text that Claude reads. `after` picks when:
 
 | Options | When Claude reads the text |
 | --- | --- |
-| neither | At the start of each conversation, as a block of context named `name`. A block of that name already in the context wins. Then again whenever `mod.state` changes and the text differs from what Claude last got. |
-| `when` | With each prompt the person sends whose text matches the `RegExp`, or for which the function returns true. `input.userPrompt` is the prompt. |
-| `after` | After each call that matches a target and succeeds, with the call's result. `input.call` is the matched call, with its `folder` as `permissions` gives it. |
+| no `after` | At the start of each conversation, as a block of context named `name`. A block of that name already in the context wins. Then again whenever `mod.state` changes and the text differs from what Claude last got. |
+| `after` | After each call that matches a target and succeeds, with the call's result, under the heading `# <name>`. `input.call` is the matched call, with its `folder` as `permissions` gives it. |
 
-- With `when` or `after`, the text goes to Claude under the heading `# <name>`.
-- With neither, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again, and when the text differs from what Claude last got, it adds `# <name>` and the new text to the conversation as a `Note` Claude reads on its next call to the model, as `sessions.current.send` does ([session.md](session.md#send-to-a-conversation)). Several changes in a row give one note with the last text. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
+- Without `after`, the text follows the mod's state. After a change to `mod.state`, cmod calls `prompt` again, and when the text differs from what Claude last got, it adds `# <name>` and the new text to the conversation as a `Note` Claude reads on its next call to the model, as `sessions.current.send` does ([session.md](session.md#act-on-a-session)). Several changes in a row give one note with the last text. A note waits until the conversation has started, so a state change before the first prompt changes only the first block.
 - A `prompt` function that returns `undefined` or `''` adds nothing. One that throws adds nothing, and the error goes to Claude Code's debug log.
-- `name` cannot be blank. `when` and `after` together throw: add a second `prompt` for the other trigger. Two prompts with one name in a mod throw.
-- A `when` prompt runs on `prompt.submit` and adds its text to the event it passes down. In a test, `fire('prompt.submit', …)` returns that text in the answer's `context`. [testing.md](testing.md#test-a-prompt-with-when) shows how.
+- `name` cannot be blank. Two prompts with one name in a mod throw.
+- Text for the prompts that match a pattern is a `beforePrompt` note: `sessions.current.beforePrompt({ text: /\bmigrat/i }, () => ({ note: 'Every migration has a down step.' }))` ([session.md](session.md#change-what-happens)).
 
 ```ts
 import { defineMod, fs, sessions } from '../node_modules/@cmodjs/core/mod.js'
@@ -288,7 +285,6 @@ export const conventions = defineMod({
   setup(mod) {
     mod.use(prompt({ name: 'Commit messages', prompt: 'Write commit messages in the imperative mood.' }))
     mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
-    mod.use(prompt({ name: 'Migrations', when: /\bmigrat/i, prompt: 'Every migration has a down step.' }))
     mod.use(prompt({ name: 'Schema', after: { write: 'db/schema.sql' }, prompt: async () => `The schema is now:\n${await fs.read(`${sessions.current.project}/db/schema.sql`)}` }))
   },
 })
@@ -411,14 +407,14 @@ type JobContext<State> = {
 }
 ```
 
-- `mod` is the mod that uses the job. A job builds on `mod.on`, `mod.every`, `mod.ui`, and the imports from `mod.js`, as `setup` does ([mod.md](mod.md)).
+- `mod` is the mod that uses the job. A job builds on `mod.every`, `mod.ui`, and the imports from `mod.js`, such as the methods of `sessions`, as `setup` does ([mod.md](mod.md)).
 - `announce` adds a phrase to the list cmod logs when the mod first starts.
 - `reserveName` throws `taken` when the mod already reserved that `type` and `name`, so a job refuses a duplicate. `dispose()` on what it returns frees the name again.
 
 A job that hands back a feature the mod turns off returns a `Disposable`, as `slashCommand` and `tool` do:
 
 ```ts
-import { defineMod, sessions, Stop, type Disposable, type Job } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions, type Disposable, type Job } from '../node_modules/@cmodjs/core/mod.js'
 
 const editCounter = (tool: string): Job<Disposable & { readonly count: () => number }> => ({ mod, announce, reserveName }) => {
   const reserved = reserveName('editCounter', tool, `${mod.name}: edits of ${tool} are already counted.`)
@@ -438,7 +434,7 @@ export const counter = defineMod({
   name: 'counter',
   setup(mod) {
     const writes = mod.use(editCounter('Write'))
-    mod.on(Stop, () => mod.ui.toast(`${writes.count()} files written so far`))
+    sessions.current.onTurnEnd(() => mod.ui.toast(`${writes.count()} files written so far`))
   },
 })
 ```
@@ -460,4 +456,4 @@ A job of your own matches calls against targets through the `permissions`, `chec
 
 ## Test a job
 
-`tested.type('/todo milk')` runs a slash command. `tested.callTool('open_ticket', { title: 'Crash' })` runs the permission rules, then the tool. `tested.fire('tool.check', …)` asks the permission rules about any call. `tested.fire('prompt.submit', …)` returns the context a `when` prompt added. [testing.md](testing.md) covers each.
+`tested.type('/todo milk')` runs a slash command. `tested.callTool('open_ticket', { title: 'Crash' })` runs the permission rules, then the tool. `tested.fire('tool.check', …)` asks the permission rules about any call. `tested.shown.notes` holds the notes a `prompt` sent after a state change. [testing.md](testing.md) covers each.

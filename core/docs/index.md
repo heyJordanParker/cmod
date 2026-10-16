@@ -16,7 +16,7 @@ my-mod/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
 ├── hooks/hooks.json                    names hooks/register.ts as the hooks module
 ├── hooks/register.ts                   registerMod(addHook, myMod, options), and nothing else
-├── src/mod.tsx                         defineMod: the state, the setup, the hooks, the panes
+├── src/mod.tsx                         defineMod: the state, the setup, the listeners, the panes
 ├── src/state.ts                        the starting state
 ├── src/panes/prompts.tsx               one definePane per file
 ├── src/components/prompt-count.tsx     what the panes and renders draw with
@@ -57,7 +57,7 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | Question | File |
 | --- | --- |
 | How do I define a mod, and what can `mod` call? | [mod.md](mod.md) |
-| How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every-and-mod-after), [session.md](session.md#send-to-a-conversation) |
+| How does a mod watch something outside Claude Code, tell Claude about it, or ask a model? | [mod.md](mod.md#mod-every-and-mod-after), [session.md](session.md#act-on-a-session) |
 | How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
 | How do I keep values across prompts, sessions, and projects? | [state.md](state.md) |
 | How does a person set a token, a URL, or a setting for my mod, for themselves or their team? | [options.md](options.md) |
@@ -66,7 +66,8 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | How does the person finish a setup step only they can do, such as signing in? | [install-steps.md](install-steps.md#steps-in-claude-code) |
 | How do I add my mod's own page to `/mods`, or change Claude Code's settings? | [mod.md](mod.md#mod-settings), [mod.md](mod.md#settings-claude-code-s-settings-files) |
 | How does my mod read and follow this conversation, its tasks, or earlier ones, search them, or start a task? | [session.md](session.md) |
-| How do I listen to a Claude Code hook, and what can a listener answer? | [hooks.md](hooks.md) |
+| How does my mod hear a prompt, a tool call, a permission dialog, or a model switch, and change or refuse it? | [session.md](session.md#listen-to-a-record), [session.md](session.md#the-session-s-own-events) |
+| How does my mod hear, change, or run any slash command, a built-in such as `/compact` included? | [mod.md](mod.md#commands-slash-commands) |
 | How do I draw a pane, change a row Claude Code draws, or ask the person something? | [ui.md](ui.md) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, a status line, or a background program? | [jobs.md](jobs.md) |
 | How does one mod call another? | [dependencies.md](dependencies.md) |
@@ -81,20 +82,20 @@ A mod imports from the files below, and every other file in this package is inte
 | Import | Exports | Docs |
 | --- | --- | --- |
 | `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `Disposable`, `Permissions`, `Allowed`, `JobContext`, `Job`, `PaneHandle`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md) |
-| `mod.js` | `settings`, `SettingsFile`, `model`, `fs`, `Entry`, `Stat`, `FileMatch`, `metadata`, `Metadata`, `process`, `http`, `Imports` | [mod.md](mod.md) |
-| `mod.js` | `sessions`, `Sessions`, `Session`, `SessionScope`, `SessionSend`, `SessionEvent`, `SessionPayload`, `TaskStartArgs`, `Usage`, `Matcher` | [session.md](session.md) |
-| `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `Document`, `Notice`, `Sender`, `SenderType`, `Person`, `Schedule`, `Channel`, `Sdk` | [session.md](session.md#message) |
-| `mod.js` | `Context`, `ContextStart`, `ContextEnd`, `Turn`, `TurnStart`, `TurnEnd`, `Goal`, `GoalChange`, `Task`, `TaskStart`, `TaskEnd` | [session.md](session.md#turn-context-goal-and-task) |
-| `mod.js` | `Hook`, `HookInput`, `HookListener`, `HookOptions`, `HookAnswer`, and one constant for each of Claude Code's 33 hooks | [hooks.md](hooks.md) |
+| `mod.js` | `settings`, `SettingsFile`, `SettingsFileChange`, `SettingsFileChangeListener`, `config`, `ConfigRow`, `commands`, `CommandInfo`, `CommandRun`, `CommandRunAnswer`, `CommandRunResult`, `model`, `fs`, `Entry`, `Stat`, `FileMatch`, `FileChange`, `metadata`, `Metadata`, `process`, `http`, `Imports` | [mod.md](mod.md) |
+| `mod.js` | `sessions`, `Sessions`, `Session`, `CurrentSession`, `TaskOwner`, `RecordPart`, `OnMethods`, `BeforeMethods`, `Listener`, `ListenerTime`, `ReadOptions`, `AnswerOptions`, `Refusal`, `SearchOptions`, `SessionScope`, `SessionSend`, `TaskStartArgs`, `ToolCallArgs`, `Usage`, `Surface`, `Matcher` | [session.md](session.md) |
+| `mod.js` | `Placement`, `ProjectSetup`, `SessionStartAsked`, `SessionStarted`, `SessionEnded`, `ModelChange`, `CwdChange`, `DirectoryAdd`, `Worktree`, `Notification`, `Elicitation`, `ElicitationResponse`, `McpServer`, `PermissionUpdate`, `PermissionCheck`, `PermissionRequest`, `PermissionDenial`, `BatchedCall`, `ToolBatch`, `Todo`, `ReplyDisplay` | [session.md](session.md#the-session-s-own-events) |
+| `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `InstructionFile`, `Notice`, `Sender`, `SenderType`, `Person`, `Mod`, `Schedule`, `Channel`, `Sdk`, `Engine` | [session.md](session.md#message) |
+| `mod.js` | `Context`, `Turn`, `Goal`, `Task` | [session.md](session.md#turn-context-goal-and-task) |
 | `mod.js` | `Toast`, `ToastId`, `ToastType`, `ToastOptions` | [ui.md](ui.md#toasts) |
 | `mod.js` | `Place`, `PlaceProps`, `ToolGroup`, `ToolProgress`, `CommandOutput`, `AskUserQuestion`, `Spinner`, `TurnDuration`, `SessionMode`, `PromptHint`, `AbovePrompt` | [ui.md](ui.md#places-change-a-row-claude-code-draws) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
 | `installer.js` | `defineStep`, `Step` | [install-steps.md](install-steps.md#steps-in-claude-code) |
 | `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod` | [mod.md](mod.md) |
 | `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionType`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
-| `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [hooks.md](hooks.md) |
-| `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [hooks.md](hooks.md) |
-| `testing.js` | `testMod`, `TestOptions`, `TestInput`, `TestedMod`, `Fakes`, `Shown`, `ShownToast`, `TestCall`, `FakeSession`, `MessageDraft` | [testing.md](testing.md) |
+| `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |
+| `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |
+| `testing.js` | `testMod`, `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, `ShownToast`, `TestCall`, `FakeSession`, `MessageDraft`, `RoutedEvent` | [testing.md](testing.md) |
 | `ui/define-pane.js` | `definePane`, `Pane` | [ui.md](ui.md) |
 | `ui/elements.js` | `Box`, `Text`, `Button`, `Link`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `drawWith` | [ui.md](ui.md) |
 | `ui/components.js` | `Tabs`, `Tab`, `Split`, `Panel`, `Toggle`, `Tooltip`, `Help`, `Dialog`, `Pagination`, `Progress` | [ui.md](ui.md) |

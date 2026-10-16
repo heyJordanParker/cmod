@@ -228,7 +228,7 @@ type PaneHandle = {
 - `open` asks Claude Code to show the pane. `isOpen` turns true once Claude Code places it. Claude Code may hold a pane back, and then `isOpen` stays false.
 - `{ focus: true }` asks Claude Code to give the pane the keyboard as it opens. Claude Code gives it only while the prompt is empty and holds the keyboard, so typed text, a dialog, or another pane the person is using keeps it. cmod sends `focus` only on that one open, never when it resizes the pane.
 - `mod.ui.pane` only adds the pane. cmod opens it only when the mod calls `open` or `toggle`, and Claude Code shows a pane only once the plugin has opened it. So give the person a way in, such as a slash command whose `reply` calls `pane.toggle()`.
-- A pane opened from what the person did, such as a slash command they typed or a `Button` they pressed, shows at any terminal width. A pane opened from anything else, such as `setup`, a timer, or `SessionStart`, shows only on a terminal 144 columns wide, or 110 for a pane the person opened before. Below that it waits undrawn until the person opens it or the terminal widens.
+- A pane opened from what the person did, such as a slash command they typed or a `Button` they pressed, shows at any terminal width. A pane opened from anything else, such as `setup`, a timer, or `onSessionStart`, shows only on a terminal 144 columns wide, or 110 for a pane the person opened before. Below that it waits undrawn until the person opens it or the terminal widens.
 - `close` closes it. The person closes a pane too, and `isOpen` follows.
 - `toggle` closes an open pane and opens a closed one.
 - When the mod starts, `isOpen` is true for each of its panes Claude Code already shows.
@@ -286,7 +286,7 @@ export const notes = defineMod({
 - No place covers the permission dialog. `mod.ui.notice` adds a line under it instead ([Notices](#notices)).
 
 ```tsx
-import { AbovePrompt, defineMod, PromptHint, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+import { AbovePrompt, defineMod, PromptHint, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { Box, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
 export const hints = defineMod({
@@ -301,7 +301,7 @@ export const hints = defineMod({
           <Text dimColor>{`Prompts: ${mod.state.session.prompts}`}</Text>
         </Box>
       ))
-    mod.on(UserPromptSubmit, () => {
+    sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
     })
   },
@@ -353,7 +353,7 @@ export const diagrams = defineMod({
 markdownBlocks<P extends MarkdownPlace>(text: string, place: P): Omit<PlaceProps<P>, 'Default'>[]
 ```
 
-`markdownBlocks`, exported from `ui/markdown.js`, returns the props of every block at one markdown place in a markdown text, such as every code block of a reply. A mod reads the blocks of a reply it got in a hook with it, and a test calls a component with real props.
+`markdownBlocks`, exported from `ui/markdown.js`, returns the props of every block at one markdown place in a markdown text, such as every code block of a reply. A mod reads the blocks of a reply an `onReply` listener got with it, and a test calls a component with real props.
 
 ```ts
 import { CodeBlock, markdownBlocks } from '../node_modules/@cmodjs/core/ui/markdown.js'
@@ -396,12 +396,12 @@ type ToastOptions = {
 - `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
 ```ts
-import { defineMod, fs, SessionStart, sessions } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, fs, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const indexer = defineMod({
   name: 'indexer',
   setup(mod) {
-    mod.on(SessionStart, async () => {
+    sessions.current.onSessionStart(async () => {
       const indexed = fs.list(sessions.current.project).then((entries) => entries.length)
       mod.ui.toast.promise(indexed, { loading: 'Indexing files', success: (count) => `Indexed ${count} files`, error: 'Indexing failed' })
     })
@@ -409,7 +409,7 @@ export const indexer = defineMod({
 })
 ```
 
-An error cmod catches for a mod, such as a hook that throws, shows as an error toast that stays, with its buttons on a line under the message:
+An error cmod catches for a mod, such as a listener that throws, shows as an error toast that stays, with its buttons on a line under the message:
 
 - `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped. The toast stays where it is, and the step's progress shows in place of its description, or of its buttons when it has none, until the try ends.
 - `Report` replaces the toast's buttons with the ways to tell the mod's author, with the keys on the first, and `Back` returns to the buttons. The same failure happening again keeps them open. `Ask Claude to report it` sends this session a prompt to file the report with the person's own tools, and Claude Code asks before each step. `Report it on GitHub (opens your browser)` opens a filled-in issue on the mod's `supportUrl` or `repository` in its `plugin.json`, or `Email the author (opens your mail app)` writes to its `author.email`. `Copy the error` copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack.
@@ -428,12 +428,12 @@ type AskOptions = { options?: readonly string[]; header?: string; multiSelect?: 
 `ask` shows a question with 2 to 4 options and resolves the answer. Fewer than two options are padded with Yes and No, and the person may type an answer of their own. `header` is a short chip beside the question, 12 characters at most. `multiSelect` lets the person pick several, and the answer comes back joined by commas.
 
 ```ts
-import { defineMod, process, sessions, Stop } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, process, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const committer = defineMod({
   name: 'committer',
   setup(mod) {
-    mod.on(Stop, async () => {
+    sessions.current.onTurnEnd(async () => {
       const answer = await mod.ui.ask('Commit the changes?', { options: ['Commit', 'Wait'], header: 'Commit' })
       if (answer === 'Commit') await process.run(['git', 'commit', '-am', 'wip'], { cwd: sessions.current.project })
     })

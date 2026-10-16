@@ -42,14 +42,14 @@ export const initialState: TasksState = {
 Then pass it to `defineMod`:
 
 ```ts
-import { defineMod, UserPromptSubmit } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { initialState } from './state.js'
 
 export const tasks = defineMod({
   name: 'tasks',
   state: initialState,
   setup(mod) {
-    mod.on(UserPromptSubmit, () => {
+    sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
     })
   },
@@ -66,14 +66,14 @@ Assign to a key. cmod saves the new value and redraws the mod.
 - An object or an array in the state is frozen. Changing it in place throws `<mod>: mod.state.<path> cannot change in place.` Assign a new value instead:
 
 ```ts
-import { defineMod, PostToolUse } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 export const reads = defineMod({
   name: 'reads',
   state: { memory: { readFiles: [] as readonly string[] } },
   setup(mod) {
-    mod.on(PostToolUse, (input) => {
-      mod.state.memory.readFiles = [...mod.state.memory.readFiles, ...input.files.read]
+    sessions.current.onToolResult(({ files }) => {
+      mod.state.memory.readFiles = [...mod.state.memory.readFiles, ...files.read]
     })
   },
 })

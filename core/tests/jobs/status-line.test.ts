@@ -3,6 +3,7 @@ import type { Args } from 'claude-code'
 import { statusLine } from '../../src/jobs/status-line.js'
 import { defineMod, fs } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
+import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
 const measured: Args<'session.measure'> = { context: { window: 200000 }, rateLimits: [], changed: ['cost'] }
 
@@ -27,15 +28,34 @@ test('the line shows when the mod turns on and is sent again only when its text 
   await tested.start()
   await tested.settle()
 
-  await tested.fire('session.measure', measured, { changed: ['cost'] })
+  await claudeCodeOf(tested).fire('session.measure', measured, { changed: ['cost'] })
   await tested.settle()
   branch = 'feature'
-  await tested.fire('session.measure', measured, { changed: ['cost'] })
+  await claudeCodeOf(tested).fire('session.measure', measured, { changed: ['cost'] })
   await tested.settle()
 
   expect(tested.shown.statuses).toEqual(['main · test-model', 'feature · test-model'])
-  expect(seen[0]).toEqual({ model: 'test-model', context: { window: 200000 }, cost: { usd: 0 } })
+  expect(seen[0]).toEqual({ model: 'test-model', contextWindow: { size: 200000 }, cost: { usd: 0 } })
   expect(seen).toHaveLength(3)
+})
+
+test("the line redraws when the mod's state changes", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'mode-line',
+      state: { session: { mode: 'propose' } },
+      setup(mod) {
+        mod.use(statusLine({ text: (_usage, mod) => `mode: ${mod.state.session.mode}` }))
+      },
+    }),
+  )
+  await tested.start()
+  await tested.settle()
+
+  tested.state.session.mode = 'build'
+  await tested.settle()
+
+  expect(tested.shown.statuses).toEqual(['mode: propose', 'mode: build'])
 })
 
 test("text gets the mod's own typed state, so the line shows state without capturing the mod from setup", async () => {
@@ -75,7 +95,7 @@ test('a text that throws keeps the last line and writes one debug line', async (
   await tested.settle()
   fails = true
 
-  await tested.fire('session.measure', measured, { changed: ['cost'] })
+  await claudeCodeOf(tested).fire('session.measure', measured, { changed: ['cost'] })
   await tested.settle()
 
   expect(tested.shown.statuses).toEqual(['main'])

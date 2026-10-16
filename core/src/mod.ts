@@ -1,8 +1,7 @@
 import type {
   AskOptions,
-  ClassicHookInputs,
   CmodDependencies,
-  ConfigRow,
+  ConfigRow as ClaudeConfigRow,
   FsStatOptions,
   HookStream,
   HttpInit,
@@ -11,7 +10,6 @@ import type {
   ModelCompleteRequest,
   ModelCompleteResult,
   PaneOpenArgs,
-  PermissionRequestDecision,
   ProcessRunInit,
   ProcessRunResult,
   ProcessSpawnChunk,
@@ -26,7 +24,7 @@ import type { Step } from './installer.js'
 import { checkOptions, type Option, type Options, type OptionValues } from './options.js'
 import { bound } from './runtime/bound.js'
 import { Mod as modSender } from './session/context/turn/message/sender.js'
-import { sessionEvents, type OnMethods, type Sessions } from './session/session.js'
+import { sessionEvents, type BeforeMethod, type CommandRun, type CommandRunAnswer, type OnMethod, type OnMethods, type Sessions } from './session/session.js'
 import type { Pane } from './ui/define-pane.js'
 import type { Place, PlaceProps } from './ui/places.js'
 import type { Disposable } from './utils/disposable.js'
@@ -65,132 +63,6 @@ export type PaneHandle = {
   readonly isOpen: boolean
   readonly isShown: boolean
   readonly isFocused: boolean
-}
-
-export const SessionStart = 'SessionStart'
-export const SessionEnd = 'SessionEnd'
-export const UserPromptSubmit = 'UserPromptSubmit'
-export const InstructionsLoaded = 'InstructionsLoaded'
-export const PreToolUse = 'PreToolUse'
-export const PermissionRequest = 'PermissionRequest'
-export const PermissionDenied = 'PermissionDenied'
-export const PostToolUse = 'PostToolUse'
-export const PostToolUseFailure = 'PostToolUseFailure'
-export const PostToolBatch = 'PostToolBatch'
-export const SubagentStart = 'SubagentStart'
-export const SubagentStop = 'SubagentStop'
-export const Notification = 'Notification'
-export const PreCompact = 'PreCompact'
-export const Stop = 'Stop'
-export const StopFailure = 'StopFailure'
-export const CwdChanged = 'CwdChanged'
-export const FileChanged = 'FileChanged'
-export const UserPromptExpansion = 'UserPromptExpansion'
-export const Setup = 'Setup'
-export const ConfigChange = 'ConfigChange'
-export const DirectoryAdded = 'DirectoryAdded'
-export const PreModelSwitch = 'PreModelSwitch'
-export const PostModelSwitch = 'PostModelSwitch'
-export const PostCompact = 'PostCompact'
-export const MessageDisplay = 'MessageDisplay'
-export const TodoCreated = 'TaskCreated'
-export const TodoCompleted = 'TaskCompleted'
-export const TeammateIdle = 'TeammateIdle'
-export const Elicitation = 'Elicitation'
-export const ElicitationResult = 'ElicitationResult'
-export const WorktreeCreate = 'WorktreeCreate'
-export const WorktreeRemove = 'WorktreeRemove'
-
-export const hooks = [
-  Setup,
-  SessionStart,
-  SessionEnd,
-  UserPromptSubmit,
-  UserPromptExpansion,
-  InstructionsLoaded,
-  ConfigChange,
-  DirectoryAdded,
-  PreModelSwitch,
-  PostModelSwitch,
-  PreToolUse,
-  PermissionRequest,
-  PermissionDenied,
-  PostToolUse,
-  PostToolUseFailure,
-  PostToolBatch,
-  MessageDisplay,
-  SubagentStart,
-  SubagentStop,
-  TodoCreated,
-  TodoCompleted,
-  TeammateIdle,
-  Elicitation,
-  ElicitationResult,
-  Notification,
-  PreCompact,
-  PostCompact,
-  Stop,
-  StopFailure,
-  CwdChanged,
-  FileChanged,
-  WorktreeCreate,
-  WorktreeRemove,
-] as const
-
-export type Hook = (typeof hooks)[number]
-
-export type HookAnswer = {
-  continue?: boolean
-  stopReason?: string
-  suppressOutput?: boolean
-  systemMessage?: string
-  decision?: 'block'
-  reason?: string
-  hookSpecificOutput?: {
-    hookEventName?: Hook
-    additionalContext?: string
-    permissionDecision?: 'allow' | 'deny' | 'ask'
-    permissionDecisionReason?: string
-    updatedInput?: Record<string, unknown>
-    sessionTitle?: string
-    suppressOriginalPrompt?: boolean
-    initialUserMessage?: string
-    watchPaths?: string[]
-    reloadSkills?: boolean
-    decision?: PermissionRequestDecision
-    updatedToolOutput?: unknown
-    updatedMCPToolOutput?: unknown
-    retry?: boolean
-    displayContent?: string
-    worktreePath?: string
-  }
-}
-
-type CallFiles = { read: string[]; changed: string[] }
-
-type HookInputs = Omit<ClassicHookInputs, 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'CwdChanged'> & {
-  PreToolUse: {
-    session_id: string
-    cwd: string
-    hook_event_name: 'PreToolUse'
-    tool_name: string
-    tool_input: Record<string, unknown>
-    tool_use_id: string
-    agent_id?: string
-    agent_type?: string
-    files: CallFiles
-  }
-  PostToolUse: ClassicHookInputs['PostToolUse'] & { files: CallFiles }
-  PostToolUseFailure: ClassicHookInputs['PostToolUseFailure'] & { files: CallFiles }
-  CwdChanged: Omit<ClassicHookInputs['CwdChanged'], 'transcript_path'>
-}
-
-export type HookInput<H extends Hook> = HookInputs[H]
-
-export type HookListener<H extends Hook> = (input: HookInput<H>) => HookAnswer | void | Promise<HookAnswer | void>
-
-export type HookOptions = {
-  readonly timeoutMs?: number
 }
 
 export type Metadata = Readonly<Record<string, string>>
@@ -243,16 +115,26 @@ export type SettingsFileChange = { readonly source: 'user' | 'project' | 'local'
 
 export type SettingsFileChangeListener = (change: SettingsFileChange) => { readonly refuse: string } | void | Promise<{ readonly refuse: string } | void>
 
-export type Setting = Pick<ConfigRow, 'key' | 'label' | 'kind' | 'value' | 'isLocked'> & {
+export type ConfigRow = Pick<ClaudeConfigRow, 'key' | 'label' | 'kind' | 'value' | 'isLocked'> & {
   readonly description?: string
   readonly options?: readonly string[]
   readonly plugin?: string
 }
 
+export type CommandInfo = { readonly name: string; readonly description: string; readonly source: 'builtin' | 'plugin' | 'user' | 'mcp'; readonly plugin?: string }
+
+export type CommandRunResult = { readonly text?: string; readonly note?: string }
+
 export type Imports = {
   readonly sessions: Sessions
+  readonly commands: {
+    list(): Promise<CommandInfo[]>
+    run(name: string, args?: string): Promise<CommandRunResult>
+    readonly beforeRun: BeforeMethod<CommandRun, CommandRunAnswer>
+    readonly onRun: OnMethod<CommandRun>
+  }
+  readonly config: { list(): Promise<ConfigRow[]> }
   readonly settings: {
-    list(): Promise<Setting[]>
     readonly user: SettingsFile
     readonly project: SettingsFile
     readonly local: SettingsFile
@@ -285,16 +167,26 @@ export const sessions: Imports['sessions'] = {
     return bound().sessions.current
   },
   list: (options) => bound().sessions.list(options),
-  search: (text, options) => bound().sessions.search(text, options),
+  search: (text, matcher, options) => bound().sessions.search(text, matcher, options),
   ...(Object.fromEntries(Object.keys(sessionEvents).map((named) => [`on${named}`, (...args: unknown[]) => (bound().sessions[`on${named}` as keyof OnMethods] as (...each: unknown[]) => Disposable)(...args)])) as OnMethods),
 }
 
 export const settings: Imports['settings'] = {
-  list: () => bound().settings.list(),
   user: { read: () => bound().settings.user.read(), update: (values) => bound().settings.user.update(values) },
   project: { read: () => bound().settings.project.read(), update: (values) => bound().settings.project.update(values) },
   local: { read: () => bound().settings.local.read(), update: (values) => bound().settings.local.update(values) },
   beforeFileChange: ((matcherOrListener: never, listener?: never) => bound().settings.beforeFileChange(matcherOrListener, listener as never)) as Imports['settings']['beforeFileChange'],
+}
+
+export const commands: Imports['commands'] = {
+  list: () => bound().commands.list(),
+  run: (name, args) => bound().commands.run(name, args),
+  beforeRun: ((...args: never[]) => (bound().commands.beforeRun as (...each: never[]) => Disposable)(...args)) as Imports['commands']['beforeRun'],
+  onRun: ((...args: never[]) => (bound().commands.onRun as (...each: never[]) => Disposable)(...args)) as Imports['commands']['onRun'],
+}
+
+export const config: Imports['config'] = {
+  list: () => bound().config.list(),
 }
 
 export const model: Imports['model'] = {
@@ -332,8 +224,6 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly state: Readonly<State>
   readonly options: OptionValues<Declared>
   readonly permissions: Permissions
-  on<H extends Hook>(hook: H, listener: HookListener<H>, options?: HookOptions): Disposable
-  on<H extends Hook>(hook: H, matcher: Matcher<HookInput<H>>, listener: HookListener<H>, options?: HookOptions): Disposable
   every(ms: number, listener: () => unknown): Disposable
   after(ms: number, listener: () => unknown): Disposable
   use<Handle>(job: Job<Handle, State>): Handle
@@ -393,21 +283,21 @@ export function defineMod<State extends StateGroups = Record<never, never>, Name
 export type { Matcher } from './utils/matcher.js'
 export type { Place, PlaceProps } from './ui/places.js'
 export { AbovePrompt, AskUserQuestion, CommandOutput, PromptHint, SessionMode, Spinner, ToolGroup, ToolProgress, TurnDuration } from './ui/places.js'
-export { Session, UsageChange, type BeforeAnswer, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type Refusal, type SearchOptions, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from './session/session.js'
-export { ContextEnd, ContextStart, type Context } from './session/context/context.js'
-export { TurnEnd, TurnStart, type Turn } from './session/context/turn/turn.js'
-export { Message, type MessageType } from './session/context/turn/message/message.js'
+export { Session, type AnswerOptions, type BeforeMethods, type Surface, type Listener, type ListenerTime, type OnMethods, type ReadOptions, type RecordPart, type Refusal, type SearchOptions, type SessionScope, type SessionSend, type Sessions, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type Notification, type Elicitation, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionRequest, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage, type CommandRun, type CommandRunAnswer } from './session/session.js'
+export type { Context } from './session/context/context.js'
+export type { Turn } from './session/context/turn/turn.js'
+export type { Message, MessageType } from './session/context/turn/message/message.js'
 export { Prompt } from './session/context/turn/message/prompt.js'
 export { Note } from './session/context/turn/message/note.js'
 export { Reply } from './session/context/turn/message/reply.js'
 export { ToolCall } from './session/context/turn/message/tool-call.js'
 export { ToolResult } from './session/context/turn/message/tool-result.js'
 export { Skill } from './session/context/turn/message/skill.js'
-export { Document } from './session/context/turn/message/document.js'
+export { InstructionFile } from './session/context/turn/message/instruction-file.js'
 export { Notice } from './session/context/turn/message/notice.js'
-export { Channel, Person, Schedule, Sdk, type Sender, type SenderType } from './session/context/turn/message/sender.js'
-export { GoalChange, type Goal } from './session/goal/goal.js'
-export { Task, TaskEnd, TaskStart } from './session/goal/task.js'
+export { Channel, Engine, Person, Schedule, Sdk, type Sender, type SenderType } from './session/context/turn/message/sender.js'
+export type { Goal } from './session/goal/goal.js'
+export { Task } from './session/goal/task.js'
 export { longestMs } from './runtime/deadline.js'
 export { notInstalled } from './runtime/dependencies.js'
 export { messageOf } from './utils/text.js'

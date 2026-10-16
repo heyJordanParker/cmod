@@ -15,6 +15,7 @@ export type Fakes = {
   http: { fetch?: Claude['http']['fetch'] }
   settings: { read?: Claude['settings']['read'] }
   config: { list?: Claude['config']['list'] }
+  command: { list?: Claude['command']['list']; run?: Claude['command']['run'] }
   ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll']; copy?: Claude['ui']['copy']; focus?: Claude['ui']['focus'] }
   session: { messages?: Claude['session']['messages']; append?: Claude['session']['append']; send?: Claude['session']['send'] }
   prompt: { submit?: Claude['prompt']['submit'] }
@@ -55,7 +56,7 @@ export function calledAnswer(caller: string, answer: EventResult<'cmod.call'>): 
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
   const emptyDisk = fakeFiles({})
   const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
@@ -197,6 +198,8 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         shown.commands.push(command.name)
         return { command: command.name }
       },
+      list: rejected('command.list', () => fakes.command.list ?? (async () => shown.commands.map((name) => ({ name, description: '', source: 'plugin' as const, plugin: plugin.name })))),
+      run: rejected('command.run', () => fakes.command.run ?? (async () => ({}))),
     },
     tool: {
       register: async (tool) => {
