@@ -184,29 +184,32 @@ An answer that changes text needs the `prompt` permission, a `ToolCall` answer n
 
 ### The session's own events
 
-`sessions.current` is a `CurrentSession`, which also hears what happens to the session itself. Each event has an `on` method, and one a mod can change also has a `before` method. A `before` method's answer reaches Claude Code, and an `on` listener never makes Claude Code wait.
+`sessions.current` is a `CurrentSession`, which also hears what happens to the session itself. Each event has an `on` method, and one a mod can change also has a `before` method. A `before` method's answer reaches Claude Code, and an `on` listener never makes Claude Code wait. These methods hear the main agent, never a subagent.
 
-| Method | Claude Code's moment | The listener can answer |
-| --- | --- | --- |
-| `beforeProjectSetup`, `onProjectSetup` | `claude --init-only` sets up the project | nothing: Claude Code waits for it |
-| `beforeSessionStart`, `onSessionStart` | a startup, resume, `/clear`, fork, or compaction | `{ note?, title?, reloadSkills?, firstPrompt? }` |
-| `onSessionEnd` | the session ends | |
-| `beforeModelChange`, `onModelChange` | `/model` switches the model | `{ ask }` or `{ refuse }` |
-| `onCwdChange`, `onDirectoryAdd` | the working folder moves, or `/add-dir` adds one | |
-| `beforeWorktreeCreate`, `onWorktreeCreate`, `onWorktreeRemove` | a worktree is made or removed | `{ result }`, the worktree's path |
-| `onNotification` | Claude Code notifies the person | |
-| `onElicitation`, `onElicitationResponse` | an MCP server asks the person, and the answer | |
-| `beforePermissionRequest`, `onPermissionRequest` | a permission dialog is about to show | `{ allow: true }` or `{ refuse }` |
-| `beforePermissionDenial`, `onPermissionDenial` | a tool call was denied | `{ retry: true }` |
-| `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `{ note }` |
-| `onTodoCreate`, `onTodoComplete` | the todo checklist changes | |
-| `beforeReplyDisplay`, `onReplyDisplay` | a reply is about to show | `{ text }`, what the person sees |
+| Method | Claude Code's moment | The payload | The listener can answer |
+| --- | --- | --- | --- |
+| `beforeProjectSetup`, `onProjectSetup` | `claude --init-only` sets up the project | `ProjectSetup`: `trigger` | nothing: Claude Code waits for it |
+| `beforeSessionStart`, `onSessionStart` | a startup, resume, `/clear`, or fork, and for `beforeSessionStart` a compaction | `SessionStartAsked`, `SessionStarted`: `source`, `model?`, `title?`, `idleSeconds?`, `contextTokenCount?`, `isCacheWarm?`, `cacheWriteUsd?` | `{ note?, title?, reloadSkills?, firstPrompt? }` |
+| `onSessionEnd` | the session ends | `SessionEnded`: `reason` | |
+| `beforeModelChange`, `onModelChange` | `/model` switches the model | `ModelChange`: `model`, `previous`, `requested?`, `source`, `contextTokenCount`, `isCacheWarm`, `cacheTtl`, `cacheWriteUsd`, `pricing?` | `{ ask }` or `{ refuse }` |
+| `onCwdChange` | the working folder moves | `CwdChange`: `previous`, and `cwd` is the new folder | |
+| `onDirectoryAdd` | `/add-dir` adds a folder | `DirectoryAdd`: `directory`, `source` | |
+| `beforeWorktreeCreate`, `onWorktreeCreate`, `onWorktreeRemove` | a worktree is made or removed | `Worktree`: `name?`, `path?` | `{ result }`, the worktree's path |
+| `onNotification` | Claude Code notifies the person | `Notification`: `text`, `title?`, `type` | |
+| `beforeElicitation`, `onElicitation` | an MCP server asks the person | `Elicitation`: `id?`, `server`, `text`, `mode?`, `url?`, `schema?` | `{ refuse }` |
+| `beforeElicitationResponse`, `onElicitationResponse` | the person answers an MCP server | `ElicitationResponse`: `id?`, `server`, `mode?`, `action`, `content?` | `{ refuse }` |
+| `beforePermissionRequest`, `onPermissionRequest` | a permission dialog is about to show | `PermissionRequest`: `name`, `input`, `suggestions`, `mcpServer?` | `{ allow: true, input?, updates? }` or `{ refuse, interrupt? }` |
+| `beforePermissionDenial`, `onPermissionDenial` | a tool call was denied | `PermissionDenial`: `name`, `input`, `callId`, `reason`, `mcpServer?` | `{ retry: true }` |
+| `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `ToolBatch`: `calls`, each `{ callId, name, input, output? }` | `{ note }` |
+| `beforeTodoCreate`, `onTodoCreate`, `beforeTodoComplete`, `onTodoComplete` | a todo is added to or ticked on the checklist | `Todo`: `id`, `subject`, `description?`, `teammate?` | `{ refuse }` |
+| `beforeReplyDisplay`, `onReplyDisplay` | a reply is about to show | `ReplyDisplay`: `replyId`, `index`, `isLast`, `text` | `{ text }`, what the person sees |
 
-The payload holds Claude Code's fields in camelCase, such as `{ source, model }` on `beforeSessionStart`, and a matcher keeps the payloads it matches:
+Every payload also carries where it happened: `session`, `cwd`, and `agentType?` and `permissionMode?` when Claude Code reports them. A matcher keeps the payloads it matches:
 
 ```ts
 sessions.current.beforeSessionStart({ source: 'compact' }, () => ({ note: 'Re-read DESIGN.md before you continue.' }))
 sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ refuse: 'This project stays on opus.' }))
+sessions.current.onCwdChange(({ cwd, previous }) => mod.log(`moved from ${previous} to ${cwd}`))
 ```
 
 A `before` method on another session asks the mod over cmod from that session. That session waits up to 5 seconds for the answer, then lets the event happen as it was and logs why.

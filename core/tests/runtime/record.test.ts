@@ -209,17 +209,20 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
       name: 'modes',
       setup() {
         sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ refuse: 'This mode keeps opus.' }))
-        sessions.current.onCwdChange((change) => void moved.push(change['newCwd']))
+        sessions.current.onCwdChange((change) => void moved.push({ cwd: change.cwd, previous: change.previous }))
       },
     }),
     { permissions: ['model'] },
   )
   await tested.start()
+  const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
 
-  expect(await tested.fire(PreModelSwitch, { session_id: 's1', model: 'haiku', previous_model: 'opus' } as never)).toEqual({ permissionDecision: 'deny', permissionDecisionReason: 'This mode keeps opus.' })
-  expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/b', old_cwd: '/work/a', new_cwd: '/work/b' } as never)).toEqual({})
+  expect(await tested.fire(PreModelSwitch, { ...switched, to_model: 'sonnet' } as never)).toEqual({})
+  expect(await tested.fire(PreModelSwitch, { ...switched, to_model: 'haiku' } as never)).toEqual({ permissionDecision: 'deny', permissionDecisionReason: 'This mode keeps opus.' })
+  expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/b', old_cwd: '/work/a', new_cwd: '/work/b' })).toEqual({})
+  expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/c', old_cwd: '/work/b', new_cwd: '/work/c', agent_id: 'a1' } as never)).toEqual({})
   await tested.settle()
-  expect(moved).toEqual(['/work/b'])
+  expect(moved).toEqual([{ cwd: '/work/b', previous: '/work/a' }])
 })
 
 test('a turn searches only its own messages', async () => {

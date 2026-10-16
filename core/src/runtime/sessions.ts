@@ -8,7 +8,7 @@ import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
 import type { ContextData, GoalData, SessionChange, SessionData, TaskData, TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
-import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type ProcessBeforeMethods, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
+import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type Placement, type BeforeMethods, type Client, type OnMethods, type ProcessBeforeMethods, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
 import { matches, sentMatcher, type SentMatcher } from '../utils/matcher.js'
 import { foldAnswers, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
@@ -394,7 +394,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
       const matcher = maybeListener === undefined ? undefined : matcherOrListener
       if (hookOn === undefined) throw new Error(`${name}: ${isBefore ? 'before' : 'on'}${named} works only in a mod's own session.`)
       return hookOn(hook, async (input: unknown) => {
-        const payload = processPayloadOf(input)
+        const payload = processPayloadOf(named as keyof typeof processEvents, input)
+        if (payload['task'] !== undefined) return undefined
+        if (named === 'SessionStart' && !isBefore && payload['source'] === 'compact') return undefined
         if (matcher !== undefined && !matches(payload, matcher)) return undefined
         if (!isBefore) {
           void Promise.resolve()
@@ -464,24 +466,82 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
   }
 }
 
-const hookFields: readonly string[] = ['hook_event_name', 'session_id', 'transcript_path']
+type HookFields = Readonly<Record<string, unknown>>
 
-export function processPayloadOf(input: unknown): Readonly<Record<string, unknown>> {
-  const fields = typeof input === 'object' && input !== null ? Object.entries(input) : []
-  return Object.fromEntries(fields.filter(([key]) => !hookFields.includes(key)).map(([key, value]) => [key.replace(/_([a-z])/g, (_each, letter: string) => letter.toUpperCase()), value]))
+const recordOf = (value: unknown): Readonly<Record<string, unknown>> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {})
+
+const defined = (fields: HookFields): HookFields => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
+
+const placementOf = (input: HookFields): Placement => defined({ session: input['session_id'], task: input['agent_id'], agentType: input['agent_type'], cwd: input['cwd'], permissionMode: input['permission_mode'] }) as Placement
+
+const mcpServerOf = (server: unknown) => (server === undefined ? undefined : { name: String(recordOf(server)['name']), source: String(recordOf(server)['source']) })
+
+const modelChangeOf = (input: HookFields) => ({
+  model: input['to_model'],
+  previous: input['from_model'],
+  requested: input['requested_model'] ?? undefined,
+  source: input['source'],
+  contextTokenCount: input['context_tokens'],
+  isCacheWarm: input['prompt_cache_warm'],
+  cacheTtl: input['cache_ttl'],
+  cacheWriteUsd: input['estimated_cache_write_usd'],
+  pricing: input['pricing'],
+})
+
+const todoOf = (input: HookFields) => ({ id: input['task_id'], subject: input['task_subject'], description: input['task_description'], teammate: input['teammate_name'] })
+
+const processFields: { readonly [Name in keyof typeof processEvents]: (input: HookFields) => HookFields } = {
+  ProjectSetup: (input) => ({ trigger: input['trigger'] }),
+  SessionStart: (input) => ({
+    source: input['source'],
+    model: input['model'],
+    title: input['session_title'] || undefined,
+    idleSeconds: input['seconds_since_last_response'],
+    contextTokenCount: input['context_tokens'],
+    isCacheWarm: input['prompt_cache_likely_expired'] === undefined ? undefined : input['prompt_cache_likely_expired'] !== true,
+    cacheWriteUsd: input['estimated_cache_write_usd'],
+  }),
+  SessionEnd: (input) => ({ reason: input['reason'] === 'prompt_input_exit' ? 'exit' : input['reason'] }),
+  ModelChange: modelChangeOf,
+  CwdChange: (input) => ({ cwd: input['new_cwd'] ?? input['cwd'], previous: input['old_cwd'] }),
+  DirectoryAdd: (input) => ({ directory: input['directory'], source: input['source'] === 'slash_command' ? 'command' : 'sdk' }),
+  WorktreeCreate: (input) => ({ name: input['name'] }),
+  WorktreeRemove: (input) => ({ path: input['worktree_path'] }),
+  Notification: (input) => ({ text: input['message'], title: input['title'], type: input['notification_type'] }),
+  Elicitation: (input) => ({ id: input['elicitation_id'], server: input['mcp_server_name'], text: input['message'], mode: input['mode'], url: input['url'], schema: input['requested_schema'] }),
+  ElicitationResponse: (input) => ({ id: input['elicitation_id'], server: input['mcp_server_name'], mode: input['mode'], action: input['action'], content: input['content'] }),
+  PermissionRequest: (input) => ({ name: input['tool_name'], input: recordOf(input['tool_input']), suggestions: input['permission_suggestions'] ?? [], mcpServer: mcpServerOf(input['mcp_server']) }),
+  PermissionDenial: (input) => ({ name: input['tool_name'], input: recordOf(input['tool_input']), callId: input['tool_use_id'], reason: input['reason'], mcpServer: mcpServerOf(input['mcp_server']) }),
+  ToolBatch: (input) => ({
+    calls: (Array.isArray(input['tool_calls']) ? input['tool_calls'] : []).map((call: unknown) => {
+      const fields = recordOf(call)
+      return defined({ callId: fields['tool_use_id'], name: fields['tool_name'], input: recordOf(fields['tool_input']), output: fields['tool_response'] })
+    }),
+  }),
+  TodoCreate: todoOf,
+  TodoComplete: todoOf,
+  ReplyDisplay: (input) => ({ replyId: input['message_id'], index: input['index'], isLast: input['final'], text: input['delta'] }),
 }
 
-export function hookAnswerOf(named: string, hook: string, answer: Readonly<Record<string, unknown>>): HookAnswer | undefined {
-  const output = (fields: Readonly<Record<string, unknown>>): HookAnswer => ({ hookSpecificOutput: { hookEventName: hook as Hook, ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) } })
+export function processPayloadOf(named: keyof typeof processEvents, input: unknown): HookFields {
+  const fields = recordOf(input)
+  return { ...placementOf(fields), ...defined(processFields[named](fields)) }
+}
+
+export function hookAnswerOf(named: string, hook: string, answer: HookFields): HookAnswer | undefined {
+  const output = (fields: HookFields): HookAnswer => ({ hookSpecificOutput: { hookEventName: hook as Hook, ...defined(fields) } })
   const refuse = typeof answer['refuse'] === 'string' ? answer['refuse'] : undefined
   if (named === 'SessionStart') return output({ additionalContext: answer['note'], sessionTitle: answer['title'], reloadSkills: answer['reloadSkills'], initialUserMessage: answer['firstPrompt'] })
   if (named === 'ModelChange') return refuse === undefined ? output({ permissionDecision: 'ask', permissionDecisionReason: answer['ask'] }) : output({ permissionDecision: 'deny', permissionDecisionReason: refuse })
   if (named === 'WorktreeCreate') return output({ worktreePath: answer['result'] })
-  if (named === 'PermissionRequest') return output({ decision: refuse === undefined ? { behavior: 'allow' } : { behavior: 'deny', message: refuse } })
+  if (named === 'PermissionRequest') {
+    const allowed = defined({ behavior: 'allow', updatedInput: answer['input'], updatedPermissions: answer['updates'] })
+    return output({ decision: refuse === undefined ? allowed : defined({ behavior: 'deny', message: refuse, interrupt: answer['interrupt'] }) })
+  }
   if (named === 'PermissionDenial') return output({ retry: answer['retry'] })
   if (named === 'ToolBatch') return output({ additionalContext: answer['note'] })
   if (named === 'ReplyDisplay') return output({ displayContent: answer['text'] })
-  return undefined
+  return refuse === undefined ? undefined : { decision: 'block', reason: refuse }
 }
 
 export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, answered: Awaited<ReturnType<Claude['tool']['call']>>): ToolResult {

@@ -1,3 +1,4 @@
+import type { PermissionRequestDecision } from 'claude-code'
 import type { Disposable } from '../utils/disposable.js'
 import type { Matcher } from '../utils/matcher.js'
 import type { Context, ContextEnd, ContextStart } from './context/context.js'
@@ -180,33 +181,121 @@ export const processEvents = {
   WorktreeRemove: { on: 'WorktreeRemove' },
   Notification: { on: 'Notification' },
   Elicitation: { on: 'Elicitation' },
-  ElicitationResponse: { on: 'ElicitationResult' },
+  ElicitationResponse: { on: 'ElicitationResult', before: 'ElicitationResult' },
   PermissionRequest: { on: 'PermissionRequest', before: 'PermissionRequest' },
   PermissionDenial: { on: 'PermissionDenied', before: 'PermissionDenied' },
   ToolBatch: { on: 'PostToolBatch', before: 'PostToolBatch' },
-  TodoCreate: { on: 'TaskCreated' },
-  TodoComplete: { on: 'TaskCompleted' },
+  TodoCreate: { on: 'TaskCreated', before: 'TaskCreated' },
+  TodoComplete: { on: 'TaskCompleted', before: 'TaskCompleted' },
   ReplyDisplay: { on: 'MessageDisplay', before: 'MessageDisplay' },
 } as const satisfies Readonly<Record<string, ProcessEvent>>
+
+export type Placement = {
+  readonly session: string
+  readonly task?: string
+  readonly agentType?: string
+  readonly cwd: string
+  readonly permissionMode?: string
+}
+
+export type SessionStartAsked = Placement & {
+  readonly source: 'startup' | 'resume' | 'clear' | 'fork' | 'compact'
+  readonly model?: string
+  readonly title?: string
+  readonly idleSeconds?: number
+  readonly contextTokenCount?: number
+  readonly isCacheWarm?: boolean
+  readonly cacheWriteUsd?: number
+}
+
+export type SessionStarted = Omit<SessionStartAsked, 'source'> & { readonly source: 'startup' | 'resume' | 'clear' | 'fork' }
+
+export type ProjectSetup = Placement & { readonly trigger: 'init' | 'maintenance' }
+
+export type SessionEnded = Placement & { readonly reason: 'clear' | 'resume' | 'logout' | 'exit' | 'other' }
+
+export type ModelChange = Placement & {
+  readonly model: string
+  readonly previous: string
+  readonly requested?: string
+  readonly source: 'command' | 'picker' | 'sdk' | 'auto' | 'resume'
+  readonly contextTokenCount: number
+  readonly isCacheWarm: boolean
+  readonly cacheTtl: '5m' | '1h'
+  readonly cacheWriteUsd: number
+  readonly pricing?: 'configured' | 'catalog' | 'default'
+}
+
+export type CwdChange = Placement & { readonly previous: string }
+
+export type DirectoryAdd = Placement & { readonly directory: string; readonly source: 'command' | 'sdk' }
+
+export type Worktree = Placement & { readonly name?: string; readonly path?: string }
+
+export type Notification = Placement & { readonly text: string; readonly title?: string; readonly type: string }
+
+export type Elicitation = Placement & { readonly id?: string; readonly server: string; readonly text: string; readonly mode?: 'form' | 'url'; readonly url?: string; readonly schema?: Readonly<Record<string, unknown>> }
+
+export type ElicitationResponse = Placement & { readonly id?: string; readonly server: string; readonly mode?: 'form' | 'url'; readonly action: 'accept' | 'decline' | 'cancel'; readonly content?: Readonly<Record<string, unknown>> }
+
+export type McpServer = { readonly name: string; readonly source: string }
+
+export type PermissionUpdate = NonNullable<Extract<PermissionRequestDecision, { behavior: 'allow' }>['updatedPermissions']>[number]
+
+export type PermissionRequest = Placement & { readonly name: string; readonly input: Readonly<Record<string, unknown>>; readonly suggestions: readonly PermissionUpdate[]; readonly mcpServer?: McpServer }
+
+export type PermissionDenial = Placement & { readonly name: string; readonly input: Readonly<Record<string, unknown>>; readonly callId: string; readonly reason: string; readonly mcpServer?: McpServer }
+
+export type BatchedCall = { readonly callId: string; readonly name: string; readonly input: Readonly<Record<string, unknown>>; readonly output?: unknown }
+
+export type ToolBatch = Placement & { readonly calls: readonly BatchedCall[] }
+
+export type Todo = Placement & { readonly id: string; readonly subject: string; readonly description?: string; readonly teammate?: string }
+
+export type ReplyDisplay = Placement & { readonly replyId: string; readonly index: number; readonly isLast: boolean; readonly text: string }
+
+export type ProcessPayload = {
+  readonly ProjectSetup: ProjectSetup
+  readonly SessionStart: SessionStarted
+  readonly SessionEnd: SessionEnded
+  readonly ModelChange: ModelChange
+  readonly CwdChange: CwdChange
+  readonly DirectoryAdd: DirectoryAdd
+  readonly WorktreeCreate: Worktree
+  readonly WorktreeRemove: Worktree
+  readonly Notification: Notification
+  readonly Elicitation: Elicitation
+  readonly ElicitationResponse: ElicitationResponse
+  readonly PermissionRequest: PermissionRequest
+  readonly PermissionDenial: PermissionDenial
+  readonly ToolBatch: ToolBatch
+  readonly TodoCreate: Todo
+  readonly TodoComplete: Todo
+  readonly ReplyDisplay: ReplyDisplay
+}
+
+export type ProcessAsked = Omit<ProcessPayload, 'SessionStart'> & { readonly SessionStart: SessionStartAsked }
 
 export type ProcessAnswer = {
   readonly ProjectSetup: Record<never, never>
   readonly SessionStart: { readonly note?: string; readonly title?: string; readonly reloadSkills?: true; readonly firstPrompt?: string }
   readonly ModelChange: { readonly ask: string } | Refusal
   readonly WorktreeCreate: { readonly result: string }
-  readonly PermissionRequest: { readonly allow: true } | Refusal
+  readonly Elicitation: Refusal
+  readonly ElicitationResponse: Refusal
+  readonly PermissionRequest: { readonly allow: true; readonly input?: Readonly<Record<string, unknown>>; readonly updates?: readonly PermissionUpdate[] } | (Refusal & { readonly interrupt?: true })
   readonly PermissionDenial: { readonly retry: true }
   readonly ToolBatch: { readonly note: string }
+  readonly TodoCreate: Refusal
+  readonly TodoComplete: Refusal
   readonly ReplyDisplay: { readonly text: string }
 }
 
 type ProcessName = keyof typeof processEvents
 
-type ProcessPayload = Readonly<Record<string, unknown>>
+export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: OnMethod<ProcessPayload[Name]> }
 
-export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: OnMethod<ProcessPayload> }
-
-export type ProcessBeforeMethods = { readonly [Name in keyof ProcessAnswer as `before${Name}`]: BeforeMethod<ProcessPayload, ProcessAnswer[Name]> }
+export type ProcessBeforeMethods = { readonly [Name in keyof ProcessAnswer as `before${Name}`]: BeforeMethod<ProcessAsked[Name], ProcessAnswer[Name]> }
 
 export type CurrentSession = Session & ProcessOnMethods & ProcessBeforeMethods
 
