@@ -75,12 +75,12 @@ var flagPermissions = ["conversation", "prompt", "model", "tasks", "tools", "app
 var permissionNames = [...listPermissions, ...flagPermissions];
 var hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 var programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
-var settingName = /^[A-Za-z][A-Za-z0-9]*$/;
+var settingPath = /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9_@-]+)*$/;
 var listItemHint = {
   network: 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"',
   run: `a program's command, such as "gh"`,
   files: 'a path that starts with ~/ or /, such as "~/.zshrc"',
-  config: `a Claude Code setting's name, such as "cleanupPeriodDays"`
+  config: `a Claude Code setting's name, or a key path inside one, such as "cleanupPeriodDays" or "env.ANTHROPIC_BASE_URL"`
 };
 var pluginName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 function storeFolder(env) {
@@ -208,7 +208,7 @@ function readPermissions(steps) {
       throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write a list, such as "${name}": ${example}.`);
     for (const each of value) {
       const isPath = /^(~\/|\/)/.test(each) && !each.split("/").includes("..");
-      const isValid = { network: hostName.test(each) || isPath, run: programName.test(each), files: isPath, config: settingName.test(each) }[name];
+      const isValid = { network: hostName.test(each) || isPath, run: programName.test(each), files: isPath, config: settingPath.test(each) }[name];
       if (isValid !== true)
         throw new Error(`${at} lists "${each}" under "${name}". Write ${listItemHint[name]}.`);
       items.push(`${name}:${each}`);
@@ -243,6 +243,13 @@ function permissionWords(item) {
     default:
       return item;
   }
+}
+function settingPaths(values) {
+  return Object.entries(values).flatMap(([key, value]) => isObject(value) && Object.keys(value).length > 0 ? settingPaths(value).map((path) => [key, ...path]) : [[key]]);
+}
+function isSettingCovered(granted, path) {
+  const item = `config:${path}`;
+  return [...granted].some((each) => item === each || item.startsWith(`${each}.`));
 }
 var settingsPagesMethod = "cmod:settingsPages";
 var changelogPage = "changelog";
@@ -287,9 +294,11 @@ function readKeys(keys) {
   }
   return { keys: commands };
 }
-var coreVersion = "1.5.0";
+var coreVersion = "1.6.0";
 function oldestCmodFor(steps) {
-  if (steps.permissions?.some((item) => item === "tasks" || item.startsWith("config:")) === true)
+  if (steps.permissions?.some((item) => item.startsWith("config:")) === true)
+    return "1.6.0";
+  if (steps.permissions?.includes("tasks") === true)
     return "1.0.0";
   if (steps.permissions !== undefined)
     return "0.2.0";
@@ -5985,9 +5994,9 @@ async function checkGrant(grants, call, item) {
 async function checkWrite(grants, call, path) {
   await checkGrant(grants, call, writeItem(grants, path));
 }
-async function checkSettings(grants, source, keys) {
-  for (const key of keys)
-    await checkGrant(grants, `settings.${source}.update(${key})`, `config:${key}`);
+async function checkSettings(grants, source, values) {
+  for (const path of settingPaths(values).map((each) => each.join(".")))
+    await checkGrant(grants, `settings.${source}.update(${path})`, `config:${path}`);
 }
 function checkingGrants(claude, grants) {
   const gate = (call, item) => checkGrant(grants, call, item);
@@ -6100,6 +6109,8 @@ function isCovered(granted, item, home) {
   if (split === -1)
     return false;
   const name = item.slice(0, split);
+  if (name === "config")
+    return isSettingCovered(granted, item.slice(split + 1));
   const target = expanded(item.slice(split + 1), home);
   const values = [...granted].filter((each) => each.startsWith(`${name}:`)).map((each) => expanded(each.slice(name.length + 1), home));
   if (name === "run")
@@ -7152,7 +7163,7 @@ function createToaster(claude, name, version) {
   let showsAll = false;
   let bandId;
   const changed = () => {
-    const isLoading = [...entries.values()].some((entry) => entry.type === "loading");
+    const isLoading = [...entries.values()].some((entry) => entry.type === "loading" || entry.trying !== undefined);
     if (isLoading && spinning === undefined) {
       spinning = claude.clock.every(spinnerMs, () => {
         frame += 1;
@@ -7195,6 +7206,11 @@ function createToaster(claude, name, version) {
   const put = (type, message, options, actions, hides) => {
     const id = options.id ?? (lastId += 1);
     const previous = entries.get(id);
+    if (previous?.trying !== undefined && type === "loading") {
+      previous.trying = options.description ?? message;
+      changed();
+      return id;
+    }
     if (previous !== undefined)
       disarm(previous);
     const reporting = hides !== undefined && previous?.hides === hides ? previous.reporting : undefined;
@@ -7270,7 +7286,22 @@ ${description}`}${stack}`;
       if ("deny" in focused)
         claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: "debug" });
     };
-    const actions = [...retry === undefined ? [] : [{ label: "Retry", onClick: retry }], { label: "Report", onClick: startReporting }];
+    const tryAgain = async () => {
+      const shown = entries.get(id);
+      if (shown === undefined || retry === undefined || shown.trying !== undefined)
+        return;
+      shown.trying = "Starting";
+      changed();
+      try {
+        await retry();
+      } finally {
+        if (entries.get(id) === shown) {
+          shown.trying = undefined;
+          changed();
+        }
+      }
+    };
+    const actions = [...retry === undefined ? [] : [{ label: "Retry", onClick: tryAgain }], { label: "Report", onClick: startReporting }];
     return put("error", message, { id, ...description === undefined ? {} : { description }, duration: Infinity }, actions, hides);
   };
   const toggle = (entry) => () => {
@@ -7281,14 +7312,16 @@ ${description}`}${stack}`;
   const row = (entry) => {
     const { description } = entry.options;
     const isText = typeof description === "string";
-    const icon = entry.type === "loading" ? { glyph: spinner[frame % spinner.length], color: "claude" } : icons[entry.type];
+    const icon = entry.type === "loading" || entry.trying !== undefined ? { glyph: spinner[frame % spinner.length], color: "claude" } : icons[entry.type];
     const message = isText ? Button({ plain: true, key: `toast:${entry.id}:open`, label: entry.message, onPress: toggle(entry) }) : Text({ children: entry.message });
     const details = !isText ? description : Text({ dimColor: true, wrap: entry.isOpen ? "wrap" : "truncate-end", children: entry.isOpen ? description : firstLine(description) });
     const fixed = (child) => Box({ flexShrink: 0, children: child });
     const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? "✕" : "Hide", onPress: () => hide(entry) });
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? "action" : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }));
-    const text = details === undefined ? [message] : [message, details];
-    const under = entry.reporting === undefined ? [Box({ gap: 2, flexWrap: "wrap", children: [...actions, close] })] : reportChoices(entry, entry.reporting);
+    const buttons = Box({ gap: 2, flexWrap: "wrap", children: [...actions, close] });
+    const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: "Trying again:" }), typeof entry.trying === "string" ? Text({ dimColor: true, wrap: "truncate-end", children: entry.trying }) : entry.trying] });
+    const text = details === undefined ? [message] : [message, trying ?? details];
+    const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting);
     return Box({
       gap: 2,
       children: [
@@ -7995,7 +8028,7 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
       claude().ui.log(`${name} waits for consent to run ${event.install}. Run cmod install ${name} in a terminal.`);
       return;
     }
-    installing("Waiting for your answer");
+    runtime?.toaster.toast.info("Installing", { id: installId, description: "Waiting for your answer", duration: Infinity });
     const updates = await updatesToShow().catch((error) => {
       toastFailure({ id: "cmod:updates", message: "Could not read whether its marketplace updates automatically", error });
       return;
@@ -8331,7 +8364,7 @@ async function createMod(definition, runtime) {
   const settingsFile = (source) => ({
     read: () => checked.settings.read({ source }),
     async update(values) {
-      await checkSettings(grants, source, Object.keys(values));
+      await checkSettings(grants, source, values);
       await claude.cmod.call({ to: cmodPluginName, method: "updateSettings", input: { mod: definition.name, source, project: modState.root, values } });
     }
   });
@@ -8846,7 +8879,7 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-vFNMVW/release/src/mods.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SaflPl/release/src/mods.ts
 var modsMemory = { selected: null, tab: "options", notice: null, removing: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
@@ -9083,7 +9116,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-vFNMVW/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SaflPl/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null };
 var cmodSession = { tip: null };
 var newestMessages = 8;
@@ -9207,7 +9240,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/cmod-publish-cmod-vFNMVW/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SaflPl/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);

@@ -4,17 +4,17 @@
     "": {
       "name": "cmod",
       "dependencies": {
-        "@cmodjs/cli": "^1.5.0",
-        "@cmodjs/core": "^1.5.0",
+        "@cmodjs/cli": "^1.6.0",
+        "@cmodjs/core": "^1.6.0",
       },
     },
   },
   "packages": {
     "@babel/runtime": ["@babel/runtime@7.29.10", "", {}, "sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA=="],
 
-    "@cmodjs/cli": ["@cmodjs/cli@1.5.0", "", { "bin": { "cmod": "bin/cmod" } }, "sha512-QsWhSSBP4GD1/jk2jtagmiwzj2H7StEjFe1K05tu+uVWSeJLidZaApXLAzZAPsjxChj3v0Oj/9XKkm1N8zoxeQ=="],
+    "@cmodjs/cli": ["@cmodjs/cli@1.6.0", "", { "bin": { "cmod": "bin/cmod" } }, "sha512-hl5hO78X7yxYvDjTUko9NAqczQyHdhzNm+nOMdM+TqO3OoGeunzVFOwx36atXSgtMWHv6U/gWw0TJtAhAVPaEg=="],
 
-    "@cmodjs/core": ["@cmodjs/core@1.5.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-seU1huHsgfIz0ixZpugOjhGUtXPNUCW6f6Zv4Gz8q5CVdhyMr31mOBajEgeFmvnxZa9Q35ZruNLZj45qdV3eeQ=="],
+    "@cmodjs/core": ["@cmodjs/core@1.6.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-iDIWpsXKW0WVKYHE9675Wzt+hcpzR7lAepkg50AALBJs8v01BsVBhgq9udLXnio33m4+fSarSgbrFUc5EnlJ2g=="],
 
     "@types/node": ["@types/node@26.6.5", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg=="],
 
@@ -24,7 +24,7 @@
 
     "ts-algebra": ["ts-algebra@2.0.0", "", {}, "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw=="],
 
-    "undici-types": ["undici-types@8.12.1", "", {}, "sha512-nCiEcIx87oMw9u3Yzj2DuRBzv6p0e7akhy4HUPtpBiVWmAY3o6Phznst8QhmY1oLMttLgJ2tlAvsKuzCgBSoAw=="],
+    "undici-types": ["undici-types@8.12.2", "", {}, "sha512-VoMeD2O0KdHhcn+oPqOrpivN+7aDOklVSwOLD7JNjbzV1CboAFek9IFOXnreoufTUtAsCsOK0iETiERPNR/fDA=="],
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }
