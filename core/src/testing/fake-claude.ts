@@ -190,6 +190,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       send: rejected('session.send', () => fakes.session.send ?? (async () => ({ isDelivered: true as const }))),
     },
     prompt: { submit: rejected('prompt.submit', () => fakes.prompt.submit ?? submitPrompt) },
+    turn: { abort: rejected('turn.abort', () => async () => undefined) },
     model: { complete: rejected('model.complete', () => fakes.model.complete) },
     command: {
       register: async (command) => {

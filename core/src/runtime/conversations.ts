@@ -64,6 +64,12 @@ export function serveConversations({ claude, router, store, project, report }: {
   const liveIds = new Set<string>()
   const waitingRows = new Map<string, Row[]>()
   let follower: { readonly sessions: string; stop(): void } | undefined
+  const engineTurns = new Map<string, string>()
+  router.add('turn.start', async (e, next) => {
+    const agent = (e as typeof e & { readonly agentId?: string }).agentId ?? ''
+    engineTurns.set(agent, e.turnId)
+    return next(e)
+  })
 
   const json = async <Value>(args: readonly string[]): Promise<Value> => JSON.parse(await runCmod(claude, [...args, '--json', '--project', project()], session === '' ? await claude.session.id() : session)) as Value
 
@@ -360,6 +366,7 @@ export function serveConversations({ claude, router, store, project, report }: {
   const perform = async (caller: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
     await checkAct(caller, action, input)
     await starting
+    if (action === 'abort') return abortTurn(task)
     if (task !== undefined) return performInTask(action, input, task)
     if (action === 'usage') return usageOf(claude)
     if (action === 'clients') return [...(await claude.session.surfaces())] satisfies Client[]
@@ -385,6 +392,13 @@ export function serveConversations({ claude, router, store, project, report }: {
     }
     const { name, input: toolInput } = input as ToolCallArgs
     return resultOf(place(), { name, input: toolInput, cwd: await claude.session.cwd() }, await claude.tool.call({ ...toolInput, tool: name } as never))
+  }
+
+  const abortTurn = async (task: string | undefined) => {
+    const turnId = engineTurns.get(task ?? '')
+    if (turnId === undefined) throw new Error(`no turn is running in ${task === undefined ? `session ${session}` : `task ${task}`}.`)
+    await claude.turn.abort({ turnId })
+    return null
   }
 
   const performInTask = async (action: Act, input: unknown, task: string): Promise<unknown> => {

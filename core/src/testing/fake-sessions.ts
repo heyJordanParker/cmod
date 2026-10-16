@@ -1,6 +1,6 @@
 import { isObject } from '../records.js'
 import { Document } from '../session/context/turn/message/document.js'
-import { Message, searchText, skillPrefix, type Row } from '../session/context/turn/message/message.js'
+import { Message, noFiles, searchText, skillPrefix, type Row } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Notice } from '../session/context/turn/message/notice.js'
 import { Prompt } from '../session/context/turn/message/prompt.js'
@@ -203,6 +203,7 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
       if (action === 'usage') return { model: task === undefined ? session.data.model : (taskOf(session, task).model ?? session.data.model), context: {} }
       if (action === 'clients') return isLive ? ['terminal'] : []
       if (!isLive) throw new Error(`session ${task ?? session.data.id} has ended`)
+      if (action === 'abort') return null
       if (action === 'send') {
         sent.push({ session: session.data.id, ...(task === undefined ? {} : { task }), type: String(input['type']), text: String(input['text']), ...(typeof input['as'] === 'string' ? { as: input['as'] } : {}) })
         return null
@@ -214,7 +215,7 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
         return data
       }
       if (session.data.id === current) return resultOf(place(), { name: String(input['name']), input: input['input'] as Readonly<Record<string, unknown>>, cwd: project() }, await callTool({ ...input['input'] as object, tool: String(input['name']) } as never))
-      return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', name: '', input: {}, output: '', isError: false }
+      return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', name: '', input: {}, cwd: project(), files: noFiles, output: '', isError: false }
     },
     [conversationMethods.subscribe](request, caller) {
       const list = Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Subscription[]) : []

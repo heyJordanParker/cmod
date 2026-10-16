@@ -325,7 +325,7 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   every(ms: number, listener: () => unknown): Disposable
   after(ms: number, listener: () => unknown): Disposable
   use<Handle>(job: Job<Handle, State>): Handle
-  log(text: string): void
+  log(text: string, options?: { readonly to?: 'debug' | 'transcript' }): void
   readonly ui: {
     pane(pane: Pane<State>): PaneHandle
     render<P extends Place>(place: P, Component: (props: PlaceProps<P>) => RenderElement): Disposable

@@ -230,10 +230,12 @@ mod.every(60_000, async () => {
 ### mod.log
 
 ```ts
-mod.log(text: string): void
+mod.log(text: string, options?: { to?: 'debug' | 'transcript' }): void
 ```
 
 `log` writes `<mod>: <text>` to Claude Code's debug log, which `claude --debug` shows. It is for what helps the mod's author find a fault and the person never needs to see. Tell the person with a toast instead ([ui.md](ui.md#toasts)).
+
+With `{ to: 'transcript' }`, the line shows dim in the conversation, where the person reads it and Claude never does, such as "Formatted 3 files" after a turn.
 
 ### mod.settings
 

@@ -287,6 +287,20 @@ test('beforePermissionCheck approves a call with approve, and asks or refuses on
   expect(await unallowed.fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
 })
 
+test('abort stops a running turn with the prompt permission, and throws on an ended one', async () => {
+  const tested = testMod(defineMod({ name: 'guard', setup() {} }), { permissions: ['prompt'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Deploy to prod' })
+
+  const running = await sessions.current.turn()
+  await running!.abort()
+  await tested.endTurn()
+  const [ended] = await sessions.current.turns()
+
+  expect(tested.calls.filter((call) => call.call === 'cmod.call').map((call) => call.args[0]).filter((args) => (args as { method: string }).method === 'cmod:act')).toMatchObject([{ input: { action: 'abort', input: { turn: running!.prompt.id } } }])
+  await expect(ended!.abort()).rejects.toThrow(/has ended, so there is nothing to abort/)
+})
+
 test('onToolResult hears the files a call changed and read, with the tool and its input', async () => {
   const heard: unknown[] = []
   const tested = testMod(

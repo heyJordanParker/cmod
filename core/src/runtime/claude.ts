@@ -93,6 +93,7 @@ export type Claude = {
     send: EngineInterface['session']['send']
   }
   readonly prompt: { submit: EngineInterface['prompt']['submit'] }
+  readonly turn: { abort: EngineInterface['turn']['abort'] }
   readonly model: { complete: EngineInterface['model']['complete'] }
   readonly command: { register(command: CommandSpec): Promise<{ command: string }> }
   readonly tool: { register(tool: ToolSpec): Promise<{ tool: string }>; call: EngineInterface['tool']['call'] }

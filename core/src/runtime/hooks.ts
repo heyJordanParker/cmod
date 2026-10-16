@@ -29,6 +29,7 @@ export type RoutedEvent =
   | 'session.compact'
   | 'session.receive'
   | 'agent.spawn'
+  | 'turn.start'
 
 export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.PermissionRequest']
 

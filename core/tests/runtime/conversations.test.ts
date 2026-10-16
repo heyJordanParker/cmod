@@ -109,6 +109,19 @@ test("the cmod plugin asks a mod in this session before a prompt enters, and the
   expect(asked).toMatchObject([{ to: 'guard', method: conversationMethods.before, input: { session: 'test-session', event: 'prompt', change: { type: 'message', message: { type: 'prompt', text: 'Deploy to prod' } } } }])
 })
 
+test('the cmod plugin aborts the engine turn that is running, for a mod with the prompt permission', async () => {
+  const consent = consentPath(storeFolder({ HOME: '/test/home' }))
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: ['prompt'], reader: [] }) } })
+  await tested.fire(SessionStart, { source: 'startup' })
+  const abort = (caller: string) => tested.fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: {} }, caller } as never)
+
+  expect(await abort('guard')).toEqual({ deny: 'no turn is running in session test-session.' })
+  await tested.fire('turn.start', { text: 'Deploy', turnId: 'turn-7' } as never)
+  expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in /mods reader.' })
+  expect(await abort('guard')).toEqual({ value: null })
+  expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
+})
+
 test("a mod with no grant still refuses a prompt in its own session", async () => {
   const consent = consentPath(storeFolder({ HOME: '/test/home' }))
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: [] }) } })

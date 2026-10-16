@@ -12,4 +12,5 @@ export type Turn = RecordPart & {
   readonly openedAt: string
   readonly closedAt?: string
   messages(): Promise<Message[]>
+  abort(): Promise<void>
 }

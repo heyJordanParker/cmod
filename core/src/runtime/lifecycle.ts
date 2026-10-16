@@ -825,7 +825,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     every: (ms, listener) => timer(ms, 'every', claude.clock.every, listener),
     after: (ms, listener) => timer(ms, 'after', claude.clock.after, listener),
     use: (job) => job({ mod, announce, reserveName }),
-    log: (text) => claude.ui.log(`${definition.name}: ${text}`, { to: 'debug' }),
+    log: (text, options) => claude.ui.log(`${definition.name}: ${text}`, { to: options?.to ?? 'debug' }),
     ui: { ...area.ui, notice: (callId, text) => claude.ui.notice(callId, text) },
     settings: settingsPages,
     dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),

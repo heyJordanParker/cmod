@@ -70,6 +70,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       send: (args) => $.session.send(args),
     },
     prompt: { submit: (args) => $.prompt.submit(args) },
+    turn: { abort: (args) => $.turn.abort(args) },
     model: { complete: (request, options) => $.model.complete(request, options) },
     command: { register: (command) => $.command.register(command) },
     tool: { register: (tool) => $.tool.register(tool), call: (input: ToolCallArgs) => $.tool.call(input) },
@@ -149,6 +150,7 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('session.receive', routeToMod)
   addHook('agent.spawn', routeToMod)
   addHook('prompt.attachment', routeToMod)
+  addHook('turn.start', routeToMod)
 }
 
 export function registerPermissionCheck(addHook: On): void {

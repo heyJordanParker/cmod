@@ -317,29 +317,30 @@ type Sender = { readonly type: SenderType; readonly name?: string; readonly as?:
 ## Turn, Context, Goal, and Task
 
 ```ts
-type Turn = { readonly prompt: Prompt; readonly context: number; readonly openedAt: string; readonly closedAt?: string; messages(): Promise<Message[]>; search; on; before }
+type Turn = { readonly prompt: Prompt; readonly context: number; readonly openedAt: string; readonly closedAt?: string; messages(): Promise<Message[]>; abort(): Promise<void>; search; on…; before… }
 
-type Context = { readonly number: number; readonly openedAt: string; readonly closedAt?: string; turns(): Promise<Turn[]>; search; on; before }
+type Context = { readonly number: number; readonly openedAt: string; readonly closedAt?: string; turns(): Promise<Turn[]>; search; on…; before… }
 
-type Goal = { readonly text: string; tasks(): Promise<Task[]>; search; on; before; update(change: { text: string }): Promise<void> }
+type Goal = { readonly text: string; tasks(): Promise<Task[]>; search; on…; before…; update(change: { text: string }): Promise<void> }
 
 type Task = {
   readonly id: string
   readonly title: string
-  readonly owner: Session
+  readonly owner: TaskOwner
   readonly openedBy: string
   readonly openedAt: string
   readonly closedAt?: string
   tasks(): Promise<Task[]>
   messages(): Promise<Message[]>
-  search; on; before
+  search; on…; before…
 }
 ```
 
 - A turn's `closedAt` is set once the agent stops. A turn still running has none.
+- `abort()` stops a turn while it runs, a task's turn included, and needs the `prompt` permission. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.
 - A context's `number` counts from 1. Its `closedAt` is set at the compaction that ended it.
-- A goal's `text` starts as the session's first prompt. `update` replaces it, and a `GoalChange` listener hears the new text.
-- A task's `owner` is the session doing the work. Its goal is the task's prompt, its `agentType` and `model` are what the task runs, and its turns and messages are the task's own. Claude Code's checklist tools, `TaskCreate`, `TaskUpdate`, and `TaskList`, are not tasks: they are its todo list, which the `TodoCreated` and `TodoCompleted` hooks hear ([hooks.md](hooks.md)).
+- A goal's `text` starts as the session's first prompt. `update` replaces it, and `onGoalChange` hears the new text.
+- A task's `owner` is a `TaskOwner`: the session doing the work, which can't start tasks or call tools. Its goal is the task's prompt, its `agentType` and `model` are what the task runs, and its turns and messages are the task's own. Claude Code's checklist tools, `TaskCreate`, `TaskUpdate`, and `TaskList`, are not tasks: they are its todo list, which `onTodoCreate` and `onTodoComplete` hear.
 - A task's `openedBy` is the `callId` of the Agent call that started it, and empty for a task a mod started. Its `closedAt` is set once it answered.
 
 ## Test it

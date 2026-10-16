@@ -37,9 +37,9 @@ export const conversationMethods = {
   before: 'cmod:before',
 } as const
 
-export type Act = 'send' | 'startTask' | 'callTool' | 'usage' | 'clients'
+export type Act = 'send' | 'startTask' | 'callTool' | 'usage' | 'clients' | 'abort'
 
-const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', usage: 'conversation', clients: 'conversation' }
+const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', usage: 'conversation', clients: 'conversation', abort: 'prompt' }
 
 const startsTurns: readonly string[] = ['CronCreate']
 
@@ -235,6 +235,11 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       ...data,
       ...recordPart({ ...scope, ...(task === undefined ? {} : { task }), turn: data.prompt.id }, data.closedAt === undefined ? undefined : `turn ${data.prompt.id}`),
       messages: () => messagesFrom(conversationMethods.messages, { session: scope.session, turn: data.prompt.id, ...(task === undefined ? {} : { task }) }),
+      abort: async () => {
+        if (data.closedAt !== undefined) throw new Error(`${name}: turn ${data.prompt.id} has ended, so there is nothing to abort.`)
+        const session = scope.session ?? current.id
+        await act(session, 'abort', { turn: data.prompt.id }, task === undefined ? undefined : { session, task })
+      },
     }
   }
 
