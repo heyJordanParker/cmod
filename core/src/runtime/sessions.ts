@@ -445,7 +445,8 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
         if (answer === undefined || answer === null) continue
         const unread = Object.keys(answer).filter((key) => !takes.includes(key))
         if (unread.length > 0) throw new Error(`it answered ${unread.join(' and ')}, which ${method} does not take. It takes ${takes.map((key) => `{ ${key} }`).join(', ') || 'no answer'}.`)
-        merged = { ...merged, ...answer }
+        const notes = [merged?.['note'], answer['note']].filter((note): note is string => typeof note === 'string')
+        merged = { ...merged, ...answer, ...(notes.length === 0 ? {} : { note: notes.join('\n\n') }) }
         if (typeof answer['refuse'] === 'string') return merged
       } catch (error) {
         report(`session:${method}`, `The ${method} listener failed`, error)
@@ -693,11 +694,14 @@ export function hookAnswerOf(named: string, hook: string, answer: HookFields): H
   const output = (fields: HookFields): HookAnswer => ({ hookSpecificOutput: { hookEventName: hook as Hook, ...defined(fields) } })
   const refuse = typeof answer['refuse'] === 'string' ? answer['refuse'] : undefined
   if (named === 'SessionStart') return output({ additionalContext: answer['note'], sessionTitle: answer['title'], reloadSkills: answer['reloadSkills'], initialUserMessage: answer['firstPrompt'] })
-  if (named === 'ModelChange') return refuse === undefined ? output({ permissionDecision: 'ask', permissionDecisionReason: answer['ask'] }) : output({ permissionDecision: 'deny', permissionDecisionReason: refuse })
+  if (named === 'ModelChange') {
+    if (refuse !== undefined) return output({ permissionDecision: 'deny', permissionDecisionReason: refuse })
+    return typeof answer['ask'] === 'string' ? output({ permissionDecision: 'ask', permissionDecisionReason: answer['ask'] }) : undefined
+  }
   if (named === 'WorktreeCreate') return output({ worktreePath: answer['result'] })
   if (named === 'PermissionRequest') {
-    const allowed = defined({ behavior: 'allow', updatedInput: answer['input'], updatedPermissions: answer['updates'] })
-    return output({ decision: refuse === undefined ? allowed : defined({ behavior: 'deny', message: refuse, interrupt: answer['interrupt'] }) })
+    if (refuse !== undefined) return output({ decision: defined({ behavior: 'deny', message: refuse, interrupt: answer['interrupt'] }) })
+    return answer['allow'] === true ? output({ decision: defined({ behavior: 'allow', updatedInput: answer['input'], updatedPermissions: answer['updates'] }) }) : undefined
   }
   if (named === 'PermissionDenial') return output({ retry: answer['retry'] })
   if (named === 'ToolBatch') return output({ additionalContext: answer['note'] })

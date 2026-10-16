@@ -240,6 +240,38 @@ test('a beforePermissionRequest listener that throws refuses the request', async
   expect(ran).toEqual([])
 })
 
+test('a beforePermissionRequest answer without allow or refuse leaves the dialog to the person, and a beforeModelChange answer without ask or refuse leaves the switch alone', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'quiet',
+      setup() {
+        sessions.current.beforePermissionRequest(() => ({ input: { command: 'rm -rf /' } }) as never)
+        sessions.current.beforeModelChange(() => ({}) as never)
+      },
+    }),
+    { permissions: ['approve', 'tools'] },
+  )
+  const asking = { decision: { behavior: 'ask' } } as never
+
+  expect(await claudeCodeOf(tested).fire('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'rm build' } }, asking)).toEqual(asking)
+  expect(await claudeCodeOf(tested).fire('PreModelSwitch', { model: 'haiku', previous_model: 'opus', source: 'command' } as never, {})).toEqual({})
+})
+
+test('two beforeToolBatch notes both reach Claude', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'notes',
+      setup() {
+        sessions.current.beforeToolBatch(() => ({ note: 'first' }))
+        sessions.current.beforeToolBatch(() => ({ note: 'second' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+
+  expect(await tested.raise.beforeToolBatch({ calls: [] })).toEqual({ note: 'first\n\nsecond' })
+})
+
 test('a before listener that throws is shown, and the listeners after it still answer', async () => {
   const tested = testMod(
     defineMod({

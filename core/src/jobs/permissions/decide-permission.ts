@@ -1,10 +1,11 @@
-import { strictness } from '../../runtime/hooks.js'
 import { messageOf } from '../../utils/text.js'
 import { callBaseOf, callEffects, type CallEffects, type Call } from '../../utils/call-effects.js'
 import type { Workspace } from './find-project-scope.js'
 import { folderInScope, matchTarget, targetOf, type MatchedCall, type Target, type TargetCalls, type TargetKey, type TargetOf } from './match-target.js'
 import { resolve } from '../../vendor.js'
 import { inFolder } from '../context.js'
+
+const strictness = ['allow', 'ask', 'deny'] as const
 
 export type Rule<Mod> = {
   [Key in TargetKey]: TargetOf<Key> & {

@@ -216,10 +216,8 @@ type Fields = Record<string, unknown>
 const classicParts: Readonly<Record<string, string>> = {
   additionalContext: 'prompt',
   initialUserMessage: 'prompt',
-  suppressOriginalPrompt: 'prompt',
   updatedToolOutput: 'prompt',
   updatedMCPToolOutput: 'prompt',
-  updatedInput: 'tools',
   retry: 'approve',
 }
 

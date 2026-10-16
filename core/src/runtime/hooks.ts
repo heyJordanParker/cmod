@@ -164,7 +164,6 @@ function classicResult(event: Hook, answer: HookAnswer): ClassicFields {
   return result
 }
 
-export const strictness = ['allow', 'ask', 'deny'] as const
 
 function mergeClassic(below: ClassicFields, ours: ClassicFields): ClassicFields {
   const merged: ClassicFields = { ...below, ...ours }

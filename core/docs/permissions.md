@@ -84,9 +84,9 @@ cmod checks the answer each `before` listener returns, part by part. A part with
 | Answer part | Permission |
 | --- | --- |
 | `text`, `note`, `title`, and `firstPrompt`, a `prompt` job's text, a `beforeToolResult` answer, a `beforeTurnEnd` refusal, which keeps Claude going, and every `commands.beforeRun` answer but a refusal | `prompt` |
-| a `beforeToolCall` answer, and a `beforePermissionRequest` `input` | `tools` |
+| a `beforeToolCall` answer | `tools` |
 | a `beforeTaskStart` answer | `tasks` |
-| an `allow` or an `ask`, and `retry` | `approve` |
+| an `allow`, with the `input` and `updates` a `beforePermissionRequest` allow carries, an `ask`, and `retry` | `approve` |
 
 Any other `refuse` needs no permission. A tool of the mod's own, `mcp__<mod>__*`, answers freely.
 
