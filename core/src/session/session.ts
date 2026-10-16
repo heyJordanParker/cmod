@@ -167,6 +167,49 @@ export type Session = RecordPart & {
 
 export type TaskOwner = Omit<Session, 'startTask' | 'callTool'>
 
+type ProcessEvent = { readonly on: string; readonly before?: string }
+
+export const processEvents = {
+  ProjectSetup: { on: 'Setup', before: 'Setup' },
+  SessionStart: { on: 'SessionStart', before: 'SessionStart' },
+  SessionEnd: { on: 'SessionEnd' },
+  ModelChange: { on: 'PostModelSwitch', before: 'PreModelSwitch' },
+  CwdChange: { on: 'CwdChanged' },
+  DirectoryAdd: { on: 'DirectoryAdded' },
+  WorktreeCreate: { on: 'WorktreeCreate', before: 'WorktreeCreate' },
+  WorktreeRemove: { on: 'WorktreeRemove' },
+  Notification: { on: 'Notification' },
+  Elicitation: { on: 'Elicitation' },
+  ElicitationResponse: { on: 'ElicitationResult' },
+  PermissionRequest: { on: 'PermissionRequest', before: 'PermissionRequest' },
+  PermissionDenial: { on: 'PermissionDenied', before: 'PermissionDenied' },
+  ToolBatch: { on: 'PostToolBatch', before: 'PostToolBatch' },
+  TodoCreate: { on: 'TaskCreated' },
+  TodoComplete: { on: 'TaskCompleted' },
+  ReplyDisplay: { on: 'MessageDisplay', before: 'MessageDisplay' },
+} as const satisfies Readonly<Record<string, ProcessEvent>>
+
+export type ProcessAnswer = {
+  readonly ProjectSetup: Record<never, never>
+  readonly SessionStart: { readonly note?: string; readonly title?: string; readonly reloadSkills?: true; readonly firstPrompt?: string }
+  readonly ModelChange: { readonly ask: string } | Refusal
+  readonly WorktreeCreate: { readonly result: string }
+  readonly PermissionRequest: { readonly allow: true } | Refusal
+  readonly PermissionDenial: { readonly retry: true }
+  readonly ToolBatch: { readonly note: string }
+  readonly ReplyDisplay: { readonly text: string }
+}
+
+type ProcessName = keyof typeof processEvents
+
+type ProcessPayload = Readonly<Record<string, unknown>>
+
+export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: OnMethod<ProcessPayload> }
+
+export type ProcessBeforeMethods = { readonly [Name in keyof ProcessAnswer as `before${Name}`]: BeforeMethod<ProcessPayload, ProcessAnswer[Name]> }
+
+export type CurrentSession = Session & ProcessOnMethods & ProcessBeforeMethods
+
 export type SessionScope = {
   readonly running?: boolean
   readonly since?: string
@@ -174,7 +217,7 @@ export type SessionScope = {
 }
 
 export type Sessions = OnMethods & {
-  readonly current: Session
+  readonly current: CurrentSession
   list(options?: SessionScope): Promise<Session[]>
   search(text: string, options?: SessionScope & SearchOptions): Promise<Message[]>
 }

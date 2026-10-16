@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { defineMod, Message, Note, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
+import { CwdChanged, defineMod, Message, Note, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -184,6 +184,42 @@ test('a listener on a turn that has ended throws, naming the turn', async () => 
   const [ended] = await sessions.current.turns()
 
   expect(() => ended!.onReply(() => {})).toThrow(/^history: turn .+ has ended, so its onReply never fires\. Listen on its Session\.$/)
+})
+
+test("beforeSessionStart's note, title, and first prompt reach Claude Code, and a matcher keeps one source", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'tracer',
+      setup() {
+        sessions.current.beforeSessionStart({ source: 'compact' }, () => ({ note: 'Docs held: none.', title: 'Tree pane', firstPrompt: 'Go on' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+  await tested.start()
+
+  expect(await tested.fire(SessionStart, { source: 'startup', session_id: 's1' })).toEqual({})
+  expect(await tested.fire(SessionStart, { source: 'compact', session_id: 's1' })).toEqual({ additionalContext: ['Docs held: none.'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
+})
+
+test('beforeModelChange refuses a switch, and onCwdChange hears the new folder without answering', async () => {
+  const moved: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      setup() {
+        sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ refuse: 'This mode keeps opus.' }))
+        sessions.current.onCwdChange((change) => void moved.push(change['newCwd']))
+      },
+    }),
+    { permissions: ['model'] },
+  )
+  await tested.start()
+
+  expect(await tested.fire(PreModelSwitch, { session_id: 's1', model: 'haiku', previous_model: 'opus' } as never)).toEqual({ permissionDecision: 'deny', permissionDecisionReason: 'This mode keeps opus.' })
+  expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/b', old_cwd: '/work/a', new_cwd: '/work/b' } as never)).toEqual({})
+  await tested.settle()
+  expect(moved).toEqual(['/work/b'])
 })
 
 test('a turn searches only its own messages', async () => {

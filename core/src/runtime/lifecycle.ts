@@ -689,7 +689,13 @@ async function createMod<State extends object, Declared extends Options>(definit
       await claude.cmod.call({ to: cmodPluginName, method: 'updateSettings', input: { mod: definition.name, source, project: modState.root, values } })
     },
   })
-  const client = createSessionsClient({ name: definition.name, claude: checked, report: (id, message, error) => report({ id, message, error }), isGranted: (permission) => flag(permission) })
+  const client = createSessionsClient({
+    name: definition.name,
+    claude: checked,
+    report: (id, message, error) => report({ id, message, error }),
+    isGranted: (permission) => flag(permission),
+    hookOn: (hook, listener) => mod.on(hook as Hook, listener as HookListener<Hook>),
+  })
   let followed: Parameters<typeof client.follow>[0] | undefined
   const followFolders = (project: string, folder: string) => {
     if (followed === undefined) return

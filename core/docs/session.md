@@ -182,6 +182,33 @@ sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { 
 
 An answer that changes text needs the `prompt` permission, a `ToolCall` answer needs `tools`, and a `TaskStart` or `TaskEnd` answer needs `tasks`. Without it the answer changes nothing, and the toast `The before(<event>) listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
+### The session's own events
+
+`sessions.current` is a `CurrentSession`, which also hears what happens to the session itself. Each event has an `on` method, and one a mod can change also has a `before` method. A `before` method's answer reaches Claude Code, and an `on` listener never makes Claude Code wait.
+
+| Method | Claude Code's moment | The listener can answer |
+| --- | --- | --- |
+| `beforeProjectSetup`, `onProjectSetup` | `claude --init-only` sets up the project | nothing: Claude Code waits for it |
+| `beforeSessionStart`, `onSessionStart` | a startup, resume, `/clear`, fork, or compaction | `{ note?, title?, reloadSkills?, firstPrompt? }` |
+| `onSessionEnd` | the session ends | |
+| `beforeModelChange`, `onModelChange` | `/model` switches the model | `{ ask }` or `{ refuse }` |
+| `onCwdChange`, `onDirectoryAdd` | the working folder moves, or `/add-dir` adds one | |
+| `beforeWorktreeCreate`, `onWorktreeCreate`, `onWorktreeRemove` | a worktree is made or removed | `{ result }`, the worktree's path |
+| `onNotification` | Claude Code notifies the person | |
+| `onElicitation`, `onElicitationResponse` | an MCP server asks the person, and the answer | |
+| `beforePermissionRequest`, `onPermissionRequest` | a permission dialog is about to show | `{ allow: true }` or `{ refuse }` |
+| `beforePermissionDenial`, `onPermissionDenial` | a tool call was denied | `{ retry: true }` |
+| `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `{ note }` |
+| `onTodoCreate`, `onTodoComplete` | the todo checklist changes | |
+| `beforeReplyDisplay`, `onReplyDisplay` | a reply is about to show | `{ text }`, what the person sees |
+
+The payload holds Claude Code's fields in camelCase, such as `{ source, model }` on `beforeSessionStart`, and a matcher keeps the payloads it matches:
+
+```ts
+sessions.current.beforeSessionStart({ source: 'compact' }, () => ({ note: 'Re-read DESIGN.md before you continue.' }))
+sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ refuse: 'This project stays on opus.' }))
+```
+
 A `before` method on another session asks the mod over cmod from that session. That session waits up to 5 seconds for the answer, then lets the event happen as it was and logs why.
 
 ### Act on a session
