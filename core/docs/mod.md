@@ -261,6 +261,7 @@ settings.project.read(): Promise<Settings>
 settings.project.update(values: Readonly<Record<string, unknown>>): Promise<void>
 settings.local.read(): Promise<Settings>
 settings.local.update(values: Readonly<Record<string, unknown>>): Promise<void>
+settings.beforeFileChange(matcher?, listener: (change: SettingsFileChange) => { refuse: string } | void): Disposable
 ```
 
 `settings.list` answers every row of Claude Code's `/config` menu, its own and each plugin's, with the value each holds now:
@@ -285,6 +286,14 @@ A mod that points Claude Code at its local proxy sets one variable in `env`, and
 
 ```ts
 await settings.user.update({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } })
+```
+
+`beforeFileChange` hears each settings file Claude Code sees edited while the session runs, and a Skill file edited, and `{ refuse }` keeps Claude Code on the values it had. `source` is `'user'`, `'project'`, `'local'`, `'policy'`, or `'skills'`, and `path` is the file, when Claude Code names it:
+
+```ts
+type SettingsFileChange = { source: 'user' | 'project' | 'local' | 'policy' | 'skills'; path?: string }
+
+settings.beforeFileChange({ source: /^(user|project)$/ }, () => ({ refuse: 'Settings are locked while the deploy runs.' }))
 ```
 
 ## model: one question outside the conversation

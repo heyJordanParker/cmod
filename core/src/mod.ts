@@ -239,6 +239,10 @@ export type SettingsFile = {
   update(values: Readonly<Record<string, unknown>>): Promise<void>
 }
 
+export type SettingsFileChange = { readonly source: 'user' | 'project' | 'local' | 'policy' | 'skills'; readonly path?: string }
+
+export type SettingsFileChangeListener = (change: SettingsFileChange) => { readonly refuse: string } | void | Promise<{ readonly refuse: string } | void>
+
 export type Setting = Pick<ConfigRow, 'key' | 'label' | 'kind' | 'value' | 'isLocked'> & {
   readonly description?: string
   readonly options?: readonly string[]
@@ -247,7 +251,14 @@ export type Setting = Pick<ConfigRow, 'key' | 'label' | 'kind' | 'value' | 'isLo
 
 export type Imports = {
   readonly sessions: Sessions
-  readonly settings: { list(): Promise<Setting[]>; readonly user: SettingsFile; readonly project: SettingsFile; readonly local: SettingsFile }
+  readonly settings: {
+    list(): Promise<Setting[]>
+    readonly user: SettingsFile
+    readonly project: SettingsFile
+    readonly local: SettingsFile
+    beforeFileChange(listener: SettingsFileChangeListener): Disposable
+    beforeFileChange(matcher: Matcher<SettingsFileChange>, listener: SettingsFileChangeListener): Disposable
+  }
   readonly model: { complete(request: ModelCompleteRequest, options?: ModelCompleteOptions): Promise<ModelCompleteResult> }
   readonly fs: {
     read(path: string): Promise<string>
@@ -283,6 +294,7 @@ export const settings: Imports['settings'] = {
   user: { read: () => bound().settings.user.read(), update: (values) => bound().settings.user.update(values) },
   project: { read: () => bound().settings.project.read(), update: (values) => bound().settings.project.update(values) },
   local: { read: () => bound().settings.local.read(), update: (values) => bound().settings.local.update(values) },
+  beforeFileChange: ((matcherOrListener: never, listener?: never) => bound().settings.beforeFileChange(matcherOrListener, listener as never)) as Imports['settings']['beforeFileChange'],
 }
 
 export const model: Imports['model'] = {

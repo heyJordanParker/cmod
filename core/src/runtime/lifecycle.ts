@@ -1,6 +1,6 @@
 import type { Args, EventResult, Frozen, HookBudget, PluginOptions, RenderElement, Timer } from 'claude-code'
 import type { Step } from '../installer.js'
-import { FileChanged, hooks, PreToolUse, SessionStart, type Allowed, type FileChange, type Disposable, type Hook, type HookInput, type HookListener, type HookOptions, type Imports, type Mod, type ModDefinition, type PaneHandle, type SettingsFile, type Toast } from '../mod.js'
+import { ConfigChange, FileChanged, hooks, PreToolUse, SessionStart, type Allowed, type FileChange, type Disposable, type Hook, type HookInput, type HookListener, type HookOptions, type Imports, type Mod, type ModDefinition, type PaneHandle, type SettingsFile, type SettingsFileChange, type SettingsFileChangeListener, type Toast } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
 import { changelogPage, consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, recordPath, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
@@ -722,6 +722,16 @@ async function createMod<State extends object, Declared extends Options>(definit
       user: settingsFile('user'),
       project: settingsFile('project'),
       local: settingsFile('local'),
+      beforeFileChange: (matcherOrListener: unknown, maybeListener?: SettingsFileChangeListener) => {
+        const listener = (maybeListener ?? matcherOrListener) as SettingsFileChangeListener
+        const matcher = maybeListener === undefined ? undefined : matcherOrListener
+        return mod.on(ConfigChange, async ({ source, file_path }) => {
+          const change: SettingsFileChange = { source: source === 'skills' ? 'skills' : (source.replace('_settings', '') as SettingsFileChange['source']), ...(file_path === undefined ? {} : { path: file_path }) }
+          if (matcher !== undefined && !matches(change, matcher)) return undefined
+          const answer = await listener(change)
+          return answer === undefined ? undefined : { decision: 'block', reason: answer.refuse }
+        })
+      },
     },
     model: { complete: (completion, options) => checked.model.complete(completion, options) },
     fs: {

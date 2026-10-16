@@ -3,7 +3,7 @@ import type { AgentInfo, ClassicHookInputs, EventResult, RenderElement } from 'c
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { CwdChanged, defineMod, FileChanged, fs, MessageDisplay, messageOf, model, Note, PermissionRequest, Person, PostToolUse, PreToolUse, process, Prompt, Reply, SessionStart, sessions, settings, Stop, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type HookInput, type HookListener, type Job, type Mod, type PaneHandle, type Task } from '../src/mod.js'
+import { ConfigChange, CwdChanged, defineMod, FileChanged, fs, MessageDisplay, messageOf, model, Note, PermissionRequest, Person, PostToolUse, PreToolUse, process, Prompt, Reply, SessionStart, sessions, settings, Stop, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type HookInput, type HookListener, type Job, type Mod, type PaneHandle, type Task } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
@@ -1286,6 +1286,28 @@ test('mod.ui.scroll asks Claude Code to bring a row of a pane into view', async 
   await tested.press('log', 'Latest')
 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
+})
+
+test('settings.beforeFileChange refuses an edit to the settings files it matches', async () => {
+  const heard: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'locked',
+      setup() {
+        settings.beforeFileChange({ source: /^(user|project)$/ }, (change) => {
+          heard.push(change)
+          return { refuse: 'Settings are locked while the deploy runs.' }
+        })
+      },
+    }),
+  )
+
+  const project = await tested.fire(ConfigChange, { source: 'project_settings', file_path: '/work/app/.claude/settings.json' })
+  const skills = await tested.fire(ConfigChange, { source: 'skills' })
+
+  expect(project).toEqual({ block: 'Settings are locked while the deploy runs.' })
+  expect(skills).toEqual({})
+  expect(heard).toEqual([{ source: 'project', path: '/work/app/.claude/settings.json' }])
 })
 
 test('fs.onChange watches a folder from session start and hears each file that changes under it', async () => {
