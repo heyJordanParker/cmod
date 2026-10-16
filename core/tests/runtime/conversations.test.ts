@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { defineMod, SessionStart, Stop, StopFailure } from '../../src/mod.js'
+import { defineMod, sessions, SessionStart, Stop, StopFailure } from '../../src/mod.js'
 import { consentPath, storeFolder } from '../../src/records.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createRouter } from '../../src/runtime/router.js'
@@ -120,6 +120,20 @@ test('the cmod plugin aborts the engine turn that is running, for a mod with the
   expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in /mods reader.' })
   expect(await abort('guard')).toEqual({ value: null })
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
+})
+
+test("the cmod plugin's own listener on its session, added in setup, starts no follower", async () => {
+  const spawned: (readonly string[])[] = []
+  const tested = testMod(defineMod({ name: 'cmod', setup: () => void sessions.current.onPrompt(() => {}) }))
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request.argv)
+    return printed('[]')
+  }
+  await tested.fire(SessionStart, { source: 'startup' })
+  await tested.settle()
+
+  expect(spawned.filter((argv) => argv.includes('follow'))).toEqual([])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
 
 test("a turn ends at Stop with Claude's answer, stays open while a mod refuses the stop, and ends with its failure at StopFailure", async () => {
@@ -456,7 +470,7 @@ test('the cmod plugin restarts its follower quietly, and says so when a follower
     return child.stream
   }
   const listen = (session: string) => tested.fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session, subscriptions: [{ event: 'message' }] }, caller: 'watcher' } as never)
-  await tested.start()
+  await tested.fire(SessionStart, { source: 'startup' })
 
   await listen('other-1')
   await listen('other-2')

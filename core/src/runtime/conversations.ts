@@ -109,6 +109,7 @@ export function serveConversations({ claude, router, store, project, report }: {
   }
 
   const restartFollower = async () => {
+    if (session === '') return
     const wantsEvery = [...heard.values()].some((sessions) => (sessions.get(everySession) ?? []).length > 0)
     const named = [...heard.values()].flatMap((sessions) => [...sessions].filter(([id, list]) => id !== session && id !== everySession && list.length > 0).map(([id]) => id))
     const others = [...new Set(named)].sort()
