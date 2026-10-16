@@ -85,7 +85,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           until grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
-            rm bun.lock
+            rm -f bun.lock
             bun install --no-cache || true
             sleep 10
           done
