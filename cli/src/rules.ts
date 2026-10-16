@@ -1,10 +1,10 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { lstat, mkdir, readdir, readFile, readlink, rm, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { isObject, readRecord, storeFolder } from '@cmodjs/core/src/records.js'
 import { parse } from 'jsonc-parser'
 import { ifMissing, readJson, readLink, readText, writeAtomically } from './files.js'
-import { configRoot, excludeRules, includeRules, linkedFolders, settingsPath } from './settings.js'
+import { configRoot, excludeRules, includeRules, isLinked, settingsPath } from './settings.js'
 import { approvals, recordNames, storePath, takeLock } from './store.js'
 
 export type Rule = { readonly name: string; readonly isGlobal: boolean; readonly text: string }
@@ -36,9 +36,8 @@ export async function syncRules(project: string): Promise<SyncedRules> {
   const userRules = join(configRoot(), 'rules')
   const projectRules = join(project, '.claude', 'rules')
   const projectLocal = join(project, '.claude', 'settings.local.json')
-  const [user, here, checkouts] = await Promise.all([settingsOf([settingsPath()]), settingsOf([join(project, '.claude', 'settings.json'), projectLocal]), linkedFolders()])
+  const [user, here] = await Promise.all([settingsOf([settingsPath()]), settingsOf([join(project, '.claude', 'settings.json'), projectLocal])])
   const isExcluded = (path: string) => [...user.excluded, ...here.excluded].some((glob) => glob.match(path))
-  const isLinkedCheckout = (root: string) => checkouts.some((folder) => existsSync(folder) && realpathSync(folder) === realpathSync(root))
   const names = await recordNames()
   const linked: LinkedRules[] = []
   const placed: string[] = []
@@ -54,7 +53,7 @@ export async function syncRules(project: string): Promise<SyncedRules> {
       if (record === undefined) continue
       const source = rulesFolderOf(record.root)
       const isWanted = existsSync(source) && (await approvals(mod)).includes('prompt')
-      const isEverywhere = user.enabled.get(mod) === true || isLinkedCheckout(record.root)
+      const isEverywhere = user.enabled.get(mod) === true || (await isLinked(record.root))
       const isHere = here.enabled.get(mod) ?? isEverywhere
       const link = !isWanted ? undefined : isEverywhere ? join(userRules, mod) : here.enabled.get(mod) === true ? join(projectRules, mod) : undefined
       const exclude = link !== undefined && isEverywhere && !isHere ? `${link}/**` : undefined

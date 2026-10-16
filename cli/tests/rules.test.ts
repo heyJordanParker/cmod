@@ -47,6 +47,20 @@ test("cmod rules links a mod's rules into Claude Code's rules folder and prints 
   expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ placed: [], removed: [] })
 })
 
+test("a mod whose installed folder is gone leaves every other mod's rules linked", async () => {
+  const home = await temporaryHome()
+  const root = await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  await writeFiles(home, {
+    '.local/share/cmod/records/gone.json': record(join(home, 'deleted-folder')).replace('"house-style"', '"gone"'),
+    '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true }, env: { CLAUDE_CODE_PLUGIN_DIRS: root } }),
+  })
+
+  const result = await cmod(home, 'rules')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(root, 'rules'))
+})
+
 test("a mod that is off or lacks the prompt permission has no rules linked, and the link goes when it turns off", async () => {
   const home = await temporaryHome()
   await modWithRules(home, ['prompt'], { 'house-style@market': true })
