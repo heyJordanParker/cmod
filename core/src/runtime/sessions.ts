@@ -544,10 +544,10 @@ export function hookAnswerOf(named: string, hook: string, answer: HookFields): H
   return refuse === undefined ? undefined : { decision: 'block', reason: refuse }
 }
 
-export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, answered: Awaited<ReturnType<Claude['tool']['call']>>): ToolResult {
-  const base: Omit<ToolResult, 'text' | 'isError'> = { id: '', type: ToolResult, at: new Date().toISOString(), session: where.session, context: where.context, ...(where.turn === undefined ? {} : { turn: where.turn.prompt.id }), callId: '' }
-  if (answered.deny !== undefined) return { ...base, text: answered.deny, isError: true }
-  return { ...base, text: answered.text ?? JSON.stringify(answered.result), isError: answered.isError === true }
+export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, call: ToolCallArgs, answered: Awaited<ReturnType<Claude['tool']['call']>>): ToolResult {
+  const base: Omit<ToolResult, 'output' | 'isError'> = { id: '', type: ToolResult, at: new Date().toISOString(), session: where.session, context: where.context, ...(where.turn === undefined ? {} : { turn: where.turn.prompt.id }), callId: '', name: call.name, input: call.input }
+  if (answered.deny !== undefined) return { ...base, output: answered.deny, isError: true }
+  return { ...base, output: answered.result ?? answered.text, isError: answered.isError === true }
 }
 
 function optionsOf(options: SearchOptions): Readonly<Record<string, unknown>> {

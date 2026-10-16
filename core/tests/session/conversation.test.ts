@@ -67,7 +67,7 @@ test('a tool result becomes a ToolResult, and the turn ends at turn_duration wit
   const end = turnEnded()
   const ended = conversation.add(end)
 
-  expect(result.map((change) => change.type === Message && change.message)).toEqual([expect.objectContaining({ type: ToolResult, callId: 'toolu_1', text: 'export function Tree() {}', isError: false })])
+  expect(result.map((change) => change.type === Message && change.message)).toEqual([expect.objectContaining({ type: ToolResult, callId: 'toolu_1', name: 'Read', output: 'export function Tree() {}', isError: false })])
   expect(kinds(ended)).toEqual([TurnEnd])
   expect(ended[0]?.type === TurnEnd && ended[0].turn.closedAt).toBe(end.at)
 })

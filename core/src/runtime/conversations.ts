@@ -189,8 +189,8 @@ export function serveConversations({ claude, router, store, project, report }: {
   }
 
   const place = (): Place => {
-    const { context, contextOpenedAt, turn, tasks, taskTurns } = conversation.state
-    return { session, context, contextOpenedAt, ...(turn === undefined ? {} : { turn }), tasks, taskTurns }
+    const { context, contextOpenedAt, turn, tasks, taskTurns, openCalls } = conversation.state
+    return { session, context, contextOpenedAt, ...(turn === undefined ? {} : { turn }), tasks, taskTurns, ...(openCalls === undefined ? {} : { openCalls }) }
   }
 
   const deciders = (event: string): Watcher[] => {
@@ -384,7 +384,7 @@ export function serveConversations({ claude, router, store, project, report }: {
       return { id: started.agentId ?? '', title: args.name ?? '', agentType: args.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() } satisfies TaskData
     }
     const { name, input: toolInput } = input as ToolCallArgs
-    return resultOf(place(), await claude.tool.call({ ...toolInput, tool: name } as never))
+    return resultOf(place(), { name, input: toolInput }, await claude.tool.call({ ...toolInput, tool: name } as never))
   }
 
   const performInTask = async (action: Act, input: unknown, task: string): Promise<unknown> => {

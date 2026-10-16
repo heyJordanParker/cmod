@@ -169,7 +169,7 @@ The current session, `test-session`, starts empty. A test builds the conversatio
 - `compact()` records a compaction boundary, which ends the context and starts the next, as a compaction does.
 - `startTask({ title, agentType?, model?, openedBy?, parent? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn.
 
-Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, text, isError? }`, `{ type: Skill, name, text }`, `{ type: Document, path, text }`, or `{ type: Notice, text }`.
+Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: Document, path, text }`, or `{ type: Notice, text }`.
 
 The `sessions` option gives the earlier conversations, each a `FakeSession`: an `id`, its `messages` as drafts, its `goal`, and any `Session` field, such as `title`, `project`, or `isRunning`. A session that names no `project` is in the test's project.
 

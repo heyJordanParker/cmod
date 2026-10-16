@@ -1,4 +1,3 @@
-import type { PermissionRequestDecision } from 'claude-code'
 import type { Disposable } from '../utils/disposable.js'
 import type { Matcher } from '../utils/matcher.js'
 import type { Context, ContextEnd, ContextStart } from './context/context.js'
@@ -51,7 +50,7 @@ export type BeforeAnswer = {
   readonly document: { readonly text: string } | Refusal
   readonly reply: { readonly text: string }
   readonly toolCall: { readonly input: Readonly<Record<string, unknown>> } | { readonly result: string } | Refusal
-  readonly toolResult: { readonly text: string }
+  readonly toolResult: { readonly output: string }
   readonly notice: { readonly text: string }
   readonly taskStart: { readonly owner: { readonly model: string } } | Refusal
   readonly taskEnd: Refusal
@@ -240,7 +239,16 @@ export type ElicitationResponse = Placement & { readonly id?: string; readonly s
 
 export type McpServer = { readonly name: string; readonly source: string }
 
-export type PermissionUpdate = NonNullable<Extract<PermissionRequestDecision, { behavior: 'allow' }>['updatedPermissions']>[number]
+type PermissionRules = { readonly rules: readonly { readonly toolName: string; readonly ruleContent?: string }[]; readonly behavior: 'allow' | 'deny' | 'ask' }
+
+type PermissionDestination = { readonly destination: 'userSettings' | 'projectSettings' | 'localSettings' | 'session' | 'cliArg' }
+
+export type PermissionUpdate = PermissionDestination &
+  (
+    | (PermissionRules & { readonly type: 'addRules' | 'replaceRules' | 'removeRules' })
+    | { readonly type: 'setMode'; readonly mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'auto' }
+    | { readonly type: 'addDirectories' | 'removeDirectories'; readonly directories: readonly string[] }
+  )
 
 export type PermissionRequest = Placement & { readonly name: string; readonly input: Readonly<Record<string, unknown>>; readonly suggestions: readonly PermissionUpdate[]; readonly mcpServer?: McpServer }
 

@@ -54,7 +54,7 @@ function mainMessages(project: string) {
     firstTurn(),
     { id: 'a1:0', type: 'reply', at: at(1), session: 's1', context: 1, turn: 'u1', text: 'I will find it first.' },
     { id: 'a1:1', type: 'toolCall', at: at(1), session: 's1', context: 1, turn: 'u1', callId: 'toolu_1', name: 'Agent', input: { prompt: 'find the pane file' }, cwd: project },
-    { id: 'r1', type: 'toolResult', at: at(5), session: 's1', context: 1, turn: 'u1', callId: 'toolu_1', text: 'found src/panes/tree.tsx', isError: false },
+    { id: 'r1', type: 'toolResult', at: at(5), session: 's1', context: 1, turn: 'u1', callId: 'toolu_1', name: 'Agent', input: { prompt: 'find the pane file' }, output: 'found src/panes/tree.tsx', isError: false },
     { id: 'p1', type: 'prompt', at: at(6), session: 's1', context: 1, turn: 'p1', text: 'Switch to build mode', from: { type: 'mod', name: 'modes' } },
   ]
 }

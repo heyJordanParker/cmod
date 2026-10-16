@@ -7,6 +7,7 @@ import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMess
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
+import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
 import { TaskEnd, TaskStart } from '@cmodjs/core/src/session/goal/task.js'
 import { UsageChange, type Usage } from '@cmodjs/core/src/session/session.js'
@@ -778,7 +779,7 @@ function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | 
       const row = raw === undefined ? undefined : rowOfLine(raw)
       const unplaced = row === undefined ? undefined : messagesOf(row, place.task !== '')[place.part]
       if (unplaced === undefined || unplaced.id !== place.id) stale.add(place.session)
-      else messages.push({ ...unplaced, session: place.session, context: place.context, ...(place.turn === null ? {} : { turn: place.turn }), ...(place.task === '' ? {} : { task: place.task }) })
+      else messages.push({ ...unplaced, ...(unplaced.type === ToolResult ? callOf(db, lines, place, unplaced.callId, messages) : {}), session: place.session, context: place.context, ...(place.turn === null ? {} : { turn: place.turn }), ...(place.task === '' ? {} : { task: place.task }) })
     }
     if (stale.size === 0) return messages
     db.transaction(() => {
@@ -789,6 +790,21 @@ function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | 
     lines.close()
   }
 }
+
+function callOf(db: Database, lines: ReturnType<typeof lineReader>, place: Place, callId: string, read: readonly SessionMessage[]): Pick<ToolCall, 'name' | 'input'> | undefined {
+  const isTheCall = (message: { readonly type: string } | undefined): message is Pick<ToolCall, 'type' | 'callId' | 'name' | 'input'> => message?.type === ToolCall && (message as ToolCall).callId === callId
+  for (const each of read.toReversed()) if (isTheCall(each)) return { name: each.name, input: each.input }
+  const earlier = db.query<Place, [string, string, number]>(`select ${placeColumns} from messages where session = ?1 and task = ?2 and seq < (select seq from messages where row = ?3) order by seq desc limit ${callSearchRows}`).all(place.session, place.task, place.row)
+  for (const each of earlier) {
+    const raw = parsedRow(lines.read(each.file, each.offset, each.length) ?? '')
+    const row = raw === undefined ? undefined : rowOfLine(raw)
+    const call = row === undefined ? undefined : messagesOf(row, each.task !== '')[each.part]
+    if (isTheCall(call)) return { name: call.name, input: call.input }
+  }
+  return undefined
+}
+
+const callSearchRows = 64
 
 function lineReader(db: Database): { read(file: number, offset: number, length: number): string | undefined; close(): void } {
   const descriptors = new Map<number, number | undefined>()

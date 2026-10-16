@@ -167,7 +167,8 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 | `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
 | `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
 | `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
-| `beforeReply`, `beforeToolResult`, `beforeNotice` | `{ text }` | The text the transcript keeps |
+| `beforeReply`, `beforeNotice` | `{ text }` | The text the transcript keeps |
+| `beforeToolResult` | `{ output }` | The result Claude reads and the transcript keeps |
 | `beforeToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
 | `beforeTaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
 | `beforeTaskEnd` | `{ refuse }` | A task about to end. `refuse` sends its owner on with the reason |
@@ -279,7 +280,7 @@ type MessageOf<Type> = {
 | `'note'` | `Note` | `text`, `from`: text Claude reads that is not a prompt, such as a mod's note or a task's notification. |
 | `'reply'` | `Reply` | `text`: what Claude said. |
 | `'toolCall'` | `ToolCall` | `callId`, `name`, `input`, `cwd`: a tool Claude called, and the folder it called it in. |
-| `'toolResult'` | `ToolResult` | `callId`, `text`, `isError`: what the tool answered. |
+| `'toolResult'` | `ToolResult` | `callId`, `name`, `input`, `output`, `isError`: the call's tool and input, and what the tool answered. `output` is the text Claude read, or the tool's own result for `callTool`. |
 | `'skill'` | `Skill` | `name`, `text`: a Skill Claude Code loaded. |
 | `'document'` | `Document` | `path`, `text`: a `CLAUDE.md` file Claude Code read for a folder. |
 | `'notice'` | `Notice` | `text`: a line Claude Code added, such as a model switch. |

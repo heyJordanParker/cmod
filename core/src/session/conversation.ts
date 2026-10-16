@@ -50,7 +50,10 @@ export type ConversationState = {
   readonly endedCalls: Readonly<Record<string, string>>
   readonly tasks: Readonly<Record<string, RunningTask>>
   readonly taskTurns: Readonly<Record<string, TurnData>>
+  readonly openCalls?: Readonly<Record<string, OpenCall>>
 }
+
+type OpenCall = Pick<ToolCall, 'name' | 'input'>
 
 export type Conversation = {
   add(row: Row, task?: string): SessionChange[]
@@ -76,6 +79,7 @@ export function createConversation(start: ConversationState): Conversation {
   const endedCalls = new Map(Object.entries(start.endedCalls))
   const tasks = new Map(Object.entries(start.tasks))
   const taskTurns = new Map(Object.entries(start.taskTurns))
+  const openCalls = new Map(Object.entries(start.openCalls ?? {}))
 
   const endTaskTurn = (task: string, at: string): SessionChange[] => {
     const open = taskTurns.get(task)
@@ -148,8 +152,12 @@ export function createConversation(start: ConversationState): Conversation {
           if (task === undefined && goal === undefined) changes.push(...changeGoal(unplaced.text))
         }
         const open = task === undefined ? turn : taskTurns.get(task)
+        const call = unplaced.type === ToolResult ? openCalls.get(unplaced.callId) : undefined
+        if (unplaced.type === ToolCall) openCalls.set(unplaced.callId, { name: unplaced.name, input: unplaced.input })
+        if (unplaced.type === ToolResult) openCalls.delete(unplaced.callId)
         const placed = {
           ...unplaced,
+          ...call,
           session: start.session,
           context: placedIn,
           ...(open === undefined ? {} : { turn: open.prompt.id }),
@@ -157,7 +165,7 @@ export function createConversation(start: ConversationState): Conversation {
         } as Message
         changes.push({ type: Message, message: placed })
         if (placed.type === ToolCall && agentTools.includes(placed.name)) agentCalls.add(placed.callId)
-        if (placed.type === ToolResult && agentCalls.has(placed.callId) && !placed.text.startsWith(asyncLaunch)) changes.push(...endTask(placed.callId, row.at))
+        if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch)) changes.push(...endTask(placed.callId, row.at))
         if (placed.type === Note && placed.from.type === Task) {
           const call = tagOf(textOf(row.content), 'tool-use-id')
           if (call !== undefined && agentCalls.has(call)) changes.push(...endTask(call, row.at, tagOf(textOf(row.content), 'task-id')))
@@ -188,6 +196,7 @@ export function createConversation(start: ConversationState): Conversation {
         endedCalls: Object.fromEntries(endedCalls),
         tasks: Object.fromEntries(tasks),
         taskTurns: Object.fromEntries(taskTurns),
+        openCalls: Object.fromEntries(openCalls),
       }
     },
   }

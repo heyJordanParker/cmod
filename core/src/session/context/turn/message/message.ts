@@ -113,7 +113,7 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   }
   if (row.isSummary) return []
   const results = row.content.filter(isToolResultBlock)
-  if (results.length > 0) return results.map((block) => ({ ...base, type: ToolResult, callId: block['tool_use_id'] as string, text: textOf(block['content']), isError: block['is_error'] === true }))
+  if (results.length > 0) return results.map((block) => ({ ...base, type: ToolResult, callId: block['tool_use_id'] as string, name: '', input: {}, output: textOf(block['content']), isError: block['is_error'] === true }))
   if (text === '') return []
   if (text.startsWith(skillPrefix)) return [{ ...base, type: Skill, name: basename(text.slice(skillPrefix.length).split('\n')[0]?.trim() ?? ''), text }]
   if (text.startsWith('<task-notification')) return [{ ...base, type: Note, text: tagOf(text, 'summary') ?? text, from: { type: Task } }]

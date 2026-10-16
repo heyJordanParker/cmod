@@ -224,6 +224,7 @@ function labelOf(message: SessionMessage): string {
 function lineText(message: SessionMessage): string {
   if (message.type === ToolCall) return `${message.name}  ${JSON.stringify(message.input)}`
   if (message.type === Document) return message.path
+  if (message.type === ToolResult) return typeof message.output === 'string' ? message.output : JSON.stringify(message.output)
   return message.text
 }
 

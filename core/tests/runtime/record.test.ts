@@ -140,7 +140,7 @@ test('a subtask closes when its result reaches the parent task', async () => {
   ;(await sessions.current.goal()).onTaskEnd((task) => void ended.push(task.id))
   await tested.settle()
 
-  await tested.add({ type: ToolResult, callId: 'toolu_child', text: 'Read it.', isError: false }, { task: parent })
+  await tested.add({ type: ToolResult, callId: 'toolu_child', output: 'Read it.', isError: false }, { task: parent })
 
   expect(ended).toEqual([child])
 })
@@ -450,7 +450,7 @@ test('callTool runs a tool in this session and answers its result, with the tool
 
   const result = await sessions.current.callTool({ name: 'Bash', input: { command: 'bun run build' } })
 
-  expect([result.type, result.text, result.isError, result.session]).toEqual(['toolResult', 'ok', false, 'test-session'])
+  expect([result.type, result.name, result.input, result.output, result.isError, result.session]).toEqual(['toolResult', 'Bash', { command: 'bun run build' }, { stdout: 'ok' }, false, 'test-session'])
   expect(tested.calls.filter((call) => call.call === 'tool.call').map((call) => call.args[0])).toEqual([{ command: 'bun run build', tool: 'Bash' }])
 })
 

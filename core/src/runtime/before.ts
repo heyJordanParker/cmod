@@ -20,11 +20,11 @@ import { cmodPluginName } from './dependencies.js'
 import type { Router } from './router.js'
 import { toolInputOf } from './tool-calls.js'
 
-export type Place = Pick<ConversationState, 'session' | 'context' | 'contextOpenedAt' | 'turn' | 'tasks' | 'taskTurns'>
+export type Place = Pick<ConversationState, 'session' | 'context' | 'contextOpenedAt' | 'turn' | 'tasks' | 'taskTurns' | 'openCalls'>
 
 export type Decide = (event: BeforeEvent, change: SessionChange) => Promise<Partial<Answers> | undefined>
 
-export type Answers = { readonly text: string; readonly refuse: string; readonly input: Readonly<Record<string, unknown>>; readonly result: string; readonly owner: { readonly model: string } }
+export type Answers = { readonly text: string; readonly output: string; readonly refuse: string; readonly input: Readonly<Record<string, unknown>>; readonly result: string; readonly owner: { readonly model: string } }
 
 export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly decide: Decide }
 
@@ -44,7 +44,8 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
   const message = (where: Place, unplaced: Unplaced, task: string | undefined, isInTurn = true): SessionChange => {
     const turn = isInTurn ? (task === undefined ? where.turn : where.taskTurns[task]) : undefined
     const context = task === undefined ? where.context : (where.tasks[task]?.context ?? where.context)
-    return { type: Message, message: { ...unplaced, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
+    const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
+    return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
   }
   const added: Disposable[] = [
     router.add('prompt.submit', async (e, next) => {
@@ -98,7 +99,8 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       for (const [part, unplaced] of found.entries()) {
         if (!wanted.has(unplaced.type)) continue
         const answer = await asked(unplaced.type, message(where, unplaced, e.agentId))
-        if (answer.text !== undefined) texts.set(part, answer.text)
+        const text = unplaced.type === ToolResult ? answer.output : answer.text
+        if (text !== undefined) texts.set(part, text)
       }
       return next(texts.size === 0 ? e : { ...e, message: { ...e.message, content: withTexts(row, texts) as typeof e.message.content } })
     }),
@@ -154,6 +156,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
 }
 
 export function withAnswer(change: SessionChange, answer: Partial<Answers>): SessionChange {
+  if (change.type === Message && answer.output !== undefined && change.message.type === ToolResult) return { ...change, message: { ...change.message, output: answer.output } }
   if (change.type === Message && answer.text !== undefined) return { ...change, message: { ...change.message, text: answer.text } as Message }
   if (change.type === Message && answer.input !== undefined && change.message.type === ToolCall) return { ...change, message: { ...change.message, input: answer.input } }
   if (change.type === TaskStart && answer.owner !== undefined) return { ...change, task: { ...change.task, model: answer.owner.model } }

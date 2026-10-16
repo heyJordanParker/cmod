@@ -4,6 +4,8 @@ export const ToolResult = 'toolResult'
 
 export type ToolResult = MessageOf<typeof ToolResult> & {
   readonly callId: string
-  readonly text: string
+  readonly name: string
+  readonly input: Readonly<Record<string, unknown>>
+  readonly output: unknown
   readonly isError: boolean
 }

@@ -1139,7 +1139,7 @@ test('sessions.current.messages reads this conversation, and each message names 
   await tested.start()
   const [prompt] = await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.add({ type: ToolCall, name: 'Read', input: { file_path: '/work/tree.ts' }, callId: 'toolu_1' })
-  await tested.add({ type: ToolResult, callId: 'toolu_1', text: 'export function Tree() {}' })
+  await tested.add({ type: ToolResult, callId: 'toolu_1', output: 'export function Tree() {}' })
   await tested.add({ type: Reply, text: 'Renamed it.' })
   await tested.endTurn()
 
@@ -1147,6 +1147,7 @@ test('sessions.current.messages reads this conversation, and each message names 
   const [turn] = await sessions.current.turns()
 
   expect(messages.map((message) => message.type)).toEqual([Prompt, ToolCall, ToolResult, Reply])
+  expect(messages.find((message) => message.type === ToolResult)).toMatchObject({ name: 'Read', input: { file_path: '/work/tree.ts' }, output: 'export function Tree() {}', isError: false })
   expect(messages.every((message) => message.turn === prompt?.id)).toBe(true)
   expect(turn?.prompt.text).toBe('Rename the tree pane')
   expect(turn?.closedAt).toBeDefined()

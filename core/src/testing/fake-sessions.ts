@@ -23,7 +23,7 @@ export type MessageDraft =
   | { readonly type: typeof Note; readonly text: string; readonly from?: Sender }
   | { readonly type: typeof Reply; readonly text: string }
   | { readonly type: typeof ToolCall; readonly name: string; readonly input?: Readonly<Record<string, unknown>>; readonly callId?: string }
-  | { readonly type: typeof ToolResult; readonly callId: string; readonly text: string; readonly isError?: boolean }
+  | { readonly type: typeof ToolResult; readonly callId: string; readonly output: string; readonly isError?: boolean }
   | { readonly type: typeof Skill; readonly name: string; readonly text: string }
   | { readonly type: typeof Document; readonly path: string; readonly text: string }
   | { readonly type: typeof Notice; readonly text: string }
@@ -109,8 +109,8 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
   const currentSession = () => sessionOf(current)
 
   const place = (): Place => {
-    const { session, context, contextOpenedAt, turn, tasks, taskTurns } = currentSession().conversation.state
-    return { session, context, contextOpenedAt, ...(turn === undefined ? {} : { turn }), tasks, taskTurns }
+    const { session, context, contextOpenedAt, turn, tasks, taskTurns, openCalls } = currentSession().conversation.state
+    return { session, context, contextOpenedAt, ...(turn === undefined ? {} : { turn }), tasks, taskTurns, ...(openCalls === undefined ? {} : { openCalls }) }
   }
 
   const taskOf = (session: Kept, id: string) => {
@@ -213,8 +213,8 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
         record(session, session.conversation.startTask(data))
         return data
       }
-      if (session.data.id === current) return resultOf(place(), await callTool({ ...input['input'] as object, tool: String(input['name']) } as never))
-      return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', text: '', isError: false }
+      if (session.data.id === current) return resultOf(place(), { name: String(input['name']), input: input['input'] as Readonly<Record<string, unknown>> }, await callTool({ ...input['input'] as object, tool: String(input['name']) } as never))
+      return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', name: '', input: {}, output: '', isError: false }
     },
     [conversationMethods.subscribe](request, caller) {
       const list = Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Subscription[]) : []
@@ -270,7 +270,7 @@ function rowOf(draft: MessageDraft, id: string, at: string): Row {
   if (draft.type === Note) return { ...base, type: 'user', isMeta: true, content: text(draft.text), origin: origin(draft.from ?? { type: Mod, name: 'test' }) }
   if (draft.type === Reply) return { ...base, type: 'assistant', content: text(draft.text) }
   if (draft.type === ToolCall) return { ...base, type: 'assistant', content: [{ type: 'tool_use', id: draft.callId ?? `toolu_${id}`, name: draft.name, input: draft.input ?? {} }], cwd: '/test/project' }
-  if (draft.type === ToolResult) return { ...base, type: 'user', content: [{ type: 'tool_result', tool_use_id: draft.callId, content: draft.text, ...(draft.isError === true ? { is_error: true } : {}) }] }
+  if (draft.type === ToolResult) return { ...base, type: 'user', content: [{ type: 'tool_result', tool_use_id: draft.callId, content: draft.output, ...(draft.isError === true ? { is_error: true } : {}) }] }
   if (draft.type === Skill) return { ...base, type: 'user', isMeta: true, content: text(`${skillPrefix} /skills/${draft.name}\n\n${draft.text}`) }
   if (draft.type === Document) return { ...base, type: 'attachment', name: 'nested_memory', content: text(draft.text), path: draft.path }
   return { ...base, type: 'system', name: 'informational', content: text(draft.text) }
