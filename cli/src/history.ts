@@ -791,15 +791,15 @@ function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | 
   }
 }
 
-function callOf(db: Database, lines: ReturnType<typeof lineReader>, place: Place, callId: string, read: readonly SessionMessage[]): Pick<ToolCall, 'name' | 'input'> | undefined {
-  const isTheCall = (message: { readonly type: string } | undefined): message is Pick<ToolCall, 'type' | 'callId' | 'name' | 'input'> => message?.type === ToolCall && (message as ToolCall).callId === callId
-  for (const each of read.toReversed()) if (isTheCall(each)) return { name: each.name, input: each.input }
+function callOf(db: Database, lines: ReturnType<typeof lineReader>, place: Place, callId: string, read: readonly SessionMessage[]): Pick<ToolCall, 'name' | 'input' | 'cwd'> | undefined {
+  const isTheCall = (message: { readonly type: string } | undefined): message is Pick<ToolCall, 'type' | 'callId' | 'name' | 'input' | 'cwd'> => message?.type === ToolCall && (message as ToolCall).callId === callId
+  for (const each of read.toReversed()) if (isTheCall(each)) return { name: each.name, input: each.input, cwd: each.cwd }
   const earlier = db.query<Place, [string, string, number]>(`select ${placeColumns} from messages where session = ?1 and task = ?2 and seq < (select seq from messages where row = ?3) order by seq desc limit ${callSearchRows}`).all(place.session, place.task, place.row)
   for (const each of earlier) {
     const raw = parsedRow(lines.read(each.file, each.offset, each.length) ?? '')
     const row = raw === undefined ? undefined : rowOfLine(raw)
     const call = row === undefined ? undefined : messagesOf(row, each.task !== '')[each.part]
-    if (isTheCall(call)) return { name: call.name, input: call.input }
+    if (isTheCall(call)) return { name: call.name, input: call.input, cwd: call.cwd }
   }
   return undefined
 }

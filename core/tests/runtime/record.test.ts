@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { CwdChanged, defineMod, Message, Note, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
+import { CwdChanged, defineMod, Message, Note, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolCall, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -223,6 +223,26 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
   expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/c', old_cwd: '/work/b', new_cwd: '/work/c', agent_id: 'a1' } as never)).toEqual({})
   await tested.settle()
   expect(moved).toEqual([{ cwd: '/work/b', previous: '/work/a' }])
+})
+
+test('onToolResult hears the files a call changed and read, with the tool and its input', async () => {
+  const heard: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tree',
+      setup() {
+        sessions.current.onToolResult(({ name, files }) => void heard.push({ name, files }))
+      },
+    }),
+    { files: { '/test/project/notes.md': 'notes' } },
+  )
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Tidy the notes' })
+  await tested.add({ type: ToolCall, name: 'Bash', input: { command: 'cat notes.md > summary.md' }, callId: 'toolu_1' })
+  await tested.add({ type: ToolResult, callId: 'toolu_1', output: '' })
+  await tested.settle()
+
+  expect(heard).toEqual([{ name: 'Bash', files: { read: ['/test/project/notes.md'], changed: ['/test/project/summary.md'] } }])
 })
 
 test('a turn searches only its own messages', async () => {

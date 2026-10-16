@@ -2,7 +2,7 @@ import type { Args, Frozen } from 'claude-code'
 import type { Disposable } from '../mod.js'
 import { ContextEnd } from '../session/context/context.js'
 import { Document } from '../session/context/turn/message/document.js'
-import { Message, messagesOf, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
+import { Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Notice } from '../session/context/turn/message/notice.js'
 import { Prompt } from '../session/context/turn/message/prompt.js'
@@ -108,7 +108,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (!(await wants(ToolCall))) return next(e)
       const where = await place()
       const input = toolInputOf(e)
-      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd: await claude.session.cwd() }, e.agentId))
+      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd: await claude.session.cwd(), files: noFiles }, e.agentId))
       if (answer.refuse !== undefined) return { deny: answer.refuse }
       if (answer.result !== undefined) return { result: answer.result }
       if (answer.input === undefined) return next(e)

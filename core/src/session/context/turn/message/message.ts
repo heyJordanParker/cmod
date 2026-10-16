@@ -7,7 +7,7 @@ import { Prompt } from './prompt.js'
 import { Reply } from './reply.js'
 import { senderOf } from './sender.js'
 import { Skill } from './skill.js'
-import { ToolCall } from './tool-call.js'
+import { ToolCall, type CallFiles } from './tool-call.js'
 import { ToolResult } from './tool-result.js'
 
 export const Message = 'message'
@@ -94,6 +94,8 @@ export function rowOfAppend(append: { readonly uuid: string; readonly door: stri
   }
 }
 
+export const noFiles: CallFiles = { read: [], changed: [] }
+
 export function messagesOf(row: Row, isInTask: boolean): Unplaced[] {
   const found = unplacedOf(row, isInTask)
   return found.length === 1 ? found : found.map((message, index) => ({ ...message, id: `${row.id}:${index}` }))
@@ -108,12 +110,12 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
     return row.content.filter(isObject).flatMap((block): Unplaced[] => {
       if (block['type'] === 'text' && typeof block['text'] === 'string' && block['text'].trim() !== '') return [{ ...base, type: Reply, text: block['text'].trim() }]
       if (block['type'] !== 'tool_use' || typeof block['id'] !== 'string' || typeof block['name'] !== 'string') return []
-      return [{ ...base, type: ToolCall, callId: block['id'], name: block['name'], input: isObject(block['input']) ? block['input'] : {}, cwd: row.cwd ?? '' }]
+      return [{ ...base, type: ToolCall, callId: block['id'], name: block['name'], input: isObject(block['input']) ? block['input'] : {}, cwd: row.cwd ?? '', files: noFiles }]
     })
   }
   if (row.isSummary) return []
   const results = row.content.filter(isToolResultBlock)
-  if (results.length > 0) return results.map((block) => ({ ...base, type: ToolResult, callId: block['tool_use_id'] as string, name: '', input: {}, output: textOf(block['content']), isError: block['is_error'] === true }))
+  if (results.length > 0) return results.map((block) => ({ ...base, type: ToolResult, callId: block['tool_use_id'] as string, name: '', input: {}, cwd: row.cwd ?? '', files: noFiles, output: textOf(block['content']), isError: block['is_error'] === true }))
   if (text === '') return []
   if (text.startsWith(skillPrefix)) return [{ ...base, type: Skill, name: basename(text.slice(skillPrefix.length).split('\n')[0]?.trim() ?? ''), text }]
   if (text.startsWith('<task-notification')) return [{ ...base, type: Note, text: tagOf(text, 'summary') ?? text, from: { type: Task } }]

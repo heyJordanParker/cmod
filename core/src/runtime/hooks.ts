@@ -186,7 +186,7 @@ async function preToolUseInput(name: string, envelope: Frozen<Args<'tool.call'>>
   }
 }
 
-async function callFiles(name: string, claude: Claude, use: CallBase, cwd: string): Promise<CallFiles> {
+export async function callFiles(name: string, claude: Claude, use: CallBase, cwd: string): Promise<CallFiles> {
   try {
     const [home, configRoot] = await Promise.all([claude.env.home(), claude.env.configHome()])
     if (home === undefined) throw new Error('HOME is not set, so ~ in a path has no meaning.')

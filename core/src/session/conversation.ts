@@ -53,7 +53,7 @@ export type ConversationState = {
   readonly openCalls?: Readonly<Record<string, OpenCall>>
 }
 
-type OpenCall = Pick<ToolCall, 'name' | 'input'>
+type OpenCall = Pick<ToolCall, 'name' | 'input' | 'cwd'>
 
 export type Conversation = {
   add(row: Row, task?: string): SessionChange[]
@@ -153,7 +153,7 @@ export function createConversation(start: ConversationState): Conversation {
         }
         const open = task === undefined ? turn : taskTurns.get(task)
         const call = unplaced.type === ToolResult ? openCalls.get(unplaced.callId) : undefined
-        if (unplaced.type === ToolCall) openCalls.set(unplaced.callId, { name: unplaced.name, input: unplaced.input })
+        if (unplaced.type === ToolCall) openCalls.set(unplaced.callId, { name: unplaced.name, input: unplaced.input, cwd: unplaced.cwd })
         if (unplaced.type === ToolResult) openCalls.delete(unplaced.callId)
         const placed = {
           ...unplaced,

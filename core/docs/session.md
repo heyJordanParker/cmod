@@ -279,8 +279,10 @@ type MessageOf<Type> = {
 | `'prompt'` | `Prompt` | `text`, `from`: the prompt that opens a turn. A slash command reads as the command typed, such as `/review 12`. |
 | `'note'` | `Note` | `text`, `from`: text Claude reads that is not a prompt, such as a mod's note or a task's notification. |
 | `'reply'` | `Reply` | `text`: what Claude said. |
-| `'toolCall'` | `ToolCall` | `callId`, `name`, `input`, `cwd`: a tool Claude called, and the folder it called it in. |
-| `'toolResult'` | `ToolResult` | `callId`, `name`, `input`, `output`, `isError`: the call's tool and input, and what the tool answered. `output` is the text Claude read, or the tool's own result for `callTool`. |
+| `'toolCall'` | `ToolCall` | `callId`, `name`, `input`, `cwd`, `files`: a tool Claude called, the folder it called it in, and the files it reads and changes. |
+| `'toolResult'` | `ToolResult` | `callId`, `name`, `input`, `cwd`, `files`, `output`, `isError`: the call's tool, input, folder, and files, and what the tool answered. `output` is the text Claude read, or the tool's own result for `callTool`. |
+
+`files` is `{ read, changed }`, each a list of absolute paths. cmod reads them from the call's input, a Bash command line included, and `read` lists only paths that are files.
 | `'skill'` | `Skill` | `name`, `text`: a Skill Claude Code loaded. |
 | `'document'` | `Document` | `path`, `text`: a `CLAUDE.md` file Claude Code read for a folder. |
 | `'notice'` | `Notice` | `text`: a line Claude Code added, such as a model switch. |

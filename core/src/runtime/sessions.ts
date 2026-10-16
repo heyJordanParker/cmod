@@ -1,8 +1,9 @@
 import type { Disposable, Hook, HookAnswer } from '../mod.js'
 import { ContextEnd, ContextStart, type Context } from '../session/context/context.js'
-import { Message } from '../session/context/turn/message/message.js'
+import { Message, noFiles } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Person } from '../session/context/turn/message/sender.js'
+import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
 import type { ContextData, GoalData, SessionChange, SessionData, TaskData, TurnData } from '../session/conversation.js'
@@ -13,6 +14,7 @@ import { matches, sentMatcher, type SentMatcher } from '../utils/matcher.js'
 import { foldAnswers, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
+import { callFiles } from './hooks.js'
 
 export type Subscription = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined }
 
@@ -196,7 +198,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
       .map((entry) => async (latest: SessionChange) => {
         if (!isInScope(entry.scope, session, latest, isUnderIn(session))) return undefined
         if (entry.matcher !== undefined && !matches(payloadOf(latest), entry.matcher)) return undefined
-        const answer = await entry.listener(payloadFor(session, latest) as never)
+        const answer = await entry.listener((await payloadFor(session, latest)) as never)
         if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer) || isGranted(beforePermission(event))) return answer
         throw new Error(`Its before(${event}) answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`)
       })
@@ -214,9 +216,16 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
     ]) as OnMethods & Partial<BeforeMethods>
   }
 
+  const withFiles = async (message: Message): Promise<Message> => {
+    if (message.type !== ToolCall && message.type !== ToolResult) return message
+    return { ...message, files: await callFiles(name, claude, { tool: message.name, input: message.input }, message.cwd) }
+  }
+
+  const messagesFrom = async (method: string, input: unknown) => Promise.all((await call<Message[]>(method, input)).map(withFiles))
+
   const recordPart = (scope: Scope, ended?: string): RecordPart =>
     ({
-      search: (text: string, options: SearchOptions = {}) => call(conversationMethods.search, { text, ...scope, ...optionsOf(options) }),
+      search: (text: string, options: SearchOptions = {}) => messagesFrom(conversationMethods.search, { text, ...scope, ...optionsOf(options) }),
       ...eventMethods(() => scope, true, ended),
     }) as RecordPart
 
@@ -225,7 +234,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
     return {
       ...data,
       ...recordPart({ ...scope, ...(task === undefined ? {} : { task }), turn: data.prompt.id }, data.closedAt === undefined ? undefined : `turn ${data.prompt.id}`),
-      messages: () => call<Message[]>(conversationMethods.messages, { session: scope.session, turn: data.prompt.id, ...(task === undefined ? {} : { task }) }),
+      messages: () => messagesFrom(conversationMethods.messages, { session: scope.session, turn: data.prompt.id, ...(task === undefined ? {} : { task }) }),
     }
   }
 
@@ -247,7 +256,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
     owner: ownerOf(session, data),
     ...recordPart({ session, task: data.id }),
     tasks: async () => (await call<TaskData[]>(conversationMethods.tasks, { session, task: data.id })).map((task) => taskOf(session, task)),
-    messages: () => call<Message[]>(conversationMethods.messages, { session, task: data.id }),
+    messages: () => messagesFrom(conversationMethods.messages, { session, task: data.id }),
   })
 
   const goalOf = (scope: Scope, data: GoalData): Goal => ({
@@ -260,9 +269,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
     },
   })
 
-  const payloadFor = (session: string, change: SessionChange): unknown => {
+  const payloadFor = async (session: string, change: SessionChange): Promise<unknown> => {
     const scope = { session }
-    if (change.type === Message) return change.message
+    if (change.type === Message) return withFiles(change.message)
     if ('turn' in change) return turnOf(scope, change.turn)
     if ('context' in change) return contextOf(scope, change.context)
     if ('task' in change) return taskOf(session, change.task)
@@ -350,7 +359,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
         return last?.closedAt === undefined ? last : undefined
       },
       turns: turnsOf,
-      messages: (options: { readonly after?: string; readonly last?: number } = {}) => call<Message[]>(conversationMethods.messages, { ...where(), ...options }),
+      messages: (options: { readonly after?: string; readonly last?: number } = {}) => messagesFrom(conversationMethods.messages, { ...where(), ...options }),
       usage: async (): Promise<Usage> => (isHere() ? usageOf(claude) : act<Usage>(id(), 'usage', null, owned)),
       clients: async (): Promise<Client[]> => (isHere() ? clientsHere() : act<Client[]>(id(), 'clients', null, owned)),
       async send(message: SessionSend) {
@@ -366,7 +375,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
         const started = await act<TaskData>(id(), 'startTask', task)
         return taskOf(id(), started)
       },
-      callTool: (toolCall: ToolCallArgs): Promise<ToolResult> => act<ToolResult>(id(), 'callTool', toolCall),
+      callTool: async (toolCall: ToolCallArgs): Promise<ToolResult> => (await withFiles(await act<ToolResult>(id(), 'callTool', toolCall))) as ToolResult,
     }) as unknown as Sessions['current']
   }
 
@@ -432,7 +441,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
           if (current.title === '') current = { ...current, title: data.title }
           return currentSession
         }),
-      search: (text, options = {}) => call<Message[]>(conversationMethods.search, { text, ...optionsOf(options), ...(options.running === undefined ? {} : { running: options.running }), ...(options.since === undefined ? {} : { since: options.since }), ...(options.everyProject === undefined ? {} : { everyProject: options.everyProject }) }),
+      search: (text, options = {}) => messagesFrom(conversationMethods.search, { text, ...optionsOf(options), ...(options.running === undefined ? {} : { running: options.running }), ...(options.since === undefined ? {} : { since: options.since }), ...(options.everyProject === undefined ? {} : { everyProject: options.everyProject }) }),
       ...every,
     },
     changed(session, change, isInProject) {
@@ -441,7 +450,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
         for (const { scope, event, matcher, listener } of listening.get(key) ?? []) {
           if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session))) continue
           void Promise.resolve()
-            .then(() => listener(payloadFor(session, change) as never))
+            .then(async () => listener((await payloadFor(session, change)) as never))
             .catch((error: unknown) => report(`session:${event}`, `The ${event} listener failed`, error))
         }
       }
@@ -544,8 +553,8 @@ export function hookAnswerOf(named: string, hook: string, answer: HookFields): H
   return refuse === undefined ? undefined : { decision: 'block', reason: refuse }
 }
 
-export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, call: ToolCallArgs, answered: Awaited<ReturnType<Claude['tool']['call']>>): ToolResult {
-  const base: Omit<ToolResult, 'output' | 'isError'> = { id: '', type: ToolResult, at: new Date().toISOString(), session: where.session, context: where.context, ...(where.turn === undefined ? {} : { turn: where.turn.prompt.id }), callId: '', name: call.name, input: call.input }
+export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, call: ToolCallArgs & { readonly cwd: string }, answered: Awaited<ReturnType<Claude['tool']['call']>>): ToolResult {
+  const base: Omit<ToolResult, 'output' | 'isError'> = { id: '', type: ToolResult, at: new Date().toISOString(), session: where.session, context: where.context, ...(where.turn === undefined ? {} : { turn: where.turn.prompt.id }), callId: '', name: call.name, input: call.input, cwd: call.cwd, files: noFiles }
   if (answered.deny !== undefined) return { ...base, output: answered.deny, isError: true }
   return { ...base, output: answered.result ?? answered.text, isError: answered.isError === true }
 }

@@ -213,7 +213,7 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
         record(session, session.conversation.startTask(data))
         return data
       }
-      if (session.data.id === current) return resultOf(place(), { name: String(input['name']), input: input['input'] as Readonly<Record<string, unknown>> }, await callTool({ ...input['input'] as object, tool: String(input['name']) } as never))
+      if (session.data.id === current) return resultOf(place(), { name: String(input['name']), input: input['input'] as Readonly<Record<string, unknown>>, cwd: project() }, await callTool({ ...input['input'] as object, tool: String(input['name']) } as never))
       return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', name: '', input: {}, output: '', isError: false }
     },
     [conversationMethods.subscribe](request, caller) {
