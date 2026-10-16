@@ -262,6 +262,31 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
   expect(await tested.fire(PostToolUse, used('Write', {}))).toEqual({ block: 'Write only under src/.' })
 })
 
+test('beforePermissionCheck approves a call with approve, and asks or refuses one with no permission', async () => {
+  const guard = (permissions: string[]) =>
+    testMod(
+      defineMod({
+        name: 'auto-approve',
+        setup() {
+          sessions.current.beforePermissionCheck({ name: 'Read' }, () => ({ allow: true }))
+          sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^git push/ } }, () => ({ ask: 'Pushing leaves this computer.' }))
+          sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
+        },
+      }),
+      { permissions },
+    )
+  const check = (tool: string, input: object) => ({ tool, input, tool_use_id: 'toolu_1' }) as never
+
+  const allowed = guard(['approve'])
+  await allowed.start()
+  expect(await allowed.fire('tool.check', check('Read', { file_path: '/work/a.ts' }))).toEqual({ decision: 'allow' })
+  expect(await allowed.fire('tool.check', check('Bash', { command: 'git push' }))).toEqual({ decision: 'ask', reason: 'Pushing leaves this computer.' })
+
+  const unallowed = guard([])
+  await unallowed.start()
+  expect(await unallowed.fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
+})
+
 test('onToolResult hears the files a call changed and read, with the tool and its input', async () => {
   const heard: unknown[] = []
   const tested = testMod(

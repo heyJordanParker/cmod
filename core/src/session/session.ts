@@ -181,6 +181,7 @@ export const processEvents = {
   Notification: { on: 'Notification' },
   Elicitation: { on: 'Elicitation' },
   ElicitationResponse: { on: 'ElicitationResult', before: 'ElicitationResult' },
+  PermissionCheck: { on: 'tool.check', before: 'tool.check' },
   PermissionRequest: { on: 'PermissionRequest', before: 'PermissionRequest' },
   PermissionDenial: { on: 'PermissionDenied', before: 'PermissionDenied' },
   ToolBatch: { on: 'PostToolBatch', before: 'PostToolBatch' },
@@ -250,6 +251,16 @@ export type PermissionUpdate = PermissionDestination &
     | { readonly type: 'addDirectories' | 'removeDirectories'; readonly directories: readonly string[] }
   )
 
+export type PermissionCheck = Placement & {
+  readonly name: string
+  readonly input: Readonly<Record<string, unknown>>
+  readonly callId?: string
+  readonly decision: 'allow' | 'ask' | 'refuse'
+  readonly reason?: string
+  readonly rule?: string
+  readonly ceiling?: 'allow' | 'ask' | 'refuse'
+}
+
 export type PermissionRequest = Placement & { readonly name: string; readonly input: Readonly<Record<string, unknown>>; readonly suggestions: readonly PermissionUpdate[]; readonly mcpServer?: McpServer }
 
 export type PermissionDenial = Placement & { readonly name: string; readonly input: Readonly<Record<string, unknown>>; readonly callId: string; readonly reason: string; readonly mcpServer?: McpServer }
@@ -274,6 +285,7 @@ export type ProcessPayload = {
   readonly Notification: Notification
   readonly Elicitation: Elicitation
   readonly ElicitationResponse: ElicitationResponse
+  readonly PermissionCheck: PermissionCheck
   readonly PermissionRequest: PermissionRequest
   readonly PermissionDenial: PermissionDenial
   readonly ToolBatch: ToolBatch
@@ -291,6 +303,7 @@ export type ProcessAnswer = {
   readonly WorktreeCreate: { readonly result: string }
   readonly Elicitation: Refusal
   readonly ElicitationResponse: Refusal
+  readonly PermissionCheck: { readonly allow: true } | { readonly ask: string } | Refusal
   readonly PermissionRequest: { readonly allow: true; readonly input?: Readonly<Record<string, unknown>>; readonly updates?: readonly PermissionUpdate[] } | (Refusal & { readonly interrupt?: true })
   readonly PermissionDenial: { readonly retry: true }
   readonly ToolBatch: { readonly note: string }

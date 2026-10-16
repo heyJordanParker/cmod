@@ -695,6 +695,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     report: (id, message, error) => report({ id, message, error }),
     isGranted: (permission) => flag(permission),
     hookOn: (hook, listener) => mod.on(hook as Hook, listener as HookListener<Hook>),
+    routeOn: (event, hook) => router.add(event, hook as never),
   })
   let followed: Parameters<typeof client.follow>[0] | undefined
   const followFolders = (project: string, folder: string) => {

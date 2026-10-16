@@ -127,7 +127,7 @@ export function isInScope(scope: Scope, session: string, change: SessionChange, 
   return (change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.id === scope.turn
 }
 
-export function createSessionsClient({ name, claude, report, isGranted, hookOn }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: (hook: string, listener: (input: unknown) => unknown) => Disposable }): SessionsClient {
+export function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: (hook: string, listener: (input: unknown) => unknown) => Disposable; readonly routeOn?: RouteOn }): SessionsClient {
   const call = <Answer>(method: string, input: unknown) => claude.cmod.call({ to: cmodPluginName, method, input }) as Promise<Answer>
   const listening = new Map<string, Set<Listening>>()
   const deciding = new Map<string, Set<Listening>>()
@@ -401,18 +401,32 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
     const method = (named: string, hook: string, isBefore: boolean) => (matcherOrListener: unknown, maybeListener?: unknown) => {
       const listener = (maybeListener ?? matcherOrListener) as (payload: unknown) => unknown
       const matcher = maybeListener === undefined ? undefined : matcherOrListener
-      if (hookOn === undefined) throw new Error(`${name}: ${isBefore ? 'before' : 'on'}${named} works only in a mod's own session.`)
+      if (hookOn === undefined || routeOn === undefined) throw new Error(`${name}: ${isBefore ? 'before' : 'on'}${named} works only in a mod's own session.`)
+      const heard = (payload: HookFields) => payload['task'] === undefined && (matcher === undefined || matches(payload, matcher))
+      const tell = (payload: HookFields) =>
+        void Promise.resolve()
+          .then(() => listener(payload))
+          .catch((error: unknown) => report(`session:on${named}`, `The on${named} listener failed`, error))
+      if (named === 'PermissionCheck') {
+        return routeOn('tool.check', async (e: ToolCheck, next) => {
+          const below = (await next(e)) as ToolCheckVerdict
+          const payload = { session: current.id, cwd: current.cwd, ...defined({ task: e.agentId, callId: e.tool_use_id, reason: below.reason, rule: below.rule, ceiling: e.ceiling === undefined ? undefined : verdictName(e.ceiling) }), name: e.tool, input: recordOf(e.input), decision: verdictName(below.decision) }
+          if (!heard(payload)) return below
+          if (!isBefore) {
+            tell(payload)
+            return below
+          }
+          const answer = (await listener(payload)) as Partial<{ readonly allow: true; readonly ask: string; readonly refuse: string }> | null | undefined
+          if (answer === undefined || answer === null || below.decision === 'deny') return below
+          if (answer.refuse !== undefined) return { decision: 'deny', reason: answer.refuse }
+          if (answer.ask !== undefined) return { decision: 'ask', reason: answer.ask }
+          return answer.allow === true ? { decision: 'allow' } : below
+        })
+      }
       return hookOn(hook, async (input: unknown) => {
-        const payload = processPayloadOf(named as keyof typeof processEvents, input)
-        if (payload['task'] !== undefined) return undefined
-        if (named === 'SessionStart' && !isBefore && payload['source'] === 'compact') return undefined
-        if (matcher !== undefined && !matches(payload, matcher)) return undefined
-        if (!isBefore) {
-          void Promise.resolve()
-            .then(() => listener(payload))
-            .catch((error: unknown) => report(`session:on${named}`, `The on${named} listener failed`, error))
-          return undefined
-        }
+        const payload = processPayloadOf(named as Exclude<keyof typeof processEvents, 'PermissionCheck'>, input)
+        if (!heard(payload) || (named === 'SessionStart' && !isBefore && payload['source'] === 'compact')) return undefined
+        if (!isBefore) return tell(payload)
         const answer = await listener(payload)
         return answer === undefined || answer === null ? undefined : hookAnswerOf(named, hook, answer as Readonly<Record<string, unknown>>)
       })
@@ -477,6 +491,14 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
 
 type HookFields = Readonly<Record<string, unknown>>
 
+type ToolCheck = { readonly tool: string; readonly input: unknown; readonly tool_use_id?: string; readonly agentId?: string; readonly ceiling?: 'allow' | 'ask' | 'deny' }
+
+type ToolCheckVerdict = { readonly decision: 'allow' | 'ask' | 'deny'; readonly reason?: string; readonly rule?: string }
+
+export type RouteOn = (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>) => Disposable
+
+const verdictName = (decision: 'allow' | 'ask' | 'deny') => (decision === 'deny' ? 'refuse' : decision)
+
 const recordOf = (value: unknown): Readonly<Record<string, unknown>> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {})
 
 const defined = (fields: HookFields): HookFields => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
@@ -499,7 +521,7 @@ const modelChangeOf = (input: HookFields) => ({
 
 const todoOf = (input: HookFields) => ({ id: input['task_id'], subject: input['task_subject'], description: input['task_description'], teammate: input['teammate_name'] })
 
-const processFields: { readonly [Name in keyof typeof processEvents]: (input: HookFields) => HookFields } = {
+const processFields: { readonly [Name in Exclude<keyof typeof processEvents, 'PermissionCheck'>]: (input: HookFields) => HookFields } = {
   ProjectSetup: (input) => ({ trigger: input['trigger'] }),
   SessionStart: (input) => ({
     source: input['source'],
@@ -532,7 +554,7 @@ const processFields: { readonly [Name in keyof typeof processEvents]: (input: Ho
   ReplyDisplay: (input) => ({ replyId: input['message_id'], index: input['index'], isLast: input['final'], text: input['delta'] }),
 }
 
-export function processPayloadOf(named: keyof typeof processEvents, input: unknown): HookFields {
+export function processPayloadOf(named: Exclude<keyof typeof processEvents, 'PermissionCheck'>, input: unknown): HookFields {
   const fields = recordOf(input)
   return { ...placementOf(fields), ...defined(processFields[named](fields)) }
 }

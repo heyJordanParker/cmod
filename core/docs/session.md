@@ -199,6 +199,7 @@ An answer that changes text needs the `prompt` permission, a `ToolCall` answer n
 | `onNotification` | Claude Code notifies the person | `Notification`: `text`, `title?`, `type` | |
 | `beforeElicitation`, `onElicitation` | an MCP server asks the person | `Elicitation`: `id?`, `server`, `text`, `mode?`, `url?`, `schema?` | `{ refuse }` |
 | `beforeElicitationResponse`, `onElicitationResponse` | the person answers an MCP server | `ElicitationResponse`: `id?`, `server`, `mode?`, `action`, `content?` | `{ refuse }` |
+| `beforePermissionCheck`, `onPermissionCheck` | Claude Code decides whether a tool call runs, asks, or is refused, before any dialog, and when a mod asks `tools.check` | `PermissionCheck`: `name`, `input`, `callId?`, `decision`, `reason?`, `rule?`, `ceiling?` | `{ allow: true }`, `{ ask }`, or `{ refuse }`. `allow` approves a call in every mode, auto mode included, and needs `approve`. A mod never overrides a refusal from the person's settings |
 | `beforePermissionRequest`, `onPermissionRequest` | a permission dialog is about to show | `PermissionRequest`: `name`, `input`, `suggestions`, `mcpServer?` | `{ allow: true, input?, updates? }` or `{ refuse, interrupt? }` |
 | `beforePermissionDenial`, `onPermissionDenial` | a tool call was denied | `PermissionDenial`: `name`, `input`, `callId`, `reason`, `mcpServer?` | `{ retry: true }` |
 | `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `ToolBatch`: `calls`, each `{ callId, name, input, output? }` | `{ note }` |
