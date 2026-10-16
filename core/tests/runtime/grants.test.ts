@@ -294,7 +294,7 @@ test('a mod that asks for a config list needs cmod 1.6, for tasks 1.0, and other
 
 test('a mod whose conversation grant the person turned off hears no new message after the next prompt', async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'listener', setup: () => void sessions.current.on(Prompt, (prompt) => void heard.push(prompt.text)) }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'listener', setup: () => void sessions.current.onPrompt((prompt) => void heard.push(prompt.text)) }), { permissions: ['conversation'] })
   await tested.add({ type: Prompt, text: 'before' })
 
   await tested.fakes.fs.write?.(consentPath(storeFolder({ HOME: '/test/home' })), JSON.stringify({ listener: [] }))

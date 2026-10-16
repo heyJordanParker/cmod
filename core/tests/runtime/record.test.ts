@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ContextEnd, defineMod, GoalChange, Message, Note, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskEnd, TaskStart, ToolCall, ToolResult, TurnEnd, TurnStart, type Disposable, type Session, type Turn } from '../../src/mod.js'
+import { defineMod, Message, Note, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolResult, type Disposable, type Session, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -42,8 +42,8 @@ test("a turn hears only its own messages, and a task's messages reach the sessio
     defineMod({
       name: 'history',
       setup() {
-        sessions.current.on(TurnStart, { prompt: { text: 'First' } }, (turn: Turn) => void turn.on(Reply, (reply) => void inTurn.push(reply.text)))
-        sessions.current.on(Message, { task: /./ }, (message) => void inSession.push(message.type))
+        sessions.current.onTurnStart({ prompt: { text: 'First' } }, (turn: Turn) => void turn.onReply((reply) => void inTurn.push(reply.text)))
+        sessions.current.onMessage({ task: /./ }, (message) => void inSession.push(message.type))
       },
     }),
     { permissions: ['conversation'] },
@@ -68,7 +68,7 @@ test("a task hears its subtask's replies, though it listens only for replies", a
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
   const [task] = await (await sessions.current.goal()).tasks()
-  task!.on(Reply, (reply) => void heard.push(reply.text))
+  task!.onReply((reply) => void heard.push(reply.text))
   await tested.settle()
 
   const child = await tested.startTask({ title: 'Read tree.ts', parent })
@@ -83,7 +83,7 @@ test("a task refuses its subtask's start", async () => {
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
   const [task] = await (await sessions.current.goal()).tasks()
-  task!.before(TaskStart, () => ({ refuse: 'No subtasks' }))
+  task!.beforeTaskStart(() => ({ refuse: 'No subtasks' }))
   await tested.settle()
 
   expect(await tested.fire('agent.spawn', { prompt: 'Read tree.ts', description: 'Read', tool_use_id: 'toolu_9', parentAgentId: parent, parentModel: 'opus' } as never)).toEqual({ deny: 'No subtasks' })
@@ -93,7 +93,7 @@ test("a goal refuses its session's top-level task starts", async () => {
   const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
-  ;(await sessions.current.goal()).before(TaskStart, () => ({ refuse: 'No new tasks' }))
+  ;(await sessions.current.goal()).beforeTaskStart(() => ({ refuse: 'No new tasks' }))
   await tested.settle()
 
   expect(await tested.fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)).toEqual({ deny: 'No new tasks' })
@@ -106,8 +106,8 @@ test("a task's owner keeps its context through a compaction and its turn through
   const id = await tested.startTask({ title: 'Find the pane' })
   await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
   const [task] = await (await sessions.current.goal()).tasks()
-  task!.owner.before(ContextEnd, () => ({ refuse: 'Keep the findings' }))
-  task!.owner.before(TurnEnd, () => ({ refuse: 'Name the file first' }))
+  task!.owner.beforeContextEnd(() => ({ refuse: 'Keep the findings' }))
+  task!.owner.beforeTurnEnd(() => ({ refuse: 'Name the file first' }))
   await tested.settle()
 
   expect(await tested.fire('session.compact', { trigger: 'auto', agentId: id } as never)).toEqual({ skip: 'Keep the findings' })
@@ -120,8 +120,8 @@ test("a message sent to a task meets that task's prompt guard, and never the ses
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
   const [task] = await (await sessions.current.goal()).tasks()
-  task!.owner.before(Prompt, () => ({ refuse: 'Task guard' }))
-  ;(await sessions.current.context()).before(Prompt, () => ({ refuse: 'Main context only' }))
+  task!.owner.beforePrompt(() => ({ refuse: 'Task guard' }))
+  ;(await sessions.current.context()).beforePrompt(() => ({ refuse: 'Main context only' }))
   await tested.settle()
 
   expect(await tested.fire('session.receive', { origin: { kind: 'peer', plugin: 'other' }, text: 'Deploy production', agentId: id } as never, { text: 'Deploy production' } as never)).toEqual({ consumed: 'Task guard' })
@@ -134,7 +134,7 @@ test('a subtask closes when its result reaches the parent task', async () => {
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
   const child = await tested.startTask({ title: 'Read tree.ts', parent, openedBy: 'toolu_child' })
-  sessions.current.on(TaskEnd, (task) => void ended.push(task.id))
+  sessions.current.onTaskEnd((task) => void ended.push(task.id))
   await tested.settle()
 
   await tested.add({ type: ToolResult, callId: 'toolu_child', text: 'Read it.', isError: false }, { task: parent })
@@ -147,7 +147,7 @@ test("a session's context hears only the session's own messages, not a task's in
   const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Main loop prompt' })
-  ;(await sessions.current.context()).on(Reply, (reply) => void heard.push(reply.text))
+  ;(await sessions.current.context()).onReply((reply) => void heard.push(reply.text))
   await tested.settle()
 
   const task = await tested.startTask({ title: 'Look' })
@@ -163,7 +163,7 @@ test("a task's TurnStart payload reads that task's messages", async () => {
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
-  sessions.current.on(TurnStart, { prompt: { task: id } }, (turn: Turn) => void turn.messages().then((messages) => read.push(messages.map((message) => message.type))))
+  sessions.current.onTurnStart({ prompt: { task: id } }, (turn: Turn) => void turn.messages().then((messages) => read.push(messages.map((message) => message.type))))
   await tested.settle()
 
   await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
@@ -185,12 +185,12 @@ test('a turn searches only its own messages', async () => {
   expect(await sessions.current.search('rename')).toHaveLength(2)
 })
 
-test('before(Prompt) rewrites a typed prompt and refuses another', async () => {
+test('beforePrompt rewrites a typed prompt and refuses another', async () => {
   const tested = testMod(
     defineMod({
       name: 'guard',
       setup() {
-        sessions.current.before(Prompt, (prompt) => (prompt.text.includes('prod') ? { refuse: 'No deploys to prod from here.' } : { text: `${prompt.text}, with tests` }))
+        sessions.current.beforePrompt((prompt) => (prompt.text.includes('prod') ? { refuse: 'No deploys to prod from here.' } : { text: `${prompt.text}, with tests` }))
       },
     }),
     { permissions: ['conversation', 'prompt'] },
@@ -203,13 +203,13 @@ test('before(Prompt) rewrites a typed prompt and refuses another', async () => {
   expect(await tested.fire('prompt.submit', { ...typed, text: 'Deploy to prod' })).toEqual({ drop: 'No deploys to prod from here.' })
 })
 
-test('before(ToolCall) refuses a call, and changes nothing without the tools permission', async () => {
+test('beforeToolCall refuses a call, and changes nothing without the tools permission', async () => {
   const guard = (permissions: string[]) =>
     testMod(
       defineMod({
         name: 'guard',
         setup() {
-          sessions.current.before(ToolCall, { name: 'Bash' }, () => ({ refuse: 'Bash is off in this project.' }))
+          sessions.current.beforeToolCall({ name: 'Bash' }, () => ({ refuse: 'Bash is off in this project.' }))
         },
       }),
       { permissions },
@@ -227,12 +227,12 @@ test('before(ToolCall) refuses a call, and changes nothing without the tools per
   expect(unallowed.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The before(toolCall) listener failed'])
 })
 
-test('before(TaskStart) picks the model a task runs on', async () => {
+test('beforeTaskStart picks the model a task runs on', async () => {
   const tested = testMod(
     defineMod({
       name: 'thrift',
       setup() {
-        sessions.current.before(TaskStart, { owner: { agentType: 'Explore' } }, () => ({ owner: { model: 'haiku' } }))
+        sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ owner: { model: 'haiku' } }))
       },
     }),
     { permissions: ['conversation', 'tasks'] },
@@ -251,7 +251,7 @@ test('a disposed before listener stops answering', async () => {
     defineMod({
       name: 'guard',
       setup() {
-        listening = sessions.current.before(Prompt, () => ({ refuse: 'Not now.' }))
+        listening = sessions.current.beforePrompt(() => ({ refuse: 'Not now.' }))
       },
     }),
     { permissions: ['conversation', 'prompt'] },
@@ -268,7 +268,7 @@ test('a before listener disposed after /clear stops answering in the new session
     defineMod({
       name: 'guard',
       setup() {
-        listening = sessions.current.before(Prompt, () => ({ refuse: 'Stopped by listener' }))
+        listening = sessions.current.beforePrompt(() => ({ refuse: 'Stopped by listener' }))
       },
     }),
     { permissions: ['conversation', 'prompt'] },
@@ -292,7 +292,7 @@ test('a task heard starting in another running session is running, and a send re
   }
   const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true })
   const owners: Session[] = []
-  client.sessions.on(TaskStart, (task) => void owners.push(task.owner))
+  client.sessions.onTaskStart((task) => void owners.push(task.owner))
   await fake.settle()
 
   client.changed('other', { type: TaskStart, task: { id: 'task-1', title: 'Look', agentType: 'Explore', openedBy: 'toolu_1', openedAt: '2026-10-14T10:00:00.000Z', context: 1 } }, true)
@@ -308,7 +308,7 @@ test("a session of another project reaches a mod's listener on that session, nev
   fake.fakes.cmod.call = async () => ({ value: [] })
   const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true })
   const heard: string[] = []
-  client.sessions.on(Prompt, (prompt) => void heard.push(`every: ${prompt.text}`))
+  client.sessions.onPrompt((prompt) => void heard.push(`every: ${prompt.text}`))
   await fake.settle()
 
   client.changed('b', { type: Message, message: { id: 'b1', type: Prompt, at: '2026-10-14T10:00:00.000Z', session: 'b', context: 1, text: 'Private B', from: { type: 'person' } } }, false)
@@ -325,7 +325,7 @@ test("a task owner's goal hears its own update", async () => {
   await tested.startTask({ title: 'Find the pane' })
   const [task] = await (await sessions.current.goal()).tasks()
   const goal = await task!.owner.goal()
-  goal.on(GoalChange, (changed) => void heard.push(changed.text))
+  goal.onGoalChange((changed) => void heard.push(changed.text))
   await tested.settle()
 
   await goal.update({ text: 'Find where tree.ts draws the pane' })
@@ -343,7 +343,7 @@ test("a task goal's event payload updates that task's goal, never the session's"
   await tested.startTask({ title: 'Find the pane' })
   const [task] = await (await sessions.current.goal()).tasks()
   const goal = await task!.owner.goal()
-  goal.on(GoalChange, (changed) => void payloads.push(changed))
+  goal.onGoalChange((changed) => void payloads.push(changed))
   await tested.settle()
   await goal.update({ text: 'Child goal' })
   await tested.settle()
@@ -361,18 +361,6 @@ test('callTool with CronList or CronDelete needs the tools permission', async ()
   expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
 })
 
-test("a mod's before listener on every session answers only for sessions of its project", async () => {
-  const fake = fakeClaude({ name: 'guard', root: '/plugins/guard' })
-  fake.fakes.cmod.call = async () => ({ value: [] })
-  const client = createSessionsClient({ name: 'guard', claude: fake.claude, report: () => {}, isGranted: () => true })
-  client.sessions.before(Prompt, () => ({ refuse: 'Only in /work/app' }))
-  await fake.settle()
-  const change = { type: Message, message: { id: '', type: Prompt, at: '2026-10-14T10:00:00.000Z', session: 'other', context: 1, text: 'Deploy', from: { type: 'person' } } } as const
-
-  expect(await client.answerBefore('other', Prompt, change, false)).toBeUndefined()
-  expect(await client.answerBefore('other', Prompt, change, true)).toEqual({ refuse: 'Only in /work/app' })
-})
-
 test("a task owner's goal hears the tasks it started, never the owner's own messages", async () => {
   const heard: string[] = []
   const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
@@ -381,7 +369,7 @@ test("a task owner's goal hears the tasks it started, never the owner's own mess
   const owner = await tested.startTask({ title: 'Find the pane' })
   const child = await tested.startTask({ title: 'Read tree.ts', parent: owner })
   const [task] = (await (await sessions.current.goal()).tasks()).filter((each) => each.id === owner)
-  ;(await task!.owner.goal()).on(Reply, (reply) => void heard.push(reply.text))
+  ;(await task!.owner.goal()).onReply((reply) => void heard.push(reply.text))
   await tested.settle()
 
   await tested.add({ type: Reply, text: 'Owner reply' }, { task: owner })

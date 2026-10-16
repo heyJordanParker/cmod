@@ -418,12 +418,12 @@ type JobContext<State> = {
 A job that hands back a feature the mod turns off returns a `Disposable`, as `slashCommand` and `tool` do:
 
 ```ts
-import { defineMod, sessions, Stop, ToolCall, type Disposable, type Job } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions, Stop, type Disposable, type Job } from '../node_modules/@cmodjs/core/mod.js'
 
 const editCounter = (tool: string): Job<Disposable & { readonly count: () => number }> => ({ mod, announce, reserveName }) => {
   const reserved = reserveName('editCounter', tool, `${mod.name}: edits of ${tool} are already counted.`)
   let edits = 0
-  const listening = sessions.current.on(ToolCall, { name: tool }, () => void (edits += 1))
+  const listening = sessions.current.onToolCall({ name: tool }, () => void (edits += 1))
   announce(`a count of ${tool} calls`)
   return {
     count: () => edits,

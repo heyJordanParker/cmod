@@ -8,7 +8,7 @@ import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
 import type { ContextData, GoalData, SessionChange, SessionData, TaskData, TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
-import { Session, type BeforeEvent, type Client, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
+import { beforeEvents, Session, sessionEvents, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
 import { matches, sentMatcher, type SentMatcher } from '../utils/matcher.js'
 import { foldAnswers, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
@@ -205,11 +205,17 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
     return foldAnswers(event, change, askers, (error) => report(`before:${event}`, `The before(${event}) listener failed`, error))
   }
 
-  const recordPart = (scope: Scope): RecordPart => ({
-    search: (text: string, options: SearchOptions = {}) => call(conversationMethods.search, { text, ...scope, ...optionsOf(options) }),
-    on: (event: SessionEvent, matcherOrListener: unknown, maybeListener?: unknown) => add(listening, scope, event, matcherOrListener, maybeListener, subscribe),
-    before: (event: BeforeEvent, matcherOrListener: unknown, maybeListener?: unknown) => add(deciding, scope, event, matcherOrListener, maybeListener, subscribe),
-  }) as RecordPart
+  const eventMethods = (scopeOf: () => Scope, hasBefore: boolean): OnMethods & Partial<BeforeMethods> =>
+    Object.fromEntries([
+      ...Object.entries(sessionEvents).map(([named, event]) => [`on${named}`, (matcherOrListener: unknown, maybeListener?: unknown) => add(listening, scopeOf(), event, matcherOrListener, maybeListener, subscribe)]),
+      ...(hasBefore ? beforeEvents.map((named) => [`before${named}`, (matcherOrListener: unknown, maybeListener?: unknown) => add(deciding, scopeOf(), sessionEvents[named], matcherOrListener, maybeListener, subscribe)]) : []),
+    ]) as OnMethods & Partial<BeforeMethods>
+
+  const recordPart = (scope: Scope): RecordPart =>
+    ({
+      search: (text: string, options: SearchOptions = {}) => call(conversationMethods.search, { text, ...scope, ...optionsOf(options) }),
+      ...eventMethods(() => scope, true),
+    }) as RecordPart
 
   const turnOf = (scope: Scope, data: TurnData): Turn => {
     const task = data.prompt.task ?? scope.task
@@ -327,8 +333,7 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
         return read().forkedFrom
       },
       search: (text: string, options: SearchOptions = {}) => recordPart(scope()).search(text, options),
-      on: (event: SessionEvent, matcherOrListener: unknown, maybeListener?: unknown) => (recordPart(scope()).on as (...args: unknown[]) => Disposable)(event, matcherOrListener, maybeListener),
-      before: (event: BeforeEvent, matcherOrListener: unknown, maybeListener?: unknown) => (recordPart(scope()).before as (...args: unknown[]) => Disposable)(event, matcherOrListener, maybeListener),
+      ...eventMethods(scope, true),
       goal: async () => goalOf(scope(), await call<GoalData>(conversationMethods.goal, where())),
       context: async () => {
         const all = await contextsOf()
@@ -383,7 +388,7 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
   }
 
   const currentSession = sessionOf(() => current)
-  const every = recordPart({})
+  const every = eventMethods(() => ({}), false)
 
   const answerBefore = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean) => (isGranted('conversation') ? combined(session, event, change, isInProject) : undefined)
 
@@ -402,8 +407,7 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
           return currentSession
         }),
       search: (text, options = {}) => call<Message[]>(conversationMethods.search, { text, ...optionsOf(options), ...(options.running === undefined ? {} : { running: options.running }), ...(options.since === undefined ? {} : { since: options.since }), ...(options.everyProject === undefined ? {} : { everyProject: options.everyProject }) }),
-      on: every.on,
-      before: every.before,
+      ...every,
     },
     changed(session, change, isInProject) {
       remember(session, change)

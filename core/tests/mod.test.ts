@@ -1160,7 +1160,7 @@ test('sessions.current.on hears each new message of its type, and dispose stops 
     defineMod({
       name: 'history',
       setup() {
-        listening = sessions.current.on(Reply, (reply) => void heard.push(reply.text))
+        listening = sessions.current.onReply((reply) => void heard.push(reply.text))
       },
     }),
     { permissions: ['conversation'] },

@@ -68,22 +68,59 @@ export type Usage = {
 
 export type Client = 'terminal' | 'desktop' | 'mobile' | 'vscode'
 
-export type Listener<Event extends SessionEvent> = (payload: SessionPayload[Event]) => unknown
+export const sessionEvents = {
+  Message: 'message',
+  Prompt: 'prompt',
+  Note: 'note',
+  Reply: 'reply',
+  ToolCall: 'toolCall',
+  ToolResult: 'toolResult',
+  Skill: 'skill',
+  InstructionFile: 'document',
+  Notice: 'notice',
+  ContextStart: 'contextStart',
+  ContextEnd: 'contextEnd',
+  TurnStart: 'turnStart',
+  TurnEnd: 'turnEnd',
+  TaskStart: 'taskStart',
+  TaskEnd: 'taskEnd',
+  GoalChange: 'goalChange',
+  UsageChange: 'usageChange',
+} as const satisfies Readonly<Record<string, SessionEvent>>
 
-export type BeforeListener<Event extends BeforeEvent> = (payload: SessionPayload[Event]) => BeforeAnswer[Event] | void | Promise<BeforeAnswer[Event] | void>
+export const beforeEvents = ['Prompt', 'Note', 'Skill', 'InstructionFile', 'Reply', 'ToolCall', 'ToolResult', 'Notice', 'TaskStart', 'TaskEnd', 'TurnEnd', 'ContextEnd'] as const satisfies readonly (keyof typeof sessionEvents)[]
+
+type EventName = keyof typeof sessionEvents
+
+type BeforeName = (typeof beforeEvents)[number]
+
+type PayloadOf<Name extends EventName> = SessionPayload[(typeof sessionEvents)[Name]]
+
+type AnswerOf<Name extends BeforeName> = (typeof sessionEvents)[Name] extends BeforeEvent ? BeforeAnswer[(typeof sessionEvents)[Name]] : never
+
+type OnMethod<Payload> = {
+  (listener: (payload: Payload) => unknown): Disposable
+  (matcher: Matcher<Payload>, listener: (payload: Payload) => unknown): Disposable
+}
+
+type BeforeMethod<Payload, Answer> = {
+  (listener: (payload: Payload) => Answer | void | Promise<Answer | void>): Disposable
+  (matcher: Matcher<Payload>, listener: (payload: Payload) => Answer | void | Promise<Answer | void>): Disposable
+}
+
+export type OnMethods = { readonly [Name in EventName as `on${Name}`]: OnMethod<PayloadOf<Name>> }
+
+export type BeforeMethods = { readonly [Name in BeforeName as `before${Name}`]: BeforeMethod<PayloadOf<Name>, AnswerOf<Name>> }
 
 export type SearchOptions = {
   readonly limit?: number
   readonly before?: Pick<Message, 'session' | 'id'>
 }
 
-export type RecordPart = {
-  search(text: string, options?: SearchOptions): Promise<Message[]>
-  on<Event extends SessionEvent>(event: Event, listener: Listener<Event>): Disposable
-  on<Event extends SessionEvent>(event: Event, matcher: Matcher<SessionPayload[Event]>, listener: Listener<Event>): Disposable
-  before<Event extends BeforeEvent>(event: Event, listener: BeforeListener<Event>): Disposable
-  before<Event extends BeforeEvent>(event: Event, matcher: Matcher<SessionPayload[Event]>, listener: BeforeListener<Event>): Disposable
-}
+export type RecordPart = OnMethods &
+  BeforeMethods & {
+    search(text: string, options?: SearchOptions): Promise<Message[]>
+  }
 
 export type SessionSend = {
   readonly type: typeof Prompt | typeof Note
@@ -134,7 +171,7 @@ export type SessionScope = {
   readonly everyProject?: boolean
 }
 
-export type Sessions = Omit<RecordPart, 'search'> & {
+export type Sessions = OnMethods & {
   readonly current: Session
   list(options?: SessionScope): Promise<Session[]>
   search(text: string, options?: SessionScope & SearchOptions): Promise<Message[]>

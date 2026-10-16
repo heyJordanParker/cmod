@@ -26,7 +26,7 @@ import type { Step } from './installer.js'
 import { checkOptions, type Option, type Options, type OptionValues } from './options.js'
 import { bound } from './runtime/bound.js'
 import { Mod as modSender } from './session/context/turn/message/sender.js'
-import type { Sessions } from './session/session.js'
+import { sessionEvents, type OnMethods, type Sessions } from './session/session.js'
 import type { Pane } from './ui/define-pane.js'
 import type { Place, PlaceProps } from './ui/places.js'
 import type { Disposable } from './utils/disposable.js'
@@ -272,8 +272,7 @@ export const sessions: Imports['sessions'] = {
   },
   list: (options) => bound().sessions.list(options),
   search: (text, options) => bound().sessions.search(text, options),
-  on: ((...args: Parameters<Imports['sessions']['on']>) => bound().sessions.on(...args)) as Imports['sessions']['on'],
-  before: ((...args: Parameters<Imports['sessions']['before']>) => bound().sessions.before(...args)) as Imports['sessions']['before'],
+  ...(Object.fromEntries(Object.keys(sessionEvents).map((named) => [`on${named}`, (...args: unknown[]) => (bound().sessions[`on${named}` as keyof OnMethods] as (...each: unknown[]) => Disposable)(...args)])) as OnMethods),
 }
 
 export const settings: Imports['settings'] = {
@@ -378,7 +377,7 @@ export function defineMod<State extends StateGroups = Record<never, never>, Name
 export type { Matcher } from './utils/matcher.js'
 export type { Place, PlaceProps } from './ui/places.js'
 export { AbovePrompt, AskUserQuestion, CommandOutput, PromptHint, SessionMode, Spinner, ToolGroup, ToolProgress, TurnDuration } from './ui/places.js'
-export { Session, UsageChange, type BeforeAnswer, type BeforeEvent, type BeforeListener, type Client, type Listener, type RecordPart, type Refusal, type SearchOptions, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from './session/session.js'
+export { Session, UsageChange, type BeforeAnswer, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type Refusal, type SearchOptions, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from './session/session.js'
 export { ContextEnd, ContextStart, type Context } from './session/context/context.js'
 export { TurnEnd, TurnStart, type Turn } from './session/context/turn/turn.js'
 export { Message, type MessageType } from './session/context/turn/message/message.js'

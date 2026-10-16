@@ -34,10 +34,7 @@ type Sessions = {
   readonly current: Session
   list(options?: { running?: boolean; since?: string; everyProject?: boolean }): Promise<Session[]>
   search(text: string, options?: { running?: boolean; since?: string; everyProject?: boolean; limit?: number; before?: Message }): Promise<Message[]>
-  on(event, listener): Disposable
-  on(event, matcher, listener): Disposable
-  before(event, listener): Disposable
-  before(event, matcher, listener): Disposable
+  onMessage(matcher?, listener): Disposable   // and every on method below
 }
 ```
 
@@ -51,7 +48,7 @@ const last = earlier.at(-1)
 const older = last === undefined ? [] : await sessions.search('deploy job', { since: '1w', before: last })
 ```
 
-- `on` and `before` hear every running session of the project, this one included ([Listen](#listen-to-a-record), [Change what happens](#change-what-happens)).
+- Its `on` methods hear every running session of the project, this one included ([Listen](#listen-to-a-record)). `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
 
 While a mod holds the `conversation` permission, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since. The `cmod history` command answers the same questions in a terminal ([commands.md](commands.md#cmod-history)).
 
@@ -76,10 +73,8 @@ type Session = {
   turns(options?: { last?: number }): Promise<Turn[]>
   messages(options?: { after?: string; last?: number }): Promise<Message[]>
   search(text: string, options?: { limit?: number; before?: Message }): Promise<Message[]>
-  on(event, listener): Disposable
-  on(event, matcher, listener): Disposable
-  before(event, listener): Disposable
-  before(event, matcher, listener): Disposable
+  onMessage(matcher?, listener): Disposable         // and every on method below
+  beforePrompt(matcher?, listener): Disposable      // and every before method below
   send(message: { type: Prompt | Note; text: string; as?: Person | Session }): Promise<void>
   startTask(task: { prompt: string; agentType?: string; model?: string; name?: string; cwd?: string }): Promise<Task>
   callTool(call: { name: string; input: Record<string, unknown> }): Promise<ToolResult>
@@ -114,38 +109,38 @@ A session that has ended keeps its record, so every read works on it.
 ### Listen to a record
 
 ```ts
-part.on(event: SessionEvent, listener: (payload) => unknown): Disposable
-part.on(event: SessionEvent, matcher: Matcher<payload>, listener: (payload) => unknown): Disposable
+part.on<Event>(listener: (payload) => unknown): Disposable
+part.on<Event>(matcher: Matcher<payload>, listener: (payload) => unknown): Disposable
 ```
 
-`on` runs `listener` for each new message, turn, context, task, goal change, or usage change, as it happens. `sessions`, a session, its goal, a task, a context, and a turn each have `on`, and each hears what happens inside it: an event reaches the part it happens in and every part above it.
+Each event has its own method, such as `onReply` or `onTaskStart`, which runs `listener` for each new message, turn, context, task, goal change, or usage change, as it happens. `sessions`, a session, its goal, a task, a context, and a turn each have every `on` method, and each hears what happens inside it: an event reaches the part it happens in and every part above it.
 
 ```
 Message ──> Turn ──> Context ──> Session ──> sessions
 TaskStart, TaskEnd, and the owner's record ──> Task ──> its parent Task ──> Goal ──> Session
 ```
 
-So `turn.on(Reply, …)` hears the replies of that turn only, `task.on(Message, …)` hears every message of the task's owner and of the tasks it handed on, and `sessions.on(Prompt, …)` hears every prompt of every running session in the project.
+So `turn.onReply(…)` hears the replies of that turn only, `task.onMessage(…)` hears every message of the task's owner and of the tasks it handed on, and `sessions.onPrompt(…)` hears every prompt of every running session in the project.
 
-| Event | The listener gets | It happens in |
+| Method | The listener gets | It happens in |
 | --- | --- | --- |
-| `Message` | Every new message. | Its turn |
-| `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `Document`, `Notice` | Each new message of that type. | Its turn |
-| `TurnStart`, `TurnEnd` | The `Turn` that started or ended. | Its context |
-| `ContextStart`, `ContextEnd` | The `Context` that started or ended. | The session |
-| `TaskStart`, `TaskEnd` | The `Task` that started or ended. | Its parent task, or the goal |
-| `GoalChange` | The `Goal` with its new text. | The goal |
-| `UsageChange` | The session's new `Usage`. | The session |
+| `onMessage` | Every new message. | Its turn |
+| `onPrompt`, `onNote`, `onReply`, `onToolCall`, `onToolResult`, `onSkill`, `onInstructionFile`, `onNotice` | Each new message of that type. | Its turn |
+| `onTurnStart`, `onTurnEnd` | The `Turn` that started or ended. | Its context |
+| `onContextStart`, `onContextEnd` | The `Context` that started or ended. | The session |
+| `onTaskStart`, `onTaskEnd` | The `Task` that started or ended. | Its parent task, or the goal |
+| `onGoalChange` | The `Goal` with its new text. | The goal |
+| `onUsageChange` | The session's new `Usage`. | The session |
 
 The current session's events arrive as Claude Code writes them, and another running session's within a moment.
 
 A matcher keeps the payloads it matches. It is a partial copy of the payload: a key it names must match, and a key it leaves out matches anything. A string matches the same string, a `RegExp` matches the text it tests true on, and a list matches any one of its items. A key the payload lacks matches nothing.
 
 ```ts
-import { Reply, sessions, TaskStart, ToolCall } from '../node_modules/@cmodjs/core/mod.js'
+import { sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-sessions.current.on(ToolCall, { name: /^(Edit|Write)$/ }, (call) => void (mod.state.session.edits += 1))
-sessions.current.on(TaskStart, { owner: { agentType: 'Explore' } }, (task) => mod.log(`Exploring: ${task.title}`))
+sessions.current.onToolCall({ name: /^(Edit|Write)$/ }, (call) => void (mod.state.session.edits += 1))
+sessions.current.onTaskStart({ owner: { agentType: 'Explore' } }, (task) => mod.log(`Exploring: ${task.title}`))
 ```
 
 A listener that throws shows the error toast `The <event> listener failed`. `dispose()` on the `Disposable` stops the listener.
@@ -153,34 +148,34 @@ A listener that throws shows the error toast `The <event> listener failed`. `dis
 ### Change what happens
 
 ```ts
-part.before(event: BeforeEvent, listener: (payload) => Answer | void): Disposable
-part.before(event: BeforeEvent, matcher: Matcher<payload>, listener: (payload) => Answer | void): Disposable
+part.before<Event>(listener: (payload) => Answer | void): Disposable
+part.before<Event>(matcher: Matcher<payload>, listener: (payload) => Answer | void): Disposable
 ```
 
-`before` runs `listener` just before something happens, and its answer changes or refuses it. Returning nothing lets it happen as it was. Each part has `before`, and hears what is about to happen inside it, the way `on` does.
+Each `before` method, such as `beforeToolCall`, runs `listener` just before something happens, and its answer changes or refuses it. Returning nothing lets it happen as it was. Each part except `sessions` has every `before` method, and hears what is about to happen inside it, the way `on` methods do.
 
-| Event | The listener can answer | Covers |
+| Method | The listener can answer | Covers |
 | --- | --- | --- |
-| `Prompt` | `{ text }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session |
-| `Note` | `{ text }` | A note any mod or Claude Code adds |
-| `Skill` | `{ text }` | A Skill as Claude Code loads it |
-| `Document` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
-| `Reply`, `ToolResult`, `Notice` | `{ text }` | The text the transcript keeps |
-| `ToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
-| `TaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
-| `TaskEnd` | `{ refuse }` | A task about to end. `refuse` sends its owner on with the reason |
-| `TurnEnd` | `{ refuse }` | The agent about to stop. `refuse` sends it on with the reason |
-| `ContextEnd` | `{ refuse }` | A compaction about to start. `refuse` keeps the context |
+| `beforePrompt` | `{ text }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session |
+| `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
+| `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
+| `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
+| `beforeReply`, `beforeToolResult`, `beforeNotice` | `{ text }` | The text the transcript keeps |
+| `beforeToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
+| `beforeTaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
+| `beforeTaskEnd` | `{ refuse }` | A task about to end. `refuse` sends its owner on with the reason |
+| `beforeTurnEnd` | `{ refuse }` | The agent about to stop. `refuse` sends it on with the reason |
+| `beforeContextEnd` | `{ refuse }` | A compaction about to start. `refuse` keeps the context |
 
 ```ts
-sessions.current.before(ToolCall, { name: 'Bash', input: { command: /\brm -rf\b/ } }, () => ({ refuse: 'Delete files one at a time.' }))
-sessions.current.before(TaskStart, { owner: { agentType: 'Explore' } }, () => ({ owner: { model: 'haiku' } }))
-sessions.current.before(TurnEnd, async () => ((await testsPass()) ? undefined : { refuse: 'The tests fail. Fix them before you stop.' }))
+sessions.current.beforeToolCall({ name: 'Bash', input: { command: /\brm -rf\b/ } }, () => ({ refuse: 'Delete files one at a time.' }))
+sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ owner: { model: 'haiku' } }))
+sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { refuse: 'The tests fail. Fix them before you stop.' }))
 ```
 
 An answer that changes text needs the `prompt` permission, a `ToolCall` answer needs `tools`, and a `TaskStart` or `TaskEnd` answer needs `tasks`. Without it the answer changes nothing, and the toast `The before(<event>) listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
-`before` on another session, and `sessions.before`, ask the mod over cmod from that session. That session waits up to 5 seconds for the answer, then lets the event happen as it was and logs why. `sessions.before` answers once for each event, whichever session it happens in.
+A `before` method on another session asks the mod over cmod from that session. That session waits up to 5 seconds for the answer, then lets the event happen as it was and logs why.
 
 ### Act on a session
 
@@ -209,12 +204,12 @@ mod.every(60_000, async () => {
 })
 ```
 
-The task's answer arrives once it finishes, on a `TaskEnd` listener:
+The task's answer arrives once it finishes, on an `onTaskEnd` listener:
 
 ```ts
 mod.on(UserPromptSubmit, { prompt: /^\/summarize/ }, async () => {
   const task = await sessions.current.startTask({ prompt: 'Summarize README.md in one line.', agentType: 'Explore', name: 'Summarize the README' })
-  const ended = await new Promise<Task>((resolve) => task.on(TaskEnd, resolve))
+  const ended = await new Promise<Task>((resolve) => task.onTaskEnd(resolve))
   const [answer] = await ended.owner.messages({ last: 1 })
   return { hookSpecificOutput: { hookEventName: UserPromptSubmit, additionalContext: answer?.type === Reply ? answer.text : '' } }
 })
