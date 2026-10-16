@@ -90,10 +90,6 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     },
     session: {
       ...claude.session,
-      messages: (async (...args: Parameters<Claude['session']['messages']>) => {
-        await gate('session.messages', 'conversation')
-        return claude.session.messages(...args)
-      }) as Claude['session']['messages'],
       append: async (args: Parameters<Claude['session']['append']>[0]) => {
         await gate('send', 'prompt')
         return claude.session.append(args)
@@ -114,7 +110,9 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
         const named = args.to === cmodPluginName ? conversationCalls[args.method] : undefined
         const given = args.method === conversationMethods.act && isObject(args.input) ? String(args.input['action']) : undefined
         const action = given !== undefined && isAct(given) ? given : undefined
-        if (named !== undefined) await gate(action ?? named, action === undefined ? 'conversation' : actPermission(action, isObject(args.input) ? args.input['input'] : undefined))
+        const isThisSession = isObject(args.input) && args.input['session'] === (await claude.session.id())
+        if (named !== undefined && action !== undefined) await gate(action, actPermission(action, isObject(args.input) ? args.input['input'] : undefined))
+        else if (named !== undefined && !isThisSession) await gate(named, 'conversation')
         return claude.cmod.call(args)
       },
     },

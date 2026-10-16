@@ -19,15 +19,15 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 | `"network": ["api.github.com"]` | Connect to api.github.com | `http.fetch` to that host. A path starting with `/` or `~/` names a socket, such as `"~/.docker/run/docker.sock"`. The address of the mod's own running `program` job needs none |
 | `"run": ["gh"]`, or `"run": "*"` | Run gh on your computer | `process.run`, `process.spawn`, and the `program` and `check` jobs. A program matches by its file name, so `"mermaid-ascii"` covers `${mod.dataFolder}/bin/mermaid-ascii` and the copy in cmod's programs folder |
 | `"files": ["~/.zshrc"]` | Change ~/.zshrc | `fs.write` and `metadata.update` outside the project and the mod's data folder. A folder covers every file below it |
-| `"conversation": true` | Read your Claude Code conversations | Reading `sessions`: their messages, turns, contexts, goals, and tasks, `sessions.list`, `search`, `on`, `before`, `usage`, and `clients`. Also reading Claude Code's transcript files |
+| `"conversation": true` | Read your other Claude Code conversations | Every session but the one the mod runs in: its messages, turns, contexts, goals, tasks, and events, `sessions.list`, `sessions.search`, the `on` methods of `sessions`, and a `before` method on another session. Also reading Claude Code's transcript files. Hearing and reading the mod's own session needs no permission |
 | `"prompt": true` | Add text Claude reads and start turns | A session's `send`, a `before` answer that changes or refuses text, the mod's `rules/`, the `prompt` and `schedule` jobs, and the hook answers listed below |
 | `"model": true` | Ask a model, which uses your plan | `model.complete` |
 | `"tasks": true` | Start tasks that work beside Claude | A session's `startTask`, and a `before(TaskStart)` or `before(TaskEnd)` answer |
 | `"tools": true` | Use and change Claude's tool calls | A session's `callTool`, a `before(ToolCall)` answer, and a listener or a job that changes a tool call's input |
 | `"config": ["env.ANTHROPIC_BASE_URL"]` | Change env.ANTHROPIC_BASE_URL in your Claude Code settings | Each value `settings.user.update`, `settings.project.update`, and `settings.local.update` change. A key path covers its own value and every key below it, so `"env"` covers every key in `env`, and `await settings.user.update({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } })` needs `"env.ANTHROPIC_BASE_URL"` or `"env"`. `mcpServers` covers the project's `.mcp.json` |
-| `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A deny needs no permission |
+| `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A refusal needs no permission |
 
-Reading files, drawing panes and renders, toasts, slash commands, tools of the mod's own, and listeners need no permission. Writing a Claude Code settings file with `fs.write` is refused with every permission, and names the `settings` call to use instead ([mod.md](mod.md#settings-claude-code-s-settings-files)).
+Reading files, drawing panes and renders, toasts, slash commands, tools of the mod's own, listeners on the mod's own session, and a `refuse` answer need no permission. Writing a Claude Code settings file with `fs.write` is refused with every permission, and names the `settings` call to use instead ([mod.md](mod.md#settings-claude-code-s-settings-files)).
 
 `cmod check` adds `"approve": true` to `package.json` when `hooks/register.ts` calls `registerPermissionCheck` and the line is missing, and says so.
 

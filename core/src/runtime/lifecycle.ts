@@ -889,8 +889,8 @@ async function createMod<State extends object, Declared extends Options>(definit
     if (e.to !== definition.name) return next(e)
     const call = e as typeof e & { readonly caller?: string }
     if (e.method === conversationMethods.changed && call.caller === cmodPluginName) {
-      if (!flag('conversation')) return { value: null }
       const { session: changedSession, change, isInProject } = e.input as { readonly session: string; readonly change: SessionChange; readonly isInProject?: boolean }
+      if (changedSession !== client.sessions.current.id && !flag('conversation')) return { value: null }
       client.changed(changedSession, change, isInProject !== false)
       return { value: null }
     }

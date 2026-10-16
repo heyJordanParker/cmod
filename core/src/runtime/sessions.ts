@@ -197,7 +197,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
         if (!isInScope(entry.scope, session, latest, isUnderIn(session))) return undefined
         if (entry.matcher !== undefined && !matches(payloadOf(latest), entry.matcher)) return undefined
         const answer = await entry.listener(payloadFor(session, latest) as never)
-        if (answer === undefined || isGranted(beforePermission(event))) return answer
+        if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer) || isGranted(beforePermission(event))) return answer
         throw new Error(`Its before(${event}) answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`)
       })
     return foldAnswers(event, change, askers, (error) => report(`before:${event}`, `The before(${event}) listener failed`, error))
@@ -416,7 +416,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn }
   const currentSession = Object.assign(sessionOf(() => current), processMethods())
   const every = eventMethods(() => ({}), false)
 
-  const answerBefore = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean) => (isGranted('conversation') ? combined(session, event, change, isInProject) : undefined)
+  const answerBefore = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean) => (session === current.id || isGranted('conversation') ? combined(session, event, change, isInProject) : undefined)
 
   return {
     sessions: {

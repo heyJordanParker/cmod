@@ -109,16 +109,14 @@ test("the cmod plugin asks a mod in this session before a prompt enters, and the
   expect(asked).toMatchObject([{ to: 'guard', method: conversationMethods.before, input: { session: 'test-session', event: 'prompt', change: { type: 'message', message: { type: 'prompt', text: 'Deploy to prod' } } } }])
 })
 
-test('a mod whose prompt permission was turned off is not asked before a prompt, though it registered while it had it', async () => {
+test("a mod with no grant still refuses a prompt in its own session", async () => {
   const consent = consentPath(storeFolder({ HOME: '/test/home' }))
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: ['conversation', 'prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: [] }) } })
   tested.fakes.cmod.call = async () => ({ refuse: 'No prompts' })
   await tested.fire(SessionStart, { source: 'startup' })
   await tested.fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
 
-  await tested.fakes.fs.write?.(consent, JSON.stringify({ guard: ['conversation'] }))
-
-  expect(await tested.fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Continue', origin: { kind: 'composer' } })
+  expect(await tested.fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ drop: 'No prompts' })
 })
 
 test("a delivery that only looks like cmod's relay still meets a mod's before(Prompt)", async () => {

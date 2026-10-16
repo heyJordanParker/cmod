@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { defineMod, fs, http, model, process, Prompt, SessionStart, sessions, settings, Stop, UserPromptSubmit, type Mod } from '../../src/mod.js'
-import { consentPath, formatEvent, oldestCmodFor, parseEvent, permissionWords, readSteps, scriptsSha256, storeFolder } from '../../src/records.js'
+import { formatEvent, oldestCmodFor, parseEvent, permissionWords, readSteps, scriptsSha256 } from '../../src/records.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -292,14 +292,20 @@ test('a mod that asks for a config list needs cmod 1.6, for tasks 1.0, and other
   expect(oldestCmodFor({ permissions: ['prompt', 'network:api.github.com'] })).toBe('0.2.0')
 })
 
-test('a mod whose conversation grant the person turned off hears no new message after the next prompt', async () => {
+test('a mod hears and reads its own session with no grant, and another session only with the conversation grant', async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'listener', setup: () => void sessions.current.onPrompt((prompt) => void heard.push(prompt.text)) }), { permissions: ['conversation'] })
-  await tested.add({ type: Prompt, text: 'before' })
+  const tested = testMod(
+    defineMod({
+      name: 'listener',
+      setup() {
+        sessions.current.onPrompt((prompt) => void heard.push(prompt.text))
+      },
+    }),
+    { permissions: [], sessions: [{ id: 'other', title: 'Other', messages: [{ type: Prompt, text: 'elsewhere' }] }] },
+  )
+  await tested.add({ type: Prompt, text: 'here' })
 
-  await tested.fakes.fs.write?.(consentPath(storeFolder({ HOME: '/test/home' })), JSON.stringify({ listener: [] }))
-  await tested.fire(UserPromptSubmit, { prompt: 'refresh grants' })
-  await tested.add({ type: Prompt, text: 'after' })
-
-  expect(heard).toEqual(['before'])
+  expect(heard).toEqual(['here'])
+  expect((await sessions.current.messages()).map((message) => message.type === Prompt && message.text)).toEqual(['here'])
+  await expect(sessions.list()).rejects.toThrow(/conversation/)
 })

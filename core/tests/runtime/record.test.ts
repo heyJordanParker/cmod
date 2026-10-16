@@ -256,28 +256,32 @@ test('beforePrompt rewrites a typed prompt and refuses another', async () => {
   expect(await tested.fire('prompt.submit', { ...typed, text: 'Deploy to prod' })).toEqual({ drop: 'No deploys to prod from here.' })
 })
 
-test('beforeToolCall refuses a call, and changes nothing without the tools permission', async () => {
+test('beforeToolCall refuses a call with no permission, and rewrites one only with the tools permission', async () => {
   const guard = (permissions: string[]) =>
     testMod(
       defineMod({
         name: 'guard',
         setup() {
-          sessions.current.beforeToolCall({ name: 'Bash' }, () => ({ refuse: 'Bash is off in this project.' }))
+          sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
+          sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^ls$/ } }, () => ({ input: { command: 'ls -la' } }))
         },
       }),
       { permissions },
     )
-  const call = { tool: 'Bash', tool_use_id: 'toolu_9', command: 'rm -rf build' } as never
+  const call = (command: string) => ({ tool: 'Bash', tool_use_id: 'toolu_9', command }) as never
 
-  const allowed = guard(['conversation', 'tools'])
-  await allowed.start()
-  expect(await allowed.fire('tool.call', call)).toEqual({ deny: 'Bash is off in this project.' })
-
-  const unallowed = guard(['conversation'])
+  const unallowed = guard([])
   await unallowed.start()
-  expect(await unallowed.fire('tool.call', call)).toEqual({} as never)
+  expect(await unallowed.fire('tool.call', call('rm -rf build'))).toEqual({ deny: 'Use trash instead of rm.' })
+  expect(await unallowed.fire('tool.call', call('ls'))).toEqual({} as never)
   await unallowed.settle()
   expect(unallowed.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The before(toolCall) listener failed'])
+
+  const allowed = guard(['tools'])
+  await allowed.start()
+  await allowed.fire('tool.call', call('ls'))
+  await allowed.settle()
+  expect(allowed.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
 test('beforeTaskStart picks the model a task runs on', async () => {

@@ -8,7 +8,7 @@ import { Prompt, sessions } from '../node_modules/@cmodjs/core/mod.js'
 const prompts = (await sessions.current.messages()).filter((message) => message.type === Prompt)
 ```
 
-Reading a conversation needs the `conversation` permission. Sending to one and changing its text need `prompt`, calling a tool and changing a tool call need `tools`, and starting or changing a task needs `tasks` ([permissions.md](permissions.md)).
+A mod hears and reads the session it runs in with no permission. Every other session needs the `conversation` permission. Sending to a session and changing its text need `prompt`, calling a tool and changing a tool call need `tools`, and starting or changing a task needs `tasks`. A `refuse` answer needs no permission ([permissions.md](permissions.md)).
 
 ## The shape of a conversation
 
