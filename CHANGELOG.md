@@ -4,6 +4,20 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-16
+
+### Added
+- A mod changes one value inside a setting and leaves the rest alone: `settings.user.update({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } })` keeps every other variable in `env` and the file's comments. Removing the mod takes out only that value, and only while it still holds what the mod set.
+- A `config` permission names a key path: `"config": ["env.ANTHROPIC_BASE_URL"]` covers that one value, and `"config": ["env"]` covers every key in `env`.
+
+### Changed
+- `settings.<source>.update` merges an object into the object already there, at every depth, instead of replacing it. `null` still removes a key, and an array or any other value still replaces it. To replace a whole object, read it and set each key you drop to `null`.
+- A mod that declares a `config` permission waits for cmod 1.6.0, because an older cmod replaces the whole object.
+
+### Fixed
+- A mod whose installed folder was deleted no longer stops `cmod link` and `cmod rules` from linking every other mod's rules.
+- A cmod release ships the `@cmodjs/core` and `@cmodjs/cli` it just published. The cmod plugin 1.5.1 shipped with `@cmodjs/core` 1.5.0.
+
 ## [1.5.1] - 2026-10-14
 
 ### Fixed
