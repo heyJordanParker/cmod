@@ -685,7 +685,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   const settingsFile = (source: 'user' | 'project' | 'local'): SettingsFile => ({
     read: () => checked.settings.read({ source }),
     async update(values) {
-      await checkSettings(grants, source, Object.keys(values))
+      await checkSettings(grants, source, values)
       await claude.cmod.call({ to: cmodPluginName, method: 'updateSettings', input: { mod: definition.name, source, project: modState.root, values } })
     },
   })

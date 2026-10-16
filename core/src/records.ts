@@ -26,12 +26,12 @@ export type FlagPermission = (typeof flagPermissions)[number]
 const permissionNames: readonly string[] = [...listPermissions, ...flagPermissions]
 const hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/
 const programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
-const settingName = /^[A-Za-z][A-Za-z0-9]*$/
+const settingPath = /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9_@-]+)*$/
 const listItemHint: Readonly<Record<ListPermission, string>> = {
   network: 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"',
   run: 'a program\'s command, such as "gh"',
   files: 'a path that starts with ~/ or /, such as "~/.zshrc"',
-  config: 'a Claude Code setting\'s name, such as "cleanupPeriodDays"',
+  config: 'a Claude Code setting\'s name, or a key path inside one, such as "cleanupPeriodDays" or "env.ANTHROPIC_BASE_URL"',
 }
 
 export type ReadFile = (path: string) => Promise<string | undefined>
@@ -165,7 +165,7 @@ function readPermissions(steps: Record<string, unknown>): string[] {
     if (!Array.isArray(value) || value.length === 0 || !value.every((each) => typeof each === 'string')) throw new Error(`${at} sets "${name}" to ${JSON.stringify(value)}. Write a list, such as "${name}": ${example}.`)
     for (const each of value) {
       const isPath = /^(~\/|\/)/.test(each) && !each.split('/').includes('..')
-      const isValid = { network: hostName.test(each) || isPath, run: programName.test(each), files: isPath, config: settingName.test(each) }[name]
+      const isValid = { network: hostName.test(each) || isPath, run: programName.test(each), files: isPath, config: settingPath.test(each) }[name]
       if (isValid !== true) throw new Error(`${at} lists "${each}" under "${name}". Write ${listItemHint[name as ListPermission]}.`)
       items.push(`${name}:${each}`)
     }
@@ -200,6 +200,15 @@ export function permissionWords(item: string): string {
     default:
       return item
   }
+}
+
+export function settingPaths(values: Readonly<Record<string, unknown>>): string[][] {
+  return Object.entries(values).flatMap(([key, value]) => (isObject(value) && Object.keys(value).length > 0 ? settingPaths(value).map((path) => [key, ...path]) : [[key]]))
+}
+
+export function isSettingCovered(granted: Iterable<string>, path: string): boolean {
+  const item = `config:${path}`
+  return [...granted].some((each) => item === each || item.startsWith(`${each}.`))
 }
 
 export const settingsPagesMethod = 'cmod:settingsPages'
@@ -253,7 +262,8 @@ function readKeys(keys: unknown): Steps {
 export const coreVersion = '1.5.1'
 
 export function oldestCmodFor(steps: Steps): string {
-  if (steps.permissions?.some((item) => item === 'tasks' || item.startsWith('config:')) === true) return '1.0.0'
+  if (steps.permissions?.some((item) => item.startsWith('config:')) === true) return '1.6.0'
+  if (steps.permissions?.includes('tasks') === true) return '1.0.0'
   if (steps.permissions !== undefined) return '0.2.0'
   return Object.keys(steps.keys ?? {}).length > 0 ? '0.1.12' : '0.0.0'
 }

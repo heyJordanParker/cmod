@@ -1,4 +1,4 @@
-import { isObject, permissionWords } from '../records.js'
+import { isObject, isSettingCovered, permissionWords, settingPaths } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
@@ -53,8 +53,8 @@ export async function checkWrite(grants: Grants, call: string, path: string): Pr
   await checkGrant(grants, call, writeItem(grants, path))
 }
 
-export async function checkSettings(grants: Grants, source: 'user' | 'project' | 'local', keys: readonly string[]): Promise<void> {
-  for (const key of keys) await checkGrant(grants, `settings.${source}.update(${key})`, `config:${key}`)
+export async function checkSettings(grants: Grants, source: 'user' | 'project' | 'local', values: Readonly<Record<string, unknown>>): Promise<void> {
+  for (const path of settingPaths(values).map((each) => each.join('.'))) await checkGrant(grants, `settings.${source}.update(${path})`, `config:${path}`)
 }
 
 export function checkingGrants(claude: Claude, grants: Grants): Claude {
@@ -167,6 +167,7 @@ export function isCovered(granted: ReadonlySet<string>, item: string, home: stri
   const split = item.indexOf(':')
   if (split === -1) return false
   const name = item.slice(0, split)
+  if (name === 'config') return isSettingCovered(granted, item.slice(split + 1))
   const target = expanded(item.slice(split + 1), home)
   const values = [...granted].filter((each) => each.startsWith(`${name}:`)).map((each) => expanded(each.slice(name.length + 1), home))
   if (name === 'run') return values.includes('*') || values.includes(target)

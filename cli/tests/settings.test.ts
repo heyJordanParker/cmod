@@ -6,11 +6,11 @@ import { cmod, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from '.
 
 afterEach(deleteTemporaryHomes)
 
-async function setUpKeeper(home: string): Promise<{ project: string }> {
+async function setUpKeeper(home: string, config: readonly string[] = ['cleanupPeriodDays', 'mcpServers', 'statusLine']): Promise<{ project: string }> {
   const root = join(home, 'keeper')
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'keeper', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'keeper', cmod: { permissions: { config: ['cleanupPeriodDays', 'mcpServers', 'statusLine'] } } }),
+    'package.json': JSON.stringify({ name: 'keeper', cmod: { permissions: { config } } }),
   })
   expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
   return { project: join(home, 'work/app') }
@@ -59,4 +59,53 @@ test('a null value removes the key, and teardown takes out only the values that 
 
   expect(await read(join(home, '.claude/settings.json'))).toEqual({ model: 'opus', cleanupPeriodDays: 90 })
   expect(existsSync(join(home, '.local/share/cmod/settings/keeper.json'))).toBe(false)
+})
+
+test('an object merges into the one the person has, keeping its comments, and teardown takes out only the mod\'s value and the objects it left empty', async () => {
+  const home = await temporaryHome()
+  const { project } = await setUpKeeper(home, ['env'])
+  await writeFiles(home, { '.claude/settings.json': '{\n  // my proxy\n  "env": {\n    "FOO": "1"\n  }\n}\n' })
+
+  const user = await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}')
+  await cmod(home, 'settings', 'keeper', 'project', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}', '--project', project)
+
+  expect(user).toEqual({ exitCode: 0, stdout: 'Changed env in ~/.claude/settings.json for keeper.\n', stderr: '' })
+  expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe('{\n  // my proxy\n  "env": {\n    "FOO": "1",\n    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317"\n  }\n}\n')
+  expect((await cmod(home, 'teardown', 'keeper')).exitCode).toBe(0)
+  expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe('{\n  // my proxy\n  "env": {\n    "FOO": "1"\n  }\n}\n')
+  expect(await read(join(project, '.claude/settings.json'))).toEqual({})
+})
+
+test('teardown keeps a value the person changed after the mod set it', async () => {
+  const home = await temporaryHome()
+  await setUpKeeper(home, ['env'])
+  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { FOO: '1' } }) })
+  await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}')
+  const edited = (await read(join(home, '.claude/settings.json'))) as { env: Record<string, unknown> }
+  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { ...edited.env, ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000' } }) })
+
+  expect((await cmod(home, 'teardown', 'keeper')).exitCode).toBe(0)
+
+  expect(await read(join(home, '.claude/settings.json'))).toEqual({ env: { FOO: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000' } })
+})
+
+test('a null inside an object removes only that key', async () => {
+  const home = await temporaryHome()
+  await setUpKeeper(home, ['env.ANTHROPIC_BASE_URL'])
+  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { FOO: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } }) })
+
+  expect((await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":null}}')).exitCode).toBe(0)
+
+  expect(await read(join(home, '.claude/settings.json'))).toEqual({ env: { FOO: '1' } })
+})
+
+test('a grant for one key path refuses a value beside it and names the line to add, changing nothing', async () => {
+  const home = await temporaryHome()
+  await setUpKeeper(home, ['env.ANTHROPIC_BASE_URL'])
+
+  const refused = await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","OTHER":"1"}}')
+
+  expect(refused.exitCode).toBe(1)
+  expect(refused.stderr).toContain('keeper has no grant to "Change env.OTHER in your Claude Code settings". It needs "permissions": { "config": ["env.OTHER"] } in package.json "cmod", turned on in /mods keeper.')
+  expect(existsSync(join(home, '.claude/settings.json'))).toBe(false)
 })

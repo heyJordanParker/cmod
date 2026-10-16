@@ -9,9 +9,9 @@ import { testMod } from '../../src/testing.js'
 const ok = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
 test('readSteps turns package.json "cmod" permissions into one item each', () => {
-  const steps = readSteps({ cmod: { permissions: { network: ['api.github.com', '/var/run/docker.sock'], run: ['gh'], files: ['~/.zshrc'], prompt: true, tools: true, config: ['cleanupPeriodDays', 'statusLine'], conversation: true } } })
+  const steps = readSteps({ cmod: { permissions: { network: ['api.github.com', '/var/run/docker.sock'], run: ['gh'], files: ['~/.zshrc'], prompt: true, tools: true, config: ['cleanupPeriodDays', 'env.ANTHROPIC_BASE_URL'], conversation: true } } })
 
-  expect(steps).toEqual({ permissions: ['network:api.github.com', 'network:/var/run/docker.sock', 'run:gh', 'files:~/.zshrc', 'prompt', 'tools', 'config:cleanupPeriodDays', 'config:statusLine', 'conversation'] })
+  expect(steps).toEqual({ permissions: ['network:api.github.com', 'network:/var/run/docker.sock', 'run:gh', 'files:~/.zshrc', 'prompt', 'tools', 'config:cleanupPeriodDays', 'config:env.ANTHROPIC_BASE_URL', 'conversation'] })
   expect(steps?.permissions?.map(permissionWords)).toEqual([
     'Connect to api.github.com',
     'Connect to /var/run/docker.sock',
@@ -20,7 +20,7 @@ test('readSteps turns package.json "cmod" permissions into one item each', () =>
     'Add text Claude reads and start turns',
     "Use and change Claude's tool calls",
     'Change cleanupPeriodDays in your Claude Code settings',
-    'Change statusLine in your Claude Code settings',
+    'Change env.ANTHROPIC_BASE_URL in your Claude Code settings',
     'Read your Claude Code conversations',
   ])
 })
@@ -33,7 +33,7 @@ test('readSteps names the fix for each permission it cannot use', () => {
   expect(read({ network: ['https://api.github.com/repos'] })).toThrow('lists "https://api.github.com/repos" under "network". Write a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock".')
   expect(read({ files: ['notes.md'] })).toThrow('lists "notes.md" under "files". Write a path that starts with ~/ or /, such as "~/.zshrc".')
   expect(read({ config: true })).toThrow('sets "config" to true. Write a list, such as "config": ["cleanupPeriodDays"].')
-  expect(read({ config: ['permissions.allow'] })).toThrow('lists "permissions.allow" under "config". Write a Claude Code setting\'s name, such as "cleanupPeriodDays".')
+  expect(read({ config: ['env.'] })).toThrow('lists "env." under "config". Write a Claude Code setting\'s name, or a key path inside one, such as "cleanupPeriodDays" or "env.ANTHROPIC_BASE_URL".')
 })
 
 test('a call the mod does not declare fails with the line to add to package.json', async () => {
@@ -186,6 +186,29 @@ test('settings.update sends each listed setting to the cmod plugin and refuses o
   expect(sent).toEqual([{ mod: 'keeper', source: 'user', project: '/work/app', values: { cleanupPeriodDays: 365 } }])
 })
 
+test('a config grant names a key path, and covers each value at or below it', async () => {
+  const sent: unknown[] = []
+  let mod: Mod | undefined
+  const tested = testMod(defineMod({ name: 'oneclaude', setup: (started) => void (mod = started) }), {
+    permissions: ['config:env.ANTHROPIC_BASE_URL', 'config:permissions'],
+    dependencies: {
+      cmod: {
+        updateSettings(input: unknown) {
+          sent.push((input as { values: unknown }).values)
+          return null
+        },
+      },
+    } as never,
+  })
+  await tested.start()
+
+  await settings.user.update({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' }, permissions: { allow: ['Bash(gh:*)'] } })
+  await expect(settings.user.update({ env: { ANTHROPIC_BASE_URL: null, OTHER: '1' } })).rejects.toThrow('oneclaude calls settings.user.update(env.OTHER), which needs "permissions": { "config": ["env.OTHER"] } in package.json "cmod".')
+
+  expect(sent).toEqual([{ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' }, permissions: { allow: ['Bash(gh:*)'] } }])
+  expect([mod?.permissions.config.allows('env.ANTHROPIC_BASE_URL'), mod?.permissions.config.allows('env'), mod?.permissions.config.allows('permissions.deny'), mod?.permissions.config.allows('permissionsX')]).toEqual([true, false, true, false])
+})
+
 test('a hook answer part with its grant reaches Claude Code', async () => {
   const tested = testMod(defineMod({ name: 'nudge', setup: (mod) => mod.on(UserPromptSubmit, () => ({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Be brief.' } })) }), {
     permissions: ['prompt'],
@@ -263,9 +286,9 @@ test('the consent hash changes when the permissions change', async () => {
   expect(await scriptsSha256({ permissions: ['prompt', 'network:api.github.com'] }, files)).not.toBe(base)
 })
 
-test('a mod that asks for tasks or a config list needs cmod 1.0, and other permissions need 0.2', () => {
+test('a mod that asks for a config list needs cmod 1.6, for tasks 1.0, and other permissions need 0.2', () => {
   expect(oldestCmodFor({ permissions: ['tasks'] })).toBe('1.0.0')
-  expect(oldestCmodFor({ permissions: ['config:statusLine'] })).toBe('1.0.0')
+  expect(oldestCmodFor({ permissions: ['config:statusLine'] })).toBe('1.6.0')
   expect(oldestCmodFor({ permissions: ['prompt', 'network:api.github.com'] })).toBe('0.2.0')
 })
 

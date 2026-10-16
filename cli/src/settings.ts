@@ -2,8 +2,8 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { isObject, marketplaceOf, updatesToTurnOn } from '@cmodjs/core/src/records.js'
-import { applyEdits, modify, parse } from 'jsonc-parser'
+import { isObject, marketplaceOf, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
+import { applyEdits, modify, parse, type FormattingOptions } from 'jsonc-parser'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
 import { storePath, takeLock } from './store.js'
 
@@ -107,17 +107,18 @@ export async function changeSettings(mod: string, changes: readonly SettingChang
     const set = await readModSettings(recordFile)
     for (const file of new Set(changes.map((change) => change.file))) {
       const { path, text } = await readConfig(file)
-      configObject(text, path)
+      const current = configObject(text, path)
       const base = text.trim() === '' ? '{}\n' : text
       const formattingOptions = indentation(base)
-      const ours = set[path] ?? {}
+      let ours: unknown = set[path] ?? {}
       let next = base
       for (const { key, value } of changes.filter((change) => change.file === file)) {
-        next = applyEdits(next, modify(next, [key], value ?? undefined, { formattingOptions }))
-        if (value === null) delete ours[key]
-        else ours[key] = value
+        for (const [at, written] of editsOf(valueAt(current, [key]), [key], value)) {
+          next = applyEdits(next, modify(next, at, written, { formattingOptions }))
+          ours = withValueAt(ours, at, written)
+        }
       }
-      if (Object.keys(ours).length > 0) set[path] = ours
+      if (isObject(ours) && Object.keys(ours).length > 0) set[path] = ours
       else delete set[path]
       await writeAtomically(path, next)
     }
@@ -132,16 +133,44 @@ export async function restoreSettings(mod: string): Promise<void> {
     for (const [file, values] of Object.entries(await readModSettings(recordFile))) {
       const { path, text } = await readConfig(file)
       if (text.trim() === '') continue
-      const current = configObject(text, path)
       const formattingOptions = indentation(text)
       let next = text
-      for (const [key, value] of Object.entries(values)) {
-        if (isDeepStrictEqual(current[key], value)) next = applyEdits(next, modify(next, [key], undefined, { formattingOptions }))
+      for (const at of settingPaths(values)) {
+        if (isDeepStrictEqual(valueAt(configObject(next, path), at), valueAt(values, at))) next = withoutValue(next, at, formattingOptions)
       }
       if (next !== text) await writeAtomically(path, next)
     }
     await rm(recordFile, { force: true })
   })
+}
+
+function editsOf(current: unknown, path: string[], value: unknown): [string[], unknown][] {
+  if (value === null) return current === undefined ? [] : [[path, undefined]]
+  if (isObject(value) && isObject(current)) return Object.entries(value).flatMap(([key, each]) => editsOf(valueAt(current, [key]), [...path, key], each))
+  return [[path, isObject(value) ? withoutNulls(value) : value]]
+}
+
+function withoutNulls(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(values).flatMap(([key, value]) => (value === null ? [] : [[key, isObject(value) ? withoutNulls(value) : value]])))
+}
+
+function valueAt(value: unknown, path: readonly string[]): unknown {
+  return path.reduce<unknown>((each, key) => (isObject(each) && Object.hasOwn(each, key) ? each[key] : undefined), value)
+}
+
+function withValueAt(values: unknown, path: readonly string[], value: unknown): unknown {
+  const [key, ...rest] = path
+  if (key === undefined) return value
+  const { [key]: current, ...others } = isObject(values) ? values : {}
+  const next = withValueAt(current, rest, value)
+  return next === undefined || (rest.length > 0 && isObject(next) && Object.keys(next).length === 0) ? others : { ...others, [key]: next }
+}
+
+function withoutValue(text: string, path: string[], formattingOptions: FormattingOptions): string {
+  const next = applyEdits(text, modify(text, path, undefined, { formattingOptions }))
+  const parent = path.slice(0, -1)
+  const left = valueAt(parse(next), parent)
+  return parent.length > 0 && isObject(left) && Object.keys(left).length === 0 ? withoutValue(next, parent, formattingOptions) : next
 }
 
 async function withSettingsLock(change: () => Promise<void>): Promise<void> {
@@ -304,10 +333,8 @@ function configObject(text: string, path: string): Record<string, unknown> {
 async function writeEntries(path: string, text: string, entries: string[]): Promise<void> {
   const base = text.trim() === '' ? '{}\n' : text
   const formattingOptions = indentation(base)
-  let next = applyEdits(base, modify(base, ['env', pluginFolders], entries.length > 0 ? entries.join(':') : undefined, { formattingOptions }))
-  const env = settingsObject(next)['env']
-  if (isObject(env) && Object.keys(env).length === 0) next = applyEdits(next, modify(next, ['env'], undefined, { formattingOptions }))
-  await writeAtomically(path, next)
+  const at = ['env', pluginFolders]
+  await writeAtomically(path, entries.length > 0 ? applyEdits(base, modify(base, at, entries.join(':'), { formattingOptions })) : withoutValue(base, at, formattingOptions))
 }
 
 export function indentation(text: string): { insertSpaces: boolean; tabSize: number; eol: string } {

@@ -272,14 +272,17 @@ type Setting = { key: string; label: string; description?: string; kind: 'boolea
 `settings.user` is the person's own `~/.claude/settings.json`, `settings.project` is the project's `.claude/settings.json`, and `settings.local` is the project's `.claude/settings.local.json`.
 
 - `read` answers the values in that one file, such as `(await settings.user.read())['enabledPlugins']`.
-- `update` writes each top-level key of `values` into that file. `mcpServers` in `settings.project` goes to the project's `.mcp.json`, where Claude Code reads a project's servers.
-- A key replaces its whole value, and `null` removes the key. Every other key, and the file's formatting, stays as it was.
-- Each key needs its own `config` permission, such as `"config": ["cleanupPeriodDays"]` ([permissions.md](permissions.md)), and `update` rejects with the line to add for a key without one.
-- Removing the mod takes out each value it set that still equals what it set, so a value the person changed since stays.
+- `update` merges `values` into that file as a JSON Merge Patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)). `mcpServers` in `settings.project` goes to the project's `.mcp.json`, where Claude Code reads a project's servers.
+- An object merges into the object already at that key, at every depth, so every key it does not name stays as it was. `null` removes the key at its depth. An array or any other value replaces the value. To replace a whole object, read it and set each key you drop to `null`.
+- The file's comments and formatting stay as they were.
+- Each value needs a `config` permission for its key path or a path above it ([permissions.md](permissions.md)): `"config": ["env.ANTHROPIC_BASE_URL"]` covers that one value, and `"config": ["env"]` covers every key in `env`. `update` rejects with the line to add for a value no grant covers, and changes nothing.
+- Removing the mod takes out each value it set that still equals what it set, then each object that leaves empty. A value the person changed since stays.
 - `fs.write` to a Claude Code settings file rejects and names `update`, because a whole-file write loses the person's own edits and leaves the mod's values behind when it is removed.
 
+A mod that points Claude Code at its local proxy sets one variable in `env`, and the person's other variables stay:
+
 ```ts
-await settings.user.update({ cleanupPeriodDays: 365 })
+await settings.user.update({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } })
 ```
 
 ## model: one question outside the conversation

@@ -814,7 +814,7 @@ test('a mod that binds keys waits while PATH finds a cmod older than 0.1.12, nam
   expect(spawned).toEqual([{ argv: ['cmod', 'setup', root, '--events'] }])
 })
 
-test('a mod that asks for the tasks permission or a config list waits while PATH finds a cmod older than 1.0.0, which does not know them', async () => {
+test('a mod that asks for a config list waits while PATH finds a cmod older than 1.6.0, which replaces a whole object where it merges now', async () => {
   const fake = fakeClaude({ name: 'modes', root })
   fake.fakes.process.run = async () => ({ exitCode: 0, stdout: 'cmod 0.3.0\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   const spawned: ProcessSpawnRequest[] = []
@@ -835,7 +835,7 @@ test('a mod that asks for the tasks permission or a config list waits while PATH
   await fake.settle()
 
   expect(spawned).toEqual([])
-  expect(lifecycle.toasts[0]?.description).toBe('PATH finds cmod 0.3.0, and modes needs cmod 1.0.0 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.')
+  expect(lifecycle.toasts[0]?.description).toBe('PATH finds cmod 0.3.0, and modes needs cmod 1.6.0 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.')
 })
 
 test('a mod keeps waiting for cmod past 60 seconds and starts once cmod is ready', async () => {

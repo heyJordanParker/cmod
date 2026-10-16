@@ -24,7 +24,7 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 | `"model": true` | Ask a model, which uses your plan | `model.complete` |
 | `"tasks": true` | Start tasks that work beside Claude | A session's `startTask`, and a `before(TaskStart)` or `before(TaskEnd)` answer |
 | `"tools": true` | Use and change Claude's tool calls | A session's `callTool`, a `before(ToolCall)` answer, and a listener or a job that changes a tool call's input |
-| `"config": ["cleanupPeriodDays"]` | Change cleanupPeriodDays in your Claude Code settings | `settings.user.update`, `settings.project.update`, and `settings.local.update` of that setting. `mcpServers` covers the project's `.mcp.json` |
+| `"config": ["env.ANTHROPIC_BASE_URL"]` | Change env.ANTHROPIC_BASE_URL in your Claude Code settings | Each value `settings.user.update`, `settings.project.update`, and `settings.local.update` change. A key path covers its own value and every key below it, so `"env"` covers every key in `env`, and `await settings.user.update({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } })` needs `"env.ANTHROPIC_BASE_URL"` or `"env"`. `mcpServers` covers the project's `.mcp.json` |
 | `"approve": true` | Approve Claude's tool calls for you | an allow or an ask from the mod's permission rules or hooks, and a `retry`. A deny needs no permission |
 
 Reading files, drawing panes and renders, toasts, slash commands, tools of the mod's own, and listeners need no permission. Writing a Claude Code settings file with `fs.write` is refused with every permission, and names the `settings` call to use instead ([mod.md](mod.md#settings-claude-code-s-settings-files)).
@@ -56,11 +56,11 @@ type Permissions = {
   readonly network: { allows(host: string): boolean }
   readonly run: { allows(program: string): boolean }
   readonly files: { allows(path: string): boolean }
-  readonly config: { allows(key: string): boolean }
+  readonly config: { allows(keyPath: string): boolean }
 }
 ```
 
-`mod.permissions` says whether the person has each permission turned on, so a mod hides a feature instead of failing it. A flag is `true` while it is granted, and `allows` answers for one host, program, path, or settings key:
+`mod.permissions` says whether the person has each permission turned on, so a mod hides a feature instead of failing it. A flag is `true` while it is granted, and `allows` answers for one host, program, path, or settings key path, such as `env.ANTHROPIC_BASE_URL`:
 
 ```ts
 if (mod.permissions.model) {
