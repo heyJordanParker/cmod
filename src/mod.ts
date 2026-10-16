@@ -1,5 +1,5 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, longestMs, messageOf, process, SessionStart, settings, Stop, StopFailure, UserPromptSubmit, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, longestMs, messageOf, process, sessions, settings, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
@@ -104,8 +104,8 @@ export const cmodPlugin = defineMod({
       }
     }
 
-    mod.on(SessionStart, watchRemovals)
-    mod.on(UserPromptSubmit, watchRemovals)
+    sessions.current.onSessionStart(watchRemovals)
+    sessions.current.onPrompt(watchRemovals)
 
     let applied: ReadonlyMap<string, ReadonlyMap<string, string>> | undefined
     let following = Promise.resolve()
@@ -128,17 +128,15 @@ export const cmodPlugin = defineMod({
         if (added.deny !== undefined) mod.log(`Claude Code refused the rules note: ${added.deny}`)
       }
     }
-    const keepRules = () => {
+    const keepRules = async () => {
       following = following.then(followRules).catch((error: unknown) => report({ id: 'rules', message: "Could not link the mods' rules", error }))
-      return following
+      await following
     }
-    mod.on(SessionStart, keepRules)
-    mod.on(UserPromptSubmit, keepRules)
+    sessions.current.beforeSessionStart(keepRules)
+    sessions.current.beforePrompt(keepRules)
 
-    const keepTip = async () => {
+    sessions.current.onTurnEnd(async () => {
       mod.state.session.tip = await tipOf(mod)
-    }
-    mod.on(Stop, keepTip)
-    mod.on(StopFailure, keepTip)
+    })
   },
 })
