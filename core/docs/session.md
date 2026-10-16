@@ -115,12 +115,19 @@ part.on<Event>(matcher: Matcher<payload>, listener: (payload) => unknown): Dispo
 
 Each event has its own method, such as `onReply` or `onTaskStart`, which runs `listener` for each new message, turn, context, task, goal change, or usage change, as it happens. `sessions`, a session, its goal, a task, a context, and a turn each have every `on` method, and each hears what happens inside it: an event reaches the part it happens in and every part above it.
 
+A session is one agent: the conversation's main agent, or the agent doing a task. An event runs up one chain:
+
 ```
-Message ──> Turn ──> Context ──> Session ──> sessions
-TaskStart, TaskEnd, and the owner's record ──> Task ──> its parent Task ──> Goal ──> Session
+Turn ──> Context ──> Session ──> that session's Task ──> each Task above ──> Goal ──> sessions
 ```
 
-So `turn.onReply(…)` hears the replies of that turn only, `task.onMessage(…)` hears every message of the task's owner and of the tasks it handed on, and `sessions.onPrompt(…)` hears every prompt of every running session in the project.
+The goal belongs to the main agent, so the main agent's events reach it too. So:
+- `sessions.current.onToolCall(…)` hears the main agent's tool calls only.
+- `(await sessions.current.goal()).onToolCall(…)` hears every agent's in the session.
+- `task.onMessage(…)` hears every message of the task's owner and of the tasks it handed on, and `task.owner.onMessage(…)` hears the owner's alone.
+- `turn.onReply(…)` hears the replies of that turn only, and `sessions.onPrompt(…)` hears every prompt of every running session in the project.
+
+A turn or a context that has ended takes no listener: its methods throw `<mod>: turn <id> has ended, so its onReply never fires. Listen on its Session.`
 
 | Method | The listener gets | It happens in |
 | --- | --- | --- |
@@ -191,7 +198,7 @@ Every action works on the current session and on every other running session. cm
 - `usage` answers the session's model, its context window's fill, and its cost so far, as the status line shows them: `{ model, context: { tokens?, window?, percent? }, cost?: { usd } }`. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript.
 - `clients` answers the Claude apps showing the session now: `'terminal'`, `'desktop'`, `'mobile'`, and `'vscode'`. An ended session shows in none.
 
-A task's owner takes `send`, `usage`, and `clients`. Claude Code gives a subagent no way to start a task or run a tool from outside, so its `startTask` and `callTool` reject. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
+A task's owner is a `TaskOwner`, a session without `startTask` and `callTool`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `clients`. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
 
 A prompt that comes on a clock, such as every 10 minutes, belongs in a `schedule` job instead, which Claude Code shows as one `Running scheduled task` row ([jobs.md](jobs.md#schedule)).
 

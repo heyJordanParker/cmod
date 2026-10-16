@@ -165,6 +165,8 @@ export type Session = RecordPart & {
   clients(): Promise<Client[]>
 }
 
+export type TaskOwner = Omit<Session, 'startTask' | 'callTool'>
+
 export type SessionScope = {
   readonly running?: boolean
   readonly since?: string

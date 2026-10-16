@@ -8,7 +8,7 @@ import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
 import type { ContextData, GoalData, SessionChange, SessionData, TaskData, TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
-import { beforeEvents, Session, sessionEvents, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
+import { beforeEvents, Session, sessionEvents, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
 import { matches, sentMatcher, type SentMatcher } from '../utils/matcher.js'
 import { foldAnswers, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
@@ -55,7 +55,7 @@ export function actPermission(action: Act, input: unknown): string | undefined {
   return action === 'callTool' ? (toolPermission(String((input as Partial<ToolCallArgs> | null)?.name)) ?? 'tools') : actPermissions[action]
 }
 
-export type Scope = { readonly session?: string; readonly context?: number; readonly turn?: string; readonly task?: string; readonly isGoal?: true }
+export type Scope = { readonly session?: string; readonly context?: number; readonly turn?: string; readonly task?: string; readonly isGoal?: true; readonly isAgent?: true }
 
 export type SessionsClient = {
   readonly sessions: Sessions
@@ -68,8 +68,6 @@ export type SessionsClient = {
 type Listening = { scope: Scope; readonly event: SessionEvent; readonly matcher: unknown; readonly listener: (payload: never) => unknown }
 
 type Owned = { readonly session: string; readonly task: string }
-
-const asked = (action: string) => `cmod: ${action} runs only on a session's own main loop, and Claude Code gives a subagent's tasks no way to start a task or run a tool.`
 
 export async function usageOf(claude: Pick<Claude, 'session'>): Promise<Usage> {
   const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()])
@@ -119,8 +117,8 @@ function contextOfChange(change: SessionChange): number | undefined {
 export function isInScope(scope: Scope, session: string, change: SessionChange, isUnder: (task: string, ancestor: string) => boolean): boolean {
   if (scope.session !== undefined && scope.session !== session) return false
   const task = taskOfChange(change)
+  if (scope.isAgent === true) return (change.type === TaskStart || change.type === TaskEnd ? change.task.parent : task) === scope.task
   if (scope.task !== undefined && (task === undefined || !isUnder(task, scope.task))) return false
-  if (scope.isGoal === true && change.type !== GoalChange && change.type !== TaskStart && (task === undefined || task === scope.task)) return false
   if (scope.context !== undefined && (contextOfChange(change) !== scope.context || ownerOfChange(change) !== scope.task)) return false
   if (scope.turn === undefined) return true
   if (change.type === Message) return change.message.turn === scope.turn
@@ -205,23 +203,28 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
     return foldAnswers(event, change, askers, (error) => report(`before:${event}`, `The before(${event}) listener failed`, error))
   }
 
-  const eventMethods = (scopeOf: () => Scope, hasBefore: boolean): OnMethods & Partial<BeforeMethods> =>
-    Object.fromEntries([
-      ...Object.entries(sessionEvents).map(([named, event]) => [`on${named}`, (matcherOrListener: unknown, maybeListener?: unknown) => add(listening, scopeOf(), event, matcherOrListener, maybeListener, subscribe)]),
-      ...(hasBefore ? beforeEvents.map((named) => [`before${named}`, (matcherOrListener: unknown, maybeListener?: unknown) => add(deciding, scopeOf(), sessionEvents[named], matcherOrListener, maybeListener, subscribe)]) : []),
+  const eventMethods = (scopeOf: () => Scope, hasBefore: boolean, ended?: string): OnMethods & Partial<BeforeMethods> => {
+    const method = (into: Map<string, Set<Listening>>, named: string, event: SessionEvent) => (matcherOrListener: unknown, maybeListener?: unknown) => {
+      if (ended !== undefined) throw new Error(`${name}: ${ended} has ended, so its ${named} never fires. Listen on its Session.`)
+      return add(into, scopeOf(), event, matcherOrListener, maybeListener, subscribe)
+    }
+    return Object.fromEntries([
+      ...Object.entries(sessionEvents).map(([named, event]) => [`on${named}`, method(listening, `on${named}`, event)]),
+      ...(hasBefore ? beforeEvents.map((named) => [`before${named}`, method(deciding, `before${named}`, sessionEvents[named])]) : []),
     ]) as OnMethods & Partial<BeforeMethods>
+  }
 
-  const recordPart = (scope: Scope): RecordPart =>
+  const recordPart = (scope: Scope, ended?: string): RecordPart =>
     ({
       search: (text: string, options: SearchOptions = {}) => call(conversationMethods.search, { text, ...scope, ...optionsOf(options) }),
-      ...eventMethods(() => scope, true),
+      ...eventMethods(() => scope, true, ended),
     }) as RecordPart
 
   const turnOf = (scope: Scope, data: TurnData): Turn => {
     const task = data.prompt.task ?? scope.task
     return {
       ...data,
-      ...recordPart({ ...scope, ...(task === undefined ? {} : { task }), turn: data.prompt.id }),
+      ...recordPart({ ...scope, ...(task === undefined ? {} : { task }), turn: data.prompt.id }, data.closedAt === undefined ? undefined : `turn ${data.prompt.id}`),
       messages: () => call<Message[]>(conversationMethods.messages, { session: scope.session, turn: data.prompt.id, ...(task === undefined ? {} : { task }) }),
     }
   }
@@ -230,7 +233,7 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
     const owned: Scope = { ...(scope.session === undefined ? {} : { session: scope.session }), ...(data.task === undefined ? {} : { task: data.task }) }
     return {
       ...data,
-      ...recordPart({ ...owned, context: data.number }),
+      ...recordPart({ ...owned, context: data.number }, data.closedAt === undefined ? undefined : `context ${data.number}`),
       turns: async () => (await call<TurnData[]>(conversationMethods.turns, { ...owned, context: data.number })).map((turn) => turnOf(owned, turn)),
     }
   }
@@ -297,10 +300,10 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
   const sessionOf = (read: () => SessionData, owned?: Owned) => {
     const id = () => read().id
     const isHere = () => owned === undefined && id() === current.id
-    const scope = (): Scope => (owned === undefined ? { session: id() } : { session: owned.session, task: owned.task })
+    const scope = (): Scope => (owned === undefined ? { session: id(), isAgent: true } : { session: owned.session, task: owned.task, isAgent: true })
     const where = () => (owned === undefined ? { session: id() } : { session: owned.session, task: owned.task })
-    const turnsOf = async (options: { readonly last?: number } = {}): Promise<Turn[]> => (await call<TurnData[]>(conversationMethods.turns, { ...where(), ...options })).map((turn) => turnOf(scope(), turn))
-    const contextsOf = async (): Promise<Context[]> => (await call<ContextData[]>(conversationMethods.contexts, where())).map((context) => contextOf(scope(), context))
+    const turnsOf = async (options: { readonly last?: number } = {}): Promise<Turn[]> => (await call<TurnData[]>(conversationMethods.turns, { ...where(), ...options })).map((turn) => turnOf(where(), turn))
+    const contextsOf = async (): Promise<Context[]> => (await call<ContextData[]>(conversationMethods.contexts, where())).map((context) => contextOf(where(), context))
     const session = {
       get id() {
         return read().id
@@ -334,7 +337,7 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
       },
       search: (text: string, options: SearchOptions = {}) => recordPart(scope()).search(text, options),
       ...eventMethods(scope, true),
-      goal: async () => goalOf(scope(), await call<GoalData>(conversationMethods.goal, where())),
+      goal: async () => goalOf(where(), await call<GoalData>(conversationMethods.goal, where())),
       context: async () => {
         const all = await contextsOf()
         const last = all.at(-1)
@@ -355,21 +358,19 @@ export function createSessionsClient({ name, claude, report, isGranted }: { read
         if (isHere() && message.as !== Session) return sendHere(message)
         await act(id(), 'send', message, owned)
       },
+    }
+    if (owned !== undefined) return session as unknown as Sessions['current']
+    return Object.assign(session, {
       async startTask(task: TaskStartArgs): Promise<Task> {
-        if (owned !== undefined) throw new Error(asked('startTask'))
         if (isHere()) return startHere(task)
         const started = await act<TaskData>(id(), 'startTask', task)
         return taskOf(id(), started)
       },
-      async callTool(toolCall: ToolCallArgs): Promise<ToolResult> {
-        if (owned !== undefined) throw new Error(asked('callTool'))
-        return act<ToolResult>(id(), 'callTool', toolCall)
-      },
-    }
-    return session as unknown as Sessions['current']
+      callTool: (toolCall: ToolCallArgs): Promise<ToolResult> => act<ToolResult>(id(), 'callTool', toolCall),
+    }) as unknown as Sessions['current']
   }
 
-  const ownerOf = (session: string, data: TaskData): Sessions['current'] => {
+  const ownerOf = (session: string, data: TaskData): TaskOwner => {
     const parent = session === current.id ? current : known.get(session)
     return sessionOf(
       () => ({

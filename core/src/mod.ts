@@ -377,7 +377,7 @@ export function defineMod<State extends StateGroups = Record<never, never>, Name
 export type { Matcher } from './utils/matcher.js'
 export type { Place, PlaceProps } from './ui/places.js'
 export { AbovePrompt, AskUserQuestion, CommandOutput, PromptHint, SessionMode, Spinner, ToolGroup, ToolProgress, TurnDuration } from './ui/places.js'
-export { Session, UsageChange, type BeforeAnswer, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type Refusal, type SearchOptions, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type TaskStartArgs, type ToolCallArgs, type Usage } from './session/session.js'
+export { Session, UsageChange, type BeforeAnswer, type BeforeEvent, type BeforeMethods, type Client, type OnMethods, type RecordPart, type Refusal, type SearchOptions, type SessionEvent, type SessionPayload, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from './session/session.js'
 export { ContextEnd, ContextStart, type Context } from './session/context/context.js'
 export { TurnEnd, TurnStart, type Turn } from './session/context/turn/turn.js'
 export { Message, type MessageType } from './session/context/turn/message/message.js'

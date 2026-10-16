@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { defineMod, Message, Note, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolResult, type Disposable, type Session, type Turn } from '../../src/mod.js'
+import { defineMod, Message, Note, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -35,15 +35,17 @@ test('sessions.current.turn() is the running turn, and none once Claude stops', 
   expect(await sessions.current.turn()).toBeUndefined()
 })
 
-test("a turn hears only its own messages, and a task's messages reach the session's listeners", async () => {
+test("a turn hears only its own messages, a session only its own agent's, and the goal every agent's", async () => {
   const inTurn: string[] = []
+  const inMain: string[] = []
   const inSession: string[] = []
   const tested = testMod(
     defineMod({
       name: 'history',
-      setup() {
+      async setup() {
         sessions.current.onTurnStart({ prompt: { text: 'First' } }, (turn: Turn) => void turn.onReply((reply) => void inTurn.push(reply.text)))
-        sessions.current.onMessage({ task: /./ }, (message) => void inSession.push(message.type))
+        sessions.current.onMessage((message) => void inMain.push(message.type))
+        ;(await sessions.current.goal()).onMessage({ task: /./ }, (message) => void inSession.push(message.type))
       },
     }),
     { permissions: ['conversation'] },
@@ -58,6 +60,7 @@ test("a turn hears only its own messages, and a task's messages reach the sessio
   await tested.add({ type: Reply, text: 'Looked.' }, { task })
 
   expect(inTurn).toEqual(['one'])
+  expect(inMain).toEqual([Prompt, Reply, Prompt, Reply])
   expect(inSession).toEqual([Reply])
 })
 
@@ -134,7 +137,7 @@ test('a subtask closes when its result reaches the parent task', async () => {
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
   const child = await tested.startTask({ title: 'Read tree.ts', parent, openedBy: 'toolu_child' })
-  sessions.current.onTaskEnd((task) => void ended.push(task.id))
+  ;(await sessions.current.goal()).onTaskEnd((task) => void ended.push(task.id))
   await tested.settle()
 
   await tested.add({ type: ToolResult, callId: 'toolu_child', text: 'Read it.', isError: false }, { task: parent })
@@ -163,13 +166,24 @@ test("a task's TurnStart payload reads that task's messages", async () => {
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
-  sessions.current.onTurnStart({ prompt: { task: id } }, (turn: Turn) => void turn.messages().then((messages) => read.push(messages.map((message) => message.type))))
+  ;(await sessions.current.goal()).onTurnStart({ prompt: { task: id } }, (turn: Turn) => void turn.messages().then((messages) => read.push(messages.map((message) => message.type))))
   await tested.settle()
 
   await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
   await tested.settle()
 
   expect(read).toEqual([[Prompt]])
+})
+
+test('a listener on a turn that has ended throws, naming the turn', async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  await tested.endTurn()
+
+  const [ended] = await sessions.current.turns()
+
+  expect(() => ended!.onReply(() => {})).toThrow(/^history: turn .+ has ended, so its onReply never fires\. Listen on its Session\.$/)
 })
 
 test('a turn searches only its own messages', async () => {
@@ -291,7 +305,7 @@ test('a task heard starting in another running session is running, and a send re
     return { value: null }
   }
   const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true })
-  const owners: Session[] = []
+  const owners: TaskOwner[] = []
   client.sessions.onTaskStart((task) => void owners.push(task.owner))
   await fake.settle()
 
@@ -361,7 +375,7 @@ test('callTool with CronList or CronDelete needs the tools permission', async ()
   expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
 })
 
-test("a task owner's goal hears the tasks it started, never the owner's own messages", async () => {
+test("a task owner's goal hears the owner and the tasks it started", async () => {
   const heard: string[] = []
   const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
   await tested.start()
@@ -376,7 +390,7 @@ test("a task owner's goal hears the tasks it started, never the owner's own mess
   await tested.add({ type: Reply, text: 'Child reply' }, { task: child })
   await tested.settle()
 
-  expect(heard).toEqual(['Child reply'])
+  expect(heard).toEqual(['Owner reply', 'Child reply'])
 })
 
 test('callTool runs a tool in this session and answers its result, with the tools permission alone', async () => {

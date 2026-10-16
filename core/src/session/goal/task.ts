@@ -1,5 +1,5 @@
 import type { Message } from '../context/turn/message/message.js'
-import type { RecordPart, Session } from '../session.js'
+import type { RecordPart, TaskOwner } from '../session.js'
 
 export const Task = 'task'
 
@@ -10,7 +10,7 @@ export const TaskEnd = 'taskEnd'
 export type Task = RecordPart & {
   readonly id: string
   readonly title: string
-  readonly owner: Session
+  readonly owner: TaskOwner
   readonly openedBy: string
   readonly openedAt: string
   readonly closedAt?: string
