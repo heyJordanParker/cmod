@@ -44,13 +44,13 @@ export type SessionPayload = {
 export type Refusal = { readonly refuse: string }
 
 export type BeforeAnswer = {
-  readonly prompt: { readonly text: string } | Refusal
+  readonly prompt: { readonly text?: string; readonly note?: string; readonly title?: string } | Refusal
   readonly note: { readonly text: string }
   readonly skill: { readonly text: string }
   readonly document: { readonly text: string } | Refusal
   readonly reply: { readonly text: string }
   readonly toolCall: { readonly input: Readonly<Record<string, unknown>> } | { readonly result: string } | Refusal
-  readonly toolResult: { readonly output: string }
+  readonly toolResult: { readonly output?: unknown; readonly isError?: true; readonly note?: string }
   readonly notice: { readonly text: string }
   readonly taskStart: { readonly owner: { readonly model: string } } | Refusal
   readonly taskEnd: Refusal

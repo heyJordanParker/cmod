@@ -24,11 +24,28 @@ export type Place = Pick<ConversationState, 'session' | 'context' | 'contextOpen
 
 export type Decide = (event: BeforeEvent, change: SessionChange) => Promise<Partial<Answers> | undefined>
 
-export type Answers = { readonly text: string; readonly output: string; readonly refuse: string; readonly input: Readonly<Record<string, unknown>>; readonly result: string; readonly owner: { readonly model: string } }
+export type Answers = {
+  readonly text: string
+  readonly output: unknown
+  readonly isError: true
+  readonly note: string
+  readonly title: string
+  readonly refuse: string
+  readonly input: Readonly<Record<string, unknown>>
+  readonly result: string
+  readonly owner: { readonly model: string }
+}
 
 export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly decide: Decide }
 
-const appended: readonly BeforeEvent[] = [Note, Reply, ToolResult, Notice]
+const appended: readonly BeforeEvent[] = [Note, Reply, Notice]
+
+type ClassicFields = Readonly<Record<string, unknown>>
+
+const withNote = (below: unknown, note: string | undefined): ClassicFields => {
+  const fields = (below ?? {}) as ClassicFields
+  return note === undefined ? fields : { ...fields, additionalContext: [...((fields['additionalContext'] as readonly string[] | undefined) ?? []), note] }
+}
 
 const relayTag = /^(?:<cross-session-message[^>]*>\s*)?<cmod-relay>([\s\S]*)<\/cmod-relay>(?:\s*<\/cross-session-message>[\s\S]*)?$/
 
@@ -47,14 +64,39 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
     return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
   }
+  let title: string | undefined
+  const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: (e: never) => Promise<unknown>) => {
+    if (!(await wants(ToolResult))) return next(e as never)
+    const where = await place()
+    const name = String(e['tool_name'])
+    const callId = String(e['tool_use_id'])
+    const input = (typeof e['tool_input'] === 'object' && e['tool_input'] !== null ? e['tool_input'] : {}) as Readonly<Record<string, unknown>>
+    const task = typeof e['agent_id'] === 'string' ? e['agent_id'] : undefined
+    const result = { id: callId, at: now(), type: ToolResult, callId, name, input, cwd: String(e['cwd']), files: noFiles, output: isFailure ? e['error'] : e['tool_response'], isError: isFailure } as const
+    const answer = await asked(ToolResult, message(where, result, task))
+    const below = await next(e as never)
+    const rewritten = answer.output === undefined || isFailure ? {} : name.startsWith('mcp__') ? { updatedMCPToolOutput: answer.output } : { updatedToolOutput: answer.output }
+    const failed = answer.isError === true && !isFailure ? { block: answer.note ?? `${name} failed.` } : {}
+    return { ...withNote(below, answer.isError === true ? undefined : answer.note), ...rewritten, ...failed }
+  }
   const added: Disposable[] = [
     router.add('prompt.submit', async (e, next) => {
       if (!(await wants(Prompt)) || e.text.startsWith('/')) return next(e)
       const where = await place()
       const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false))
       if (answer.refuse !== undefined) return { drop: answer.refuse }
-      return next(answer.text === undefined ? e : { ...e, text: answer.text })
+      title = answer.title
+      const context = answer.note === undefined ? e.context : [...(e.context ?? []), answer.note]
+      return next({ ...e, ...(answer.text === undefined ? {} : { text: answer.text }), ...(context === undefined ? {} : { context }) })
     }),
+    router.add('classic.UserPromptSubmit', async (e, next) => {
+      const named = title
+      title = undefined
+      const below = await next(e)
+      return named === undefined ? below : { ...below, sessionTitle: named }
+    }),
+    router.add('classic.PostToolUse', toolResultHook(false) as never),
+    router.add('classic.PostToolUseFailure', toolResultHook(true) as never),
     router.add('command.run', async (e, next) => {
       if (!(await wants(Prompt))) return next(e)
       const typed = e.args === '' ? `/${e.command}` : `/${e.command} ${e.args}`
@@ -99,8 +141,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       for (const [part, unplaced] of found.entries()) {
         if (!wanted.has(unplaced.type)) continue
         const answer = await asked(unplaced.type, message(where, unplaced, e.agentId))
-        const text = unplaced.type === ToolResult ? answer.output : answer.text
-        if (text !== undefined) texts.set(part, text)
+        if (answer.text !== undefined) texts.set(part, answer.text)
       }
       return next(texts.size === 0 ? e : { ...e, message: { ...e.message, content: withTexts(row, texts) as typeof e.message.content } })
     }),
@@ -170,7 +211,8 @@ export async function foldAnswers(event: BeforeEvent, change: SessionChange, ask
     try {
       const answer = answerOf(event, await ask(latest))
       if (answer === undefined) continue
-      result = { ...result, ...answer }
+      const notes = [result?.note, answer.note].filter((note) => note !== undefined)
+      result = { ...result, ...answer, ...(notes.length === 0 ? {} : { note: notes.join('\n\n') }) }
       if (answer.refuse !== undefined || answer.result !== undefined) return result
       latest = withAnswer(latest, answer)
     } catch (error) {
@@ -184,13 +226,13 @@ export function answerOf(event: BeforeEvent, answer: unknown): Partial<Answers> 
   if (typeof answer !== 'object' || answer === null) return undefined
   const given = answer as Partial<Answers>
   const allowed: Readonly<Record<BeforeEvent, readonly (keyof Answers)[]>> = {
-    prompt: ['text', 'refuse'],
+    prompt: ['text', 'note', 'title', 'refuse'],
     note: ['text'],
     skill: ['text'],
     document: ['text', 'refuse'],
     reply: ['text'],
     toolCall: ['input', 'result', 'refuse'],
-    toolResult: ['text'],
+    toolResult: ['output', 'isError', 'note'],
     notice: ['text'],
     taskStart: ['owner', 'refuse'],
     taskEnd: ['refuse'],

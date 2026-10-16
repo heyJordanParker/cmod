@@ -163,12 +163,12 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 
 | Method | The listener can answer | Covers |
 | --- | --- | --- |
-| `beforePrompt` | `{ text }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session |
+| `beforePrompt` | `{ text?, note?, title? }` or `{ refuse }` | A typed prompt, a mod's prompt, a slash command, and a message from another session. `note` reaches Claude beside a typed or a mod's prompt, and `title` names the session |
 | `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
 | `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
 | `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
 | `beforeReply`, `beforeNotice` | `{ text }` | The text the transcript keeps |
-| `beforeToolResult` | `{ output }` | The result Claude reads and the transcript keeps |
+| `beforeToolResult` | `{ output?, isError?, note? }` | The result Claude reads, after the tool ran. `output` replaces it, `note` adds text beside it, and `isError: true` makes Claude read it as a failure, with the note as the reason. A failed call takes only a note |
 | `beforeToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
 | `beforeTaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
 | `beforeTaskEnd` | `{ refuse }` | A task about to end. `refuse` sends its owner on with the reason |

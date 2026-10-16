@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { CwdChanged, defineMod, Message, Note, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolCall, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
+import { CwdChanged, defineMod, Message, Note, PostToolUse, PreModelSwitch, Prompt, Reply, sessions, SessionStart, SubagentStop, TaskStart, ToolCall, ToolResult, UserPromptSubmit, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -223,6 +223,43 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
   expect(await tested.fire(CwdChanged, { session_id: 's1', cwd: '/work/c', old_cwd: '/work/b', new_cwd: '/work/c', agent_id: 'a1' } as never)).toEqual({})
   await tested.settle()
   expect(moved).toEqual([{ cwd: '/work/b', previous: '/work/a' }])
+})
+
+test("beforePrompt's note reaches Claude beside the prompt, and its title names the session", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'classify',
+      setup() {
+        sessions.current.beforePrompt({ text: /^\/?commit/ }, () => ({ note: 'The person asked for a commit.', title: 'Commit' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+  await tested.start()
+
+  expect(await tested.fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['The person asked for a commit.'], origin: { kind: 'composer' } })
+  expect(await tested.fire(UserPromptSubmit, { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
+  expect(await tested.fire(UserPromptSubmit, { prompt: 'next' })).toEqual({})
+})
+
+test("beforeToolResult adds a note, rewrites the output, or marks the result failed", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'docs',
+      setup() {
+        sessions.current.beforeToolResult({ name: 'Read' }, () => ({ note: 'src/CLAUDE.md says: no default exports.' }))
+        sessions.current.beforeToolResult({ name: 'Bash' }, ({ output }) => ({ output: String(output).replace('sk-secret', '[hidden]') }))
+        sessions.current.beforeToolResult({ name: 'Write' }, () => ({ isError: true, note: 'Write only under src/.' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+  await tested.start()
+  const used = (tool_name: string, tool_response: unknown) => ({ session_id: 's1', cwd: '/work', tool_name, tool_input: {}, tool_use_id: 'toolu_1', tool_response }) as never
+
+  expect(await tested.fire(PostToolUse, used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['src/CLAUDE.md says: no default exports.'] })
+  expect(await tested.fire(PostToolUse, used('Bash', 'key=sk-secret'))).toEqual({ updatedToolOutput: 'key=[hidden]' })
+  expect(await tested.fire(PostToolUse, used('Write', {}))).toEqual({ block: 'Write only under src/.' })
 })
 
 test('onToolResult hears the files a call changed and read, with the tool and its input', async () => {
