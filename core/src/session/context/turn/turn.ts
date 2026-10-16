@@ -11,6 +11,9 @@ export type Turn = RecordPart & {
   readonly context: number
   readonly openedAt: string
   readonly closedAt?: string
+  readonly answer?: string
+  readonly reason?: 'answer' | 'error'
+  readonly failure?: { readonly type: string; readonly text: string }
   messages(): Promise<Message[]>
   abort(): Promise<void>
 }

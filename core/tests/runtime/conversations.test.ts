@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { defineMod, SessionStart } from '../../src/mod.js'
+import { defineMod, SessionStart, Stop, StopFailure } from '../../src/mod.js'
 import { consentPath, storeFolder } from '../../src/records.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createRouter } from '../../src/runtime/router.js'
@@ -120,6 +120,37 @@ test('the cmod plugin aborts the engine turn that is running, for a mod with the
   expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in /mods reader.' })
   expect(await abort('guard')).toEqual({ value: null })
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
+})
+
+test("a turn ends at Stop with Claude's answer, stays open while a mod refuses the stop, and ends with its failure at StopFailure", async () => {
+  const ended: unknown[] = []
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ watcher: [], guard: [] }) } })
+  let refuses = true
+  tested.fakes.cmod.call = async (input) => {
+    const { change } = (input.input ?? {}) as { readonly change?: { readonly type: string; readonly turn?: unknown } }
+    if (input.method === conversationMethods.changed && change?.type === 'turnEnd') ended.push(change.turn)
+    return input.method === conversationMethods.before && refuses ? { refuse: 'Run the tests first.' } : undefined
+  }
+  const prompt = (uuid: string, text: string) => {
+    const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
+    return tested.fire('session.append', appended as never, appended as never)
+  }
+  await tested.fire(SessionStart, { source: 'startup' })
+  await tested.fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'watcher' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'guard' } as never)
+  await prompt('p1', 'Rename the tree pane')
+
+  expect(await tested.fire(Stop, { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)).toEqual({ block: 'Run the tests first.' })
+  refuses = false
+  await tested.fire(Stop, { stop_hook_active: true, last_assistant_message: 'Renamed it, and the tests pass.' } as never)
+  await prompt('p2', 'Deploy it')
+  await tested.fire(StopFailure, { error: 'server_error', error_details: 'API Error: 500' } as never)
+  await tested.settle()
+
+  expect(ended).toMatchObject([
+    { prompt: { text: 'Rename the tree pane' }, reason: 'answer', answer: 'Renamed it, and the tests pass.' },
+    { prompt: { text: 'Deploy it' }, reason: 'error', failure: { type: 'server_error', text: 'API Error: 500' } },
+  ])
 })
 
 test("a mod with no grant still refuses a prompt in its own session", async () => {

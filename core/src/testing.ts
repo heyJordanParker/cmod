@@ -36,6 +36,7 @@ import { Note } from './session/context/turn/message/note.js'
 import { Prompt } from './session/context/turn/message/prompt.js'
 import { Mod, Person } from './session/context/turn/message/sender.js'
 import type { SessionChange } from './session/conversation.js'
+import type { Turn } from './session/context/turn/turn.js'
 import type { BeforeEvent } from './session/session.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
@@ -74,7 +75,7 @@ export type TestedMod<State extends object> = {
   fire<N extends RoutedEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
   settle(): Promise<void>
   add(message: MessageDraft, options?: { readonly task?: string }): Promise<Message[]>
-  endTurn(): Promise<void>
+  endTurn(ending?: Pick<Turn, 'answer' | 'failure'>): Promise<void>
   compact(): Promise<void>
   startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): Promise<string>
   lines(paneId: string): Promise<string[]>
@@ -277,9 +278,9 @@ export function testMod<State extends object, Declared extends Options = Options
       await start()
       return settled(conversations.add(message, added?.task))
     },
-    endTurn: async () => {
+    endTurn: async (ending) => {
       await start()
-      await settled(conversations.endTurn())
+      await settled(conversations.endTurn(ending === undefined ? undefined : { ...ending, ...(ending.failure === undefined ? {} : { reason: 'error' as const }) }))
     },
     compact: async () => {
       await start()

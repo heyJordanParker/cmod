@@ -11,7 +11,7 @@ import { Task } from '../session/goal/task.js'
 import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
-import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
+import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import type { Place } from '../runtime/before.js'
 import type { Claude } from '../runtime/claude.js'
 import { conversationMethods, everySession, isHeardBy, resultOf, type Subscription } from '../runtime/sessions.js'
@@ -51,7 +51,7 @@ export type FakeSessions = {
   add(draft: MessageDraft, task?: string): Message[]
   place(): Place
   wants(mod: string, event: string): boolean
-  endTurn(): void
+  endTurn(ending?: TurnEnding): void
   compact(): void
   startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): string
   start(id: string): void
@@ -239,9 +239,9 @@ export function fakeSessions({ project, given, push, callTool }: { readonly proj
     add: (draft, task) => add(currentSession(), draft, task),
     place,
     wants: (mod, event) => [current, everySession].some((target) => (watches.get(mod)?.get(target) ?? []).includes(event)),
-    endTurn() {
+    endTurn(ending = {}) {
       const session = currentSession()
-      record(session, session.conversation.add({ id: `turn-end-${(ids += 1)}`, at: now(), type: 'system', name: 'turn_duration', isMeta: false, isSummary: false, content: [] }))
+      record(session, session.conversation.endTurn(now(), { reason: 'answer', ...ending }))
     },
     compact() {
       const session = currentSession()

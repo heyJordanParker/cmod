@@ -24,7 +24,9 @@ export type SessionData = {
 
 export type ContextData = Pick<Context, 'number' | 'openedAt' | 'closedAt' | 'task'>
 
-export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt'>
+export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt' | 'answer' | 'reason' | 'failure'>
+
+export type TurnEnding = Pick<Turn, 'answer' | 'reason' | 'failure'>
 
 export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt'> & { readonly agentType: string; readonly model?: string; readonly parent?: string }
 
@@ -59,6 +61,7 @@ export type Conversation = {
   add(row: Row, task?: string): SessionChange[]
   startTask(task: TaskData): SessionChange[]
   startContext(at: string): SessionChange[]
+  endTurn(at: string, ending: TurnEnding, task?: string): SessionChange[]
   changeGoal(text: string): SessionChange[]
   readonly state: ConversationState
 }
@@ -81,11 +84,11 @@ export function createConversation(start: ConversationState): Conversation {
   const taskTurns = new Map(Object.entries(start.taskTurns))
   const openCalls = new Map(Object.entries(start.openCalls ?? {}))
 
-  const endTaskTurn = (task: string, at: string): SessionChange[] => {
+  const endTaskTurn = (task: string, at: string, ending: TurnEnding = {}): SessionChange[] => {
     const open = taskTurns.get(task)
     if (open === undefined) return []
     taskTurns.delete(task)
-    return open.closedAt === undefined ? [{ type: TurnEnd, turn: { ...open, closedAt: at } }] : []
+    return open.closedAt === undefined ? [{ type: TurnEnd, turn: { ...open, ...ending, closedAt: at } }] : []
   }
 
   const startContext = (at: string): SessionChange[] => {
@@ -107,9 +110,9 @@ export function createConversation(start: ConversationState): Conversation {
     ]
   }
 
-  const endTurn = (at: string): SessionChange[] => {
+  const endTurn = (at: string, ending: TurnEnding = {}): SessionChange[] => {
     if (turn === undefined) return []
-    const ended = { ...turn, closedAt: at }
+    const ended = { ...turn, ...ending, closedAt: at }
     turn = undefined
     return [{ type: TurnEnd, turn: ended }]
   }
@@ -184,6 +187,7 @@ export function createConversation(start: ConversationState): Conversation {
       return changes
     },
     startContext,
+    endTurn: (at, ending, task) => (task === undefined ? endTurn(at, ending) : endTaskTurn(task, at, ending)),
     changeGoal,
     get state() {
       return {

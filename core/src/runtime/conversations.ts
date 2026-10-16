@@ -3,7 +3,7 @@ import { consentPath, dataFolder, isObject, parseConsent } from '../records.js'
 import { Message, rowOfAppend, type Row } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Person } from '../session/context/turn/message/sender.js'
-import { createConversation, emptyConversation, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
+import { createConversation, emptyConversation, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import { Session, UsageChange, type BeforeEvent, type Client, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
 import { GoalChange } from '../session/goal/goal.js'
 import { receivedMatcher } from '../utils/matcher.js'
@@ -70,6 +70,15 @@ export function serveConversations({ claude, router, store, project, report }: {
     engineTurns.set(agent, e.turnId)
     return next(e)
   })
+  const endTurn = (ending: TurnEnding, task?: string) => <Below extends { readonly block?: string }>(below: Below): Below => {
+    if (below.block !== undefined) return below
+    engineTurns.delete(task ?? '')
+    dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task))
+    return below
+  }
+  router.add('classic.Stop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) })(await next(e)))
+  router.add('classic.StopFailure', async (e, next) => endTurn({ reason: 'error', failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)))
+  router.add('classic.SubagentStop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) }, e.agent_id)(await next(e)))
 
   const json = async <Value>(args: readonly string[]): Promise<Value> => JSON.parse(await runCmod(claude, [...args, '--json', '--project', project()], session === '' ? await claude.session.id() : session)) as Value
 

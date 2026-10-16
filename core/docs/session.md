@@ -317,7 +317,18 @@ type Sender = { readonly type: SenderType; readonly name?: string; readonly as?:
 ## Turn, Context, Goal, and Task
 
 ```ts
-type Turn = { readonly prompt: Prompt; readonly context: number; readonly openedAt: string; readonly closedAt?: string; messages(): Promise<Message[]>; abort(): Promise<void>; search; on…; before… }
+type Turn = {
+  readonly prompt: Prompt
+  readonly context: number
+  readonly openedAt: string
+  readonly closedAt?: string
+  readonly answer?: string
+  readonly reason?: 'answer' | 'error'
+  readonly failure?: { readonly type: string; readonly text: string }
+  messages(): Promise<Message[]>
+  abort(): Promise<void>
+  search; on…; before…
+}
 
 type Context = { readonly number: number; readonly openedAt: string; readonly closedAt?: string; turns(): Promise<Turn[]>; search; on…; before… }
 
@@ -337,6 +348,13 @@ type Task = {
 ```
 
 - A turn's `closedAt` is set once the agent stops. A turn still running has none.
+- The turn `onTurnEnd` hears carries why it ended. `reason` is `'answer'` when Claude finished, with its last words in `answer`, and `'error'` when a request failed, with `failure` naming the error's `type`, such as `'rate_limit'`, and its `text`. A turn a mod kept going with `beforeTurnEnd` ends only at the stop that nothing refuses. A turn read later through `turns()` has `closedAt` and none of these.
+
+```ts
+sessions.current.onTurnEnd((turn) => {
+  if (turn.failure !== undefined) mod.ui.toast.error(`Claude stopped: ${turn.failure.text}`)
+})
+```
 - `abort()` stops a turn while it runs, a task's turn included, and needs the `prompt` permission. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.
 - A context's `number` counts from 1. Its `closedAt` is set at the compaction that ended it.
 - A goal's `text` starts as the session's first prompt. `update` replaces it, and `onGoalChange` hears the new text.
