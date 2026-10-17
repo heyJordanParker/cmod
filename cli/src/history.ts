@@ -1,9 +1,9 @@
 import { Database } from 'bun:sqlite'
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch } from 'node:fs'
-import { join, sep } from 'node:path'
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, watch, type Stats } from 'node:fs'
+import { basename, dirname, join, sep } from 'node:path'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
-import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
+import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMessage, type Unplaced } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
@@ -54,6 +54,8 @@ const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', '
 
 const chunkBytes = 65_536
 
+const batchBytes = 8_388_608
+
 const tailBytes = 65_536
 
 const sortedMatches = 20_000
@@ -61,10 +63,12 @@ const sortedMatches = 20_000
 const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"forkedFrom"']
 
 export function openHistory(): Database {
-  mkdirSync(storePath(), { recursive: true })
-  for (const older of olderIndexes) for (const suffix of ['', '-wal', '-shm']) rmSync(storePath(`${older}${suffix}`), { force: true })
   const path = storePath(indexFile)
-  if (!existsSync(path)) createIndex(path)
+  if (!existsSync(path)) {
+    mkdirSync(storePath(), { recursive: true })
+    for (const older of olderIndexes) for (const suffix of ['', '-wal', '-shm']) rmSync(storePath(`${older}${suffix}`), { force: true })
+    createIndex(path)
+  }
   const db = new Database(path)
   db.exec('pragma busy_timeout = 120000')
   db.exec('pragma synchronous = normal')
@@ -142,13 +146,11 @@ function isAlive(pid: number): boolean {
   }
 }
 
-function mainTranscripts(folder: string): Transcript[] {
+function mainTranscripts(folder: string, only?: ReadonlySet<string>): { readonly main: Transcript; readonly stat: Stats }[] {
   if (!existsSync(folder)) return []
   return readdirSync(folder)
-    .filter((name) => name.endsWith('.jsonl'))
-    .map((name) => ({ transcript: { path: join(folder, name), folder, session: name.slice(0, -'.jsonl'.length), task: undefined }, born: statSync(join(folder, name)).birthtimeMs }))
-    .sort((first, second) => first.born - second.born || first.transcript.path.localeCompare(second.transcript.path))
-    .map(({ transcript }) => transcript)
+    .filter((name) => name.endsWith('.jsonl') && (only === undefined || only.has(name.slice(0, -'.jsonl'.length))))
+    .map((name) => ({ main: { path: join(folder, name), folder, session: name.slice(0, -'.jsonl'.length), task: undefined }, stat: statSync(join(folder, name)) }))
 }
 
 function taskTranscripts(main: Transcript): Transcript[] {
@@ -176,10 +178,10 @@ export function sessionTranscripts(session: string, project: string): Transcript
   return [main, ...taskTranscripts(main)]
 }
 
-export function readFolders(db: Database, folders: readonly string[], fully: boolean): void {
-  forgetDeleted(db)
+export function readFolders(db: Database, folders: readonly string[], fully: boolean, only?: ReadonlySet<string>): void {
+  if (only === undefined) forgetDeleted(db)
   const offsets = offsetsOf(db)
-  const mains = folders.flatMap(mainTranscripts).map((main) => ({ main, stat: statSync(main.path) }))
+  const mains = folders.flatMap((folder) => mainTranscripts(folder, only))
   for (const { main, stat } of mains.sort((first, second) => first.stat.mtimeMs - second.stat.mtimeMs)) {
     if (fully || offsets.has(main.path)) readSession(db, [main, ...taskTranscripts(main)], offsets)
     else summarize(db, main, stat.size)
@@ -209,15 +211,36 @@ export function readSession(db: Database, transcripts: readonly Transcript[], kn
     const folder = db.query<{ id: number }, [string]>('insert into folders (path) values (?) on conflict (path) do update set path = path returning id').get(main.folder)?.id ?? 0
     const files = new Map(transcripts.map((transcript) => [transcript.path, fileOf(db, transcript)]))
     const conversation = createConversation(stateOf(db, main.session) ?? emptyConversation(main.session))
-    const summary = emptySummary()
-    const reached = stepThrough(conversation, transcripts, offsets, ({ transcript, line, raw, changes }) => {
+    let summary = emptySummary()
+    const reached = new Map<string, number>()
+    let pending = 0
+    const save = () => {
+      saveSummary(db, main.session, summary)
+      summary = emptySummary()
+      db.query('update sessions set state = ? where id = ?').run(JSON.stringify(conversation.state), main.session)
+      for (const [path, offset] of reached) db.query('update files set offset = ? where path = ?').run(offset, path)
+      assignSeq(db, main.session)
+    }
+    const ended = stepThrough(conversation, transcripts, offsets, ({ transcript, line, raw, changes }) => {
       if (transcript.task === undefined) noteRow(summary, main.session, raw)
       saveChanges(db, { session: main.session, folder, file: files.get(transcript.path) ?? 0, line, row: typeof raw['uuid'] === 'string' ? raw['uuid'] : '' }, changes)
+      reached.set(transcript.path, line.offset + line.length + 1)
+      pending += line.length
+      if (pending < batchBytes) return true
+      pending = 0
+      save()
+      db.exec('commit')
+      db.exec('begin immediate')
+      const now = offsetsOf(db)
+      return [...reached].every(([path, offset]) => now.get(path) === offset)
     })
-    saveSummary(db, main.session, summary)
-    db.query('update sessions set state = ? where id = ?').run(JSON.stringify(conversation.state), main.session)
-    for (const [path, offset] of reached) db.query('update files set offset = ? where path = ?').run(offset, path)
-    assignSeq(db, main.session)
+    if (ended === undefined) {
+      db.exec('commit')
+      readSession(db, transcripts)
+      return
+    }
+    for (const [path, offset] of ended) reached.set(path, offset)
+    save()
     db.exec('commit')
   } catch (error) {
     if (db.inTransaction) db.exec('rollback')
@@ -246,11 +269,13 @@ function stateOf(db: Database, session: string): ConversationState | undefined {
   return typeof saved === 'string' ? (JSON.parse(saved) as ConversationState) : undefined
 }
 
-function stepThrough(conversation: Conversation, transcripts: readonly Transcript[], offsets: ReadonlyMap<string, number>, onStep: (step: Step) => void): Map<string, number> {
-  const metas = metasOf(transcripts.filter((transcript) => transcript.task !== undefined))
+function stepThrough(conversation: Conversation, transcripts: readonly Transcript[], offsets: ReadonlyMap<string, number>, onStep: (step: Step) => boolean | void): Map<string, number> | undefined {
   const isStarted = (task: string) => conversation.state.tasks[task] !== undefined
+  const metas = metasOf(transcripts.filter((transcript) => transcript.task !== undefined && !isStarted(transcript.task)))
   const reached = new Map<string, number>()
+  const run = { isStopped: false }
   for (const transcript of transcripts) {
+    if (run.isStopped) return undefined
     const { task } = transcript
     reached.set(
       transcript.path,
@@ -268,12 +293,12 @@ function stepThrough(conversation: Conversation, transcripts: readonly Transcrip
             if (meta !== undefined && !isStarted(meta.task)) changes.push(...conversation.startTask(taskData(meta, row.at, task)))
           }
         }
-        onStep({ transcript, line, raw, changes })
-        return true
+        run.isStopped = onStep({ transcript, line, raw, changes }) === false
+        return !run.isStopped
       }),
     )
   }
-  return reached
+  return run.isStopped ? undefined : reached
 }
 
 function metasOf(tasks: readonly Transcript[]): Map<string, Meta> {
@@ -444,8 +469,15 @@ function summarize(db: Database, main: Transcript, size: number): void {
 function forgetDeleted(db: Database): void {
   const files = db.query<{ id: number; path: string }, []>('select id, path from files').all()
   const sessions = db.query<{ id: string; folder: string }, []>('select id, folder from sessions').all()
-  const gone = files.filter((file) => !existsSync(file.path))
-  const ended = sessions.filter((session) => !existsSync(join(session.folder, `${session.id}.jsonl`)))
+  const listings = new Map<string, ReadonlySet<string>>()
+  const exists = (path: string) => {
+    const folder = dirname(path)
+    const names = listings.get(folder) ?? new Set(existsSync(folder) ? readdirSync(folder) : [])
+    listings.set(folder, names)
+    return names.has(basename(path))
+  }
+  const gone = files.filter((file) => !exists(file.path))
+  const ended = sessions.filter((session) => !exists(join(session.folder, `${session.id}.jsonl`)))
   if (gone.length === 0 && ended.length === 0) return
   db.transaction(() => {
     for (const session of ended) {
@@ -480,8 +512,8 @@ function checkForks(db: Database, folders: readonly string[]): void {
 
 export function listSessions(db: Database, scope: Scope): SessionData[] {
   const folders = foldersIn(scope)
-  readFolders(db, folders, false)
   const running = runningSessions()
+  readFolders(db, folders, false, scope.running === true ? running : undefined)
   const rows = db
     .query<{ id: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
       `select id, project, cwd, model, title, custom_title, started_at, last_at, forked_from, is_fork_checked,
@@ -745,7 +777,7 @@ async function followSession(db: Database, session: string, project: string, onC
       const usage = transcript.task === undefined ? usageOfRow(raw) : undefined
       if (usage !== undefined) onChange({ type: UsageChange, usage })
     })
-    for (const [path, offset] of reached) offsets.set(path, offset)
+    for (const [path, offset] of reached ?? []) offsets.set(path, offset)
   }
   watcher.on('change', (_event, name) => {
     const changed = String(name)
@@ -775,9 +807,7 @@ function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | 
     const messages: SessionMessage[] = []
     const stale = new Set<string>()
     for (const place of places) {
-      const raw = parsedRow(lines.read(place.file, place.offset, place.length) ?? '')
-      const row = raw === undefined ? undefined : rowOfLine(raw)
-      const unplaced = row === undefined ? undefined : messagesOf(row, place.task !== '')[place.part]
+      const unplaced = lines.messages(place)?.[place.part]
       if (unplaced === undefined || unplaced.id !== place.id) stale.add(place.session)
       else messages.push({ ...unplaced, ...(unplaced.type === ToolResult ? callOf(db, lines, place, unplaced.callId, messages) : {}), session: place.session, context: place.context, ...(place.turn === null ? {} : { turn: place.turn }), ...(place.task === '' ? {} : { task: place.task }) })
     }
@@ -793,12 +823,13 @@ function messagesAt(db: Database, places: readonly Place[]): SessionMessage[] | 
 
 function callOf(db: Database, lines: ReturnType<typeof lineReader>, place: Place, callId: string, read: readonly SessionMessage[]): Pick<ToolCall, 'name' | 'input' | 'cwd'> | undefined {
   const isTheCall = (message: { readonly type: string } | undefined): message is Pick<ToolCall, 'type' | 'callId' | 'name' | 'input' | 'cwd'> => message?.type === ToolCall && (message as ToolCall).callId === callId
-  for (const each of read.toReversed()) if (isTheCall(each)) return { name: each.name, input: each.input, cwd: each.cwd }
+  for (let index = read.length - 1; index >= 0; index -= 1) {
+    const each = read[index]
+    if (isTheCall(each)) return { name: each.name, input: each.input, cwd: each.cwd }
+  }
   const earlier = db.query<Place, [string, string, number]>(`select ${placeColumns} from messages where session = ?1 and task = ?2 and seq < (select seq from messages where row = ?3) order by seq desc limit ${callSearchRows}`).all(place.session, place.task, place.row)
   for (const each of earlier) {
-    const raw = parsedRow(lines.read(each.file, each.offset, each.length) ?? '')
-    const row = raw === undefined ? undefined : rowOfLine(raw)
-    const call = row === undefined ? undefined : messagesOf(row, each.task !== '')[each.part]
+    const call = lines.messages(each)?.[each.part]
     if (isTheCall(call)) return { name: call.name, input: call.input, cwd: call.cwd }
   }
   return undefined
@@ -806,20 +837,30 @@ function callOf(db: Database, lines: ReturnType<typeof lineReader>, place: Place
 
 const callSearchRows = 64
 
-function lineReader(db: Database): { read(file: number, offset: number, length: number): string | undefined; close(): void } {
+function lineReader(db: Database): { messages(place: Pick<Place, 'file' | 'offset' | 'length' | 'task'>): readonly Unplaced[] | undefined; close(): void } {
   const descriptors = new Map<number, number | undefined>()
+  const parsed = new Map<string, readonly Unplaced[] | undefined>()
   const pathOf = db.query<{ path: string }, [number]>('select path from files where id = ?')
+  const read = (file: number, offset: number, length: number) => {
+    if (!descriptors.has(file)) {
+      const path = pathOf.get(file)?.path
+      descriptors.set(file, path !== undefined && existsSync(path) ? openSync(path, 'r') : undefined)
+    }
+    const descriptor = descriptors.get(file)
+    if (descriptor === undefined) return undefined
+    const buffer = Buffer.allocUnsafe(length)
+    const count = readSync(descriptor, buffer, 0, length, offset)
+    return buffer.toString('utf8', 0, count)
+  }
   return {
-    read(file, offset, length) {
-      if (!descriptors.has(file)) {
-        const path = pathOf.get(file)?.path
-        descriptors.set(file, path !== undefined && existsSync(path) ? openSync(path, 'r') : undefined)
+    messages({ file, offset, length, task }) {
+      const key = `${file}:${offset}`
+      if (!parsed.has(key)) {
+        const raw = parsedRow(read(file, offset, length) ?? '')
+        const row = raw === undefined ? undefined : rowOfLine(raw)
+        parsed.set(key, row === undefined ? undefined : messagesOf(row, task !== ''))
       }
-      const descriptor = descriptors.get(file)
-      if (descriptor === undefined) return undefined
-      const buffer = Buffer.alloc(length)
-      const count = readSync(descriptor, buffer, 0, length, offset)
-      return buffer.toString('utf8', 0, count)
+      return parsed.get(key)
     },
     close() {
       for (const descriptor of descriptors.values()) if (descriptor !== undefined) closeSync(descriptor)

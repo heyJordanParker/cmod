@@ -13,6 +13,7 @@ import { serveConversations } from './conversations.js'
 import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
 import { keepEngine } from './engine.js'
 import { classicHook, permissionEvents, userSkillHook, type Hook, type HookListener, type RoutedEvent } from './hooks.js'
+import type { PermissionRoutes } from './permission-check.js'
 import { checkedAnswer, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
 import { cmodError, lastLineOf, locatingPrograms, readLines, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
@@ -63,7 +64,7 @@ type ModRuntime = {
   readonly steps: Steps
   readonly granted: ReadonlySet<string>
   readonly refreshGrants: () => Promise<void>
-  readonly checksPermissions: () => boolean
+  readonly permissionRoutes: () => PermissionRoutes | undefined
   readonly options: PluginOptions
 }
 
@@ -84,6 +85,8 @@ const installRetrySeconds = [2, 4, 8, 16, 32, 64, 128] as const
 const cmodCheckMs = 1000
 
 const cmodWaitMs = 60_000
+
+const cmodSlowCheckMs = 10_000
 
 const startHoldMs = (10_000 satisfies HookBudget['ms']) - 1_000
 
@@ -153,7 +156,7 @@ async function cmodVersion(claude: Claude): Promise<string | undefined> {
 
 export function createLifecycle<State extends object, Declared extends Options = Options>(
   definition: ModDefinition<State, string, Declared>,
-  checksPermissions: () => boolean = () => true,
+  permissionRoutes: () => PermissionRoutes | undefined = () => undefined,
   options: PluginOptions = {},
   asksPerson = true,
 ): Lifecycle<State> {
@@ -319,7 +322,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   const activate = async (): Promise<void> => {
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, steps: plugin.steps, granted, refreshGrants, checksPermissions, options: pluginOptions }).catch(async (error: unknown) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, steps: plugin.steps, granted, refreshGrants, permissionRoutes, options: pluginOptions }).catch(async (error: unknown) => {
       if (error instanceof MissingOptions && (await askOptions(error))) return undefined
       fail(messageOf(error), error instanceof MissingOptions ? `Set ${error.keys.length === 1 ? 'it' : 'them'} in /config.` : undefined, begin)
       throw error
@@ -335,12 +338,18 @@ export function createLifecycle<State extends object, Declared extends Options =
     void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error }))
     const missed = missedSessionStart
     missedSessionStart = undefined
-    const lateAnswer = missed === undefined ? {} : await activeRouter.dispatch('classic.SessionStart', missed, async () => ({})).catch((error: unknown) => {
+    const replay = (e: Frozen<Args<'classic.SessionStart'>>) => (definition.name === cmodPluginName ? activeRouter.dispatch('classic.SessionStart', e, async () => ({})) : checkedRoute('classic.SessionStart', e, async () => ({})))
+    const lateAnswer = missed === undefined ? {} : await replay(missed).catch((error: unknown) => {
       toastFailure({ id: 'classic.SessionStart', message: 'The SessionStart hook failed', error })
       return {}
     })
-    if (Object.keys(lateAnswer).length > 0) {
-      runtime.claude.ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks.`, { to: 'debug' })
+    const { additionalContext, ...unread } = lateAnswer as { readonly additionalContext?: readonly string[] } & Record<string, unknown>
+    for (const text of additionalContext ?? []) {
+      const added = await runtime.claude.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+      if (added.deny !== undefined) runtime.claude.ui.log(`${definition.name}: Claude Code refused its SessionStart note: ${added.deny}`, { to: 'debug' })
+    }
+    if (Object.keys(unread).length > 0) {
+      runtime.claude.ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read ${Object.keys(unread).join(', ')} from its SessionStart hooks.`, { to: 'debug' })
     }
     const version = plugin.version ?? ''
     const announced = announcedOf(await runtime.claude.store.get(announcedKey))
@@ -422,27 +431,31 @@ export function createLifecycle<State extends object, Declared extends Options =
       timer.cancel()
       longWait.cancel()
     }
-    const timer = claude().clock.every(cmodCheckMs, () => {
-      check ??= cmodVersion(claude())
-        .then((version) => {
-          check = undefined
-          latest = version
-          if (!fits(version)) return
-          stop()
-          return install()
-        })
-        .catch((error: unknown) => {
-          stop()
-          report(error)
-        })
-    })
-    const longWait = claude().clock.after(cmodWaitMs, () =>
+    const poll = (ms: number) =>
+      claude().clock.every(ms, () => {
+        check ??= cmodVersion(claude())
+          .then((version) => {
+            check = undefined
+            latest = version
+            if (!fits(version)) return
+            stop()
+            return install()
+          })
+          .catch((error: unknown) => {
+            stop()
+            report(error)
+          })
+      })
+    let timer = poll(cmodCheckMs)
+    const longWait = claude().clock.after(cmodWaitMs, () => {
+      timer.cancel()
+      timer = poll(cmodSlowCheckMs)
       installing(
         latest === undefined
           ? "Still waiting for cmod to download cmod. See cmod's own line."
           : `PATH finds cmod ${latest}, and ${definition.name} needs cmod ${oldestCmodFor(plugin?.steps ?? {})} or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.`,
-      ),
-    )
+      )
+    })
   }
 
   const bootstrap = async (root: string) => {
@@ -595,7 +608,10 @@ export function createLifecycle<State extends object, Declared extends Options =
       const isCallToThisMod = event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name
       if (event === 'cmod.call' && !isCallToThisMod) return next(e)
       await (event === 'classic.SessionStart' || isCallToThisMod ? holdUntilStarted() : whenActive())
-      if (event === 'classic.SessionStart' && phase !== 'active') missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
+      if (event === 'classic.SessionStart' && phase !== 'active') {
+        missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
+        return next(e)
+      }
       if (isCallToThisMod && phase !== 'active') {
         const isStopped = phase === 'declined' || phase === 'failed'
         return { deny: isStopped ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
@@ -688,7 +704,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     }))
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: area.changed, forkParent })
   const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, report, changed: modState.changed })
-  const hookOn = <H extends Hook>(hook: H, listener: HookListener<H>): Disposable => router.add(`classic.${hook}`, classicHook(definition.name, hook, listener, report))
+  const hookOn = <H extends Hook>(hook: H, listener: HookListener<H>): Disposable => router.add(`classic.${hook}`, classicHook(hook, listener, report))
   const expand = (path: string) => (homePrefix.test(path) ? resolvedPath(path, places) : path)
   const settingsFile = (source: 'user' | 'project' | 'local'): SettingsFile => ({
     read: () => checked.settings.read({ source }),
@@ -704,6 +720,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     isGranted: (permission) => flag(permission),
     hookOn: (hook, listener) => hookOn(hook as Hook, listener as HookListener<Hook>),
     routeOn: (event, hook) => router.add(event, hook as never),
+    permissionRoutes: runtime.permissionRoutes,
   })
   let followed: Parameters<typeof client.follow>[0] | undefined
   let isSetUp = false
@@ -747,8 +764,8 @@ async function createMod<State extends object, Declared extends Options>(definit
         return hookOn('ConfigChange', async ({ source, file_path }) => {
           const change: SettingsFileChange = { source: source === 'skills' ? 'skills' : (source.replace('_settings', '') as SettingsFileChange['source']), ...(file_path === undefined ? {} : { path: file_path }) }
           if (matcher !== undefined && !matches(change, matcher)) return undefined
-          const answer = await listener(change)
-          return answer === undefined ? undefined : { decision: 'block', reason: answer.refuse }
+          const refuse = (await listener(change))?.refuse
+          return typeof refuse === 'string' ? { block: refuse } : undefined
         })
       },
     },
@@ -769,9 +786,10 @@ async function createMod<State extends object, Declared extends Options>(definit
         const watch = { paths, listener }
         watches.add(watch)
         if (watches.size === 1) {
-          hookOn('SessionStart', () => ({ hookSpecificOutput: { watchPaths: [...new Set([...watches].flatMap((each) => each.paths))] } }))
+          hookOn('SessionStart', () => ({ watchPaths: [...new Set([...watches].flatMap((each) => each.paths))] }))
           hookOn('FileChanged', ({ file_path, event }) => {
             for (const each of watches) if (each.paths.some((watched) => relativePath(watched, file_path) !== undefined)) void Promise.resolve(each.listener({ path: file_path, type: event })).catch((error: unknown) => report({ id: 'fs:onChange', message: 'The fs.onChange listener failed', error }))
+            return undefined
           })
         }
         return { dispose: () => void watches.delete(watch) }
@@ -955,7 +973,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   await failsAs('its setup function threw', () => definition.setup(mod))
   isSetUp = true
   const permissionHooks = permissionEvents.filter((event) => router.has(event))
-  if (permissionHooks.length > 0 && !runtime.checksPermissions()) {
+  if (permissionHooks.length > 0 && runtime.permissionRoutes() === undefined) {
     throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`)
   }
   await failsAs('its open panes did not load', () => area.restorePanes())
@@ -965,7 +983,7 @@ async function createMod<State extends object, Declared extends Options>(definit
 function checkingKeys(claude: Claude, toast: Toast, keys: Readonly<Record<string, string>>): Claude {
   const bound = Object.entries(keys)
   if (bound.length === 0) return claude
-  const register: Claude['command']['register'] = (command) => {
+  const addCommand: Claude['command']['register'] = (command) => {
     for (const [key, commandName] of bound) {
       if (commandName === command.name && command.immediate !== true) {
         toast.warning(`${key} runs /${command.name}, which waits for Claude's turn to end`, { id: `key:${key}`, description: `It adds a row to the conversation. Give /${command.name} immediate: true.`, duration: Infinity })
@@ -973,7 +991,7 @@ function checkingKeys(claude: Claude, toast: Toast, keys: Readonly<Record<string
     }
     return claude.command.register(command)
   }
-  return { ...claude, command: { ...claude.command, register } }
+  return { ...claude, command: { ...claude.command, register: addCommand } }
 }
 
 const longestTimerMs = 2_147_483_647

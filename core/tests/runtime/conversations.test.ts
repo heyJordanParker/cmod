@@ -29,6 +29,17 @@ test("a mod's prompt relayed from another session reaches this session as the pe
   expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","value":null}</cmod-relay>' }])
 })
 
+test("a mod that listens to its own session before the cmod plugin hears SessionStart needs no conversation grant, as in an interactive session, nor to stop listening to the session /clear left", async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  const call = (method: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method, input, caller: 'tracer' } as never)
+
+  expect(await call(conversationMethods.subscribe, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
+  expect(await call(conversationMethods.watchBefore, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
+  expect(await call(conversationMethods.subscribe, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
+  expect(await call(conversationMethods.watchBefore, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
+  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ deny: 'tracer reads your conversations without your grant. Turn it on in /mods tracer.' })
+})
+
 test('a relayed action from a mod without the permission is refused back to the asking session', async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: delivery } as never, { text: delivery } as never)

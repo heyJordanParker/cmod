@@ -58,7 +58,7 @@ A provider that changes or removes a method breaks every mod that calls it, and 
 "dependencies": [{ "name": "cmod", "version": "^1.0.0" }, { "name": "tracer", "version": "^1.0" }]
 ```
 
-Claude Code checks the range against the `version` in the provider's `plugin.json` when it loads your mod ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)). cmod is a provider too: a mod built on `@cmodjs/core` 1.0 calls methods only the 1.0 cmod plugin has, so `cmod new` writes the `^1.0.0` range.
+Claude Code checks the range against the provider's `version` when it loads your mod. Where a marketplace lists the provider from its git repository, as every mod's marketplace lists cmod, Claude Code also installs it at the highest `<name>--v<version>` tag inside the range, which `cmod publish` pushes for every release ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)). cmod is a provider too: a mod built on `@cmodjs/core` 1.0 calls methods only the 1.0 cmod plugin has, so `cmod new` writes the `^1.0.0` range.
 
 Claude Code then lays tracer's types file beside the mod's own types, so the call is typed:
 

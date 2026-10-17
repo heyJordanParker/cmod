@@ -5,10 +5,11 @@ import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { cmodPluginName } from './runtime/dependencies.js'
 import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle.js'
+import { permissionRoutes, type PermissionRoutes } from './runtime/permission-check.js'
 
 let lifecycle: Lifecycle<object>
 
-let checksPermissions = false
+let permissionCheck: PermissionRoutes | undefined
 
 let registered: ModDefinition<object> | undefined
 
@@ -99,9 +100,9 @@ function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'
 }
 
 export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
-  checksPermissions = false
+  permissionCheck = undefined
   registered = definition as ModDefinition<object>
-  lifecycle = createLifecycle(definition, () => checksPermissions, options)
+  lifecycle = createLifecycle(definition, () => permissionCheck, options)
   addHook('session.start', startMod)
   addHook('classic.Setup', routeToMod)
   addHook('classic.SessionStart', routeToMod)
@@ -154,7 +155,7 @@ export function registerMod<State extends object, Declared extends Options>(addH
 }
 
 export function registerPermissionCheck(addHook: On): void {
-  checksPermissions = true
+  permissionCheck = permissionRoutes
   addHook('tool.check', routeToMod)
   addHook('classic.PermissionRequest', routeToMod)
 }

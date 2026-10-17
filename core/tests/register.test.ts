@@ -306,6 +306,8 @@ test('CLAUDE_CONFIG_DIR moves the system tier', async () => {
 declare const Bun: {
   Glob: new (pattern: string) => { scan(options: { cwd: string }): AsyncIterable<string> }
   file(path: string): { text(): Promise<string> }
+  write(path: string, text: string): Promise<number>
+  build(options: { entrypoints: string[]; format: 'esm'; target: 'browser'; external: string[] }): Promise<{ outputs: { text(): Promise<string> }[] }>
 }
 
 test('no module a hook loads holds import(), which makes Claude Code refuse the whole hooks module', async () => {
@@ -317,6 +319,21 @@ test('no module a hook loads holds import(), which makes Claude Code refuse the 
   }
 
   expect(holding).toEqual([])
+})
+
+test('only registerPermissionCheck brings in the permission answers, so the bundle of a mod that decides no permissions passes the plugin directory', async () => {
+  const bundled = async (name: string, body: string) => {
+    const entry = `${import.meta.dir}/../node_modules/.bundle-${name}.ts`
+    await Bun.write(entry, `import { registerMod, registerPermissionCheck } from '${import.meta.dir}/../src/register.ts'\nexport function register(on) {\n  registerMod(on, { name: 'demo', setup() {} }, {})\n  ${body}\n}\n`)
+    const built = await Bun.build({ entrypoints: [entry], format: 'esm', target: 'browser', external: ['claude-code'] })
+    return (await built.outputs[0]?.text()) ?? ''
+  }
+
+  const plain = await bundled('plain', '')
+  const deciding = await bundled('deciding', 'registerPermissionCheck(on)')
+
+  expect([plain.includes('updatedPermissions'), plain.includes("behavior: \"allow\"")]).toEqual([false, false])
+  expect([deciding.includes('updatedPermissions'), deciding.includes("behavior: \"allow\"")]).toEqual([true, true])
 })
 
 test("registerMod names each event as a string literal, which Claude Code's hooks loader requires, and registers every hook a mod hears", async () => {

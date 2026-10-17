@@ -23,7 +23,8 @@ import type { Options, OptionValues } from './options.js'
 import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
-import { foldAnswers, installBefore } from './runtime/before.js'
+import { foldBefore, installBefore } from './runtime/before.js'
+import { permissionRoutes } from './runtime/permission-check.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
 import { createRouter } from './runtime/router.js'
@@ -174,7 +175,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const starting = options.state as Record<string, object> | undefined
   const declared = Object.entries(definition.state ?? {}) as [string, object][]
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
-  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => true, (options.options ?? {}) as PluginOptions, false)
+  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => permissionRoutes,(options.options ?? {}) as PluginOptions, false)
   let started: Promise<void> | undefined
 
   const start = async () => {
@@ -212,7 +213,7 @@ export function testMod<State extends object, Declared extends Options = Options
     hooks: {
       place: async () => conversations.place(),
       wants: async (event) => conversations.wants(name, event),
-      decide: (event, change) => foldAnswers(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })),
+      decide: (event, change) => foldBefore(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })),
     },
   })
 

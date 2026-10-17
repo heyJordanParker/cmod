@@ -2,7 +2,7 @@ import type { Args, Frozen } from 'claude-code'
 import type { Disposable } from '../mod.js'
 import { ContextEnd } from '../session/context/context.js'
 import { InstructionFile, isRulePath } from '../session/context/turn/message/instruction-file.js'
-import { Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
+import { instructionPathOf, Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
 import { Notice } from '../session/context/turn/message/notice.js'
 import { Prompt } from '../session/context/turn/message/prompt.js'
@@ -14,11 +14,12 @@ import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
 import type { ConversationState, SessionChange, TaskData } from '../session/conversation.js'
 import { Task, TaskStart } from '../session/goal/task.js'
-import type { BeforeEvent } from '../session/session.js'
+import { sessionEvents, type BeforeEvent, type SessionEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import type { Router } from './router.js'
 import { toolInputOf } from './tool-calls.js'
+import { resolve } from '../vendor.js'
 
 export type Place = Pick<ConversationState, 'session' | 'context' | 'contextOpenedAt' | 'turn' | 'tasks' | 'taskTurns' | 'openCalls'>
 
@@ -66,6 +67,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
   }
   const titles = new Map<string, string>()
   const spawned = new Map<string, string>()
+  const agentFolders = new Map<string, string>()
   const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: (e: never) => Promise<unknown>) => {
     if (!(await wants(ToolResult))) return next(e as never)
     const where = await place()
@@ -121,7 +123,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     router.add('prompt.attachment', async (e, next) => {
       if (!(await wants(InstructionFile)) || e.type !== 'nested_memory') return next(e)
       const where = await place()
-      const path = /^Contents of (.+?) \(/.exec(e.text)?.[1] ?? ''
+      const path = instructionPathOf(e.text)
       const answer = await asked(InstructionFile, message(where, { id: '', at: now(), type: InstructionFile, path, text: e.text, isRule: isRulePath(path) }, e.agentId))
       if (answer.refuse !== undefined) return { text: null }
       return answer.text === undefined ? next(e) : { text: answer.text }
@@ -145,7 +147,8 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (!(await wants(ToolCall))) return next(e)
       const where = await place()
       const input = toolInputOf(e)
-      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd: await claude.session.cwd(), files: noFiles }, e.agentId))
+      const cwd = (e.agentId === undefined ? undefined : agentFolders.get(e.agentId)) ?? (await claude.session.cwd())
+      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd, files: noFiles }, e.agentId))
       if (answer.refuse !== undefined) return { deny: answer.refuse }
       if (answer.result !== undefined) return { result: answer.result }
       if (answer.input === undefined) return next(e)
@@ -154,7 +157,13 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     }),
     router.add('agent.spawn', async (e, next) => {
       spawned.set(e.tool_use_id, e.prompt)
-      if (!(await wants(TaskStart))) return next(e)
+      const start = async (args: typeof e) => {
+        const started = await next(args)
+        const folder = args.isTeammate === true ? undefined : (args.cwd ?? (args.parentAgentId === undefined ? undefined : agentFolders.get(args.parentAgentId)))
+        if (started.agentId !== undefined && folder !== undefined) agentFolders.set(started.agentId, resolve(await claude.session.cwd(), folder))
+        return started
+      }
+      if (!(await wants(TaskStart))) return start(e)
       const where = await place()
       const task: TaskData = { id: '', title: e.description, agentType: e.subagentType, model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
       const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } })
@@ -162,7 +171,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
         spawned.delete(e.tool_use_id)
         return { deny: answer.refuse }
       }
-      return next(answer.owner === undefined ? e : { ...e, model: answer.owner.model })
+      return start(answer.owner === undefined ? e : { ...e, model: answer.owner.model })
     }),
     router.add('classic.SubagentStart', async (e, next) => {
       const where = await place()
@@ -177,12 +186,16 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return withNote(await next(e), answer.note)
     }),
     router.add('classic.SubagentStop', async (e, next) => {
-      if (!(await wants(TurnEnd))) return next(e)
+      const stopped = <Answer extends { readonly block?: string }>(answer: Answer) => {
+        if (answer.block === undefined) agentFolders.delete(e.agent_id)
+        return answer
+      }
+      if (!(await wants(TurnEnd))) return stopped(await next(e))
       const turn = (await place()).taskTurns[e.agent_id]
-      if (turn === undefined) return next(e)
+      if (turn === undefined) return stopped(await next(e))
       const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } })
       const below = await next(e)
-      return answer.refuse === undefined ? below : { ...below, block: answer.refuse }
+      return stopped(answer.refuse === undefined ? below : { ...below, block: answer.refuse })
     }),
     router.add('classic.Stop', async (e, next) => {
       if (!(await wants(TurnEnd))) return next(e)
@@ -213,41 +226,49 @@ export function withAnswer(change: SessionChange, answer: Partial<Answers>): Ses
   return change
 }
 
-export async function foldAnswers(event: BeforeEvent, change: SessionChange, askers: readonly ((change: SessionChange) => Promise<unknown>)[], report: (error: unknown) => void): Promise<Partial<Answers> | undefined> {
+export const methodOf = (prefix: 'on' | 'before', event: SessionEvent): string => `${prefix}${Object.entries(sessionEvents).find(([, each]) => each === event)?.[0] ?? event}`
+
+export const beforeAnswerKeys: Readonly<Record<BeforeEvent, readonly (keyof Answers)[]>> = {
+  prompt: ['text', 'note', 'title', 'refuse'],
+  note: ['text'],
+  skill: ['text'],
+  instructionFile: ['text', 'refuse'],
+  reply: ['text'],
+  toolCall: ['input', 'result', 'refuse'],
+  toolResult: ['output', 'isError', 'note'],
+  notice: ['text'],
+  taskStart: ['owner', 'refuse'],
+  turnEnd: ['refuse'],
+  contextEnd: ['refuse'],
+}
+
+export function foldBefore(event: BeforeEvent, change: SessionChange, askers: readonly ((change: SessionChange) => Promise<unknown>)[], report: (error: unknown) => void): Promise<Partial<Answers> | undefined> {
+  return foldAnswers(methodOf('before', event), beforeAnswerKeys[event], ['refuse', 'result'], change, askers, report, withAnswer)
+}
+
+export function takenAnswer(method: string, takes: readonly string[], answer: unknown): unknown {
+  if (answer === undefined || answer === null || answer === false) return undefined
+  if (typeof answer !== 'object' || Array.isArray(answer)) throw new Error(`it answered ${JSON.stringify(answer)}, but ${method} takes an object or nothing: ${takes.map((key) => `{ ${key} }`).join(', ') || 'no answer'}.`)
+  const unread = Object.keys(answer).filter((key) => !takes.includes(key))
+  if (unread.length > 0) throw new Error(`it answered ${unread.join(' and ')}, which ${method} does not take. It takes ${takes.map((key) => `{ ${key} }`).join(', ') || 'no answer'}.`)
+  return answer
+}
+
+export async function foldAnswers<Change, Answer extends object>(method: string, takes: readonly string[], ends: readonly string[], change: Change, askers: readonly ((change: Change) => Promise<unknown>)[], report: (error: unknown) => void, applied: (change: Change, answer: Answer) => Change = (same) => same): Promise<Answer | undefined> {
   let latest = change
-  let result: Partial<Answers> | undefined
+  let result: Record<string, unknown> | undefined
   for (const ask of askers) {
     try {
-      const answer = answerOf(event, await ask(latest))
-      if (answer === undefined) continue
-      const notes = [result?.note, answer.note].filter((note) => note !== undefined)
-      result = { ...result, ...answer, ...(notes.length === 0 ? {} : { note: notes.join('\n\n') }) }
-      if (answer.refuse !== undefined || answer.result !== undefined) return result
-      latest = withAnswer(latest, answer)
+      const answer = takenAnswer(method, takes, await ask(latest))
+      if (typeof answer !== 'object' || answer === null) continue
+      const given = answer as Record<string, unknown>
+      const notes = [result?.['note'], given['note']].filter((note) => typeof note === 'string')
+      result = { ...result, ...given, ...(notes.length === 0 ? {} : { note: notes.join('\n\n') }) }
+      if (ends.some((key) => given[key] !== undefined)) return result as Answer
+      latest = applied(latest, answer as Answer)
     } catch (error) {
       report(error)
     }
   }
-  return result
-}
-
-export function answerOf(event: BeforeEvent, answer: unknown): Partial<Answers> | undefined {
-  if (typeof answer !== 'object' || answer === null) return undefined
-  const given = answer as Partial<Answers>
-  const allowed: Readonly<Record<BeforeEvent, readonly (keyof Answers)[]>> = {
-    prompt: ['text', 'note', 'title', 'refuse'],
-    note: ['text'],
-    skill: ['text'],
-    instructionFile: ['text', 'refuse'],
-    reply: ['text'],
-    toolCall: ['input', 'result', 'refuse'],
-    toolResult: ['output', 'isError', 'note'],
-    notice: ['text'],
-    taskStart: ['owner', 'refuse'],
-    turnEnd: ['refuse'],
-    contextEnd: ['refuse'],
-  }
-  const unread = Object.keys(given).filter((key) => !allowed[event].includes(key as keyof Answers))
-  if (unread.length > 0) throw new Error(`a before(${event}) listener answered ${unread.join(' and ')}, which ${event} does not take. It takes ${allowed[event].map((key) => `{ ${key} }`).join(', ')}.`)
-  return given
+  return result as Answer | undefined
 }

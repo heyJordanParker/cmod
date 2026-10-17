@@ -84,14 +84,19 @@ export function createState<State extends object>({ name, initial, session, root
 
   const forgetEndedSessions = async (current: string) => {
     const stored = await claude.store.keys()
-    for (const recorded of stored.filter((key) => key.startsWith(transcriptsKey))) {
-      const owner = recorded.slice(transcriptsKey.length)
-      if (owner === current) continue
+    const ended = async (recorded: string) => {
       const transcript = await claude.store.get(recorded)
-      if (typeof transcript === 'string' && (await claude.fs.exists(transcript))) continue
-      for (const value of stored.filter((key) => key.startsWith(`${name}.`) && key.endsWith(`.sessions.${owner}`))) await claude.store.delete(value)
-      await claude.store.delete(recorded)
+      return typeof transcript !== 'string' || !(await claude.fs.exists(transcript))
     }
+    const owners = stored.filter((key) => key.startsWith(transcriptsKey) && key !== `${transcriptsKey}${current}`)
+    await Promise.all(
+      owners.map(async (recorded) => {
+        if (!(await ended(recorded))) return
+        const owner = recorded.slice(transcriptsKey.length)
+        await Promise.all(stored.filter((key) => key.startsWith(`${name}.`) && key.endsWith(`.sessions.${owner}`)).map((value) => claude.store.delete(value)))
+        await claude.store.delete(recorded)
+      }),
+    )
   }
 
   const loadGroups = async (only: readonly Lifetime[], next: { readonly root: string; readonly session: string }) => {
@@ -151,8 +156,10 @@ export function createState<State extends object>({ name, initial, session, root
     moveTo: (nextRoot) => inTurn(async () => (nextRoot === projectRoot ? undefined : loadGroups(['project'], { root: nextRoot, session: sessionId }))),
     switchSession: (nextSession, source, transcript) =>
       inTurn(async () => {
-        await claude.store.set(`${transcriptsKey}${nextSession}`, transcript)
-        await forgetEndedSessions(nextSession)
+        if (Object.keys(declared.session).length > 0) {
+          await claude.store.set(`${transcriptsKey}${nextSession}`, transcript)
+          void forgetEndedSessions(nextSession).catch((error: unknown) => report({ id: 'state:sessions', message: 'Could not forget the session values of ended sessions', error }))
+        }
         if (nextSession === sessionId) return
         if (source === 'fork') await copySession(sessionId, nextSession)
         return loadGroups(['memory', 'session'], { root: projectRoot, session: nextSession })

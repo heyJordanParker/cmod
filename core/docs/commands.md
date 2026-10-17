@@ -98,7 +98,7 @@ Releases the mod at `path` (default: the current folder) at the version in its `
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
 6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin. The cmod entry points at the `release` branch of `heyJordanParker/cmod`, so the mod's `"cmod"` dependency resolves in this marketplace and follows each cmod release with no new publish of the mod.
-7. Commits that file, tags `v<version>`, pushes the tag and the `release` branch, creates the GitHub release with every file, then pushes the branch that holds `marketplace.json`. So Claude Code never updates anyone to a release whose files are not up yet. Its notes are the version's section of the committed `CHANGELOG.md`, above GitHub's compare link ([mod.md](mod.md#release-notes)). `--dry-run` prints them.
+7. Commits that file, tags `v<version>`, tags the release commit `<name>--v<version>`, which Claude Code installs a version range from when a marketplace lists the mod from its git repository, pushes both tags and the `release` branch, creates the GitHub release with every file, then pushes the branch that holds `marketplace.json`. So Claude Code never updates anyone to a release whose files are not up yet. Its notes are the version's section of the committed `CHANGELOG.md`, above GitHub's compare link ([mod.md](mod.md#release-notes)). `--dry-run` prints them.
 8. Prints the link to paste as the Repository when you submit the mod at [claude.ai/directory/manage](https://claude.ai/directory/manage), such as `https://github.com/owner/greeter/tree/release`. The portal reads the branch from the link, so the directory follows `release`.
 
 The release keeps `package.json`, so Claude Code still installs the mod's packages for its install and uninstall steps. It keeps `bun.lock` too, unless a `"files"` list leaves it out. `main` keeps the source only.
@@ -114,7 +114,7 @@ It needs, and refuses to start without:
 - a `package.json` with no dependency on a `file:` or `link:` path, which no user has
 - a `"files"` list, when `package.json` has one, whose every path matches a committed file
 - a `"program"` in the `cmod` key of `package.json` that names the program `cli/` declares, when `cli/` declares one
-- for a real publish, a working tree with no uncommitted changes, a `v<version>` tag that does not exist yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
+- for a real publish, a working tree with no uncommitted changes, no `v<version>` or `<name>--v<version>` tag yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
 `--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
 
@@ -259,7 +259,7 @@ Changes Claude Code settings for a set-up mod, as its `settings.user.update`, `s
 cmod rules [--project <folder>] [--json]
 ```
 
-Links the `rules/` folder of each mod that is on and has the `prompt` permission into Claude Code's rules folder, and removes the link of each that is off, lacks the permission, or is removed ([mod.md](mod.md#rules)). A mod the person installed links at `<config>/rules/<mod>`, and one turned on only for `--project`, the current folder when it is left out, links at `<project>/.claude/rules/<mod>`. It prints the rules it linked. With `--json` it prints `{ linked, placed, removed }`, where `placed` and `removed` name the mods whose link this run made or took away. `cmod install`, `update`, `remove`, `enable`, `disable`, `permission`, `setup`, `teardown`, `link`, and `unlink` run it after they succeed, and the cmod plugin runs it at each session's start and each prompt.
+Links the `rules/` folder of each mod that is on and has the `prompt` permission into Claude Code's rules folder, and removes the link of each that is off, lacks the permission, or is removed ([mod.md](mod.md#rules)). A mod the person installed links at `<config>/rules/<mod>`, and one turned on only for `--project`, the current folder when it is left out, links at `<project>/.claude/rules/<mod>`. It prints the rules it linked. With `--json` it prints `{ linked, placed, removed, watched }`, where `placed` and `removed` name the mods whose link this run made or took away, and `watched` lists the files and folders whose change can change the next run. `cmod install`, `update`, `remove`, `enable`, `disable`, `permission`, `setup`, `teardown`, `link`, and `unlink` run it after they succeed. The cmod plugin runs it when a session starts and before a prompt, each time only when a `watched` path changed since its last run.
 
 ### cmod option
 

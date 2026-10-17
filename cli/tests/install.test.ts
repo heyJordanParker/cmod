@@ -277,7 +277,7 @@ test('cmod update <name> of a plain plugin updates it through Claude Code, nothi
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
-test('cmod update updates every plugin Claude Code holds, and reruns the install step of the mods only', async () => {
+test('cmod update updates every plugin Claude Code holds, and checks the setup of the mods only', async () => {
   const home = await marketplaceHome({ plain: plainFiles('plain'), 'file-tree': modFiles('file-tree') })
   expect((await cmod(home, 'install', 'plain@market')).exitCode).toBe(0)
   expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
@@ -286,7 +286,7 @@ test('cmod update updates every plugin Claude Code holds, and reruns the install
   const result = await cmod(home, 'update')
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toContain('✔ file-tree 0.1.0 is ready\n')
+  expect(result.stdout).toContain('✔ file-tree 0.1.0 is already set up\n')
   expect(result.stdout).not.toContain('plain 0.1.0')
   expect(await claudeCalls(home)).toBe(
     'plugin list --json\nplugin update cmod@cmod --json\nplugin update file-tree@market --json\nplugin update plain@market --json\nplugin list --json\nplugin list --json\nplugin install cmod@cmod --json\n',
@@ -303,8 +303,8 @@ test('cmod update of two mods installs the cmod plugin once', async () => {
   const result = await cmod(home, 'update')
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toContain('✔ file-tree 0.1.0 is ready\n')
-  expect(result.stdout).toContain('✔ diagrams 0.1.0 is ready\n')
+  expect(result.stdout).toContain('✔ file-tree 0.1.0 is already set up\n')
+  expect(result.stdout).toContain('✔ diagrams 0.1.0 is already set up\n')
   expect(await claudeCalls(home)).toBe(
     'plugin list --json\nplugin update cmod@cmod --json\nplugin update diagrams@market --json\nplugin update file-tree@market --json\nplugin list --json\nplugin list --json\nplugin install cmod@cmod --json\n',
   )
@@ -322,7 +322,7 @@ test('cmod update with no name updates the mods after a plugin whose update fail
   expect(result.exitCode).toBe(1)
   expect(result.stdout).toContain('✘ claude plugin update archived@market failed: archived@market is in no marketplace Claude Code has\n')
   expect(result.stdout).toContain('✔ Updated file-tree@market through Claude Code\n')
-  expect(result.stdout).toContain('✔ file-tree 0.1.0 is ready\n')
+  expect(result.stdout).toContain('✔ file-tree 0.1.0 is already set up\n')
   expect(await claudeCalls(home)).toBe(
     'plugin list --json\nplugin update archived@market --json\nplugin update cmod@cmod --json\nplugin update file-tree@market --json\nplugin list --json\nplugin list --json\nplugin install cmod@cmod --json\n',
   )

@@ -30,7 +30,11 @@ test("cmod rules links a mod's rules into Claude Code's rules folder and prints 
 
   expect(result.exitCode).toBe(0)
   expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(root, 'rules'))
-  expect(JSON.parse(result.stdout)).toEqual({
+  expect(JSON.parse(result.stdout).watched).toEqual(
+    expect.arrayContaining([join(home, '.claude/settings.json'), join(home, '.local/share/cmod/consent.json'), join(home, '.local/share/cmod/records/house-style.json'), join(root, 'rules'), join(root, 'rules/tests.md'), join(root, 'rules/sql.md')]),
+  )
+  expect({ ...JSON.parse(result.stdout), watched: undefined }).toEqual({
+    watched: undefined,
     linked: [
       {
         mod: 'house-style',
@@ -68,12 +72,12 @@ test("a mod that is off or lacks the prompt permission has no rules linked, and 
 
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': false } }) })
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toEqual({ linked: [], placed: [], removed: ['house-style'] })
+  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['house-style'] })
   expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
 
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true } }), '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': [] }) })
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toEqual({ linked: [], placed: [], removed: [] })
+  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: [] })
   expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
 })
 
@@ -84,7 +88,7 @@ test("cmod leaves a person's own rules link that shares a mod's name, and says s
   await mkdir(join(home, '.claude/rules'), { recursive: true })
   await symlink(join(home, 'notes/house-style'), join(home, '.claude/rules/house-style'))
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toEqual({ linked: [], placed: [], removed: [] })
+  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: [] })
   expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(home, 'notes/house-style'))
 
   await writeFiles(home, { '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': ['prompt'] }) })
@@ -101,7 +105,7 @@ test("cmod leaves a person's dangling rules link under a mod's name", async () =
   await mkdir(join(home, '.claude/rules'), { recursive: true })
   await symlink(join(home, 'personal/house-style/rules'), join(home, '.claude/rules/house-style'))
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toEqual({ linked: [], placed: [], removed: [] })
+  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: [] })
   expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(home, 'personal/house-style/rules'))
 })
 
@@ -113,7 +117,7 @@ test("a removed mod's rules leave every project, even one cmod never ran in sinc
   await cmod(home, 'rules', '--project', project)
   await rm(join(home, '.local/share/cmod/records/house-style.json'))
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toEqual({ linked: [], placed: [], removed: ['house-style'] })
+  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['house-style'] })
   expect(existsSync(join(project, '.claude/rules/house-style'))).toBe(false)
 })
 
@@ -125,7 +129,7 @@ test("turning a mod's prompt permission off takes its rules out of every project
   await cmod(home, 'rules', '--project', project)
   await writeFiles(home, { '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': [] }) })
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toEqual({ linked: [], placed: [], removed: ['house-style'] })
+  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['house-style'] })
   expect(existsSync(join(project, '.claude/rules/house-style'))).toBe(false)
 })
 

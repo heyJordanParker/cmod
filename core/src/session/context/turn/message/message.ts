@@ -50,7 +50,11 @@ export const skillPrefix = 'Base directory for this skill:'
 
 const rowTypes: readonly string[] = ['user', 'assistant', 'attachment', 'system']
 
-const memoryPath = /^Contents of (.+?) \(/
+const memoryPath = /^Contents of (.+?)(?: \([^)\n]*\))?:\r?$/m
+
+export function instructionPathOf(text: string): string {
+  return memoryPath.exec(text)?.[1] ?? ''
+}
 
 export function rowOfLine(row: Readonly<Record<string, unknown>>): Row | undefined {
   const { uuid, timestamp, type } = row
@@ -77,7 +81,7 @@ export function rowOfLine(row: Readonly<Record<string, unknown>>): Row | undefin
 export function rowOfAppend(append: { readonly uuid: string; readonly door: string; readonly origin: unknown; readonly message: { readonly type: Row['type']; readonly name?: string; readonly isMeta?: true; readonly content: readonly unknown[] } }, at: string, cwd: string): Row {
   const { message, origin } = append
   const text = textOf(message.content)
-  const path = message.type === 'attachment' ? memoryPath.exec(text)?.[1] : undefined
+  const path = message.type === 'attachment' ? instructionPathOf(text) || undefined : undefined
   const model = isObject(origin) && origin['kind'] === 'model' && typeof origin['model'] === 'string' ? origin['model'] : undefined
   return {
     id: append.uuid,

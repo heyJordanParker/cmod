@@ -29,7 +29,7 @@ export async function readRules(folder: string): Promise<Rule[]> {
   )
 }
 
-export type SyncedRules = { readonly linked: readonly LinkedRules[]; readonly placed: readonly string[]; readonly removed: readonly string[] }
+export type SyncedRules = { readonly linked: readonly LinkedRules[]; readonly placed: readonly string[]; readonly removed: readonly string[]; readonly watched: readonly string[] }
 
 export async function syncRules(project: string): Promise<SyncedRules> {
   const store = storeFolder(process.env)
@@ -42,16 +42,19 @@ export async function syncRules(project: string): Promise<SyncedRules> {
   const linked: LinkedRules[] = []
   const placed: string[] = []
   const removed: string[] = []
-  if (names.length === 0 && !existsSync(storePath('rules.json'))) return { linked, placed, removed }
+  const watched = new Set([settingsPath(), join(project, '.claude', 'settings.json'), projectLocal, userRules, projectRules, storePath('records'), storePath('consent.json'), storePath('rules.json')])
+  if (names.length === 0 && !existsSync(storePath('rules.json'))) return { linked, placed, removed, watched: [...watched] }
   await withPlaced(async (recorded) => {
     const drop = async (entry: Placed) => {
       if (await undo(entry)) removed.push(entry.mod)
       recorded.splice(recorded.indexOf(entry), 1)
     }
     for (const mod of names) {
+      watched.add(storePath('records', `${mod}.json`))
       const record = await readRecord(readText, store, mod)
       if (record === undefined) continue
       const source = rulesFolderOf(record.root)
+      watched.add(source)
       const isWanted = existsSync(source) && (await approvals(mod)).includes('prompt')
       const isEverywhere = user.enabled.get(mod) === true || (await isLinked(record.root))
       const isHere = here.enabled.get(mod) ?? isEverywhere
@@ -73,11 +76,14 @@ export async function syncRules(project: string): Promise<SyncedRules> {
           removed.push(mod)
         }
       }
-      if (link !== undefined && isHere) linked.push({ mod, folder: link, rules: (await readRules(source)).filter((rule) => !isExcluded(join(link, `${rule.name}.md`)) && !isExcluded(join(source, `${rule.name}.md`))) })
+      if (link === undefined || !isHere) continue
+      const rules = await readRules(source)
+      for (const rule of rules) watched.add(join(source, `${rule.name}.md`))
+      linked.push({ mod, folder: link, rules: rules.filter((rule) => !isExcluded(join(link, `${rule.name}.md`)) && !isExcluded(join(source, `${rule.name}.md`))) })
     }
     for (const entry of recorded.filter((each) => !names.includes(each.mod))) await drop(entry)
   })
-  return { linked, placed, removed: [...new Set(removed)].filter((mod) => !placed.includes(mod) && !linked.some((each) => each.mod === mod)) }
+  return { linked, placed, removed: [...new Set(removed)].filter((mod) => !placed.includes(mod) && !linked.some((each) => each.mod === mod)), watched: [...watched] }
 }
 
 export async function unlinkRules(mod: string): Promise<void> {

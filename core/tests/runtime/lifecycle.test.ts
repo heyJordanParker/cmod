@@ -7,6 +7,7 @@ import { defineMod, sessions, type CwdChange, type Mod } from '../../src/mod.js'
 import { option } from '../../src/options.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
+import { permissionRoutes } from '../../src/runtime/permission-check.js'
 import { scriptsSha256 } from '../../src/records.js'
 import type { ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
@@ -1019,7 +1020,7 @@ test('a step left on Not now is listed to /mods, and finishing from /mods opens 
 
 test('a mod that decides permissions without registerPermissionCheck does not start, and names the line to add', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => false)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => undefined)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
@@ -1030,7 +1031,7 @@ test('a mod that decides permissions without registerPermissionCheck does not st
 
 test('a mod that decides permissions starts once registerPermissionCheck registered the permission events', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => true)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => permissionRoutes)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
@@ -1039,7 +1040,7 @@ test('a mod that decides permissions starts once registerPermissionCheck registe
 
 test('a mod that refuses tool calls starts without registerPermissionCheck', async () => {
   const fake = fakeClaude({ name: 'docs', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'docs', setup: () => void sessions.current.beforeToolCall(() => undefined) }), () => false)
+  const lifecycle = createLifecycle(defineMod({ name: 'docs', setup: () => void sessions.current.beforeToolCall(() => undefined) }), () => undefined)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'docs', isInstalled: true }))
 
@@ -1879,7 +1880,7 @@ function sessionStartMod() {
 
 const sessionStart = (source: 'startup' | 'resume') => ({ session_id: 'test-session', transcript_path: '/t', cwd: '/work', hook_event_name: 'SessionStart', source })
 
-const unreadSessionStart = "safe-delete started after Claude Code's SessionStart, so Claude Code did not read the answer of its SessionStart hooks."
+const appendedNotes = (fake: ReturnType<typeof fakeClaude>) => fake.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
 test("an installed mod's SessionStart context reaches Claude Code on a fresh start", async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
@@ -1896,7 +1897,7 @@ test("an installed mod's SessionStart context reaches Claude Code on a fresh sta
   expect(fake.shown.debug).toEqual([])
 })
 
-test('a mod that starts after SessionStart passed runs its SessionStart hooks once', async () => {
+test('a mod that starts after SessionStart passed runs its SessionStart hooks once, and its note without the prompt grant is dropped, as on time', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   const step = controlledStream()
   fake.fakes.process.run = cmodOnPath
@@ -1913,7 +1914,8 @@ test('a mod that starts after SessionStart passed runs its SessionStart hooks on
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(fake.shown.debug).toEqual([unreadSessionStart])
+  expect(appendedNotes(fake)).toEqual([])
+  expect(fake.shown.debug).toEqual([])
 })
 
 test('a mod that started before SessionStart runs its SessionStart hooks once', async () => {
@@ -1951,11 +1953,12 @@ test('a SessionStart before session.start, as claude -p sends it, passes on at o
   expect(await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})).toEqual({})
   expect(sources).toEqual([])
 
-  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true, granted: ['prompt'] }))
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(fake.shown.debug).toEqual([unreadSessionStart])
+  expect(appendedNotes(fake)).toEqual(['safe-delete saw startup'])
+  expect(fake.shown.debug).toEqual([])
 })
 
 test('a SessionStart held past the limit passes on and replays once the mod starts', async () => {
@@ -1974,7 +1977,7 @@ test('a SessionStart held past the limit passes on and replays once the mod star
 
   const starting = lifecycle.start(fake.claude, async () => {
     await slowRead
-    return { ...pending, isInstalled: true }
+    return { ...pending, isInstalled: true, granted: ['prompt'] }
   })
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {}).finally(() => (isAnswered = true))
   await fake.settle()
@@ -1990,7 +1993,8 @@ test('a SessionStart held past the limit passes on and replays once the mod star
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(fake.shown.debug).toEqual([unreadSessionStart])
+  expect(appendedNotes(fake)).toEqual(['safe-delete saw startup'])
+  expect(fake.shown.debug).toEqual([])
 })
 
 test('a SessionStart answered before the limit cancels its timer', async () => {

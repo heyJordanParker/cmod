@@ -441,6 +441,33 @@ test('beforeToolCall refuses a call with no permission, and rewrites one only wi
   expect(allowed.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
+test("beforeToolCall's cwd is the folder a subagent runs in, which a task given its own cwd changes", async () => {
+  const folders: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'gate',
+      setup() {
+        sessions.current.goal.beforeToolCall((call) => void folders.push(call.cwd))
+      },
+    }),
+    { permissions: ['tools', 'tasks', 'conversation'] },
+  )
+  await tested.start()
+  const call = (agentId?: string) => ({ tool: 'Read', tool_use_id: 'toolu_9', file_path: 'a.ts', ...(agentId === undefined ? {} : { agentId }) }) as never
+
+  await claudeCodeOf(tested).fire('tool.call', call())
+  await claudeCodeOf(tested).fire('agent.spawn', { tool_use_id: 'toolu_1', prompt: 'Fix the api.', description: 'Fix the api', subagentType: 'general-purpose', parentModel: 'opus', cwd: 'packages/api' } as never)
+  await claudeCodeOf(tested).fire('tool.call', call('agent-1'))
+  await claudeCodeOf(tested).fire('classic.SubagentStop', { agent_id: 'agent-1', agent_type: 'general-purpose', stop_hook_active: false } as never)
+  await claudeCodeOf(tested).fire('tool.call', call('agent-1'))
+  await claudeCodeOf(tested).fire('agent.spawn', { tool_use_id: 'toolu_2', prompt: 'Review.', description: 'Review', subagentType: 'general-purpose', parentModel: 'opus', cwd: 'packages/web', isTeammate: true } as never)
+  await claudeCodeOf(tested).fire('tool.call', call('agent-1'))
+
+  const session = folders[0] ?? ''
+  expect(session).not.toBe('')
+  expect(folders).toEqual([session, `${session}/packages/api`, session, session])
+})
+
 test('beforeTaskStart picks the model a task runs on', async () => {
   const tested = testMod(
     defineMod({

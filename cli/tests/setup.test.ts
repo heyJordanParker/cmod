@@ -1451,8 +1451,7 @@ test('a current mod whose approval is gone sets up without asking', async () => 
   const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toContain('✔ demo 0.1.0 is ready')
-  expect(result.stdout).not.toContain('needs your consent')
+  expect(result.stdout).toBe('✔ demo 0.1.0 is already set up\n  Start Claude Code to use demo, or run /reload-plugins in a session that is running.\n')
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 

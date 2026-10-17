@@ -8,7 +8,8 @@ description: Release a new cmod version, so npm, the GitHub release, and the cmo
 A person reads the GitHub release to learn what a version lets them do, and what they must change in their mod before they update. `cmod publish` writes the release's notes from the version's section of the root `CHANGELOG.md`, and refuses a version with no section. So the changelog is written before the release, by hand, for the people who use cmod.
 
 - `.claude-plugin/plugin.json`, `core/package.json`, and `cli/package.json` share one version.
-- Pushing to `main` runs `.github/workflows/release.yml`, which publishes both npm packages, commits `bun.lock` and `marketplace.json`, tags `v<version>`, and creates the GitHub release through `cmod publish`.
+- Pushing to `main` runs `.github/workflows/release.yml`, which publishes both npm packages, commits `bun.lock` and `marketplace.json`, tags `v<version>` and the release commit `cmod--v<version>`, and creates the GitHub release through `cmod publish`.
+- A mod's `"cmod"` dependency range installs only from a `cmod--v<version>` tag on the `release` branch commit, so a release without it breaks every fresh install of a mod that names a range.
 - npm can take minutes to serve a version it accepted. The workflow's last step loops on `bun install` until it does.
 
 ## 1. Raise the version
@@ -31,9 +32,12 @@ Example: `- mod.history is gone. Read sessions.current.messages() instead.` unde
 
 Run the /repack-core end gate, commit with /commit, then `git push origin main`.
 
+### Date the version's section with the day you push
+Set `<date>` in `## [<version>] - <date>` to today's date just before the release commit, even when the section was written on an earlier day.
+
 ## 4. Watch the release to its end
 
 Run `gh run watch <run id> --exit-status` on the run the push started. Then `git pull --ff-only`, which brings the release bot's commits.
 
 ### Prove the release reached people
-`gh release view v<version> --repo heyJordanParker/cmod` shows the changelog section. `npm view @cmodjs/core@<version> version` and `npm view @cmodjs/cli@<version> version` print the version. The release lists `cmod-<version>.zip`, `SHA256SUMS`, and a `cmod-<os>-<arch>` build for `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
+`gh release view v<version> --repo heyJordanParker/cmod` shows the changelog section. `git ls-remote origin refs/tags/cmod--v<version>` prints the same commit as `git ls-remote origin refs/heads/release`. `npm view @cmodjs/core@<version> version` and `npm view @cmodjs/cli@<version> version` print the version. The release lists `cmod-<version>.zip`, `SHA256SUMS`, and a `cmod-<os>-<arch>` build for `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { ContextEnd, ContextStart } from '../../src/session/context/context.js'
 import { InstructionFile } from '../../src/session/context/turn/message/instruction-file.js'
-import { Message, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
+import { instructionPathOf, Message, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
 import { Note } from '../../src/session/context/turn/message/note.js'
 import { Notice } from '../../src/session/context/turn/message/notice.js'
 import { Prompt } from '../../src/session/context/turn/message/prompt.js'
@@ -108,6 +108,13 @@ test('a meta row is a Note, a skill row a Skill, a nested CLAUDE.md an Instructi
   expect(messageOf(line({ type: 'user', isMeta: true, message: { role: 'user', content: 'Base directory for this skill: /skills/review\n\nReview the diff.' } }))).toMatchObject({ type: Skill, name: 'review' })
   expect(messageOf(line({ type: 'attachment', attachment: { type: 'nested_memory', path: '/work/src/CLAUDE.md', content: 'Use tabs.' } }))).toMatchObject({ type: InstructionFile, path: '/work/src/CLAUDE.md', text: 'Use tabs.', isRule: false })
   expect(messageOf(line({ type: 'system', subtype: 'informational', content: 'Model switched to haiku.' }))).toMatchObject({ type: Notice, text: 'Model switched to haiku.' })
+})
+
+test('an instruction file Claude Code adds as it runs names its path, with or without the kind of file after it', () => {
+  expect(instructionPathOf('Contents of /work/src/cart/CLAUDE.md:\n\nUse tabs.')).toBe('/work/src/cart/CLAUDE.md')
+  expect(instructionPathOf('Contents of /work/rules/code.md (project instructions, checked into the codebase):\n\nUse tabs.')).toBe('/work/rules/code.md')
+  expect(instructionPathOf('<system-reminder>\nContents of /work/src/CLAUDE.md:\n\nUse tabs.')).toBe('/work/src/CLAUDE.md')
+  expect(instructionPathOf('Contents of /Users/j/Dropbox (Personal)/app/CLAUDE.md (project instructions, checked into the codebase):\n\nUse tabs.')).toBe('/Users/j/Dropbox (Personal)/app/CLAUDE.md')
 })
 
 test('a slash command reads as the command a person typed, and its local output adds no message', () => {

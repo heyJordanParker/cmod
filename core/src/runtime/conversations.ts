@@ -9,7 +9,7 @@ import { GoalChange } from '../session/goal/goal.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { ifMissing } from '../utils/paths.js'
 import { formatExit, messageOf } from '../utils/text.js'
-import { foldAnswers, installBefore, relayOf, type Place } from './before.js'
+import { foldBefore, installBefore, relayOf, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import { readLines, runCmod } from './programs.js'
@@ -80,7 +80,7 @@ export function serveConversations({ claude, router, store, project, report }: {
   router.add('classic.StopFailure', async (e, next) => endTurn({ reason: 'error', failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)))
   router.add('classic.SubagentStop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) }, e.agent_id)(await next(e)))
 
-  const json = async <Value>(args: readonly string[]): Promise<Value> => JSON.parse(await runCmod(claude, [...args, '--json', '--project', project()], session === '' ? await claude.session.id() : session)) as Value
+  const json = async <Value>(args: readonly string[]): Promise<Value> => JSON.parse(await runCmod(claude, [...args, '--json', '--project', project()], await claude.session.id())) as Value
 
   const isGranted = async (caller: string | undefined, item: string) => {
     if (caller === cmodPluginName) return true
@@ -89,6 +89,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     const text = await claude.fs.read(path).catch(ifMissing('{}'))
     return (parseConsent(JSON.parse(text), path)[caller] ?? []).includes(item)
   }
+
 
   const ended = (id: string) => new Error(`session ${id} has ended`)
 
@@ -144,17 +145,36 @@ export function serveConversations({ claude, router, store, project, report }: {
     if (sent.isDelivered !== true) throw ended(to)
   }
 
+  const waitingOn = new Map<Asked, string>()
+  let liveness: { cancel(): void } | undefined
+  let isChecking = false
+  const checkLiveness = async () => {
+    if (isChecking) return
+    isChecking = true
+    try {
+      const waiting = [...waitingOn]
+      const running = new Set((await json<SessionData[]>(['history', 'sessions', '--running', '--all'])).map((each) => each.id))
+      for (const [settle, to] of waiting) if (!running.has(to)) settle.reject(ended(to))
+    } finally {
+      isChecking = false
+    }
+  }
+  const watchLife = (settle: Asked, to: string) => {
+    waitingOn.set(settle, to)
+    liveness ??= claude.clock.every(livenessMs, () => void checkLiveness().catch((error: unknown) => report('liveness', 'Could not check which sessions still run', error)))
+    return {
+      cancel() {
+        waitingOn.delete(settle)
+        if (waitingOn.size > 0) return
+        liveness?.cancel()
+        liveness = undefined
+      },
+    }
+  }
+
   const ask = (to: string, relay: Question, deadlineMs?: number) =>
     new Promise<unknown>((resolve, reject) => {
       const id = `${session}:${(asks += 1)}`
-      const timer =
-        deadlineMs === undefined
-          ? claude.clock.every(livenessMs, () => {
-              void isRunning(to).then((isLive) => {
-                if (!isLive) settle.reject(ended(to))
-              })
-            })
-          : claude.clock.after(deadlineMs, () => settle.reject(new Error(`session ${to} did not answer within ${deadlineMs / 1000} s`)))
       const settle: Asked = {
         resolve(value) {
           if (asked.delete(id)) timer.cancel()
@@ -165,6 +185,7 @@ export function serveConversations({ claude, router, store, project, report }: {
           reject(error)
         },
       }
+      const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new Error(`session ${to} did not answer within ${deadlineMs / 1000} s`)))
       asked.set(id, settle)
       post(to, { ...relay, id, from: session }).catch((error: unknown) => settle.reject(error instanceof Error ? error : new Error(messageOf(error))))
     })
@@ -244,7 +265,7 @@ export function serveConversations({ claude, router, store, project, report }: {
         return deciders(event).length > 0
       },
       decide: (event, change) =>
-        foldAnswers(
+        foldBefore(
           event,
           change,
           deciders(event).map((watcher) => (latest: SessionChange) => (watcher.from === session ? askHere(watcher.mod, event, latest) : askAway(watcher, event, latest))),
@@ -556,7 +577,7 @@ export function serveConversations({ claude, router, store, project, report }: {
       const action = String(request['action']) as Act
       const task = typeof request['task'] === 'string' ? request['task'] : undefined
       if (!isAct(action)) throw new Error(`cmod takes no action named ${action}.`)
-      if (target === session) return perform(caller, action, request['input'], task)
+      if (target === (await claude.session.id())) return perform(caller, action, request['input'], task)
       return actElsewhere(caller, target, action, request['input'], task)
     },
   }
@@ -572,7 +593,8 @@ export function serveConversations({ claude, router, store, project, report }: {
       const method = methods[e.method]
       if (method === undefined) return undefined
       const input = isObject(e.input) ? e.input : {}
-      if (e.method !== conversationMethods.act && input['session'] !== session && !(await isGranted(e.caller, 'conversation'))) return { deny: `${e.caller ?? 'A mod'} reads your conversations without your grant. Turn it on in /mods ${e.caller ?? ''}.`.trim() }
+      const isDropping = (e.method === conversationMethods.subscribe || e.method === conversationMethods.watchBefore) && Array.isArray(input['subscriptions']) && input['subscriptions'].length === 0
+      if (e.method !== conversationMethods.act && !isDropping && input['session'] !== (await claude.session.id()) && !(await isGranted(e.caller, 'conversation'))) return { deny: `${e.caller ?? 'A mod'} reads your conversations without your grant. Turn it on in /mods ${e.caller ?? ''}.`.trim() }
       try {
         return { value: await method(input, e.caller) }
       } catch (error) {

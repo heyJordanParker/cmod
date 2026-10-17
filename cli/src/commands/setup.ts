@@ -96,7 +96,11 @@ export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; c
   const failure = { code: 0, message: '' }
   let code = 10
   while (code === 10) {
-    const { sha256, needsConsent, missing, updates } = await checkSetup(plugin)
+    const { sha256, isCurrent, needsConsent, missing, updates } = await checkSetup(plugin)
+    if (isCurrent) {
+      progress.succeed(`${plugin.name} ${plugin.version} is already set up`)
+      return 0
+    }
     const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, missing, updates, hold.abortSignal))
     if (answer !== true) {
       progress.fail(answer === false ? `${plugin.name} is not set up: it needs your consent. Run the command again with --yes after reading what it does.` : `Cancelled: ${plugin.name} is not set up.`)

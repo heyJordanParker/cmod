@@ -146,6 +146,125 @@ test('a before listener past its timeoutMs answers as if it were absent and show
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeSessionStart listener failed', description: 'beforeSessionStart passed its 0.02 s timeout' })
 })
 
+test('two beforeToolBatch notes both reach Claude, joined in the order the listeners were added', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'reviewer',
+      setup() {
+        sessions.current.beforeToolBatch(() => ({ note: 'Check the tests.' }))
+        sessions.current.beforeToolBatch(() => ({ note: 'Check the docs.' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+
+  expect(await tested.raise.beforeToolBatch({ calls: [] })).toEqual({ note: 'Check the tests.\n\nCheck the docs.' })
+})
+
+test("an answer a process before method does not take refuses beforePermissionRequest and a gate with onFailure: 'refuse'", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'gate',
+      setup() {
+        sessions.current.beforePermissionRequest(() => ({ deny: 'Not here.' }) as never)
+        sessions.current.beforeModelChange(() => ({ deny: 'Not here.' }) as never, { onFailure: 'refuse' })
+      },
+    }),
+    { permissions: ['approve', 'prompt'] },
+  )
+
+  expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toEqual({ refuse: 'gate: it answered deny, which beforePermissionRequest does not take. It takes { allow }, { input }, { updates }, { refuse }, { interrupt }.' })
+  expect(await tested.raise.beforeModelChange({ model: 'haiku' } as never)).toEqual({ refuse: 'gate: it answered deny, which beforeModelChange does not take. It takes { ask }, { refuse }.' })
+})
+
+test("a process before method's result never stops a later listener: a later refusal still refuses, and the last result wins", async () => {
+  const runner = testMod(
+    defineMod({
+      name: 'runner',
+      setup() {
+        commands.beforeRun(() => ({ result: 'from A' }))
+        commands.beforeRun(() => ({ refuse: 'B refuses' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+  const trees = testMod(
+    defineMod({
+      name: 'trees',
+      setup() {
+        sessions.current.beforeWorktreeCreate(() => ({ result: '/a' }))
+        sessions.current.beforeWorktreeCreate(() => ({ result: '/b' }))
+      },
+    }),
+  )
+
+  expect(await runner.raise.beforeRun({ name: 'compact', args: '', from: { type: Person } })).toMatchObject({ refuse: 'B refuses' })
+  expect(await trees.raise.beforeWorktreeCreate({ name: 'x' })).toEqual({ result: '/b' })
+})
+
+test('a before listener that answers something other than an object fails, and beforePermissionRequest refuses, while false is no answer', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'gate',
+      setup() {
+        sessions.current.beforePermissionRequest(() => false as never)
+        sessions.current.beforePermissionRequest(() => 'deny' as never)
+        sessions.current.beforeToolBatch(() => 'note' as never)
+      },
+    }),
+    { permissions: ['approve', 'prompt'] },
+  )
+
+  expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toMatchObject({ refuse: expect.stringContaining('it answered "deny"') })
+  expect(await tested.raise.beforeToolBatch({ calls: [] })).toBeUndefined()
+  await tested.settle()
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The beforePermissionRequest listener failed', 'The beforeToolBatch listener failed'])
+})
+
+test('a session before listener answering false, as cond && { refuse } does, is no answer for a mod without the tools grant', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'guard',
+      setup() {
+        sessions.current.beforeToolCall((call) => (call.name === 'Bash' && { refuse: 'No Bash here.' }) as never)
+      },
+    }),
+    { permissions: [] },
+  )
+  await tested.start()
+
+  expect(await claudeCodeOf(tested).fire('tool.call', { tool: 'Bash', tool_use_id: 'toolu_1', command: 'ls' } as never)).toEqual({ deny: 'No Bash here.' })
+  expect(await claudeCodeOf(tested).fire('tool.call', { tool: 'Read', tool_use_id: 'toolu_2', file_path: 'a.ts' } as never)).toEqual({} as never)
+  await tested.settle()
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
+})
+
+test("onFailure: 'refuse' on a method that cannot refuse lets the moment through and shows the listener's own error", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'policy',
+      setup() {
+        sessions.current.beforeSessionStart(() => {
+          throw new Error('the policy file is missing')
+        }, { onFailure: 'refuse' })
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+
+  expect(await tested.raise.beforeSessionStart({ source: 'startup' } as never)).toBeUndefined()
+  await tested.settle()
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ description }) => description)).toEqual(['the policy file is missing'])
+})
+
+test('an on listener past its timeoutMs stops quietly', async () => {
+  const tested = testMod(defineMod({ name: 'watcher', setup: () => void sessions.current.onSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }))
+
+  await tested.raise.onSessionStart({ source: 'startup' })
+
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+})
+
 test("a before listener with onFailure: 'refuse' refuses when it throws or passes its timeoutMs", async () => {
   const tested = testMod(
     defineMod({
@@ -1196,6 +1315,7 @@ test('settings.beforeFileChange refuses an edit to the settings files it matches
           heard.push(change)
           return { refuse: 'Settings are locked while the deploy runs.' }
         })
+        settings.beforeFileChange(() => false as never)
       },
     }),
   )

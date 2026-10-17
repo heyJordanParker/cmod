@@ -6,6 +6,20 @@ fail() {
   exit 1
 }
 
+newer() {
+  a=$1
+  b=$2
+  while [ -n "$a$b" ]; do
+    x=${a%%.*}
+    y=${b%%.*}
+    if [ "$a" = "$x" ]; then a=; else a=${a#*.}; fi
+    if [ "$b" = "$y" ]; then b=; else b=${b#*.}; fi
+    [ "${x:-0}" -gt "${y:-0}" ] 2>/dev/null && return 0
+    [ "${x:-0}" -lt "${y:-0}" ] 2>/dev/null && return 1
+  done
+  return 1
+}
+
 store="${XDG_DATA_HOME:-$HOME/.local/share}/cmod/bin/cmod"
 package=$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)
 
@@ -44,9 +58,22 @@ if [ -f "$package/package.json" ]; then
     mv -f "$partial" "$folder/cmod"
     rm -f "$sums"
     trap - EXIT HUP INT TERM
+    for older in "$store"/*/; do
+      name=${older%/}
+      name=${name##*/}
+      if newer "$version" "$name" && [ -x "${older}cmod" ]; then
+        { printf '#!/bin/sh\nexec "%s" "$@"\n' "$folder/cmod" > "${older}.stub.$$" && chmod +x "${older}.stub.$$" && mv -f "${older}.stub.$$" "${older}cmod"; } 2>/dev/null || rm -f "${older}.stub.$$"
+      fi
+    done
   fi
 fi
 
-newest=$(for folder in "$store"/*/; do [ -x "${folder}cmod" ] && basename "$folder"; done | sort -V | tail -n 1)
+newest=
+for folder in "$store"/*/; do
+  name=${folder%/}
+  name=${name##*/}
+  [ -x "${folder}cmod" ] || continue
+  if [ -z "$newest" ] || newer "$name" "$newest"; then newest=$name; fi
+done
 [ -n "$newest" ] || fail "no cmod is installed in $store. Run npm i -g @cmodjs/cli, or install the cmod plugin in Claude Code."
 exec "$store/$newest/cmod" "$@"

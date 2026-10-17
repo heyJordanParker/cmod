@@ -90,6 +90,55 @@ test('the cmod launcher runs the newest cmod in the store, and downloads nothing
   expect(release.requested).toEqual([])
 })
 
+test('the cmod launcher orders versions by number, so 0.10.0 runs over 0.9.0', async () => {
+  const home = await temporaryHome()
+  using release = serveRelease('0.9.0')
+  await writeFiles(storeOf(home), { '0.9.0/cmod': program('0.9.0'), '0.10.0/cmod': program('0.10.0') })
+  await chmod(join(storeOf(home), '0.9.0/cmod'), 0o755)
+  await chmod(join(storeOf(home), '0.10.0/cmod'), 0o755)
+  const launcher = await installPackage(join(home, 'npm/cmod'), '0.9.0')
+
+  const result = await run([launcher, 'list'], home, release.origin)
+
+  expect(result.stdout).toBe('cmod 0.10.0 ran list\n')
+})
+
+test('the cmod launcher shrinks the older builds to a stub that runs the new one, so a link to an older build and an older launcher still run cmod and download nothing', async () => {
+  const home = await temporaryHome()
+  using release = serveRelease('0.2.0')
+  const big = `${program('0.1.0')}${'#'.repeat(100_000)}\n`
+  await writeFiles(storeOf(home), { '0.1.0/cmod': big, '0.3.0/cmod': program('0.3.0') })
+  for (const version of ['0.1.0', '0.3.0']) await chmod(join(storeOf(home), `${version}/cmod`), 0o755)
+  const launcher = await installPackage(join(home, 'npm/cmod'), '0.2.0')
+  const older = await installPackage(join(home, 'npm-old/cmod'), '0.1.0')
+
+  const result = await run([launcher, 'list'], home, release.origin)
+  const olderResult = await run([older, 'list'], home, release.origin)
+
+  expect(result.stdout).toBe('cmod 0.3.0 ran list\n')
+  expect(olderResult.stdout).toBe('cmod 0.3.0 ran list\n')
+  expect((await run([join(storeOf(home), '0.1.0/cmod'), 'list'], home, release.origin)).stdout).toBe('cmod 0.2.0 ran list\n')
+  expect(release.requested.filter((path) => path.startsWith('/v0.1.0'))).toEqual([])
+  expect(Bun.file(join(storeOf(home), '0.1.0/cmod')).size).toBeLessThan(200)
+  expect(Bun.file(join(storeOf(home), '0.3.0/cmod')).size).toBe(program('0.3.0').length)
+})
+
+test('the cmod launcher still runs the command when it cannot shrink an older build it may not write', async () => {
+  const home = await temporaryHome()
+  using release = serveRelease('0.2.0')
+  await writeFiles(storeOf(home), { '0.1.0/cmod': program('0.1.0') })
+  await chmod(join(storeOf(home), '0.1.0/cmod'), 0o755)
+  await chmod(join(storeOf(home), '0.1.0'), 0o555)
+  const launcher = await installPackage(join(home, 'npm/cmod'), '0.2.0')
+
+  const result = await run([launcher, 'list'], home, release.origin)
+  await chmod(join(storeOf(home), '0.1.0'), 0o755)
+
+  expect(result.stdout).toBe('cmod 0.2.0 ran list\n')
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(storeOf(home), '0.1.0/cmod'), 'utf8')).toBe(program('0.1.0'))
+})
+
 test('the cmod launcher installs nothing when the download does not match SHA256SUMS', async () => {
   const home = await temporaryHome()
   using release = serveRelease('0.1.1', { sums: sha256('something else') })

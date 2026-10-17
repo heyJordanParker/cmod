@@ -12,12 +12,13 @@ import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
 import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
 import { matches, sentMatcher, type Matcher, type SentMatcher } from '../utils/matcher.js'
-import { foldAnswers, type Answers, type Place } from './before.js'
+import { beforeAnswerKeys, foldAnswers, foldBefore, methodOf, takenAnswer, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import { messageOf } from '../utils/text.js'
 import { listenerOf, PassedTimeout, withinTime, type ListenOptions, type ListenTime } from './deadline.js'
-import { callFiles, type Hook, type HookAnswer } from './hooks.js'
+import { callFiles, type HomeFolders, type HookFields } from './hooks.js'
+import type { PermissionRoutes } from './permission-check.js'
 
 export type Subscription = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined }
 
@@ -49,8 +50,6 @@ const startsTurns: readonly string[] = ['CronCreate']
 const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
 
 export const beforePermission = (event: BeforeEvent): string => (event === 'toolCall' ? 'tools' : event === TaskStart ? 'tasks' : 'prompt')
-
-const methodOf = (prefix: 'on' | 'before', event: SessionEvent): string => `${prefix}${Object.entries(sessionEvents).find(([, each]) => each === event)?.[0] ?? event}`
 
 export const isAct = (action: string): action is Act => action === 'callTool' || action in actPermissions
 
@@ -134,7 +133,9 @@ export function isInScope(scope: Scope, session: string, change: SessionChange, 
   return (change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.id === scope.turn
 }
 
-export function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: (hook: string, listener: (input: unknown) => unknown) => Disposable; readonly routeOn?: RouteOn }): SessionsClient {
+export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>) => Disposable
+
+export function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
   const call = <Answer>(method: string, input: unknown) => claude.cmod.call({ to: cmodPluginName, method, input }) as Promise<Answer>
   const listening = new Map<string, Set<Listening>>()
   const deciding = new Map<string, Set<Listening>>()
@@ -197,6 +198,13 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
 
 
 
+  const invoke = (method: string, options: ListenOptions, run: (time: ListenTime) => unknown, takes: readonly string[] = []): Promise<unknown> =>
+    withinTime(claude.clock, method, options, run).catch((error: unknown) => {
+      if (error instanceof PassedTimeout && !method.startsWith('before')) return undefined
+      report(`session:${method}`, `The ${method} listener failed`, error)
+      return options.onFailure === 'refuse' && takes.includes('refuse') ? { refuse: `${name}: ${messageOf(error)}` } : undefined
+    })
+
   const combined = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean): Promise<Partial<Answers> | undefined> => {
     const askers = [...(deciding.get(session) ?? []), ...(isInProject ? (deciding.get(everySession) ?? []) : [])]
       .filter((entry) => entry.event === event)
@@ -204,15 +212,11 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
         if (!isInScope(entry.scope, session, latest, isUnderIn(session))) return undefined
         if (entry.matcher !== undefined && !matches(payloadOf(latest), entry.matcher)) return undefined
         const payload = await payloadFor(session, latest)
-        const answer = await withinTime(claude.clock, entry.method, entry.options, (time) => entry.listener(payload as never, time)).catch((error: unknown) => {
-          if (entry.options.onFailure !== 'refuse') throw error
-          report(`session:${entry.method}`, `The ${entry.method} listener failed`, error)
-          return { refuse: `${name}: ${messageOf(error)}` }
-        })
+        const answer = await invoke(entry.method, entry.options, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
         if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer) || isGranted(beforePermission(event))) return answer
         throw new Error(`Its ${entry.method} answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`)
       })
-    return foldAnswers(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
+    return foldBefore(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
   }
 
   const eventMethods = (scopeOf: () => Scope, hasBefore: boolean, ended?: string): OnMethods & Partial<BeforeMethods> => {
@@ -226,9 +230,11 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     ]) as OnMethods & Partial<BeforeMethods>
   }
 
+  let folders: Promise<HomeFolders> | undefined
   const withFiles = async (message: Message): Promise<Message> => {
     if (message.type !== ToolCall && message.type !== ToolResult) return message
-    return { ...message, files: await callFiles(name, claude, { tool: message.name, input: message.input }, message.cwd) }
+    folders ??= Promise.all([claude.env.home(), claude.env.configHome()]).then(([home, configRoot]) => ({ home, configRoot }))
+    return { ...message, files: await callFiles(name, claude, folders, { tool: message.name, input: message.input }, message.cwd) }
   }
 
   const messagesFrom = async (method: string, input: unknown) => Promise.all((await call<Message[]>(method, input)).map(withFiles))
@@ -426,38 +432,16 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
   const processListeners = new Map<string, Set<ProcessListener>>()
 
   const raise = async (method: string, payload: HookFields): Promise<HookFields | undefined> => {
-    const isBefore = method.startsWith('before')
     const heard = [...(processListeners.get(method) ?? [])].filter(({ matcher }) => payload['task'] === undefined && (matcher === undefined || matches(payload, matcher)))
-    if (!isBefore) {
-      await Promise.all(
-        heard.map(({ listener, options }) =>
-          withinTime(claude.clock, method, options, (time) => listener(payload, time)).catch((error: unknown) => {
-            if (!(error instanceof PassedTimeout)) report(`session:${method}`, `The ${method} listener failed`, error)
-          }),
-        ),
-      )
+    if (!method.startsWith('before')) {
+      await Promise.all(heard.map(({ listener, options }) => invoke(method, options, (time) => listener(payload, time))))
       return undefined
     }
+    const failing = method === 'beforePermissionRequest' ? { onFailure: 'refuse' as const } : {}
     const takes = answerKeys[method.slice('before'.length)] ?? []
-    let merged: HookFields | undefined
-    for (const { listener, options } of heard) {
-      try {
-        const answer = (await withinTime(claude.clock, method, options, (time) => listener(payload, time))) as HookFields | null | undefined
-        if (answer === undefined || answer === null) continue
-        const unread = Object.keys(answer).filter((key) => !takes.includes(key))
-        if (unread.length > 0) throw new Error(`it answered ${unread.join(' and ')}, which ${method} does not take. It takes ${takes.map((key) => `{ ${key} }`).join(', ') || 'no answer'}.`)
-        const notes = [merged?.['note'], answer['note']].filter((note): note is string => typeof note === 'string')
-        merged = { ...merged, ...answer, ...(notes.length === 0 ? {} : { note: notes.join('\n\n') }) }
-        if (typeof answer['refuse'] === 'string') return merged
-      } catch (error) {
-        report(`session:${method}`, `The ${method} listener failed`, error)
-        if (options.onFailure === 'refuse' || method === 'beforePermissionRequest') return { refuse: `${name}: ${messageOf(error)}` }
-      }
-    }
-    return merged
+    const askers = heard.map(({ listener, options }) => () => invoke(method, { ...options, ...failing }, async (time) => takenAnswer(method, takes, await listener(payload, time)), takes))
+    return foldAnswers<undefined, HookFields>(method, takes, ['refuse'], undefined, askers, (error) => report(`session:${method}`, `The ${method} listener failed`, error))
   }
-
-  const permissionCheck = (e: ToolCheck, below: ToolCheckVerdict): HookFields => ({ session: current.id, cwd: current.cwd, ...defined({ task: e.agentId, callId: e.tool_use_id, reason: below.reason, rule: below.rule, ceiling: e.ceiling === undefined ? undefined : verdictName(e.ceiling) }), name: e.tool, input: recordOf(e.input), decision: verdictName(below.decision) })
 
   const commandRun = async (e: Args<'command.run'>): Promise<HookFields> => {
     const source = (await claude.command.list()).find((command) => command.name === e.command)?.source
@@ -483,30 +467,21 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
   const listenTo = (method: string, named: string) => {
     if (hookOn === undefined || routeOn === undefined) throw new Error(`${name}: ${method} works only in a mod's own session.`)
     const isBefore = method.startsWith('before')
-    if (named === 'PermissionCheck') {
-      return routeOn('tool.check', async (e: ToolCheck, next) => {
-        const below = (await next(e)) as ToolCheckVerdict
-        if (!isBefore) {
-          void raise(method, permissionCheck(e, below))
-          return below
-        }
-        const answer = await raise(method, permissionCheck(e, below))
-        if (answer === undefined || below.decision === 'deny') return below
-        if (typeof answer['refuse'] === 'string') return { decision: 'deny', reason: answer['refuse'] }
-        if (typeof answer['ask'] === 'string') return { decision: 'ask', reason: answer['ask'] }
-        return answer['allow'] === true ? { decision: 'allow' } : below
-      })
+    if (named === 'PermissionCheck' || named === 'PermissionRequest') {
+      const routes = permissionRoutes?.()
+      if (routes !== undefined) return routes(method, { raise, hookOn, routeOn, current: () => current })
+      return named === 'PermissionCheck' ? routeOn('tool.check', (e, next) => next(e)) : hookOn('PermissionRequest', () => undefined)
     }
     const event: { readonly on: string; readonly before?: string } = processEvents[named as ProcessName]
     const hook = (isBefore ? event.before : undefined) ?? event.on
     return hookOn(hook, async (input: unknown) => {
-      const payload = processPayloadOf(named as Exclude<ProcessName, 'PermissionCheck'>, input)
+      const payload = processPayloadOf(named as ProcessFieldsName, input)
       if (!isBefore) {
         if (named !== 'SessionStart' || payload['source'] !== 'compact') void raise(method, payload)
         return undefined
       }
       const answer = await raise(method, payload)
-      return answer === undefined ? undefined : hookAnswerOf(named, hook, answer)
+      return answer === undefined ? undefined : hookAnswerOf(named, answer)
     })
   }
 
@@ -550,14 +525,14 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     },
     changed(session, change, isInProject) {
       remember(session, change)
+      let payload: Promise<unknown> | undefined
       for (const key of isInProject ? [session, everySession] : [session]) {
         for (const { scope, event, method, matcher, listener, options } of listening.get(key) ?? []) {
           if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session))) continue
-          void payloadFor(session, change)
-            .then((payload) => withinTime(claude.clock, method, options, (time) => listener(payload as never, time)))
-            .catch((error: unknown) => {
-              if (!(error instanceof PassedTimeout)) report(`session:${method}`, `The ${method} listener failed`, error)
-            })
+          payload ??= payloadFor(session, change)
+          void payload
+            .then((heard) => invoke(method, options, (time) => listener(heard as never, time)))
+            .catch((error: unknown) => report(`session:${method}`, `The ${method} listener failed`, error))
         }
       }
     },
@@ -583,22 +558,16 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
   }
 }
 
-type HookFields = Readonly<Record<string, unknown>>
-
-type ToolCheck = { readonly tool: string; readonly input: unknown; readonly tool_use_id?: string; readonly agentId?: string; readonly ceiling?: 'allow' | 'ask' | 'deny' }
-
-type ToolCheckVerdict = { readonly decision: 'allow' | 'ask' | 'deny'; readonly reason?: string; readonly rule?: string }
+export type ToolCheck = { readonly tool: string; readonly input: unknown; readonly tool_use_id?: string; readonly agentId?: string; readonly ceiling?: 'allow' | 'ask' | 'deny' }
 
 export type RouteOn = {
   (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>): Disposable
   (event: 'command.run', hook: (e: Args<'command.run'>, next: (e: Args<'command.run'>) => Promise<CommandRunResult>) => Promise<CommandRunResult>): Disposable
 }
 
-const verdictName = (decision: 'allow' | 'ask' | 'deny') => (decision === 'deny' ? 'refuse' : decision)
+export const recordOf = (value: unknown): Readonly<Record<string, unknown>> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {})
 
-const recordOf = (value: unknown): Readonly<Record<string, unknown>> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {})
-
-const defined = (fields: HookFields): HookFields => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
+export const defined = (fields: HookFields): HookFields => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
 
 const placementOf = (input: HookFields): Placement => defined({ session: input['session_id'], task: input['agent_id'], agentType: input['agent_type'], cwd: input['cwd'], permissionMode: input['permission_mode'] }) as Placement
 
@@ -635,7 +604,9 @@ const answerKeys: Readonly<Record<string, readonly string[]>> = {
 
 const todoOf = (input: HookFields) => ({ id: input['task_id'], subject: input['task_subject'], description: input['task_description'], teammate: input['teammate_name'] })
 
-const processFields: { readonly [Name in Exclude<keyof typeof processEvents, 'PermissionCheck'>]: (input: HookFields) => HookFields } = {
+type ProcessFieldsName = Exclude<ProcessName, 'PermissionCheck'>
+
+const processFields: { readonly [Name in ProcessFieldsName]: (input: HookFields) => HookFields } = {
   ProjectSetup: (input) => ({ trigger: input['trigger'] }),
   SessionStart: (input) => ({
     source: input['source'],
@@ -683,28 +654,24 @@ export async function spawnTask(claude: Pick<Claude, 'agent'>, task: TaskStartAr
   return { id: started.agentId, title: task.title, agentType: task.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() }
 }
 
-export function processPayloadOf(named: Exclude<keyof typeof processEvents, 'PermissionCheck'>, input: unknown): HookFields {
+export function processPayloadOf(named: ProcessFieldsName, input: unknown): HookFields {
   const fields = recordOf(input)
   return { ...placementOf(fields), ...defined(processFields[named](fields)) }
 }
 
-export function hookAnswerOf(named: string, hook: string, answer: HookFields): HookAnswer | undefined {
-  const output = (fields: HookFields): HookAnswer => ({ hookSpecificOutput: { hookEventName: hook as Hook, ...defined(fields) } })
+function hookAnswerOf(named: string, answer: HookFields): HookFields | undefined {
   const refuse = typeof answer['refuse'] === 'string' ? answer['refuse'] : undefined
-  if (named === 'SessionStart') return output({ additionalContext: answer['note'], sessionTitle: answer['title'], reloadSkills: answer['reloadSkills'], initialUserMessage: answer['firstPrompt'] })
+  const note = typeof answer['note'] === 'string' ? [answer['note']] : undefined
+  if (named === 'SessionStart') return defined({ additionalContext: note, sessionTitle: answer['title'], reloadSkills: answer['reloadSkills'] === true ? true : undefined, initialUserMessage: answer['firstPrompt'] })
   if (named === 'ModelChange') {
-    if (refuse !== undefined) return output({ permissionDecision: 'deny', permissionDecisionReason: refuse })
-    return typeof answer['ask'] === 'string' ? output({ permissionDecision: 'ask', permissionDecisionReason: answer['ask'] }) : undefined
+    if (refuse !== undefined) return { permissionDecision: 'deny', permissionDecisionReason: refuse }
+    return typeof answer['ask'] === 'string' ? { permissionDecision: 'ask', permissionDecisionReason: answer['ask'] } : undefined
   }
-  if (named === 'WorktreeCreate') return output({ worktreePath: answer['result'] })
-  if (named === 'PermissionRequest') {
-    if (refuse !== undefined) return output({ decision: defined({ behavior: 'deny', message: refuse, interrupt: answer['interrupt'] }) })
-    return answer['allow'] === true ? output({ decision: defined({ behavior: 'allow', updatedInput: answer['input'], updatedPermissions: answer['updates'] }) }) : undefined
-  }
-  if (named === 'PermissionDenial') return output({ retry: answer['retry'] })
-  if (named === 'ToolBatch') return output({ additionalContext: answer['note'] })
-  if (named === 'ReplyDisplay') return output({ displayContent: answer['text'] })
-  return refuse === undefined ? undefined : { decision: 'block', reason: refuse }
+  if (named === 'WorktreeCreate') return defined({ worktreePath: answer['result'] })
+  if (named === 'PermissionDenial') return answer['retry'] === true ? { retry: true } : undefined
+  if (named === 'ToolBatch') return defined({ additionalContext: note })
+  if (named === 'ReplyDisplay') return defined({ displayContent: answer['text'] })
+  return refuse === undefined ? undefined : { block: refuse }
 }
 
 export function resultOf(where: Pick<Place, 'session' | 'context' | 'turn'>, call: ToolCallArgs & { readonly cwd: string }, answered: Awaited<ReturnType<Claude['tool']['call']>>): ToolResult {

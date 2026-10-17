@@ -32,7 +32,9 @@ the release with claude plugin validate --strict and commits it as the release
 branch. Builds the release archive from that commit and the program cli/
 declares, writes SHA256SUMS for every file of the release, and writes
 .claude-plugin/marketplace.json listing the archive and the cmod plugin. Then
-commits that file, tags v<version>, pushes the tag and the release branch,
+commits that file, tags v<version>, tags the release commit
+<name>--v<version>, which Claude Code installs a version range from when a
+marketplace lists the mod from git, pushes both tags and the release branch,
 creates the GitHub release with every file, then pushes the branch with
 marketplace.json, so no update reaches a release without its files. Its notes
 are the "## [<version>]" section of the committed CHANGELOG.md, which every
@@ -81,7 +83,9 @@ export async function run(argv: string[]): Promise<number> {
   const tag = `v${plugin.version}`
   const isDirty = (await git('status', '--porcelain')).trim() !== ''
   if (!dryRun && isDirty) throw new Error('The working tree has uncommitted changes. Commit them, then run cmod publish again.')
-  if (!dryRun && (await git('tag', '--list', tag)).trim() !== '') throw new Error(`The tag ${tag} exists. Raise "version" in .claude-plugin/plugin.json, then run cmod publish again.`)
+  for (const existing of [tag, `${plugin.name}--v${plugin.version}`]) {
+    if (!dryRun && (await git('tag', '--list', existing)).trim() !== '') throw new Error(`The tag ${existing} exists. Raise "version" in .claude-plugin/plugin.json, then run cmod publish again.`)
+  }
   const notes = changelogSections(await answer('show', 'HEAD:CHANGELOG.md')).find((section) => section.version === plugin.version)?.text
   if (notes === undefined || notes === '') throw new Error(`The committed CHANGELOG.md has no "## [${plugin.version}]" section with notes. Write what changed for the people who use ${plugin.name} under it, commit it, then run cmod publish again.`)
   const declared = await declaredOptions(plugin.root)
@@ -151,8 +155,10 @@ export async function run(argv: string[]): Promise<number> {
   progress.step(`Releasing ${tag}`)
   await git('add', marketplacePath)
   await git('commit', '--message', `release ${tag}`)
+  const dependencyTag = `${plugin.name}--v${plugin.version}`
   await git('tag', tag)
-  await git('push', '--atomic', 'origin', tag, `${release}:refs/heads/${releaseBranch}`)
+  await git('tag', dependencyTag, release)
+  await git('push', '--atomic', 'origin', tag, dependencyTag, `${release}:refs/heads/${releaseBranch}`)
   await runCommand(['gh', 'release', 'create', tag, ...assets, '--repo', repository, '--title', `${plugin.name} ${plugin.version}`, '--generate-notes', '--notes', notes])
   await git('push', 'origin', 'HEAD')
   progress.succeed(`Released ${tag}: https://github.com/${repository}/releases/tag/${tag}`)

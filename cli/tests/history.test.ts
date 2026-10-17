@@ -59,6 +59,44 @@ function mainMessages(project: string) {
   ]
 }
 
+test('readers of a session longer than several write batches, running at once, each read it whole, with no row twice', async () => {
+  const home = await temporaryHome()
+  const project = join(home, 'work/app')
+  const long = 'x'.repeat(2_000_000)
+  const time = (second: number) => new Date(Date.UTC(2026, 9, 11, 10, 0, 0) + second * 1000).toISOString()
+  const rows = Array.from({ length: 20 }, (_, index) => [
+    { type: 'user', uuid: `u${index}`, timestamp: time(index * 3), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: `Step ${index} ${long}` } },
+    { type: 'assistant', uuid: `a${index}`, timestamp: time(index * 3 + 1), cwd: project, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: `Did step ${index}.` }, ...(index === 3 ? [{ type: 'tool_use', id: 'toolu_1', name: 'Agent', input: { prompt: 'look' } }] : [])] } },
+  ]).flat()
+  const taskRows = Array.from({ length: 6 }, (_, index) => ({ type: 'user', uuid: `t${index}`, timestamp: time(10 + index), message: { role: 'user', content: `task ${index} ${long}` } }))
+  await writeFiles(home, {
+    [`${projectFolder(project)}/s1.jsonl`]: lines(rows),
+    [`${projectFolder(project)}/s1/subagents/agent-a7.jsonl`]: lines(taskRows),
+    [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: JSON.stringify({ agentType: 'explorer', description: 'Look', toolUseId: 'toolu_1' }),
+  })
+
+  const results = await Promise.all(
+    [
+      ['messages', 's1', '--project', project, '--json'],
+      ['messages', 's1', '--project', project, '--json'],
+      ['messages', 's1', '--project', project, '--task', 'a7', '--json'],
+      ['turns', 's1', '--project', project, '--json'],
+    ].map((args) => startCmod(home, 'history', ...args).done),
+  )
+  const [first, second, task, turns] = results.map((result) => JSON.parse(result.stdout) as { id: string }[])
+  const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
+  const db = new Database(join(home, '.local/share/cmod/history-6.sqlite'), { readonly: true })
+  const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
+  db.close()
+
+  expect(results.map((result) => result.stderr)).toEqual(['', '', '', ''])
+  expect(first?.map((message) => message.id)).toEqual(expected)
+  expect(second?.map((message) => message.id)).toEqual(expected)
+  expect(task?.map((message) => message.id)).toEqual(taskRows.map((row) => row.uuid))
+  expect(turns).toHaveLength(20)
+  expect(counts).toEqual({ total: counts?.ids ?? -1, ids: counts?.ids ?? -1, unordered: 0 })
+}, 120_000)
+
 test('messages reads a conversation as typed messages placed in their context and turn, and --task reads a task', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)

@@ -20,8 +20,16 @@ function testRemovals(installedPlugins: readonly string[] | null, userPlugins: R
     const answer = answers[argv[2] ?? ''] ?? { exitCode: 0, stdout: `missing ${argv[2]}\n`, stderr: '' }
     return { ...answer, isStdoutTruncated: false, isStderrTruncated: false }
   }
-  answerRules(tested, [{ linked: [], placed: [], removed: [] }])
+  answerRules(tested, [{ linked: [], placed: [], removed: [], watched }])
   return { tested, teardowns }
+}
+
+const watched = ['/test/home/.claude/settings.json']
+
+async function changeSettings(tested: ReturnType<typeof testMod>) {
+  const { write } = tested.fakes.fs
+  if (write === undefined) throw new Error('The test kit fakes no fs.write.')
+  await write('/test/home/.claude/settings.json', '{}')
 }
 
 async function prompt(tested: ReturnType<typeof testMod>, text: string) {
@@ -30,10 +38,12 @@ async function prompt(tested: ReturnType<typeof testMod>, text: string) {
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
 }
 
-type Synced = { linked: { mod: string; folder: string; rules: { name: string; isGlobal: boolean; text: string }[] }[]; placed: string[]; removed: string[] }
+type Synced = { linked: { mod: string; folder: string; rules: { name: string; isGlobal: boolean; text: string }[] }[]; placed: string[]; removed: string[]; watched: string[] }
 
-function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]) {
+function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]): { readonly runs: number } {
+  const counted = { runs: 0 }
   tested.fakes.process.spawn = () => {
+    counted.runs += 1
     const answer = answers.length > 1 ? answers.shift() : answers[0]
     async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
       yield { stream: 'stdout', text: `${JSON.stringify(answer)}\n` }
@@ -41,6 +51,7 @@ function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]) {
     }
     return Object.assign(read(), { result: Promise.resolve({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
   }
+  return counted
 }
 
 test("a mod's global rules linked after Claude Code started reach Claude as one note, and a later unlink says they no longer apply", async () => {
@@ -49,8 +60,8 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
     { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' },
     { name: 'sql', isGlobal: false, text: 'Quote every identifier.' },
   ]
-  const linked = { linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed: ['house-style'], removed: [] }
-  answerRules(tested, [linked, { ...linked, placed: [] }, { linked: [], placed: [], removed: ['house-style'] }])
+  const linked = { linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed: ['house-style'], removed: [], watched }
+  const rulesRuns = answerRules(tested, [linked, { linked: [], placed: [], removed: ['house-style'], watched }])
   const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
@@ -58,16 +69,35 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   await prompt(tested, 'hello')
 
   expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.'])
+  expect(rulesRuns.runs).toBe(1)
 
+  await changeSettings(tested)
   await prompt(tested, 'again')
   await settled()
 
   expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.', "The house-style mod's rules no longer apply."])
+  expect(rulesRuns.runs).toBe(2)
+})
+
+test('a watched file that changes while cmod rules runs makes the next prompt run it again', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  let changedAt = 0
+  tested.fakes.fs.stat = async () => ({ kind: 'file', size: 2, mtimeMs: changedAt, isLink: false })
+  const rulesRuns = answerRules(tested, [{ linked: [], placed: [], removed: [], watched }])
+
+  changedAt = Date.now()
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await settled()
+  expect(rulesRuns.runs).toBe(1)
+  await prompt(tested, 'hello')
+  await settled()
+
+  expect(rulesRuns.runs).toBe(2)
 })
 
 test('a rule taken out of a mod that stays linked is withdrawn by a note, and its other rules keep applying', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const linked = (rules: { name: string; isGlobal: boolean; text: string }[], placed: string[]) => ({ linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed, removed: [] })
+  const linked = (rules: { name: string; isGlobal: boolean; text: string }[], placed: string[]) => ({ linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed, removed: [], watched })
   const tests = { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' }
   const old = { name: 'old-api', isGlobal: true, text: 'Use the old API.' }
   answerRules(tested, [linked([tests, old], ['house-style']), linked([tests], [])])
@@ -75,6 +105,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await settled()
+  await changeSettings(tested)
   await prompt(tested, 'hello')
   await settled()
 
@@ -455,7 +486,7 @@ test('forkParent names the session whose last turn ended on this conversation, a
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'hello')
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
-  await settled()
+  while (tested.state.session.tip === null) await settled()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'fork', session_id: 'forked-elsewhere' })
 
   expect(await forkParent()).toEqual({ value: 'test-session' })

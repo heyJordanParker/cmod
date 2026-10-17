@@ -11,9 +11,11 @@ Links the rules/ folder of each mod that is on and has the prompt permission
 into Claude Code's rules folder: a user mod's at <config>/rules/<mod>, and a
 mod turned on for one project at <project>/.claude/rules/<mod>. It removes the
 link of a mod that is off, lacks the permission, or is removed, then prints the
-rules it linked. --json prints them as { linked, placed, removed }: placed and
-removed name the mods whose link this run made or took away. cmod runs it after install, update, remove, enable, disable,
-permission, setup, teardown, link, and unlink.`
+rules it linked. --json prints them as { linked, placed, removed, watched }:
+placed and removed name the mods whose link this run made or took away, and
+watched lists the files and folders whose change can change the next run. cmod
+runs it after install, update, remove, enable, disable, permission, setup,
+teardown, link, and unlink.`
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { project: { type: 'string' }, json: { type: 'boolean', default: false } } })
