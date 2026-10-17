@@ -3,6 +3,7 @@ import { defineMod, longestMs, messageOf, process, sessions, settings, type Mod 
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
+import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { modsMemory, modsPanel, readConsent, type ModsState } from './mods.js'
@@ -19,6 +20,7 @@ type SyncedRules = {
   readonly linked: readonly { readonly mod: string; readonly rules: readonly { readonly name: string; readonly isGlobal: boolean; readonly text: string }[] }[]
   readonly placed: readonly string[]
   readonly removed: readonly string[]
+  readonly watched: readonly string[]
 }
 
 async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
@@ -109,11 +111,21 @@ export const cmodPlugin = defineMod({
 
     let applied: ReadonlyMap<string, ReadonlyMap<string, string>> | undefined
     let following = Promise.resolve()
+    let synced: { readonly project: string; readonly watched: readonly string[]; readonly stamp: string } | undefined
+    const changedAt = async (paths: readonly string[]) => Promise.all(paths.map(async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? 0))
     const followRules = async () => {
-      const synced = JSON.parse(await runCmod(claude, ['rules', '--project', await claude.session.root(), '--json'], await claude.session.id())) as SyncedRules
-      const now = new Map(synced.linked.map(({ mod: name, rules }) => [name, new Map(rules.filter((rule) => rule.isGlobal).map((rule) => [rule.name, rule.text]))]))
+      const project = await claude.session.root()
+      if (synced?.project === project && (await changedAt(synced.watched)).join(',') === synced.stamp) return
+      const startedAt = await claude.clock.now()
+      const result = JSON.parse(await runCmod(claude, ['rules', '--project', project, '--json'], await claude.session.id())) as SyncedRules
+      const times = await changedAt(result.watched)
+      synced = { project, watched: result.watched, stamp: times.some((at) => at >= startedAt - 1000) ? '' : times.join(',') }
+      await noteRules(result)
+    }
+    const noteRules = async (result: SyncedRules) => {
+      const now = new Map(result.linked.map(({ mod: name, rules }) => [name, new Map(rules.filter((rule) => rule.isGlobal).map((rule) => [rule.name, rule.text]))]))
       const notes = [...now].flatMap(([name, globals]) => {
-        const before = applied === undefined ? (synced.placed.includes(name) ? undefined : globals) : applied.get(name)
+        const before = applied === undefined ? (result.placed.includes(name) ? undefined : globals) : applied.get(name)
         const changed = [...globals].filter(([rule, text]) => before?.get(rule) !== text).map(([, text]) => text)
         const withdrawn = [...(before ?? [])].filter(([rule]) => !globals.has(rule)).map(([, text]) => text)
         return [
@@ -121,7 +133,7 @@ export const cmodPlugin = defineMod({
           ...(withdrawn.length === 0 ? [] : [[`These rules of the ${name} mod no longer apply:`, ...withdrawn].join('\n\n')]),
         ]
       })
-      const gone = applied === undefined ? synced.removed : [...applied.keys()].filter((name) => !now.has(name))
+      const gone = applied === undefined ? result.removed : [...applied.keys()].filter((name) => !now.has(name))
       applied = now
       for (const text of [...notes, ...gone.map((name) => `The ${name} mod's rules no longer apply.`)]) {
         const added = await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
