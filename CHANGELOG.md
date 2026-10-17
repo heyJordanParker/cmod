@@ -4,6 +4,29 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-17
+
+cmod 2.0.1 fixes what mods ran into on 2.0.0 and makes cmod lighter: a prompt no longer waits on a cmod process, and nothing it reads blocks for minutes behind the conversation index.
+
+### Fixed
+- A mod that names a version range on cmod, such as `"version": "^2.0.0"`, installs on a computer without cmod. Claude Code installs a dependency's range only from a tag named `<name>--v<version>`, which cmod's releases now carry, back to 0.1.5. `cmod publish` pushes that tag on each release of your mod too, for a marketplace that lists your mod from its git repository.
+- In an interactive session, a mod's listeners on its own session work again. On 2.0.0 the cmod plugin did not yet know its session when a mod set up, so it refused them for lacking the conversation grant and showed three error toasts.
+- A mod that decides no permissions passes Anthropic's plugin directory check again. Only a mod that calls `registerPermissionCheck` carries the code that answers a permission.
+- A `beforeSessionStart` note reaches Claude in `claude -p` and the SDK, where Claude Code runs SessionStart before mods start.
+- `onInstructionFile` and `beforeInstructionFile` name the file's `path` for every instruction file Claude Code adds as it runs.
+- `beforeToolCall`'s `cwd` is the folder a subagent runs in, for a task started with its own `cwd`.
+- A message the conversation index is writing no longer makes a read of the running session wait up to two minutes and then fail with "database is locked". The index writes a large session in steps.
+- `cmod setup`, `link`, `install`, `update`, and `try` say a mod "is already set up" when its install step has nothing to run, instead of "Installing".
+- Two `before` listeners that each answer a `note` both reach Claude.
+
+### Changed
+- A prompt no longer waits for `cmod rules`. The cmod plugin runs it only when a file it reads changed, and `cmod rules --json` lists those files as `watched`.
+- The cmod launcher starts faster, and frees the disk space of each older cmod build once it installs a newer one. What ran the older build runs the newer one.
+- Checking whether another session still runs reads only the running sessions, once for every waiting call.
+- The conversation index finds deleted transcripts with one listing per folder, and reads each transcript row once per query.
+- A mod with no `state.session` does no session bookkeeping at session start.
+- cmod waiting for a newer cmod checks every 10 seconds after the first minute.
+
 ## [2.0.0] - 2026-10-17
 
 cmod 2.0 gives a mod one way to hear and change Claude Code: a named `on` or `before` method for each moment, on the part of the conversation it happens in. `mod.on` and Claude Code's raw hook inputs and answers are gone, and the docs' session.md lists every method.

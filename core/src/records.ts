@@ -259,7 +259,7 @@ function readKeys(keys: unknown): Steps {
   return { keys: commands }
 }
 
-export const coreVersion = '2.0.0'
+export const coreVersion = '2.0.1'
 
 export function oldestCmodFor(steps: Steps): string {
   if (steps.permissions?.some((item) => item.startsWith('config:')) === true) return '1.6.0'
