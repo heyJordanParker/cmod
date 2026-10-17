@@ -4,6 +4,49 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-17
+
+cmod 2.0 gives a mod one way to hear and change Claude Code: a named `on` or `before` method for each moment, on the part of the conversation it happens in. `mod.on` and Claude Code's raw hook inputs and answers are gone, and the docs' session.md lists every method.
+
+### Added
+- Every moment of a session is a method on `sessions.current`, with a typed payload and answer: `onSessionStart` and `beforeSessionStart` with a `note`, `beforeModelChange`, `onCwdChange`, `beforePermissionCheck` and `beforePermissionRequest`, `beforeToolBatch`, `beforeTodoCreate`, `beforeReplyDisplay`, worktrees, elicitations, and notifications.
+- `commands` hears, changes, and runs every slash command, built-ins such as `/compact` included: `commands.beforeRun` rewrites a command's arguments, answers in its place, or refuses it, `commands.onRun` hears it ran, `commands.run` runs one, and `commands.list` lists them all.
+- Every `on` and `before` method takes `{ timeoutMs }`, and its listener gets a `deadline` and an `AbortSignal` that aborts then. `onFailure: 'refuse'` makes a `before` gate that breaks refuse instead of letting the moment through.
+- A tool call and its result list the files they read and change, as `files: { read, changed }`, Bash command lines included.
+- A tool result names its call's tool and input.
+- A turn that ends says why: Claude's `answer`, or a `failure` with its type. `turn.abort()` stops a running turn.
+- `beforePrompt` adds a `note` beside a prompt and names the session with `title`, and a task's first prompt takes a `note` its subagent reads before its first step. `beforeToolResult` adds a `note` beside a result, or marks it an error.
+- `fs.onChange` hears the files that change under a path, and `settings.beforeFileChange` refuses an edit to a settings file while the session runs.
+- `mod.log(text, { to: 'transcript' })` writes a dim line the person reads in the conversation.
+- `InstructionFile` has `isRule`, true for a rule file. The `Engine` sender marks Claude Code's own continuation prompt.
+- The test kit raises any method with `tested.raise.<method>(payload)`, starts a new session with `tested.startSession({ source, id })`, and ends a turn with an `answer` or a `failure`.
+
+### Changed
+- A session is one agent: `sessions.current`'s listeners hear the main agent only, `sessions.current.goal` hears every agent in the session, and `task.owner` hears one subagent. A task's `owner` is a `TaskOwner`, without `startTask` and `callTool`.
+- `on(Event, …)` and `before(Event, …)` are named methods: `onReply(…)` for `on(Reply, …)`, `beforeToolCall(…)` for `before(ToolCall, …)`. `sessions` has `on` methods only, and a `before` method on another session changes what happens there.
+- `session.goal` is a property that follows the session, as `sessions.current` does, and `goal.text()` reads its text. Write `sessions.current.goal.tasks()` for `(await sessions.current.goal()).tasks()`.
+- `search` streams: it returns an `AsyncIterable` newest first and takes a matcher. Loop with `for await` and `break` instead of `limit`, and pass `before` to continue a loop that broke.
+- `search` covers what the part's listeners hear: a session's `search` its own agent's messages, its goal's every agent's, and a task's its owner's and every task below it.
+- `cmod history search --goal` is `--agent`, which keeps the main agent's messages, or with `--task` that task's own.
+- `ToolResult.text` is `output`, and `beforeToolResult` answers `{ output }`.
+- `Document` is `InstructionFile`, `clients()` is `surfaces()`, and `usage()`'s `context: { tokens, window }` is `contextWindow: { tokenCount, size }`.
+- `settings.list()` is `config.list()`, and `Setting` is `ConfigRow`.
+- `startTask` takes a `title`, and `name` is the address a teammate's `SendMessage` reaches it by.
+- A `slashCommand` reply's `context` is `note`.
+- A built-in command such as `/model` no longer reaches `beforePrompt`: `commands.beforeRun` hears every command, and `beforePrompt` hears a command Claude Code sends as a prompt.
+- A task about to end is `task.owner.beforeTurnEnd`.
+- `statusLine` redraws when the usage or the mod's state changes. A line that follows a clock sets the state from `mod.every`.
+- The conversation index is `history-6.sqlite`, and cmod deletes `history-5.sqlite`.
+- A mod built on `@cmodjs/core` 2.0 reads conversations through the cmod plugin 2.0, so update the cmod plugin with `/plugin` before such a mod.
+
+### Removed
+- `mod.on`, the 33 hook constants such as `PreToolUse` and `Stop`, and `HookInput`, `HookAnswer`, `HookListener`, and `HookOptions`. Each hook's job is a method: `sessions.current.onToolResult` for `PostToolUse`, `sessions.current.beforeToolCall` for `PreToolUse`, `sessions.current.beforeTurnEnd` for `Stop`, `sessions.current.beforeSessionStart` for `SessionStart`, and `sessions.current.onPrompt` or `beforePrompt` for `UserPromptSubmit`.
+- `beforeTaskEnd`. Use `task.owner.beforeTurnEnd`.
+- `prompt`'s `when`. Add the note with `sessions.current.beforePrompt({ text: /pattern/ }, () => ({ note }))`.
+- `statusLine`'s `interval`.
+- `tested.fire` for Claude Code's hooks, and `TestInput`. Use `tested.raise`, and `tested.add`, `endTurn`, `compact`, `startTask`, and `startSession` to build the conversation. `fire` keeps `tool.check`, `prompt.context`, `cmod.call`, and the `ui` events.
+- The `SessionEvent`, `SessionPayload`, `BeforeEvent`, `BeforeAnswer`, and `UsageChange` exports, and the event constants such as `TurnEnd` and `TaskStart`. The methods carry their payload types.
+
 ## [1.6.0] - 2026-10-16
 
 ### Added
