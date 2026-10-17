@@ -89,7 +89,13 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const text = answer.text ?? e.text
       if (answer.title !== undefined) titles.set(text, answer.title)
       const context = answer.note === undefined ? e.context : [...(e.context ?? []), answer.note]
-      return next({ ...e, text, ...(context === undefined ? {} : { context }) })
+      const ran = await next({ ...e, text, ...(context === undefined ? {} : { context }) })
+      const passed = titles.get(text)
+      if (passed !== undefined && ('drop' in ran || ran.text !== text)) {
+        titles.delete(text)
+        if (!('drop' in ran) && typeof ran.text === 'string') titles.set(ran.text, passed)
+      }
+      return ran
     }),
     router.add('classic.UserPromptSubmit', async (e, next) => {
       const named = titles.get(e.prompt)
@@ -152,15 +158,20 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const where = await place()
       const task: TaskData = { id: '', title: e.description, agentType: e.subagentType, model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
       const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } })
-      if (answer.refuse !== undefined) return { deny: answer.refuse }
+      if (answer.refuse !== undefined) {
+        spawned.delete(e.tool_use_id)
+        return { deny: answer.refuse }
+      }
       return next(answer.owner === undefined ? e : { ...e, model: answer.owner.model })
     }),
     router.add('classic.SubagentStart', async (e, next) => {
-      if (!(await wants(Prompt))) return next(e)
       const where = await place()
-      const open = where.taskTurns[e.agent_id]?.prompt
       const openedBy = where.tasks[e.agent_id]?.openedBy
-      const text = open?.text ?? (openedBy === undefined ? undefined : spawned.get(openedBy))
+      const prompt = openedBy === undefined ? undefined : spawned.get(openedBy)
+      if (openedBy !== undefined) spawned.delete(openedBy)
+      if (!(await wants(Prompt))) return next(e)
+      const open = where.taskTurns[e.agent_id]?.prompt
+      const text = open?.text ?? prompt
       if (text === undefined) return next(e)
       const answer = await asked(Prompt, message(where, { id: open?.id ?? '', at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false))
       return withNote(await next(e), answer.note)

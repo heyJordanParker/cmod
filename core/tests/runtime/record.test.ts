@@ -262,6 +262,10 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'next' })).toEqual({})
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({})
+  await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit it', origin: { kind: 'composer' }, wait: false }, { text: 'commit it now', origin: { kind: 'composer' } } as never)
+  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit it now' })).toEqual({ sessionTitle: 'Commit' })
+  await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit that', origin: { kind: 'composer' }, wait: false }, { drop: 'Not now.' } as never)
+  expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit that' })).toEqual({})
 })
 
 test("beforeToolResult adds a note, rewrites the output, or marks the result failed", async () => {
@@ -321,6 +325,8 @@ test('abort stops a running turn with the prompt permission, and throws on an en
 
   expect(tested.calls.filter((call) => call.call === 'cmod.call').map((call) => call.args[0]).filter((args) => (args as { method: string }).method === 'cmod:act')).toMatchObject([{ input: { action: 'abort', input: { turn: running!.prompt.id } } }])
   await expect(ended!.abort()).rejects.toThrow(/has ended, so there is nothing to abort/)
+  await tested.add({ type: Prompt, text: 'Deploy to staging' })
+  await expect(running!.abort()).rejects.toThrow(/has ended, so there is nothing to abort/)
 })
 
 test('onToolResult hears the files a call changed and read, with the tool and its input', async () => {

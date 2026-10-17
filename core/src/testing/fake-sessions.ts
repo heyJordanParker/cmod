@@ -204,7 +204,11 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
       if (action === 'usage') return { model: task === undefined ? session.data.model : (taskOf(session, task).model ?? session.data.model), contextWindow: {} }
       if (action === 'surfaces') return isLive ? ['terminal'] : []
       if (!isLive) throw new Error(`session ${task ?? session.data.id} has ended`)
-      if (action === 'abort') return null
+      if (action === 'abort') {
+        const open = task === undefined ? session.conversation.state.turn : session.conversation.state.taskTurns[task]
+        if (open?.prompt.id !== input['turn']) throw new Error(`turn ${String(input['turn'])} has ended, so there is nothing to abort.`)
+        return null
+      }
       if (action === 'send') {
         sent.push({ session: session.data.id, ...(task === undefined ? {} : { task }), type: String(input['type']), text: String(input['text']), ...(typeof input['as'] === 'string' ? { as: input['as'] } : {}) })
         return null

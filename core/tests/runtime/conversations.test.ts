@@ -114,9 +114,13 @@ test('the cmod plugin aborts the engine turn that is running, for a mod with the
   const consent = consentPath(storeFolder({ HOME: '/test/home' }))
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: ['prompt'], reader: [] }) } })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  const abort = (caller: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: {} }, caller } as never)
+  const abort = (caller: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: { turn: 'p1' } }, caller } as never)
+  const appended = { uuid: 'p1', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Deploy' }] } }
 
   expect(await abort('guard')).toEqual({ deny: 'no turn is running in session test-session.' })
+  await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-0' } as never)
+  expect(await abort('guard')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
+  await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-7' } as never)
   expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in /mods reader.' })
   expect(await abort('guard')).toEqual({ value: null })

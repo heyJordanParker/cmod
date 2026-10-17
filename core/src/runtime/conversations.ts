@@ -398,7 +398,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     if (turnId === undefined) throw new Error(`no turn is running in ${task === undefined ? `session ${session}` : `task ${task}`}.`)
     const asked = isObject(input) ? input['turn'] : undefined
     const open = task === undefined ? conversation.state.turn : conversation.state.taskTurns[task]
-    if (open !== undefined && open.prompt.id !== asked) throw new Error(`turn ${String(asked)} has ended, so there is nothing to abort.`)
+    if (open?.prompt.id !== asked) throw new Error(`turn ${String(asked)} has ended, so there is nothing to abort.`)
     await claude.turn.abort({ turnId })
     return null
   }
