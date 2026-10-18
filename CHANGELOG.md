@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-18
+
+cmod 3.1 lets Anthropic's plugin directory list a mod that hears Claude Code's permission check and only refuses.
+
+### Changed
+- `cmod publish` leaves the code that allows and asks on Claude Code's permission check out of the bundle of a mod without `"approve": true`, so a mod that only refuses, such as one that blocks `rm -rf`, holds no hook that can approve a tool call, and the plugin directory can list it.
+- `cmod check` adds `"approve": true` only to a mod that allows or asks, and no longer to one that only refuses. For a mod that declares it, `cmod check` says Anthropic's plugin directory does not list a mod that approves Claude's tool calls.
+
 ## [3.0.0] - 2026-10-18
 
 cmod 3.0 tells a mod which of its notes Claude got, gives a subagent its own note after a compaction, and keeps a mod's gates working when Claude Code stops one of its hooks.
