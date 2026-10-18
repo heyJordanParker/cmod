@@ -5,7 +5,7 @@
   "cmod": { "program": "cmod", "permissions": { "run": ["cmod"], "conversation": true, "prompt": true } },
   "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^2.0.1",
-    "@cmodjs/core": "^2.0.1"
+    "@cmodjs/cli": "^2.1.0",
+    "@cmodjs/core": "^2.1.0"
   }
 }
