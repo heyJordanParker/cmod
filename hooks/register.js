@@ -294,7 +294,7 @@ function readKeys(keys) {
   }
   return { keys: commands };
 }
-var coreVersion = "2.1.0";
+var coreVersion = "3.0.0";
 function oldestCmodFor(steps) {
   if (steps.permissions?.some((item) => item.startsWith("config:")) === true)
     return "1.6.0";
@@ -514,6 +514,21 @@ function nameOf(place) {
 var Prompt = "prompt";
 // node_modules/@cmodjs/core/session/context/turn/message/note.js
 var Note = "note";
+var modNoteBlock = new RegExp(`<(${pluginName.source.slice(1, -1)})_mod>\\n([\\s\\S]*?)\\n</\\1_mod>`, "g");
+function modNote(mod, text) {
+  return `<${mod}_mod>
+${text}
+</${mod}_mod>`;
+}
+function modNotesIn(text) {
+  return [...text.matchAll(modNoteBlock)].map((match) => ({ mod: match[1], text: match[2] }));
+}
+function untagged(text) {
+  const notes = modNotesIn(text);
+  return notes.length === 0 ? text : notes.map((note) => note.text).join(`
+
+`);
+}
 // node_modules/@cmodjs/core/session/context/turn/message/reply.js
 var Reply = "reply";
 // node_modules/@cmodjs/core/session/context/turn/message/tool-call.js
@@ -3096,10 +3111,15 @@ function messagesOf(row, isInTask) {
 function unplacedOf(row, isInTask) {
   const base = { id: row.id, at: row.at };
   const text = textOf(row.content).trim();
+  const notesFrom = (each) => each.map((note) => ({ ...base, type: Note, text: note.text, from: { type: Mod, name: note.mod } }));
   if (row.type === "system")
     return row.name === "turn_duration" || row.name === "compact_boundary" || text === "" ? [] : [{ ...base, type: Notice, text }];
+  if (row.type === "attachment" && row.name === "hook_additional_context")
+    return notesFrom(row.content.flatMap((entry) => modNotesIn(typeof entry === "string" ? entry : textOf([entry]))));
   if (row.type === "attachment")
     return row.name === "nested_memory" ? [{ ...base, type: InstructionFile, path: row.path ?? "", text, isRule: isRulePath(row.path ?? "") }] : [];
+  if (isModNotesRow(row))
+    return notesFrom(modNotesIn(text));
   if (row.type === "assistant") {
     return row.content.filter(isObject).flatMap((block) => {
       if (block["type"] === "text" && typeof block["text"] === "string" && block["text"].trim() !== "")
@@ -3126,7 +3146,30 @@ function unplacedOf(row, isInTask) {
   const prompt = promptText(text);
   return prompt === undefined ? [] : [{ ...base, type: Prompt, text: prompt, from: senderOf(row.origin, isInTask) }];
 }
+function isModNotesRow(row) {
+  const text = textOf(row.content);
+  return row.type === "user" && !row.content.some(isToolResultBlock) && modNotesIn(text).length > 0 && text.replace(modNoteBlock, "").trim() === "";
+}
+function withNoteTexts(entries, texts) {
+  let index = -1;
+  const replaced = (text) => text.replace(modNoteBlock, (whole, mod) => {
+    index += 1;
+    const changed = texts.get(index);
+    if (changed === undefined)
+      return whole;
+    return changed === "" ? "" : modNote(mod, changed);
+  });
+  return entries.map((entry) => {
+    if (typeof entry === "string")
+      return replaced(entry);
+    return isObject(entry) && entry["type"] === "text" && typeof entry["text"] === "string" ? { ...entry, text: replaced(entry["text"]) } : entry;
+  });
+}
 function withTexts(row, texts) {
+  if (row.type === "attachment" && row.name === "hook_additional_context")
+    return withNoteTexts(row.content, texts);
+  if (isModNotesRow(row))
+    return keepingMedia(row.content, withNoteTexts([textOf(row.content)], texts)[0]);
   if (row.type === "assistant") {
     let index = -1;
     return row.content.map((block) => {
@@ -3435,9 +3478,9 @@ function relayOf(e) {
   return isFromCmod ? relayTag.exec(e.text)?.[1] : undefined;
 }
 function installBefore({ claude, router, hooks }) {
-  const { place, wants, decide } = hooks;
+  const { place, wants, fold } = hooks;
   const now = () => new Date().toISOString();
-  const asked = async (event, change) => await decide(event, change) ?? {};
+  const asked = async (event, change, decide = fold()) => await decide(event, change) ?? {};
   const message = (where, unplaced, task, isInTurn = true) => {
     const turn = isInTurn ? task === undefined ? where.turn : where.taskTurns[task] : undefined;
     const context = task === undefined ? where.context : where.tasks[task]?.context ?? where.context;
@@ -3459,7 +3502,7 @@ function installBefore({ claude, router, hooks }) {
     const answer = await asked(ToolResult, message(where, result, task));
     const below = await next(e);
     const rewritten = answer.output === undefined || isFailure ? {} : name.startsWith("mcp__") ? { updatedMCPToolOutput: answer.output } : { updatedToolOutput: answer.output };
-    const failed = answer.isError === true && !isFailure ? { block: answer.note ?? `${name} failed.` } : {};
+    const failed = answer.isError === true && !isFailure ? { block: answer.note === undefined ? `${name} failed.` : untagged(answer.note) } : {};
     return { ...withNote(below, answer.isError === true ? undefined : answer.note), ...rewritten, ...failed };
   };
   const added = [
@@ -3527,10 +3570,11 @@ function installBefore({ claude, router, hooks }) {
         return next(e);
       const where = await place();
       const texts = new Map;
+      const decide = fold();
       for (const [part, unplaced] of found.entries()) {
         if (!wanted.has(unplaced.type))
           continue;
-        const answer = await asked(unplaced.type, message(where, unplaced, e.agentId));
+        const answer = await asked(unplaced.type, message(where, unplaced, e.agentId), decide);
         if (answer.text !== undefined)
           texts.set(part, answer.text);
       }
@@ -4872,6 +4916,13 @@ function classicHook(event, hook, report) {
   };
   return routed;
 }
+function classicFailure(failed) {
+  const routed = async (e, error, next) => {
+    const ours = await failed(e, error);
+    return ours === undefined ? undefined : mergeClassic(await next(e), ours);
+  };
+  return routed;
+}
 var frontmatter = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 var baseDirectoryLine = /^Base directory for this skill: [^\n]*\n\n/;
 function userSkillHook(claude) {
@@ -5037,7 +5088,7 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     queued.add(key);
     Promise.resolve().then(async () => {
       queued.delete(key);
-      const heard = (from) => [...from.get(key) ?? []].map(({ event, matcher }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher) }));
+      const heard = (from) => [...from.get(key) ?? []].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...options.onFailure === "refuse" ? { onFailure: "refuse", scope } : {} }));
       const tracksTasks = [...listening.get(key) ?? [], ...deciding.get(key) ?? []].some(({ scope }) => scope.task !== undefined || scope.isGoal === true);
       const subscriptions = [...heard(listening), ...tracksTasks ? [{ event: TaskStart }] : []];
       await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? "the other sessions" : `session ${key}`}`, error));
@@ -5085,25 +5136,28 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       }
     };
   };
+  const refusalOf = (options, takes, error) => options.onFailure === "refuse" && takes.includes("refuse") ? { refuse: `${name}: ${messageOf(error)}` } : undefined;
   const invoke = (method, options, run, takes = []) => withinTime(claude.clock, method, options, run).catch((error) => {
     if (error instanceof PassedTimeout && !method.startsWith("before"))
       return;
     report(`session:${method}`, `The ${method} listener failed`, error);
-    return options.onFailure === "refuse" && takes.includes("refuse") ? { refuse: `${name}: ${messageOf(error)}` } : undefined;
+    return refusalOf(options, takes, error);
   });
+  const decidersOf = (session, event, isInProject) => [...deciding.get(session) ?? [], ...isInProject ? deciding.get(everySession) ?? [] : []].filter((entry) => entry.event === event);
+  const decides = (entry, session, change) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher));
+  const mayDecide = (session) => session === current2.id || isGranted("conversation");
   const combined = async (session, event, change, isInProject) => {
-    const askers = [...deciding.get(session) ?? [], ...isInProject ? deciding.get(everySession) ?? [] : []].filter((entry) => entry.event === event).map((entry) => async (latest) => {
-      if (!isInScope(entry.scope, session, latest, isUnderIn(session)))
-        return;
-      if (entry.matcher !== undefined && !matches(payloadOf(latest), entry.matcher))
+    const askers = decidersOf(session, event, isInProject).map((entry) => async (latest) => {
+      if (!decides(entry, session, latest))
         return;
       const payload = await payloadFor(session, latest);
-      const answer = await invoke(entry.method, entry.options, async (time2) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time2)), beforeAnswerKeys[event]);
-      if (answer === undefined || answer === null || typeof answer === "object" && "refuse" in answer || isGranted(beforePermission(event)))
-        return answer;
+      const answer2 = await invoke(entry.method, entry.options, async (time2) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time2)), beforeAnswerKeys[event]);
+      if (answer2 === undefined || answer2 === null || typeof answer2 === "object" && "refuse" in answer2 || isGranted(beforePermission(event)))
+        return answer2;
       throw new Error(`Its ${entry.method} answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`);
     });
-    return foldBefore(event, change, askers, (error) => report(`session:${methodOf("before", event)}`, `The ${methodOf("before", event)} listener failed`, error));
+    const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf("before", event)}`, `The ${methodOf("before", event)} listener failed`, error));
+    return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) };
   };
   const eventMethods = (scopeOf, hasBefore, ended) => {
     const method = (into, named, event) => (...args) => {
@@ -5211,7 +5265,7 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     if (type === Note) {
       if (as !== undefined)
         throw new Error(`${name}: a Note is always from this mod, so it takes no as.`);
-      const added = await claude.session.append({ message: { type: "user", content: [{ type: "text", text }] } });
+      const added = await claude.session.append({ message: { type: "user", content: [{ type: "text", text: modNote(name, text) }] } });
       if (added.deny !== undefined)
         throw new Error(`${name}: Claude Code refused the note: ${added.deny}`);
       return;
@@ -5314,17 +5368,19 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     }), { session, task: data.id });
   };
   const processListeners = new Map;
+  const processHearers = (method, payload) => [...processListeners.get(method) ?? []].filter(({ matcher, isEveryAgent }) => (payload["task"] === undefined || isEveryAgent) && (matcher === undefined || matches(payload, matcher)));
   const raise = async (method, payload) => {
-    const heard = [...processListeners.get(method) ?? []].filter(({ matcher }) => payload["task"] === undefined && (matcher === undefined || matches(payload, matcher)));
+    const heard = processHearers(method, payload);
     if (!method.startsWith("before")) {
       await Promise.all(heard.map(({ listener, options }) => invoke(method, options, (time2) => listener(payload, time2))));
       return;
     }
-    const failing = method === "beforePermissionRequest" ? { onFailure: "refuse" } : {};
-    const takes = answerKeys[method.slice("before".length)] ?? [];
-    const askers = heard.map(({ listener, options }) => () => invoke(method, { ...options, ...failing }, async (time2) => takenAnswer(method, takes, await listener(payload, time2)), takes));
+    const takes = takesOf(method);
+    const askers = heard.map(({ listener, options }) => () => invoke(method, options, async (time2) => takenAnswer(method, takes, await listener(payload, time2)), takes));
     return foldAnswers(method, takes, ["refuse"], undefined, askers, (error) => report(`session:${method}`, `The ${method} listener failed`, error));
   };
+  const takesOf = (method) => answerKeys[method.slice("before".length)] ?? [];
+  const refusalFor = (method, payload, error) => processHearers(method, payload).map((entry) => refusalOf(entry.options, takesOf(method), error)).find((answer) => answer !== undefined);
   const commandRun = async (e) => {
     const source = (await claude.command.list()).find((command) => command.name === e.command)?.source;
     return { session: current2.id, cwd: current2.cwd, name: e.command, args: e.args, ...defined({ source }), from: senderOf(e.origin, false) };
@@ -5347,7 +5403,10 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     const args = typeof changes?.["args"] === "string" ? changes["args"] : e.args;
     const ran = await next(args === e.args ? e : { ...e, args });
     raise("onRun", { ...run, args });
-    return typeof changes?.["note"] === "string" ? { ...ran, context: [...ran.context ?? [], changes["note"]] } : ran;
+    return typeof changes?.["note"] === "string" ? { ...ran, context: [...ran.context ?? [], modNote(name, changes["note"])] } : ran;
+  }, async (e, error) => {
+    const refusal = commandListeners.beforeRun.size === 0 ? undefined : refusalFor("beforeRun", await commandRun(e), error);
+    return refusal === undefined ? undefined : { text: refusal.refuse };
   });
   const listenTo = (method, named) => {
     if (hookOn === undefined || routeOn === undefined)
@@ -5357,23 +5416,51 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       const routes = permissionRoutes?.();
       if (routes === undefined)
         throw new Error(withoutPermissionCheck(name, method));
-      return routes(method, { raise, hookOn, routeOn, current: () => current2 });
+      return routes(method, { raise, refusalFor, hookOn, routeOn, current: () => current2 });
     }
     const event = processEvents[named];
     const hook = (isBefore ? event.before : undefined) ?? event.on;
+    if (method === "beforeSessionStart")
+      routeOn("session.compact", compactionNote);
+    const failed = (input, error) => {
+      const refusal = refusalFor(method, processPayloadOf(named, input), error);
+      return refusal === undefined ? undefined : hookAnswerOf(name, named, refusal);
+    };
     return hookOn(hook, async (input) => {
       const payload = processPayloadOf(named, input);
+      if (named === "SessionStart" && payload["source"] === "compact") {
+        const started = isBefore ? compactionStarts.shift() : undefined;
+        return started === undefined ? undefined : hookAnswerOf(name, named, started);
+      }
       if (!isBefore) {
-        if (named !== "SessionStart" || payload["source"] !== "compact")
-          raise(method, payload);
+        raise(method, payload);
         return;
       }
       const answer = await raise(method, payload);
-      return answer === undefined ? undefined : hookAnswerOf(named, answer);
-    });
+      return answer === undefined ? undefined : hookAnswerOf(name, named, answer);
+    }, isBefore ? failed : undefined);
   };
-  const listen = (method, args) => {
-    const entry = listenerOf(name, method, args);
+  const compactionStarts = [];
+  const compactionNote = async (e, next) => {
+    const compacted = await next(e);
+    if (e.trigger === "precompute" || compacted.skip !== undefined)
+      return compacted;
+    const model = e.agentId === undefined ? await claude.session.model() : undefined;
+    const answer = await raise("beforeSessionStart", { session: current2.id, cwd: current2.cwd, ...defined({ task: e.agentId, model, title: current2.title || undefined, contextTokenCount: compacted.tokensAfter }), source: "compact" });
+    const { note, ...started } = answer ?? {};
+    if (Object.keys(started).length > 0)
+      compactionStarts.push(started);
+    if (typeof note !== "string")
+      return compacted;
+    if (!isGranted("prompt")) {
+      report("session:beforeSessionStart", "The beforeSessionStart listener failed", new Error(`${name}: its note adds text Claude reads, which needs the prompt permission.`));
+      return compacted;
+    }
+    return { ...compacted, messages: [...compacted.messages, { role: "user", text: modNote(name, note), toolUses: [] }] };
+  };
+  const listen = (method, args, isEveryAgent = false) => {
+    const heard = listenerOf(name, method, args);
+    const entry = { ...heard, options: method === "beforePermissionRequest" ? { ...heard.options, onFailure: "refuse" } : heard.options, isEveryAgent };
     const held = processListeners.get(method) ?? new Set;
     if (!processListeners.has(method)) {
       listenTo(method, method.replace(/^(on|before)/, ""));
@@ -5383,9 +5470,14 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     return { dispose: () => void held.delete(entry) };
   };
   const processMethods = () => Object.fromEntries(Object.entries(processEvents).flatMap(([named, event]) => [`on${named}`, ..."before" in event ? [`before${named}`] : []]).map((method) => [method, (...args) => listen(method, args)]));
-  const currentSession = Object.assign(sessionOf(() => current2), processMethods());
+  const here = sessionOf(() => current2);
+  const currentSession = Object.assign(here, processMethods(), { goal: Object.assign(here.goal, { beforeSessionStart: (...args) => listen("beforeSessionStart", args, true) }) });
   const every = eventMethods(() => ({}), false);
-  const answerBefore = async (session, event, change, isInProject) => session === current2.id || isGranted("conversation") ? combined(session, event, change, isInProject) : undefined;
+  const answerBefore = async (session, event, change, isInProject) => mayDecide(session) ? combined(session, event, change, isInProject) : undefined;
+  const failedBefore = (session, event, change, isInProject, error) => {
+    const asked = mayDecide(session) ? decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change)) : [];
+    return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined);
+  };
   return {
     sessions: {
       get current() {
@@ -5416,6 +5508,7 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       }
     },
     answerBefore,
+    failedBefore,
     raise,
     listen,
     follow(next) {
@@ -5525,9 +5618,9 @@ function processPayloadOf(named, input) {
   const fields = recordOf(input);
   return { ...placementOf(fields), ...defined(processFields[named](fields)) };
 }
-function hookAnswerOf(named, answer) {
+function hookAnswerOf(name, named, answer) {
   const refuse = typeof answer["refuse"] === "string" ? answer["refuse"] : undefined;
-  const note = typeof answer["note"] === "string" ? [answer["note"]] : undefined;
+  const note = typeof answer["note"] === "string" ? [modNote(name, answer["note"])] : undefined;
   if (named === "SessionStart")
     return defined({ additionalContext: note, sessionTitle: answer["title"], reloadSkills: answer["reloadSkills"] === true ? true : undefined, initialUserMessage: answer["firstPrompt"] });
   if (named === "ModelChange") {
@@ -5563,6 +5656,7 @@ function searchOptionsOf({ running, since, everyProject, before }) {
 // node_modules/@cmodjs/core/runtime/conversations.js
 var bufferedTaskRows = 200;
 var beforeDeadlineMs = 5000;
+var awayFoldMs = 8000;
 var livenessMs = 5000;
 function serveConversations({ claude, router, store, project, report }) {
   const folder = dataFolder(store, cmodPluginName);
@@ -5707,7 +5801,7 @@ function serveConversations({ claude, router, store, project, report }) {
         reject(error);
       }
     };
-    const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new Error(`session ${to} did not answer within ${deadlineMs / 1000} s`)));
+    const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new PassedTimeout(`session ${to} did not answer within ${deadlineMs / 1000} s`)));
     asked.set(id, settle);
     post(to, { ...relay, id, from: session }).catch((error) => settle.reject(error instanceof Error ? error : new Error(messageOf(error))));
   });
@@ -5757,12 +5851,25 @@ ${watcher.mod}`, watcher])).values()];
       throw new Error(`${mod} needs the conversation permission to change what happens in another session. Turn it on in /mods ${mod}.`);
     return claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } });
   };
-  const askAway = async (watcher, event, change) => {
+  const isUnderHere = (task, ancestor) => {
+    for (let at = task, steps = 0;at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1)
+      if (at === ancestor)
+        return true;
+    return false;
+  };
+  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard2, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard2, matcher === undefined ? undefined : receivedMatcher(matcher), change));
+  const askAway = async (watcher, event, change, endsAt) => {
     try {
-      return await ask(watcher.from, { kind: "before", mod: watcher.mod, event, change, project: project() }, beforeDeadlineMs);
+      const leftMs = Math.min(beforeDeadlineMs, endsAt - await claude.clock.now());
+      if (leftMs <= 0)
+        throw new PassedTimeout(`the ${awayFoldMs / 1000} s cmod waits on other sessions ran out before session ${watcher.from} was asked`);
+      return await ask(watcher.from, { kind: "before", mod: watcher.mod, event, change, project: project() }, leftMs);
     } catch (error) {
-      if (await isRunning(watcher.from))
+      if (await isRunning(watcher.from)) {
+        if (error instanceof PassedTimeout && refuses(watcher, event, change))
+          return { refuse: `${watcher.mod}: ${error.message}` };
         throw error;
+      }
       watchers = watchers.filter((each) => each.from !== watcher.from);
       claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: "debug" });
       await claude.fs.write(`${watches}/${watcher.from}.json`, "[]");
@@ -5781,7 +5888,15 @@ ${watcher.mod}`, watcher])).values()];
         await Promise.all([starting, watching]);
         return deciders(event).length > 0;
       },
-      decide: (event, change) => foldBefore(event, change, deciders(event).map((watcher) => (latest) => watcher.from === session ? askHere(watcher.mod, event, latest) : askAway(watcher, event, latest)), (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error))
+      fold: () => {
+        let endsAt;
+        return (event, change) => foldBefore(event, change, deciders(event).map((watcher) => async (latest) => {
+          if (watcher.from === session)
+            return askHere(watcher.mod, event, latest);
+          endsAt ??= claude.clock.now().then((now) => now + awayFoldMs);
+          return askAway(watcher, event, latest, await endsAt);
+        }), (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error));
+      }
     }
   });
   const start = (id, source) => {
@@ -5828,15 +5943,16 @@ ${watcher.mod}`, watcher])).values()];
       await publishWatches(true).catch((error) => report("before", "Left its before listeners registered", error));
     return next(e);
   });
-  router.add("session.append", async (e, next) => {
+  const recordAppend = async (e, next) => {
     const kept = await next(e);
     if (kept.deny !== undefined || session === "")
       return kept;
     const cwd2 = e.message.type === "assistant" ? await claude.session.cwd() : "";
     take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd2), e.agentId).catch((error) => report("append", "Missed a message", error));
     return kept;
-  });
-  router.add("session.compact", async (e, next) => {
+  };
+  router.add("session.append", recordAppend, (e, _error, next) => recordAppend(e, next));
+  const recordCompaction = async (e, next) => {
     const compacted = await next(e);
     if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
       return compacted;
@@ -5844,14 +5960,15 @@ ${watcher.mod}`, watcher])).values()];
     const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
     take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
     return compacted;
-  });
+  };
+  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
   router.add("session.measure", async (e, next) => {
     const measured = await next(e);
     if (session !== "")
       dispatch(session, [{ type: UsageChange, usage: await usageOf(claude) }]);
     return measured;
   });
-  router.add("agent.spawn", async (e, next) => {
+  const recordSpawn = async (e, next) => {
     const spawned = await next(e);
     if (spawned.deny !== undefined || spawned.agentId === undefined)
       return spawned;
@@ -5864,7 +5981,8 @@ ${watcher.mod}`, watcher])).values()];
     for (const row of waiting)
       dispatch(session, conversation.add(row, id));
     return spawned;
-  });
+  };
+  router.add("agent.spawn", recordSpawn, (e, _error, next) => recordSpawn(e, next));
   router.add("session.receive", async (e, next) => {
     const sent = relayOf(e);
     if (sent === undefined)
@@ -5911,7 +6029,7 @@ ${watcher.mod}`, watcher])).values()];
     if (action === "abort")
       return abortTurn(input, task);
     if (task !== undefined)
-      return performInTask(action, input, task);
+      return performInTask(caller, action, input, task);
     if (action === "usage")
       return usageOf(claude);
     if (action === "surfaces")
@@ -5920,7 +6038,7 @@ ${watcher.mod}`, watcher])).values()];
       const { type, text, as } = input;
       if (as === Session)
         throw new Error(`session ${session} cannot send as itself to itself.`);
-      const delivered = type === Note ? await claude.session.append({ message: { type: "user", content: [{ type: "text", text }] } }) : await claude.prompt.submit({ text, ...as === Person ? { asUser: true } : {} });
+      const delivered = type === Note ? await claude.session.append({ message: { type: "user", content: [{ type: "text", text: modNote(caller, text) }] } }) : await claude.prompt.submit({ text, ...as === Person ? { asUser: true } : {} });
       if ("deny" in delivered && typeof delivered.deny === "string")
         throw new Error(`Claude Code refused the note: ${delivered.deny}`);
       if ("drop" in delivered && typeof delivered.drop === "string")
@@ -5943,7 +6061,7 @@ ${watcher.mod}`, watcher])).values()];
     await claude.turn.abort({ turnId });
     return null;
   };
-  const performInTask = async (action, input, task) => {
+  const performInTask = async (caller, action, input, task) => {
     const running = conversation.state.tasks[task];
     if (action === "usage")
       return json(["history", "usage", session, "--task", task]);
@@ -5953,7 +6071,8 @@ ${watcher.mod}`, watcher])).values()];
       throw new Error(`cmod: ${action} runs only on a session's own main loop.`);
     if (running === undefined || running.closedAt !== undefined)
       throw ended(task);
-    const sent = await claude.session.send({ to: { agentId: task }, text: input.text });
+    const { type, text } = input;
+    const sent = await claude.session.send({ to: { agentId: task }, text: type === Note ? modNote(caller, text) : text });
     if (sent.isDelivered !== true)
       throw ended(task);
     return null;
@@ -6097,7 +6216,7 @@ ${watcher.mod}`, watcher])).values()];
       const target = String(request["session"]);
       const list = Array.isArray(request["subscriptions"]) ? request["subscriptions"] : [];
       ownWatches.set(`${caller}
-${target}`, { mod: caller, target, project: project(), events: [...new Set(list.map(({ event }) => event))] });
+${target}`, { mod: caller, target, project: project(), events: [...new Set(list.map(({ event }) => event))], refusing: list.filter((each) => each.onFailure === "refuse") });
       await publishWatches();
       return null;
     },
@@ -7148,30 +7267,38 @@ function valueOf(key, option, own, project, locked) {
 
 // node_modules/@cmodjs/core/runtime/router.js
 function createRouter() {
-  const hooks = new Map;
+  const routes = new Map;
   return {
-    add(event, hook) {
-      const erased = hook;
-      hooks.set(event, [...hooks.get(event) ?? [], erased]);
+    add(event, hook, failed) {
+      const route = { hook, ...failed === undefined ? {} : { failed } };
+      routes.set(event, [...routes.get(event) ?? [], route]);
       return {
         dispose() {
-          const chain = (hooks.get(event) ?? []).filter((each) => each !== erased);
+          const chain = (routes.get(event) ?? []).filter((each) => each !== route);
           if (chain.length === 0)
-            hooks.delete(event);
+            routes.delete(event);
           else
-            hooks.set(event, chain);
+            routes.set(event, chain);
         }
       };
     },
     dispatch(event, e, next) {
-      const chain = hooks.get(event);
+      const chain = routes.get(event);
       const call = async (index, current2) => {
-        const hook = chain?.[index];
-        if (hook === undefined)
+        const route = chain?.[index];
+        if (route === undefined)
           return next(current2);
-        return hook(current2, (passed) => call(index + 1, passed));
+        return route.hook(current2, (passed) => call(index + 1, passed));
       };
       return call(0, e);
+    },
+    async dispatchFailure(event, e, error, next) {
+      for (const route of routes.get(event) ?? []) {
+        const answer = await route.failed?.(e, error, next);
+        if (answer !== undefined)
+          return answer;
+      }
+      return next(e);
     }
   };
 }
@@ -7470,6 +7597,9 @@ ${error === undefined ? "" : describe(error)}`;
     if (hidden.get(id) === hides)
       return id;
     hidden.delete(id);
+    const shown = entries.get(id);
+    if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description)
+      return id;
     const stack = error instanceof Error && error.stack !== undefined ? `
 
 ${error.stack}` : "";
@@ -7480,11 +7610,11 @@ ${message}${description === undefined ? "" : `
 ${description}`}${stack}`;
     };
     const startReporting = async () => {
-      const shown = entries.get(id);
-      if (shown === undefined)
+      const shown2 = entries.get(id);
+      if (shown2 === undefined)
         return;
-      shown.reporting = { contact: await contactOf(claude), details: await details() };
-      disarm(shown);
+      shown2.reporting = { contact: await contactOf(claude), details: await details() };
+      disarm(shown2);
       changed();
       if (bandId === undefined)
         return;
@@ -7493,16 +7623,16 @@ ${description}`}${stack}`;
         claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: "debug" });
     };
     const tryAgain = async () => {
-      const shown = entries.get(id);
-      if (shown === undefined || retry === undefined || shown.trying !== undefined)
+      const shown2 = entries.get(id);
+      if (shown2 === undefined || retry === undefined || shown2.trying !== undefined)
         return;
-      shown.trying = "Starting";
+      shown2.trying = "Starting";
       changed();
       try {
         await retry();
       } finally {
-        if (entries.get(id) === shown) {
-          shown.trying = undefined;
+        if (entries.get(id) === shown2) {
+          shown2.trying = undefined;
           changed();
         }
       }
@@ -7969,7 +8099,8 @@ var installRetrySeconds = [2, 4, 8, 16, 32, 64, 128];
 var cmodCheckMs = 1000;
 var cmodWaitMs = 60000;
 var cmodSlowCheckMs = 1e4;
-var startHoldMs = 1e4 - 1000;
+var hookMs = 1e4;
+var startHoldMs = hookMs - 1000;
 var dependencyCallMs = 30000;
 var cannotStart = /failed to start: /;
 var shellTools = ["Bash", "PowerShell"];
@@ -8510,6 +8641,17 @@ function createLifecycle(definition, permissionRoutes = () => {
       if (event !== "ui.render" || render.component !== "AbovePrompt" || runtime === undefined)
         return answer;
       return runtime.toaster.draw(await answer, runtime.claude.ui.resolve(render), render.props, render.requestId);
+    },
+    async caught(event, e, next, { kind, message }) {
+      const call = e;
+      const isAsk = event === "cmod.call" && call.to === definition.name && beforeAskOf(call) !== undefined;
+      const reasons = { timeout: `it ran past the ${hookMs / 1000} s Claude Code gives a hook`, throw: message ?? "it threw" };
+      const reason = reasons[kind];
+      if (reason === undefined)
+        return isAsk ? { value: null } : next(e);
+      const error = new Error(reason);
+      toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, "")} hook`, error });
+      return router.dispatchFailure(event, e, error, next);
     }
   };
 }
@@ -8589,7 +8731,7 @@ async function createMod(definition, runtime) {
   });
   const modState = createState({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: area.changed, forkParent });
   const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, report, changed: modState.changed });
-  const hookOn = (hook, listener) => router.add(`classic.${hook}`, classicHook(hook, listener, report));
+  const hookOn = (hook, listener, failed) => router.add(`classic.${hook}`, classicHook(hook, listener, report), failed === undefined ? undefined : classicFailure(failed));
   const expand = (path) => homePrefix.test(path) ? resolvedPath(path, places) : path;
   const settingsFile = (source) => ({
     read: () => checked.settings.read({ source }),
@@ -8603,8 +8745,8 @@ async function createMod(definition, runtime) {
     claude: checked,
     report: (id, message, error) => report({ id, message, error }),
     isGranted: (permission) => flag(permission),
-    hookOn: (hook, listener) => hookOn(hook, listener),
-    routeOn: (event, hook) => router.add(event, hook),
+    hookOn: (hook, listener, failed) => hookOn(hook, listener, failed),
+    routeOn: (event, hook, failed) => router.add(event, hook, failed),
     permissionRoutes: runtime.permissionRoutes
   });
   let followed;
@@ -8843,10 +8985,9 @@ async function createMod(definition, runtime) {
       client.changed(changedSession, change, isInProject !== false);
       return { value: null };
     }
-    if (e.method === conversationMethods.before && call.caller === cmodPluginName) {
-      const { session: asking, event, change, isInProject } = e.input;
-      return { value: await client.answerBefore(asking, event, change, isInProject !== false) ?? null };
-    }
+    const ask = beforeAskOf(call);
+    if (ask !== undefined)
+      return { value: await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject) ?? null };
     if (e.method === settingsPagesMethod)
       return { value: [...pages].map(([id, { title }]) => ({ id, title })) };
     if (e.method === openPageMethod) {
@@ -8855,6 +8996,11 @@ async function createMod(definition, runtime) {
     }
     const served = await conversations?.answer(call);
     return served ?? answerCall(definition.name, api, e);
+  }, (e, error) => {
+    if (e.to !== definition.name)
+      return;
+    const ask = beforeAskOf(e);
+    return ask === undefined ? { deny: `${definition.name}: ${error.message}` } : { value: client.failedBefore(ask.session, ask.event, ask.change, ask.isInProject, error) ?? null };
   });
   const agents = toolCalls(claude, router);
   keepEngine(mod, { claude: checked, router, toolCalls: agents, report, hasPermissionCheck: () => runtime.permissionRoutes() !== undefined });
@@ -8896,6 +9042,12 @@ function checkedMs(name, subject, ms) {
   if (!Number.isInteger(ms) || ms <= 0 || ms > longestTimerMs)
     throw new Error(`${name}: ${subject} is ${ms}. Give a whole number of milliseconds above 0 and at most ${longestTimerMs}.`);
   return ms;
+}
+function beforeAskOf(call) {
+  if (call.method !== conversationMethods.before || call.caller !== cmodPluginName)
+    return;
+  const { session, event, change, isInProject } = call.input;
+  return { session, event, change, isInProject: isInProject !== false };
 }
 async function failsAs(subject, step) {
   try {
@@ -8987,64 +9139,71 @@ async function startMod($, eventInput, passOn) {
 function routeToMod(_$, eventInput, passOn) {
   return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed));
 }
+function routeFailure(_$, eventInput, passOn) {
+  return lifecycle.caught(passOn.event, eventInput, (passed) => passOn(passed), passOn.error);
+}
+var withCaller = (eventInput, passOn) => ({ ...eventInput, caller: passOn.origin.plugin });
+var withoutCaller = (passOn) => (passed) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== "caller")));
 function routeCallToMod(_$, eventInput, passOn) {
-  const called = { ...eventInput, caller: passOn.origin.plugin };
-  return lifecycle.route("cmod.call", called, (passed) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== "caller"))));
+  return lifecycle.route("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn));
+}
+function routeCallFailure(_$, eventInput, passOn) {
+  return lifecycle.caught("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn), passOn.error);
 }
 function registerMod(addHook, definition, options) {
   permissionCheck = undefined;
   registered = definition;
   lifecycle = createLifecycle(definition, () => permissionCheck, options);
   addHook("session.start", startMod);
-  addHook("classic.Setup", routeToMod);
-  addHook("classic.SessionStart", routeToMod);
-  addHook("classic.SessionEnd", routeToMod);
-  addHook("classic.UserPromptSubmit", routeToMod);
-  addHook("classic.UserPromptExpansion", routeToMod);
-  addHook("classic.InstructionsLoaded", routeToMod);
-  addHook("classic.ConfigChange", routeToMod);
-  addHook("classic.DirectoryAdded", routeToMod);
-  addHook("classic.PreModelSwitch", routeToMod);
-  addHook("classic.PostModelSwitch", routeToMod);
-  addHook("classic.PermissionDenied", routeToMod);
-  addHook("classic.PostToolUse", routeToMod);
-  addHook("classic.PostToolUseFailure", routeToMod);
-  addHook("classic.PostToolBatch", routeToMod);
-  addHook("classic.MessageDisplay", routeToMod);
-  addHook("classic.SubagentStart", routeToMod);
-  addHook("classic.SubagentStop", routeToMod);
-  addHook("classic.TaskCreated", routeToMod);
-  addHook("classic.TaskCompleted", routeToMod);
-  addHook("classic.TeammateIdle", routeToMod);
-  addHook("classic.Elicitation", routeToMod);
-  addHook("classic.ElicitationResult", routeToMod);
-  addHook("classic.Notification", routeToMod);
-  addHook("classic.PreCompact", routeToMod);
-  addHook("classic.PostCompact", routeToMod);
-  addHook("classic.Stop", routeToMod);
-  addHook("classic.StopFailure", routeToMod);
-  addHook("classic.FileChanged", routeToMod);
-  addHook("classic.WorktreeCreate", routeToMod);
-  addHook("classic.WorktreeRemove", routeToMod);
-  addHook("tool.call", routeToMod);
-  addHook("prompt.submit", routeToMod);
-  addHook("prompt.context", routeToMod);
-  addHook("command.run", routeToMod);
-  addHook("session.measure", routeToMod);
-  addHook("skill.prompt", routeToMod);
-  addHook("ui.render", routeToMod);
-  addHook("ui.press", routeToMod);
-  addHook("ui.scroll", routeToMod);
-  addHook("ui.close", routeToMod);
-  addHook("cmod.call", routeCallToMod);
+  addHook("classic.Setup", routeToMod).catch(routeFailure);
+  addHook("classic.SessionStart", routeToMod).catch(routeFailure);
+  addHook("classic.SessionEnd", routeToMod).catch(routeFailure);
+  addHook("classic.UserPromptSubmit", routeToMod).catch(routeFailure);
+  addHook("classic.UserPromptExpansion", routeToMod).catch(routeFailure);
+  addHook("classic.InstructionsLoaded", routeToMod).catch(routeFailure);
+  addHook("classic.ConfigChange", routeToMod).catch(routeFailure);
+  addHook("classic.DirectoryAdded", routeToMod).catch(routeFailure);
+  addHook("classic.PreModelSwitch", routeToMod).catch(routeFailure);
+  addHook("classic.PostModelSwitch", routeToMod).catch(routeFailure);
+  addHook("classic.PermissionDenied", routeToMod).catch(routeFailure);
+  addHook("classic.PostToolUse", routeToMod).catch(routeFailure);
+  addHook("classic.PostToolUseFailure", routeToMod).catch(routeFailure);
+  addHook("classic.PostToolBatch", routeToMod).catch(routeFailure);
+  addHook("classic.MessageDisplay", routeToMod).catch(routeFailure);
+  addHook("classic.SubagentStart", routeToMod).catch(routeFailure);
+  addHook("classic.SubagentStop", routeToMod).catch(routeFailure);
+  addHook("classic.TaskCreated", routeToMod).catch(routeFailure);
+  addHook("classic.TaskCompleted", routeToMod).catch(routeFailure);
+  addHook("classic.TeammateIdle", routeToMod).catch(routeFailure);
+  addHook("classic.Elicitation", routeToMod).catch(routeFailure);
+  addHook("classic.ElicitationResult", routeToMod).catch(routeFailure);
+  addHook("classic.Notification", routeToMod).catch(routeFailure);
+  addHook("classic.PreCompact", routeToMod).catch(routeFailure);
+  addHook("classic.PostCompact", routeToMod).catch(routeFailure);
+  addHook("classic.Stop", routeToMod).catch(routeFailure);
+  addHook("classic.StopFailure", routeToMod).catch(routeFailure);
+  addHook("classic.FileChanged", routeToMod).catch(routeFailure);
+  addHook("classic.WorktreeCreate", routeToMod).catch(routeFailure);
+  addHook("classic.WorktreeRemove", routeToMod).catch(routeFailure);
+  addHook("tool.call", routeToMod).catch(routeFailure);
+  addHook("prompt.submit", routeToMod).catch(routeFailure);
+  addHook("prompt.context", routeToMod).catch(routeFailure);
+  addHook("command.run", routeToMod).catch(routeFailure);
+  addHook("session.measure", routeToMod).catch(routeFailure);
+  addHook("skill.prompt", routeToMod).catch(routeFailure);
+  addHook("ui.render", routeToMod).catch(routeFailure);
+  addHook("ui.press", routeToMod).catch(routeFailure);
+  addHook("ui.scroll", routeToMod).catch(routeFailure);
+  addHook("ui.close", routeToMod).catch(routeFailure);
+  addHook("cmod.call", routeCallToMod).catch(routeCallFailure);
+  addHook("session.compact", routeToMod).catch(routeFailure);
   if (definition.name !== cmodPluginName)
     return;
-  addHook("session.append", routeToMod);
-  addHook("session.compact", routeToMod);
-  addHook("session.receive", routeToMod);
-  addHook("agent.spawn", routeToMod);
-  addHook("prompt.attachment", routeToMod);
-  addHook("turn.start", routeToMod);
+  addHook("session.append", routeToMod).catch(routeFailure);
+  addHook("session.receive", routeToMod).catch(routeFailure);
+  addHook("agent.spawn", routeToMod).catch(routeFailure);
+  addHook("prompt.attachment", routeToMod).catch(routeFailure);
+  addHook("turn.start", routeToMod).catch(routeFailure);
 }
 
 // node_modules/@cmodjs/core/jobs/context.js
@@ -9074,7 +9233,7 @@ function slashCommand(options) {
       if (e.command !== registered2)
         return next(e);
       try {
-        return answerOf(await withinDeadline(mod, deadline, `/${name}`, () => reply({ args: e.args, positionals: splitWords(e.args) }, mod)));
+        return answerOf(mod.name, await withinDeadline(mod, deadline, `/${name}`, () => reply({ args: e.args, positionals: splitWords(e.args) }, mod)));
       } catch (error) {
         return { text: `/${name} failed: ${oneLine(error)}` };
       }
@@ -9087,12 +9246,12 @@ function slashCommand(options) {
     };
   };
 }
-function answerOf(reply) {
+function answerOf(name, reply) {
   if (reply === undefined)
     return {};
   if (typeof reply === "string")
     return { text: reply };
-  return { ...reply.text === undefined ? {} : { text: reply.text }, ...reply.note === undefined ? {} : { context: [reply.note] } };
+  return { ...reply.text === undefined ? {} : { text: reply.text }, ...reply.note === undefined ? {} : { context: [modNote(name, reply.note)] } };
 }
 function splitWords(args) {
   return $parse(args, (key) => `$${key}`).flatMap((entry) => {
@@ -9123,7 +9282,7 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hugurN/release/src/mods.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-W4XOST/release/src/mods.ts
 var modsMemory = { selected: null, tab: "options", notice: null, removing: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
@@ -9360,7 +9519,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hugurN/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-W4XOST/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null };
 var cmodSession = { tip: null };
 var newestMessages = 8;
@@ -9451,14 +9610,14 @@ var cmodPlugin = defineMod({
     const followRules = async () => {
       const project = await claude.session.root();
       if (synced?.project === project && (await changedAt(synced.watched)).join(",") === synced.stamp)
-        return;
+        return [];
       const startedAt = await claude.clock.now();
       const result = JSON.parse(await runCmod(claude, ["rules", "--project", project, "--json"], await claude.session.id()));
       const times2 = await changedAt(result.watched);
       synced = { project, watched: result.watched, stamp: times2.some((at) => at >= startedAt - 1000) ? "" : times2.join(",") };
-      await noteRules(result);
+      return rulesNotes(result);
     };
-    const noteRules = async (result) => {
+    const rulesNotes = (result) => {
       const now = new Map(result.linked.map(({ mod: name, rules }) => [name, new Map(rules.filter((rule) => rule.isGlobal).map((rule) => [rule.name, rule.text]))]));
       const notes = [...now].flatMap(([name, globals]) => {
         const before = applied === undefined ? result.placed.includes(name) ? undefined : globals : applied.get(name);
@@ -9475,25 +9634,31 @@ var cmodPlugin = defineMod({
       });
       const gone = applied === undefined ? result.removed : [...applied.keys()].filter((name) => !now.has(name));
       applied = now;
-      for (const text of [...notes, ...gone.map((name) => `The ${name} mod's rules no longer apply.`)]) {
-        const added = await claude.session.append({ message: { type: "user", content: [{ type: "text", text }] } });
-        if (added.deny !== undefined)
-          mod.log(`Claude Code refused the rules note: ${added.deny}`);
-      }
+      return [...notes, ...gone.map((name) => `The ${name} mod's rules no longer apply.`)];
     };
     const keepRules = async () => {
-      following = following.then(followRules).catch((error) => report({ id: "rules", message: "Could not link the mods' rules", error }));
+      let notes = [];
+      following = following.then(async () => void (notes = await followRules())).catch((error) => report({ id: "rules", message: "Could not link the mods' rules", error }));
       await following;
+      return notes;
     };
-    sessions.current.beforeSessionStart(keepRules);
-    sessions.current.beforePrompt(keepRules, { timeoutMs: 60000 });
+    sessions.current.beforeSessionStart(async () => {
+      const notes = await keepRules();
+      return notes.length === 0 ? undefined : { note: notes.join(`
+
+`) };
+    });
+    sessions.current.beforePrompt(async () => {
+      for (const text of await keepRules())
+        await sessions.current.send({ type: Note, text });
+    }, { timeoutMs: 60000 });
     sessions.current.onTurnEnd(async () => {
       mod.state.session.tip = await tipOf(mod);
     });
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hugurN/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-W4XOST/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);

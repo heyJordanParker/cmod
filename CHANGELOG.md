@@ -4,6 +4,27 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-18
+
+cmod 3.0 tells a mod which of its notes Claude got, gives a subagent its own note after a compaction, and keeps a mod's gates working when Claude Code stops one of its hooks.
+
+### Added
+- `sessions.current.goal.beforeSessionStart` hears the main agent's starts and every agent's compaction, a subagent's with its id in `task`, and its note reaches the window of the agent that compacted.
+- Every note a mod gives Claude becomes a `Note` from that mod, so `onNote({ from: { type: 'mod', name: 'tracer' } })` hears each note of tracer's that Claude got.
+- `tested.fakes.clock.now` gives a test its own time, so it can test a deadline.
+
+### Changed
+- Claude reads each mod's note inside the mod's tag, such as `<tracer_mod>…</tracer_mod>`. A test that reads what Claude Code receives, through `claudeCodeOf(tested).fire`, sees the tag. What `tested.raise` returns is the mod's own text, as before.
+- `sessions.current.beforeSessionStart` hears the main agent's compaction only, and its payload carries the `model` and the `contextTokenCount` the compaction left. Read a subagent's with `sessions.current.goal.beforeSessionStart`.
+- The conversation index is `history-7.sqlite`, and cmod deletes `history-6.sqlite`, so the next read indexes every mod note already in a transcript.
+
+### Fixed
+- A subagent's compaction no longer gets the main agent's compaction note. Claude Code names no agent on that SessionStart, so cmod now answers it from the compaction itself.
+- When Claude Code stops a mod's hook, because the hook threw or its own code ran past 10 seconds, the toast `Claude Code stopped its <hook> hook` shows it, and every gate still holds: a `before` listener or `commands.beforeRun` listener with `onFailure: 'refuse'` refuses, a `beforePermissionRequest` listener refuses the dialog, and the `permissions` job denies the call. Before, Claude Code skipped the hook in silence and the gate let the event through.
+- A `before` listener with `onFailure: 'refuse'` in another session refuses what its matcher matches when that session does not answer in time. Before, the event went through. The answers of other sessions now share one wait, so they no longer add up past the time Claude Code gives the cmod plugin's hook.
+- A note a mod sends to another session is a `Note` from that mod. Before, the other session recorded it as the cmod plugin's.
+- `cmod check` reads a mod's source the way it runs, so a commented-out line or a type-only import no longer fails the permission or import checks.
+
 ## [2.1.0] - 2026-10-18
 
 ### Added
