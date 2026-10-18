@@ -634,8 +634,10 @@ export function createLifecycle<State extends object, Declared extends Options =
     async caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, { kind, message }: HookFailure): Promise<EventResult<N>> {
       const call = e as Frozen<Args<'cmod.call'>>
       const isAsk = event === 'cmod.call' && call.to === definition.name && beforeAskOf(call) !== undefined
-      if (kind === 're-entry') return isAsk ? ({ value: null } as EventResult<N>) : next(e)
-      const error = new Error(kind === 'timeout' ? `it ran past the ${hookMs / 1000} s Claude Code gives a hook` : (message ?? 'it threw'))
+      const reasons: Readonly<Record<string, string>> = { timeout: `it ran past the ${hookMs / 1000} s Claude Code gives a hook`, throw: message ?? 'it threw' }
+      const reason = reasons[kind]
+      if (reason === undefined) return isAsk ? ({ value: null } as EventResult<N>) : next(e)
+      const error = new Error(reason)
       toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, '')} hook`, error })
       return router.dispatchFailure(event, e, error, next)
     },

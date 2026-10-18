@@ -190,7 +190,7 @@ test('a hook Claude Code stopped shows its failure, and the event goes on as if 
   const timedOut = await fake.fail('classic.PostToolBatch', $, {}, below, { kind: 'timeout', budget: 1000 })
   const drawnOnce = redraws
   await fake.fail('classic.PostToolBatch', $, {}, below, { kind: 'timeout', budget: 1000 })
-  const reentered = await fake.fail('classic.Stop', $, {}, below, { kind: 're-entry', budget: 1000 })
+  const reentered = await fake.fail('classic.Stop', $, {}, below, ({ kind: 're-entry', budget: 1000 } as unknown as HookFailure))
   const shown = textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)
 
   expect([timedOut, reentered]).toEqual([below, below])
@@ -207,7 +207,7 @@ test('a before ask that reaches the mod inside its own hook answers nothing and 
   await fake.dispatch('session.start', $, {}, {})
   const ask = { to: 'demo', method: conversationMethods.before, input: { session: 'session-1', event: ToolCall, change: { type: Message, message: { id: 't1', at: '', type: ToolCall, session: 'session-1', context: 1, callId: 't1', name: 'Bash', input: {}, cwd: '/work/app', files: { read: [], changed: [] } } } } }
 
-  expect(await fake.fail('cmod.call', $, ask, { deny: 'unanswered' }, { kind: 're-entry', budget: 1000 }, 'cmod')).toEqual({ value: null })
+  expect(await fake.fail('cmod.call', $, ask, { deny: 'unanswered' }, ({ kind: 're-entry', budget: 1000 } as unknown as HookFailure), 'cmod')).toEqual({ value: null })
   expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).not.toContain('stopped')
 })
 
