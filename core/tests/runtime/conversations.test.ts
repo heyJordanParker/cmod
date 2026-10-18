@@ -105,6 +105,18 @@ test('an action on an ended session answers from its transcript, or is refused',
   expect(await act('send', { type: 'prompt', text: 'Hi' })).toEqual({ deny: 'session older has ended' })
 })
 
+test('a note a mod sends through the cmod plugin, to the session or to one of its tasks, carries the sending mod tag', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['conversation', 'prompt'] }) } })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await claudeCodeOf(tested).fire('agent.spawn', { description: 'Look', subagentType: 'Explore', prompt: 'look', tool_use_id: 'toolu_1' } as never, { agentId: 'a1' } as never)
+  const send = (task?: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'send', input: { type: 'note', text: 'Tests pass.' }, ...(task === undefined ? {} : { task }) }, caller: 'pinger' } as never)
+
+  expect(await send()).toEqual({ value: null })
+  expect(await send('a1')).toEqual({ value: null })
+  expect(tested.calls.filter((call) => call.call === 'session.append').map((call) => call.args[0])).toContainEqual({ message: { type: 'user', content: [{ type: 'text', text: '<pinger_mod>\nTests pass.\n</pinger_mod>' }] } })
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toContainEqual({ to: { agentId: 'a1' }, text: '<pinger_mod>\nTests pass.\n</pinger_mod>' })
+})
+
 test("the cmod plugin asks a mod in this session before a prompt enters, and the mod's refusal drops it", async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ guard: ['conversation', 'prompt'] }) } })
   const asked: unknown[] = []
@@ -247,6 +259,73 @@ test("the cmod plugin asks another session's mod of this project before a prompt
   expect(question).toMatchObject({ kind: 'before', mod: 'guard', event: 'prompt' })
   expect(await submitted).toEqual({ drop: 'blocked by session other' })
   expect(sent().filter((each) => each.text.includes('"kind":"before"')).map((each) => each.to)).toEqual([{ sessionId: 'other' }])
+})
+
+function refusingWatcher(event: string, matcher: unknown) {
+  const store = storeFolder({ HOME: '/test/home' })
+  const refusing = [{ event, matcher, onFailure: 'refuse', scope: { session: 'test-session', isAgent: true } }]
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
+    projectRoot: '/work/app',
+    files: {
+      [consentPath(store)]: JSON.stringify({ guard: ['conversation', 'prompt'] }),
+      [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'guard', target: 'test-session', project: '/work/app', events: [event], refusing }]),
+    },
+  })
+  tested.fakes.process.spawn = () => printed(JSON.stringify([{ id: 'other', isRunning: true }]))
+  return tested
+}
+
+test("another session's listener with onFailure: 'refuse' refuses what its matcher and scope hold when that session does not answer in time", async () => {
+  const tested = refusingWatcher('toolCall', { name: 'Bash' })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.settle()
+  tested.fakes.clock.after = (_ms, fire) => {
+    void Promise.resolve().then(fire)
+    return { cancel: () => undefined }
+  }
+  const call = (tool: string, agentId?: string) => claudeCodeOf(tested).fire('tool.call', { tool, command: 'ls', tool_use_id: 't1', ...(agentId === undefined ? {} : { agentId }) } as never, { result: 'ran' } as never)
+
+  expect(await call('Bash')).toEqual({ deny: 'guard: session other did not answer within 5 s' })
+  expect(await call('Read')).toEqual({ result: 'ran' })
+  expect(await call('Bash', 'a1')).toEqual({ result: 'ran' })
+})
+
+test('the notes of one row share one 8 s wait on other sessions, and a session left without time is not asked', async () => {
+  const tested = refusingWatcher('note', undefined)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.settle()
+  let now = 0
+  const waits: number[] = []
+  tested.fakes.clock.now = async () => now
+  tested.fakes.clock.after = (ms, fire) => {
+    waits.push(ms)
+    now += ms
+    void Promise.resolve().then(fire)
+    return { cancel: () => undefined }
+  }
+  const text = ['alpha', 'beta', 'gamma'].map((mod) => `<${mod}_mod>\nNote of ${mod}.\n</${mod}_mod>`).join('\n')
+  const appended = { uuid: 'h1', door: 'hook-context', origin: undefined, message: { type: 'attachment', name: 'hook_additional_context', content: [{ type: 'text', text }] } }
+  const asks = () => tested.calls.filter((call) => call.call === 'session.send' && (call.args[0] as { text: string }).text.includes('"kind":"before"')).length
+
+  await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+
+  expect(waits.filter((ms) => ms <= 5000)).toEqual([5000, 3000])
+  expect(asks()).toBe(2)
+})
+
+test("another session's refusing listener lets the event through when that session answers with a refusal of its own, such as a missing grant", async () => {
+  const tested = refusingWatcher('prompt', undefined)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.settle()
+
+  const submitted = claudeCodeOf(tested).fire('prompt.submit', { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false })
+  const sent = () => tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0] as { text: string })
+  for (let waited = 0; !sent().some((each) => each.text.includes('"kind":"before"')) && waited < 200; waited += 1) await tested.settle()
+  const question = JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec(sent().find((each) => each.text.includes('"kind":"before"'))?.text ?? '')?.[1] ?? '{}') as { id: string }
+  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: 'guard needs the conversation permission to change what happens in another session.' })}</cmod-relay>`
+  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: denied } as never, { text: denied } as never)
+
+  expect(await submitted).toMatchObject({ text: 'Deploy to prod' })
 })
 
 test('a mod listening on this session and on every session is asked once before a prompt', async () => {

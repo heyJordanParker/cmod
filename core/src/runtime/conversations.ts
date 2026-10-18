@@ -1,7 +1,7 @@
 import type { Args, EventResult, Frozen } from 'claude-code'
 import { consentPath, dataFolder, isObject, parseConsent } from '../records.js'
 import { Message, rowOfAppend, type Row } from '../session/context/turn/message/message.js'
-import { Note } from '../session/context/turn/message/note.js'
+import { modNote, Note } from '../session/context/turn/message/note.js'
 import { Person } from '../session/context/turn/message/sender.js'
 import { createConversation, emptyConversation, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import { Session, UsageChange, type BeforeEvent, type Surface, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
@@ -9,18 +9,19 @@ import { GoalChange } from '../session/goal/goal.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { ifMissing } from '../utils/paths.js'
 import { formatExit, messageOf } from '../utils/text.js'
-import { foldBefore, installBefore, relayOf, type Place } from './before.js'
+import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import { readLines, runCmod } from './programs.js'
-import type { Router } from './router.js'
-import { actPermission, conversationMethods, everySession, isAct, isHeardBy, resultOf, spawnTask, usageOf, type Act, type Subscription } from './sessions.js'
+import type { RoutedHook, Router } from './router.js'
+import { PassedTimeout } from './deadline.js'
+import { actPermission, conversationMethods, everySession, isAct, isHeardBy, isInScope, resultOf, spawnTask, usageOf, type Act, type Subscription } from './sessions.js'
 
 type Request = Readonly<Record<string, unknown>>
 
 type Heard = { readonly event: Subscription['event']; readonly matcher: unknown }
 
-type Watch = { readonly mod: string; readonly target: string; readonly project: string; readonly events: readonly string[] }
+type Watch = { readonly mod: string; readonly target: string; readonly project: string; readonly events: readonly string[]; readonly refusing?: readonly Subscription[] }
 
 type Watcher = Watch & { readonly from: string }
 
@@ -36,6 +37,8 @@ type Asked = { resolve(value: unknown): void; reject(error: Error): void }
 const bufferedTaskRows = 200
 
 const beforeDeadlineMs = 5000
+
+const awayFoldMs = 8000
 
 const livenessMs = 5000
 
@@ -185,7 +188,7 @@ export function serveConversations({ claude, router, store, project, report }: {
           reject(error)
         },
       }
-      const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new Error(`session ${to} did not answer within ${deadlineMs / 1000} s`)))
+      const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new PassedTimeout(`session ${to} did not answer within ${deadlineMs / 1000} s`)))
       asked.set(id, settle)
       post(to, { ...relay, id, from: session }).catch((error: unknown) => settle.reject(error instanceof Error ? error : new Error(messageOf(error))))
     })
@@ -240,11 +243,24 @@ export function serveConversations({ claude, router, store, project, report }: {
     return claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } })
   }
 
-  const askAway = async (watcher: Watcher, event: BeforeEvent, change: SessionChange) => {
+  const isUnderHere = (task: string, ancestor: string) => {
+    for (let at: string | undefined = task, steps = 0; at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1) if (at === ancestor) return true
+    return false
+  }
+
+  const refuses = (watcher: Watcher, event: BeforeEvent, change: SessionChange) =>
+    beforeAnswerKeys[event].includes('refuse') && (watcher.refusing ?? []).some(({ event: heard, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard, matcher === undefined ? undefined : receivedMatcher(matcher), change))
+
+  const askAway = async (watcher: Watcher, event: BeforeEvent, change: SessionChange, endsAt: number) => {
     try {
-      return await ask(watcher.from, { kind: 'before', mod: watcher.mod, event, change, project: project() }, beforeDeadlineMs)
+      const leftMs = Math.min(beforeDeadlineMs, endsAt - (await claude.clock.now()))
+      if (leftMs <= 0) throw new PassedTimeout(`the ${awayFoldMs / 1000} s cmod waits on other sessions ran out before session ${watcher.from} was asked`)
+      return await ask(watcher.from, { kind: 'before', mod: watcher.mod, event, change, project: project() }, leftMs)
     } catch (error) {
-      if (await isRunning(watcher.from)) throw error
+      if (await isRunning(watcher.from)) {
+        if (error instanceof PassedTimeout && refuses(watcher, event, change)) return { refuse: `${watcher.mod}: ${error.message}` }
+        throw error
+      }
       watchers = watchers.filter((each) => each.from !== watcher.from)
       claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: 'debug' })
       await claude.fs.write(`${watches}/${watcher.from}.json`, '[]')
@@ -264,13 +280,20 @@ export function serveConversations({ claude, router, store, project, report }: {
         await Promise.all([starting, watching])
         return deciders(event).length > 0
       },
-      decide: (event, change) =>
-        foldBefore(
-          event,
-          change,
-          deciders(event).map((watcher) => (latest: SessionChange) => (watcher.from === session ? askHere(watcher.mod, event, latest) : askAway(watcher, event, latest))),
-          (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error),
-        ),
+      fold: () => {
+        let endsAt: Promise<number> | undefined
+        return (event, change) =>
+          foldBefore(
+            event,
+            change,
+            deciders(event).map((watcher) => async (latest: SessionChange) => {
+              if (watcher.from === session) return askHere(watcher.mod, event, latest)
+              endsAt ??= claude.clock.now().then((now) => now + awayFoldMs)
+              return askAway(watcher, event, latest, await endsAt)
+            }),
+            (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error),
+          )
+      },
     },
   })
 
@@ -321,22 +344,24 @@ export function serveConversations({ claude, router, store, project, report }: {
     return next(e)
   })
 
-  router.add('session.append', async (e, next) => {
+  const recordAppend: RoutedHook<'session.append'> = async (e, next) => {
     const kept = await next(e)
     if (kept.deny !== undefined || session === '') return kept
     const cwd = e.message.type === 'assistant' ? await claude.session.cwd() : ''
     void take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd), e.agentId).catch((error: unknown) => report('append', 'Missed a message', error))
     return kept
-  })
+  }
+  router.add('session.append', recordAppend, (e, _error, next) => recordAppend(e, next))
 
-  router.add('session.compact', async (e, next) => {
+  const recordCompaction: RoutedHook<'session.compact'> = async (e, next) => {
     const compacted = await next(e)
     if (e.trigger === 'precompute' || compacted.skip !== undefined || session === '') return compacted
     const at = new Date().toISOString()
     const boundary: Row = { id: `compact:${e.agentId ?? session}:${at}`, at, type: 'system', name: 'compact_boundary', isMeta: false, isSummary: false, content: [] }
     void take(boundary, e.agentId).catch((error: unknown) => report('compact', 'Missed a compaction', error))
     return compacted
-  })
+  }
+  router.add('session.compact', recordCompaction, (e, _error, next) => recordCompaction(e, next))
 
   router.add('session.measure', async (e, next) => {
     const measured = await next(e)
@@ -344,7 +369,7 @@ export function serveConversations({ claude, router, store, project, report }: {
     return measured
   })
 
-  router.add('agent.spawn', async (e, next) => {
+  const recordSpawn: RoutedHook<'agent.spawn'> = async (e, next) => {
     const spawned = await next(e)
     if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
     const id = spawned.agentId
@@ -355,7 +380,8 @@ export function serveConversations({ claude, router, store, project, report }: {
     waitingRows.delete(id)
     for (const row of waiting) dispatch(session, conversation.add(row, id))
     return spawned
-  })
+  }
+  router.add('agent.spawn', recordSpawn, (e, _error, next) => recordSpawn(e, next))
 
   router.add('session.receive', async (e, next) => {
     const sent = relayOf(e)
@@ -398,13 +424,13 @@ export function serveConversations({ claude, router, store, project, report }: {
     await checkAct(caller, action, input)
     await starting
     if (action === 'abort') return abortTurn(input, task)
-    if (task !== undefined) return performInTask(action, input, task)
+    if (task !== undefined) return performInTask(caller, action, input, task)
     if (action === 'usage') return usageOf(claude)
     if (action === 'surfaces') return [...(await claude.session.surfaces())] satisfies Surface[]
     if (action === 'send') {
       const { type, text, as } = input as SessionSend
       if (as === Session) throw new Error(`session ${session} cannot send as itself to itself.`)
-      const delivered = type === Note ? await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } }) : await claude.prompt.submit({ text, ...(as === Person ? { asUser: true } : {}) })
+      const delivered = type === Note ? await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: modNote(caller, text) }] } }) : await claude.prompt.submit({ text, ...(as === Person ? { asUser: true } : {}) })
       if ('deny' in delivered && typeof delivered.deny === 'string') throw new Error(`Claude Code refused the note: ${delivered.deny}`)
       if ('drop' in delivered && typeof delivered.drop === 'string') throw new Error(`Claude Code dropped the prompt: ${delivered.drop}`)
       return null
@@ -424,13 +450,14 @@ export function serveConversations({ claude, router, store, project, report }: {
     return null
   }
 
-  const performInTask = async (action: Act, input: unknown, task: string): Promise<unknown> => {
+  const performInTask = async (caller: string, action: Act, input: unknown, task: string): Promise<unknown> => {
     const running = conversation.state.tasks[task]
     if (action === 'usage') return json(['history', 'usage', session, '--task', task])
     if (action === 'surfaces') return running === undefined || running.closedAt !== undefined ? [] : [...(await claude.session.surfaces())]
     if (action !== 'send') throw new Error(`cmod: ${action} runs only on a session's own main loop.`)
     if (running === undefined || running.closedAt !== undefined) throw ended(task)
-    const sent = await claude.session.send({ to: { agentId: task }, text: (input as SessionSend).text })
+    const { type, text } = input as SessionSend
+    const sent = await claude.session.send({ to: { agentId: task }, text: type === Note ? modNote(caller, text) : text })
     if (sent.isDelivered !== true) throw ended(task)
     return null
   }
@@ -567,7 +594,7 @@ export function serveConversations({ claude, router, store, project, report }: {
       if (caller === undefined) throw new Error('cmod hears no caller for this before listener.')
       const target = String(request['session'])
       const list = Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Subscription[]) : []
-      ownWatches.set(`${caller}\n${target}`, { mod: caller, target, project: project(), events: [...new Set(list.map(({ event }) => event))] })
+      ownWatches.set(`${caller}\n${target}`, { mod: caller, target, project: project(), events: [...new Set(list.map(({ event }) => event))], refusing: list.filter((each) => each.onFailure === 'refuse') })
       await publishWatches()
       return null
     },

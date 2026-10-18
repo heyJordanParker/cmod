@@ -34,7 +34,7 @@ test('check runs its command after a matching call and reports a failure', async
 
   const answer = await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
-  expect(answer).toEqual({ ...answered, context: [`tsc --noEmit ${root}/a.ts exited with 2:\n${typeError}`] })
+  expect(answer).toEqual({ ...answered, context: [`<typed_mod>\ntsc --noEmit ${root}/a.ts exited with 2:\n${typeError}\n</typed_mod>`] })
   expect(tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args)).toEqual([[['tsc', '--noEmit', `${root}/a.ts`], { timeoutMs: 60000 }]])
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a check after edits to **/*.ts.')
 })
@@ -73,7 +73,7 @@ test('a check that passes its deadline tells Claude the check and the deadline',
 
   const answer = await claudeCodeOf(tested).fire('tool.call', editOf(`${root}/a.ts`, 'toolu_1'), answered)
 
-  expect(answer.context).toEqual([`The check after edits to **/*.ts failed: tsc --noEmit ${root}/a.ts passed the 60 s deadline of check`])
+  expect(answer.context).toEqual([`<typed_mod>\nThe check after edits to **/*.ts failed: tsc --noEmit ${root}/a.ts passed the 60 s deadline of check\n</typed_mod>`])
 })
 
 test('a check after cd app && echo x > cart.ts runs on app/cart.ts', async () => {

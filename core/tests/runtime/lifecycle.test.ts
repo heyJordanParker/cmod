@@ -154,7 +154,7 @@ test('a mod with a pending install registers nothing until done, then runs setup
   const answer = await fire(lifecycle, 'classic.PostToolBatch', toolBatch, {})
 
   expect(runs).toEqual(['setup', 'PostToolBatch'])
-  expect(answer).toEqual({ additionalContext: ['safe-delete saw it'] })
+  expect(answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw it\n</safe-delete_mod>'] })
   await fake.settle()
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.\nAdd text Claude reads and start turns.' }])
   expect(fake.shown.logs).toEqual([])
@@ -1914,7 +1914,7 @@ test("an installed mod's SessionStart context reaches Claude Code on a fresh sta
   await starting
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect(await answer).toEqual({ additionalContext: ['safe-delete saw resume'] })
+  expect(await answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw resume\n</safe-delete_mod>'] })
   expect(sources).toEqual(['resume'])
   expect(fake.shown.debug).toEqual([])
 })
@@ -1979,7 +1979,7 @@ test('a SessionStart before session.start, as claude -p sends it, passes on at o
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(appendedNotes(fake)).toEqual(['safe-delete saw startup'])
+  expect(appendedNotes(fake)).toEqual(['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'])
   expect(fake.shown.debug).toEqual([])
 })
 
@@ -2015,7 +2015,7 @@ test('a SessionStart held past the limit passes on and replays once the mod star
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(appendedNotes(fake)).toEqual(['safe-delete saw startup'])
+  expect(appendedNotes(fake)).toEqual(['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'])
   expect(fake.shown.debug).toEqual([])
 })
 
@@ -2034,7 +2034,7 @@ test('a SessionStart answered before the limit cancels its timer', async () => {
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   await starting
 
-  expect(await answer).toEqual({ additionalContext: ['safe-delete saw startup'] })
+  expect(await answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'] })
   expect(sources).toEqual(['startup'])
   expect(timers).toEqual([{ ms: 9_000, isCancelled: true }])
 })

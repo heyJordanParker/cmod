@@ -28,7 +28,7 @@ test('prompt adds its text after a matching call', async () => {
   const afterCommit = await claudeCodeOf(tested).fire('tool.call', bash('git add -A && git commit -m "fix: x"', 'toolu_1'), answered)
   const afterStatus = await claudeCodeOf(tested).fire('tool.call', bash('git status', 'toolu_2'), answered)
 
-  expect(afterCommit).toEqual({ ...answered, context: ['# push-reminder\nPush only when the user asks.'] })
+  expect(afterCommit).toEqual({ ...answered, context: ['<notes_mod>\n# push-reminder\nPush only when the user asks.\n</notes_mod>'] })
   expect(afterStatus).toEqual(answered)
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the push-reminder prompt after git commit.')
 })
@@ -38,7 +38,7 @@ test('a prompt after a call gives Claude the string its callback returns', async
 
   const answer = await claudeCodeOf(tested).fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['# reread\nCommitted with 1 command.'])
+  expect(answer.context).toEqual(['<notes_mod>\n# reread\nCommitted with 1 command.\n</notes_mod>'])
 })
 
 test('a prompt after a write gets the call to build its text with', async () => {
@@ -46,7 +46,7 @@ test('a prompt after a write gets the call to build its text with', async () => 
 
   const answer = await claudeCodeOf(tested).fire('tool.call', { tool: 'Write', file_path: '/test/plugins/notes/README.md', content: 'x', tool_use_id: 'toolu_1' } as never, answered)
 
-  expect(answer.context).toEqual(['# reread\nReread /test/plugins/notes/README.md.'])
+  expect(answer.context).toEqual(['<notes_mod>\n# reread\nReread /test/plugins/notes/README.md.\n</notes_mod>'])
 })
 
 test("a prompt callback after a call gets the mod's own typed state, so it counts commits without capturing the mod from setup", async () => {
@@ -63,7 +63,7 @@ test("a prompt callback after a call gets the mod's own typed state, so it count
 
   const answer = await claudeCodeOf(tested).fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['# commits\nCommit 1 landed.'])
+  expect(answer.context).toEqual(['<reread_mod>\n# commits\nCommit 1 landed.\n</reread_mod>'])
   expect(tested.state.project.commits).toBe(1)
 })
 
@@ -77,7 +77,7 @@ test('a prompt after a write gets the path from the folder the shell was in befo
   }
   const tested = withPrompt(prompt({ name: 'cart', prompt: ({ call }) => (call !== undefined && 'path' in call ? call.path : undefined), after: { write: '**/cart.ts' } }), bashMovesFolder)
 
-  expect(await claudeCodeOf(tested).fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['# cart\n/test/plugins/notes/app/cart.ts'] })
+  expect(await claudeCodeOf(tested).fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['<notes_mod>\n# cart\n/test/plugins/notes/app/cart.ts\n</notes_mod>'] })
 })
 
 test('a prompt callback that passes its 5 s deadline adds nothing, and the mod logs why', async () => {

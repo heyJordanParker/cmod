@@ -2,6 +2,7 @@ import type { JobContext } from '../mod.js'
 import { beforeDeadline, type Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
 import { toolInputOf } from '../runtime/tool-calls.js'
+import { modNote } from '../session/context/turn/message/note.js'
 import { listed } from '../utils/text.js'
 import type { Call } from '../utils/call-effects.js'
 import { findProjectScope, type Workspace } from './permissions/find-project-scope.js'
@@ -40,7 +41,7 @@ export function afterCall<State extends object>(job: JobContext<State>, contextA
     const result = await next(e)
     if (result.deny !== undefined || result.isError === true) return result
     const added = await before.then(([use, workspace]) => contextAfter(use, workspace)).catch(failed)
-    return added.length === 0 ? result : { ...result, context: [...(result.context ?? []), ...added] }
+    return added.length === 0 ? result : { ...result, context: [...(result.context ?? []), ...added.map((note) => modNote(job.mod.name, note))] }
   })
 }
 

@@ -1,11 +1,11 @@
 import { isObject } from '../../../../records.js'
 import { Task } from '../../../goal/task.js'
 import { InstructionFile, isRulePath } from './instruction-file.js'
-import { Note } from './note.js'
+import { modNote, modNoteBlock, modNotesIn, Note } from './note.js'
 import { Notice } from './notice.js'
 import { Prompt } from './prompt.js'
 import { Reply } from './reply.js'
-import { senderOf } from './sender.js'
+import { Mod, senderOf } from './sender.js'
 import { Skill } from './skill.js'
 import { ToolCall, type CallFiles } from './tool-call.js'
 import { ToolResult } from './tool-result.js'
@@ -108,8 +108,11 @@ export function messagesOf(row: Row, isInTask: boolean): Unplaced[] {
 function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   const base = { id: row.id, at: row.at }
   const text = textOf(row.content).trim()
+  const notesFrom = (each: readonly { readonly mod: string; readonly text: string }[]): Unplaced[] => each.map((note) => ({ ...base, type: Note, text: note.text, from: { type: Mod, name: note.mod } }))
   if (row.type === 'system') return row.name === 'turn_duration' || row.name === 'compact_boundary' || text === '' ? [] : [{ ...base, type: Notice, text }]
+  if (row.type === 'attachment' && row.name === 'hook_additional_context') return notesFrom(row.content.flatMap((entry) => modNotesIn(typeof entry === 'string' ? entry : textOf([entry]))))
   if (row.type === 'attachment') return row.name === 'nested_memory' ? [{ ...base, type: InstructionFile, path: row.path ?? '', text, isRule: isRulePath(row.path ?? '') }] : []
+  if (isModNotesRow(row)) return notesFrom(modNotesIn(text))
   if (row.type === 'assistant') {
     return row.content.filter(isObject).flatMap((block): Unplaced[] => {
       if (block['type'] === 'text' && typeof block['text'] === 'string' && block['text'].trim() !== '') return [{ ...base, type: Reply, text: block['text'].trim() }]
@@ -128,7 +131,29 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   return prompt === undefined ? [] : [{ ...base, type: Prompt, text: prompt, from: senderOf(row.origin, isInTask) }]
 }
 
+function isModNotesRow(row: Row): boolean {
+  const text = textOf(row.content)
+  return row.type === 'user' && !row.content.some(isToolResultBlock) && modNotesIn(text).length > 0 && text.replace(modNoteBlock, '').trim() === ''
+}
+
+function withNoteTexts(entries: readonly unknown[], texts: ReadonlyMap<number, string>): unknown[] {
+  let index = -1
+  const replaced = (text: string) =>
+    text.replace(modNoteBlock, (whole, mod: string) => {
+      index += 1
+      const changed = texts.get(index)
+      if (changed === undefined) return whole
+      return changed === '' ? '' : modNote(mod, changed)
+    })
+  return entries.map((entry) => {
+    if (typeof entry === 'string') return replaced(entry)
+    return isObject(entry) && entry['type'] === 'text' && typeof entry['text'] === 'string' ? { ...entry, text: replaced(entry['text']) } : entry
+  })
+}
+
 export function withTexts(row: Row, texts: ReadonlyMap<number, string>): readonly unknown[] {
+  if (row.type === 'attachment' && row.name === 'hook_additional_context') return withNoteTexts(row.content, texts)
+  if (isModNotesRow(row)) return keepingMedia(row.content, withNoteTexts([textOf(row.content)], texts)[0] as string)
   if (row.type === 'assistant') {
     let index = -1
     return row.content.map((block) => {

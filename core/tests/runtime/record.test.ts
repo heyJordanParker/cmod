@@ -108,7 +108,7 @@ test("beforePrompt in a task adds a note the subagent reads at its start, with t
   await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
   const task = await tested.startTask({ title: 'Find', openedBy: 'toolu_9' })
 
-  expect(await claudeCodeOf(tested).fire('SubagentStart', { agent_id: task, agent_type: 'Explore' } as never)).toEqual({ additionalContext: ['You are in read-only mode.'] })
+  expect(await claudeCodeOf(tested).fire('SubagentStart', { agent_id: task, agent_type: 'Explore' } as never)).toEqual({ additionalContext: ['<modes_mod>\nYou are in read-only mode.\n</modes_mod>'] })
   expect(prompts).toEqual(['Find the pane'])
 })
 
@@ -211,7 +211,7 @@ test("beforeSessionStart's note, title, and first prompt reach Claude Code, and 
     defineMod({
       name: 'tracer',
       setup() {
-        sessions.current.beforeSessionStart({ source: 'compact' }, () => ({ note: 'Docs held: none.', title: 'Tree pane', firstPrompt: 'Go on' }))
+        sessions.current.beforeSessionStart({ source: 'resume' }, () => ({ note: 'Docs held: none.', title: 'Tree pane', firstPrompt: 'Go on' }))
       },
     }),
     { permissions: ['prompt'] },
@@ -219,7 +219,57 @@ test("beforeSessionStart's note, title, and first prompt reach Claude Code, and 
   await tested.start()
 
   expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'startup', session_id: 's1' })).toEqual({})
-  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({ additionalContext: ['Docs held: none.'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'resume', session_id: 's1' })).toEqual({ additionalContext: ['<tracer_mod>\nDocs held: none.\n</tracer_mod>'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
+})
+
+test("a compaction's note reaches the window of the agent that compacted, and only the goal's listeners hear a subagent's", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'tracer',
+      setup() {
+        sessions.current.beforeSessionStart({ source: 'compact' }, () => ({ note: 'Main agent docs.' }))
+        sessions.current.goal.beforeSessionStart({ source: 'compact' }, ({ task }) => ({ note: `Docs of ${task ?? 'the main agent'}.` }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+  await tested.start()
+  const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
+  const compact = (agentId?: string) => claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [], ...(agentId === undefined ? {} : { agentId }) } as never, { messages: [kept] } as never)
+
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({})
+  expect(await compact()).toEqual({ messages: [kept, { role: 'user', text: '<tracer_mod>\nMain agent docs.\n\nDocs of the main agent.\n</tracer_mod>', toolUses: [] }] })
+  expect(await compact('a1')).toEqual({ messages: [kept, { role: 'user', text: '<tracer_mod>\nDocs of a1.\n</tracer_mod>', toolUses: [] }] })
+})
+
+test("a compaction's title, Skill reload, and first prompt reach Claude Code at the SessionStart after it, and its payload carries the model and the tokens left", async () => {
+  const heard: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tracer',
+      setup: () =>
+        void sessions.current.beforeSessionStart({ source: 'compact' }, (started) => {
+          heard.push(started)
+          return { title: 'Compacted', reloadSkills: true, firstPrompt: 'Go on.' }
+        }),
+    }),
+    { permissions: ['prompt'] },
+  )
+  await tested.start()
+  const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
+
+  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [] } as never, { messages: [kept], tokensAfter: 1200 } as never)).toEqual({ messages: [kept], tokensAfter: 1200 })
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({ sessionTitle: 'Compacted', reloadSkills: true, initialUserMessage: 'Go on.' })
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({})
+  expect(heard).toMatchObject([{ source: 'compact', model: expect.any(String), contextTokenCount: 1200 }])
+})
+
+test("a compaction's note needs the prompt permission, as every note does", async () => {
+  const tested = testMod(defineMod({ name: 'tracer', setup: () => void sessions.current.beforeSessionStart(() => ({ note: 'Docs held: none.' })) }))
+  const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
+
+  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [] } as never, { messages: [kept] } as never)).toEqual({ messages: [kept] })
+  expect(tested.shown.toasts.map(({ message }) => message)).toContain('The beforeSessionStart listener failed')
 })
 
 test('beforeModelChange refuses a switch, and onCwdChange hears the new folder without answering', async () => {
@@ -257,7 +307,7 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
   )
   await tested.start()
 
-  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['The person asked for a commit.'], origin: { kind: 'composer' } })
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['<classify_mod>\nThe person asked for a commit.\n</classify_mod>'], origin: { kind: 'composer' } })
   await claudeCodeOf(tested).fire('prompt.submit', { text: 'next', origin: { kind: 'composer' }, wait: false })
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'next' })).toEqual({})
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
@@ -283,7 +333,7 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
   await tested.start()
   const used = (tool_name: string, tool_response: unknown) => ({ session_id: 's1', cwd: '/work', tool_name, tool_input: {}, tool_use_id: 'toolu_1', tool_response }) as never
 
-  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['src/CLAUDE.md says: no default exports.'] })
+  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['<docs_mod>\nsrc/CLAUDE.md says: no default exports.\n</docs_mod>'] })
   expect(await claudeCodeOf(tested).fire('PostToolUse', used('Bash', 'key=sk-secret'))).toEqual({ updatedToolOutput: 'key=[hidden]' })
   expect(await claudeCodeOf(tested).fire('PostToolUse', used('Write', {}))).toEqual({ block: 'Write only under src/.' })
 })

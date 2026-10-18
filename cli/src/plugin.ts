@@ -76,7 +76,7 @@ if (typeof module !== 'string') {
   } else {
     const { userConfigOf } = await import(root + '/node_modules/@cmodjs/core/options.js')
     const { register } = await import(root + '/hooks/' + module)
-    register(() => undefined, {})
+    register(() => ({ catch: () => undefined }), {})
     const options = core.registeredMod()?.options
     console.log(JSON.stringify({ type: 'declared', userConfig: options === undefined ? {} : userConfigOf(options) }))
   }

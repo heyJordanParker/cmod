@@ -1,4 +1,4 @@
-import type { Args, EventResult, Frozen, HookBudget, PluginOptions, RenderElement, Timer } from 'claude-code'
+import type { Args, ClassicHookInputs, EventResult, Frozen, HookBudget, HookFailure, PluginOptions, RenderElement, Timer } from 'claude-code'
 import type { Step } from '../installer.js'
 import type { Allowed, FileChange, Disposable, Imports, Mod, ModDefinition, PaneHandle, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Toast } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
@@ -12,7 +12,7 @@ import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
 import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
 import { keepEngine } from './engine.js'
-import { classicHook, userSkillHook, type Hook, type HookListener, type RoutedEvent } from './hooks.js'
+import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
 import { checkedAnswer, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
 import { cmodError, lastLineOf, locatingPrograms, readLines, type Programs } from './programs.js'
@@ -21,7 +21,7 @@ import { fitsOption } from '../options.js'
 import { createInstaller } from './installer.js'
 import { createOptions, MissingOptions } from './options.js'
 import { createRouter, type Router, type RouterNext } from './router.js'
-import { conversationMethods, createSessionsClient } from './sessions.js'
+import { conversationMethods, createSessionsClient, type SessionsClient } from './sessions.js'
 import type { SessionChange } from '../session/conversation.js'
 import type { BeforeEvent } from '../session/session.js'
 import { matches } from '../utils/matcher.js'
@@ -52,6 +52,7 @@ export type Lifecycle<State extends object> = {
   readonly toasts: readonly ShownToast[]
   start(claude: Claude, read: (claude: Claude) => Promise<Plugin>): Promise<void>
   route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
+  caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, failure: HookFailure): Promise<EventResult<N>>
   raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
 }
 
@@ -72,7 +73,7 @@ type ActiveMod<State extends object, Declared extends Options> = {
   readonly mod: Mod<State, Declared>
   readonly added: readonly string[]
   readonly imports: Imports
-  readonly raise: (method: string, payload: Readonly<Record<string, unknown>>) => Promise<unknown>
+  readonly raise: SessionsClient['raise']
 }
 
 
@@ -88,7 +89,9 @@ const cmodWaitMs = 60_000
 
 const cmodSlowCheckMs = 10_000
 
-const startHoldMs = (10_000 satisfies HookBudget['ms']) - 1_000
+const hookMs = 10_000 satisfies HookBudget['ms']
+
+const startHoldMs = hookMs - 1_000
 
 const dependencyCallMs = 30_000
 
@@ -169,7 +172,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   let activation: Promise<void> | undefined
   let mod: Mod<State> | undefined
   let imports: Imports | undefined
-  let raise: ActiveMod<State, Declared>['raise'] | undefined
+  let raise: SessionsClient['raise'] | undefined
   let failure: unknown
   let pluginOptions = options
   const installer = createInstaller(definition.name, () => claude())
@@ -628,6 +631,14 @@ export function createLifecycle<State extends object, Declared extends Options =
       if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined) return answer
       return runtime.toaster.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.props, render.requestId) as EventResult<N>
     },
+    async caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, { kind, message }: HookFailure): Promise<EventResult<N>> {
+      const call = e as Frozen<Args<'cmod.call'>>
+      const isAsk = event === 'cmod.call' && call.to === definition.name && beforeAskOf(call) !== undefined
+      if (kind === 're-entry') return isAsk ? ({ value: null } as EventResult<N>) : next(e)
+      const error = new Error(kind === 'timeout' ? `it ran past the ${hookMs / 1000} s Claude Code gives a hook` : (message ?? 'it threw'))
+      toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, '')} hook`, error })
+      return router.dispatchFailure(event, e, error, next)
+    },
   }
 }
 
@@ -704,7 +715,8 @@ async function createMod<State extends object, Declared extends Options>(definit
     }))
   const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: area.changed, forkParent })
   const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, report, changed: modState.changed })
-  const hookOn = <H extends Hook>(hook: H, listener: HookListener<H>): Disposable => router.add(`classic.${hook}`, classicHook(hook, listener, report))
+  const hookOn = <H extends Hook>(hook: H, listener: HookListener<H>, failed?: (input: ClassicHookInputs[H], error: Error) => HookFields | undefined): Disposable =>
+    router.add(`classic.${hook}`, classicHook(hook, listener, report), failed === undefined ? undefined : classicFailure(failed))
   const expand = (path: string) => (homePrefix.test(path) ? resolvedPath(path, places) : path)
   const settingsFile = (source: 'user' | 'project' | 'local'): SettingsFile => ({
     read: () => checked.settings.read({ source }),
@@ -718,8 +730,8 @@ async function createMod<State extends object, Declared extends Options>(definit
     claude: checked,
     report: (id, message, error) => report({ id, message, error }),
     isGranted: (permission) => flag(permission),
-    hookOn: (hook, listener) => hookOn(hook as Hook, listener as HookListener<Hook>),
-    routeOn: (event, hook) => router.add(event, hook as never),
+    hookOn: (hook, listener, failed) => hookOn(hook as Hook, listener as HookListener<Hook>, failed),
+    routeOn: (event: RoutedEvent, hook: unknown, failed?: unknown) => router.add(event, hook as never, failed as never),
     permissionRoutes: runtime.permissionRoutes,
   })
   let followed: Parameters<typeof client.follow>[0] | undefined
@@ -944,10 +956,8 @@ async function createMod<State extends object, Declared extends Options>(definit
       client.changed(changedSession, change, isInProject !== false)
       return { value: null }
     }
-    if (e.method === conversationMethods.before && call.caller === cmodPluginName) {
-      const { session: asking, event, change, isInProject } = e.input as { readonly session: string; readonly event: BeforeEvent; readonly change: SessionChange; readonly isInProject?: boolean }
-      return { value: (await client.answerBefore(asking, event, change, isInProject !== false)) ?? null }
-    }
+    const ask = beforeAskOf(call)
+    if (ask !== undefined) return { value: (await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject)) ?? null }
     if (e.method === settingsPagesMethod) return { value: [...pages].map(([id, { title }]) => ({ id, title })) }
     if (e.method === openPageMethod) {
       await settingsPages.open(String(e.input))
@@ -955,6 +965,10 @@ async function createMod<State extends object, Declared extends Options>(definit
     }
     const served = await conversations?.answer(call)
     return served ?? answerCall(definition.name, api, e)
+  }, (e, error) => {
+    if (e.to !== definition.name) return undefined
+    const ask = beforeAskOf(e)
+    return ask === undefined ? { deny: `${definition.name}: ${error.message}` } : { value: client.failedBefore(ask.session, ask.event, ask.change, ask.isInProject, error) ?? null }
   })
   const agents = toolCalls(claude, router)
   keepEngine(mod, { claude: checked, router, toolCalls: agents, report, hasPermissionCheck: () => runtime.permissionRoutes() !== undefined })
@@ -995,6 +1009,14 @@ const longestTimerMs = 2_147_483_647
 function checkedMs(name: string, subject: string, ms: number): number {
   if (!Number.isInteger(ms) || ms <= 0 || ms > longestTimerMs) throw new Error(`${name}: ${subject} is ${ms}. Give a whole number of milliseconds above 0 and at most ${longestTimerMs}.`)
   return ms
+}
+
+type BeforeAsk = { readonly session: string; readonly event: BeforeEvent; readonly change: SessionChange; readonly isInProject: boolean }
+
+function beforeAskOf(call: Frozen<Args<'cmod.call'>> & { readonly caller?: string }): BeforeAsk | undefined {
+  if (call.method !== conversationMethods.before || call.caller !== cmodPluginName) return undefined
+  const { session, event, change, isInProject } = call.input as Omit<BeforeAsk, 'isInProject'> & { readonly isInProject?: boolean }
+  return { session, event, change, isInProject: isInProject !== false }
 }
 
 async function failsAs(subject: string, step: () => unknown): Promise<void> {

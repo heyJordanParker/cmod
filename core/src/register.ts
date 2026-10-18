@@ -1,4 +1,4 @@
-import type { Args, EngineInterface, EventResult, Frozen, Next, On, PluginOptions, ToolCallArgs } from 'claude-code'
+import type { Args, Caught, EngineInterface, EventResult, Frozen, Next, On, PluginOptions, ToolCallArgs } from 'claude-code'
 import type { ModDefinition } from './mod.js'
 import type { Options } from './options.js'
 import type { Claude } from './runtime/claude.js'
@@ -94,9 +94,20 @@ function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Froz
   return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>)
 }
 
+function routeFailure<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: Next<N> & Caught): Promise<EventResult<N>> {
+  return lifecycle.caught(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>, passOn.error)
+}
+
+const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>) => ({ ...eventInput, caller: passOn.origin.plugin }) as Frozen<Args<'cmod.call'>>
+
+const withoutCaller = (passOn: Next<'cmod.call'>) => (passed: Frozen<Args<'cmod.call'>>) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>)
+
 function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>): Promise<EventResult<'cmod.call'>> {
-  const called = { ...eventInput, caller: passOn.origin.plugin } as Frozen<Args<'cmod.call'>>
-  return lifecycle.route('cmod.call', called, (passed) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>))
+  return lifecycle.route('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn))
+}
+
+function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'> & Caught): Promise<EventResult<'cmod.call'>> {
+  return lifecycle.caught('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn.error)
 }
 
 export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
@@ -104,58 +115,58 @@ export function registerMod<State extends object, Declared extends Options>(addH
   registered = definition as ModDefinition<object>
   lifecycle = createLifecycle(definition, () => permissionCheck, options)
   addHook('session.start', startMod)
-  addHook('classic.Setup', routeToMod)
-  addHook('classic.SessionStart', routeToMod)
-  addHook('classic.SessionEnd', routeToMod)
-  addHook('classic.UserPromptSubmit', routeToMod)
-  addHook('classic.UserPromptExpansion', routeToMod)
-  addHook('classic.InstructionsLoaded', routeToMod)
-  addHook('classic.ConfigChange', routeToMod)
-  addHook('classic.DirectoryAdded', routeToMod)
-  addHook('classic.PreModelSwitch', routeToMod)
-  addHook('classic.PostModelSwitch', routeToMod)
-  addHook('classic.PermissionDenied', routeToMod)
-  addHook('classic.PostToolUse', routeToMod)
-  addHook('classic.PostToolUseFailure', routeToMod)
-  addHook('classic.PostToolBatch', routeToMod)
-  addHook('classic.MessageDisplay', routeToMod)
-  addHook('classic.SubagentStart', routeToMod)
-  addHook('classic.SubagentStop', routeToMod)
-  addHook('classic.TaskCreated', routeToMod)
-  addHook('classic.TaskCompleted', routeToMod)
-  addHook('classic.TeammateIdle', routeToMod)
-  addHook('classic.Elicitation', routeToMod)
-  addHook('classic.ElicitationResult', routeToMod)
-  addHook('classic.Notification', routeToMod)
-  addHook('classic.PreCompact', routeToMod)
-  addHook('classic.PostCompact', routeToMod)
-  addHook('classic.Stop', routeToMod)
-  addHook('classic.StopFailure', routeToMod)
-  addHook('classic.FileChanged', routeToMod)
-  addHook('classic.WorktreeCreate', routeToMod)
-  addHook('classic.WorktreeRemove', routeToMod)
-  addHook('tool.call', routeToMod)
-  addHook('prompt.submit', routeToMod)
-  addHook('prompt.context', routeToMod)
-  addHook('command.run', routeToMod)
-  addHook('session.measure', routeToMod)
-  addHook('skill.prompt', routeToMod)
-  addHook('ui.render', routeToMod)
-  addHook('ui.press', routeToMod)
-  addHook('ui.scroll', routeToMod)
-  addHook('ui.close', routeToMod)
-  addHook('cmod.call', routeCallToMod)
+  addHook('classic.Setup', routeToMod).catch(routeFailure)
+  addHook('classic.SessionStart', routeToMod).catch(routeFailure)
+  addHook('classic.SessionEnd', routeToMod).catch(routeFailure)
+  addHook('classic.UserPromptSubmit', routeToMod).catch(routeFailure)
+  addHook('classic.UserPromptExpansion', routeToMod).catch(routeFailure)
+  addHook('classic.InstructionsLoaded', routeToMod).catch(routeFailure)
+  addHook('classic.ConfigChange', routeToMod).catch(routeFailure)
+  addHook('classic.DirectoryAdded', routeToMod).catch(routeFailure)
+  addHook('classic.PreModelSwitch', routeToMod).catch(routeFailure)
+  addHook('classic.PostModelSwitch', routeToMod).catch(routeFailure)
+  addHook('classic.PermissionDenied', routeToMod).catch(routeFailure)
+  addHook('classic.PostToolUse', routeToMod).catch(routeFailure)
+  addHook('classic.PostToolUseFailure', routeToMod).catch(routeFailure)
+  addHook('classic.PostToolBatch', routeToMod).catch(routeFailure)
+  addHook('classic.MessageDisplay', routeToMod).catch(routeFailure)
+  addHook('classic.SubagentStart', routeToMod).catch(routeFailure)
+  addHook('classic.SubagentStop', routeToMod).catch(routeFailure)
+  addHook('classic.TaskCreated', routeToMod).catch(routeFailure)
+  addHook('classic.TaskCompleted', routeToMod).catch(routeFailure)
+  addHook('classic.TeammateIdle', routeToMod).catch(routeFailure)
+  addHook('classic.Elicitation', routeToMod).catch(routeFailure)
+  addHook('classic.ElicitationResult', routeToMod).catch(routeFailure)
+  addHook('classic.Notification', routeToMod).catch(routeFailure)
+  addHook('classic.PreCompact', routeToMod).catch(routeFailure)
+  addHook('classic.PostCompact', routeToMod).catch(routeFailure)
+  addHook('classic.Stop', routeToMod).catch(routeFailure)
+  addHook('classic.StopFailure', routeToMod).catch(routeFailure)
+  addHook('classic.FileChanged', routeToMod).catch(routeFailure)
+  addHook('classic.WorktreeCreate', routeToMod).catch(routeFailure)
+  addHook('classic.WorktreeRemove', routeToMod).catch(routeFailure)
+  addHook('tool.call', routeToMod).catch(routeFailure)
+  addHook('prompt.submit', routeToMod).catch(routeFailure)
+  addHook('prompt.context', routeToMod).catch(routeFailure)
+  addHook('command.run', routeToMod).catch(routeFailure)
+  addHook('session.measure', routeToMod).catch(routeFailure)
+  addHook('skill.prompt', routeToMod).catch(routeFailure)
+  addHook('ui.render', routeToMod).catch(routeFailure)
+  addHook('ui.press', routeToMod).catch(routeFailure)
+  addHook('ui.scroll', routeToMod).catch(routeFailure)
+  addHook('ui.close', routeToMod).catch(routeFailure)
+  addHook('cmod.call', routeCallToMod).catch(routeCallFailure)
+  addHook('session.compact', routeToMod).catch(routeFailure)
   if (definition.name !== cmodPluginName) return
-  addHook('session.append', routeToMod)
-  addHook('session.compact', routeToMod)
-  addHook('session.receive', routeToMod)
-  addHook('agent.spawn', routeToMod)
-  addHook('prompt.attachment', routeToMod)
-  addHook('turn.start', routeToMod)
+  addHook('session.append', routeToMod).catch(routeFailure)
+  addHook('session.receive', routeToMod).catch(routeFailure)
+  addHook('agent.spawn', routeToMod).catch(routeFailure)
+  addHook('prompt.attachment', routeToMod).catch(routeFailure)
+  addHook('turn.start', routeToMod).catch(routeFailure)
 }
 
 export function registerPermissionCheck(addHook: On): void {
   permissionCheck = permissionRoutes
-  addHook('tool.check', routeToMod)
-  addHook('classic.PermissionRequest', routeToMod)
+  addHook('tool.check', routeToMod).catch(routeFailure)
+  addHook('classic.PermissionRequest', routeToMod).catch(routeFailure)
 }

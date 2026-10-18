@@ -204,7 +204,7 @@ test('an answer part with its grant reaches Claude Code', async () => {
 
   const answer = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as Record<string, unknown>
 
-  expect(answer['additionalContext']).toEqual(['Be brief.'])
+  expect(answer['additionalContext']).toEqual(['<nudge_mod>\nBe brief.\n</nudge_mod>'])
 })
 
 test("a changed tool input without tools runs the call as Claude asked, and the mod's own tool answers freely", async () => {

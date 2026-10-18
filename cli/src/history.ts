@@ -48,9 +48,9 @@ create table tasks (session text not null, id text not null, title text not null
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-6.sqlite'
+const indexFile = 'history-7.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite']
 
 const chunkBytes = 65_536
 
@@ -60,7 +60,7 @@ const tailBytes = 65_536
 
 const sortedMatches = 20_000
 
-const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"forkedFrom"']
+const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"hook_additional_context"', '"forkedFrom"']
 
 export function openHistory(): Database {
   const path = storePath(indexFile)

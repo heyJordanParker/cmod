@@ -165,7 +165,7 @@ sessions.current.onTurnEnd(async (turn, { signal }) => {
 }, { timeoutMs: 30_000 })
 ```
 
-An `on` listener that passes its time stops quietly. A `before` listener that passes its time shows the error toast, and what was about to happen goes on as it was. With `onFailure: 'refuse'`, a `before` listener that throws or passes its time refuses instead, with the error as the reason, for a gate that must hold even when it breaks.
+An `on` listener that passes its time stops quietly. A `before` listener that passes its time shows the error toast, and what was about to happen goes on as it was. With `onFailure: 'refuse'`, a `before` listener that throws or passes its time refuses instead, with the error as the reason, for a gate that must hold even when it breaks. The gate holds when Claude Code stops the mod's hook too, as it does when the listener's own code runs past 10 seconds without waiting on a call, and the toast `Claude Code stopped its <hook> hook` says so. On another session, it holds when that session does not answer within 5 seconds, or within what is left of the 8 seconds cmod waits on other sessions for one event, for what the listener's matcher and part cover. A `beforePermissionRequest` listener always refuses when it fails.
 
 ### Change what happens
 
@@ -197,6 +197,8 @@ sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { 
 
 An answer that changes text needs the `prompt` permission, a `beforeToolCall` answer needs `tools`, and a `beforeTaskStart` answer needs `tasks`. Without it the answer changes nothing, and the toast `The <method> listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
+Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>…</tracer_mod>` for the mod `tracer`. Every note Claude received becomes a `Note` whose `from` is `{ type: 'mod', name }`, so `onNote({ from: { type: 'mod', name: 'tracer' } })` hears each note of tracer's that Claude got, and never one Claude Code dropped.
+
 ### The session's own events
 
 `sessions.current` is a `CurrentSession`, which also hears what happens to the session itself. Each event has an `on` method, and one a mod can change also has a `before` method. A `before` method's answer reaches Claude Code, and an `on` listener never makes Claude Code wait. These methods hear the main agent, never a subagent.
@@ -221,6 +223,12 @@ An answer that changes text needs the `prompt` permission, a `beforeToolCall` an
 | `beforeReplyDisplay`, `onReplyDisplay` | a reply is about to show | `ReplyDisplay`: `replyId`, `index`, `isLast`, `text` | `{ text }`, what the person sees |
 
 The four `PermissionCheck` and `PermissionRequest` methods work only in a mod whose `hooks/register.ts` calls `registerPermissionCheck` ([mod.md](mod.md#register-the-mod-with-claude-code)). Without it they throw where they are called.
+
+At a compaction, Claude reads the `note` at the start of the window the compaction opens, and `title`, `reloadSkills`, and `firstPrompt` apply to the whole session. The payload carries `model` for the main agent and `contextTokenCount` as the compaction left it. `sessions.current.beforeSessionStart` hears the main agent's compactions. `sessions.current.goal.beforeSessionStart` also hears every subagent's, with the subagent in `task`, and its note reaches that subagent's window:
+
+```ts
+sessions.current.goal.beforeSessionStart({ source: 'compact' }, ({ task }) => ({ note: primerFor(task) }))
+```
 
 Every payload also carries where it happened: `session`, `cwd`, and `agentType?` and `permissionMode?` when Claude Code reports them. A matcher keeps the payloads it matches:
 

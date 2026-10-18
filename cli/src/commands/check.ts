@@ -129,11 +129,16 @@ function downloadsIn(script: string): { program: string; listed: string[] }[] {
 
 async function checkPermissions(plugin: Plugin): Promise<Result> {
   let permissions = plugin.steps.permissions ?? []
-  const sources = await sourcesOf(plugin.root)
-  const hasPermissionCheck = /\bregisterPermissionCheck\s*\(/.test(sources.find(({ file }) => file === registerFile)?.text ?? '')
-  const hearing = hasPermissionCheck ? undefined : sources.find(({ text }) => permissionListener.test(text) || answersPermissions(text))
+  let sources: Source[]
+  try {
+    sources = await sourcesOf(plugin.root)
+  } catch (error) {
+    return { status: 'fail', text: messageOf(error), fix: 'Fix the syntax error, then run cmod check again.' }
+  }
+  const hasPermissionCheck = /\bregisterPermissionCheck\s*\(/.test(sources.find(({ file }) => file === registerFile)?.code ?? '')
+  const hearing = hasPermissionCheck ? undefined : sources.find(({ code }) => permissionListener.test(code) || answersPermissions(code))
   if (hearing !== undefined) return { status: 'fail', text: `${hearing.file} hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck`, fix: 'Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.' }
-  const isAdded = hasPermissionCheck && !permissions.includes('approve') && sources.some(({ text }) => answersPermissions(text))
+  const isAdded = hasPermissionCheck && !permissions.includes('approve') && sources.some(({ code }) => answersPermissions(code))
   if (isAdded) {
     const path = join(plugin.root, 'package.json')
     const manifest = (await readJson(path)) as Record<string, unknown>
@@ -154,12 +159,35 @@ const scriptFile = /\.(m?[jt]sx?|cts|cjs)$/
 
 const permissionListener = /\bonPermission(?:Check|Request)\s*\(/
 
-const answersPermissions = (text: string) => /\bbeforePermission(?:Check|Request)\s*\(/.test(text) || /\bimport\s*\{[^}]*\bpermissions\b[^}]*\}\s*from\s*['"][^'"]*\/jobs\/permissions\.js['"]/.test(text)
+const answersPermissions = (code: string) => /\bbeforePermission(?:Check|Request)\s*\(/.test(code) || /\bimport\s*\{[^}]*\bpermissions\b[^}]*\}\s*from\s*['"][^'"]*\/jobs\/permissions\.js['"]/.test(code)
 
-async function sourcesOf(root: string): Promise<{ readonly file: string; readonly text: string }[]> {
+type Source = { readonly file: string; readonly code: string }
+
+async function sourcesOf(root: string): Promise<Source[]> {
   const source = join(root, 'src')
   const files = [join(root, registerFile), ...(existsSync(source) ? await walk(source, root) : [])].filter((file) => scriptFile.test(file) && !/\.test\.[^.]+$/.test(file))
-  return Promise.all(files.map(async (file) => ({ file: relative(root, file), text: (await readText(file)) ?? '' })))
+  return Promise.all(files.map(async (file) => ({ file: relative(root, file), code: codeOf(relative(root, file), (await readText(file)) ?? '') })))
+}
+
+function transpilerOf(file: string): Bun.Transpiler {
+  const loader = file.slice(file.lastIndexOf('.') + 1).replace(/^[mc]/, '')
+  return new Bun.Transpiler({ loader: loader === 'js' ? 'jsx' : (loader as 'jsx' | 'ts' | 'tsx') })
+}
+
+function parsed<Value>(file: string, read: () => Value): Value {
+  try {
+    return read()
+  } catch (error) {
+    throw new Error(`${file} does not parse: ${messageOf(error)}`)
+  }
+}
+
+function codeOf(file: string, text: string): string {
+  return parsed(file, () => transpilerOf(file).transformSync(text))
+}
+
+function importsIn(file: string, text: string): string[] {
+  return parsed(file, () => transpilerOf(file).scanImports(text).map((each) => each.path))
 }
 
 async function checkMetadata(plugin: Plugin): Promise<Result> {
@@ -205,12 +233,19 @@ async function checkImports(plugin: Plugin): Promise<Result> {
   for (const file of await walk(plugin.root)) {
     if (!scriptFile.test(file)) continue
     const isSource = file.startsWith(join(plugin.root, 'src') + sep)
-    for (const specifier of importsOf((await readText(file)) ?? '')) {
+    let specifiers: string[]
+    try {
+      specifiers = importsIn(relative(plugin.root, file), (await readText(file)) ?? '')
+    } catch (error) {
+      problems.push(messageOf(error))
+      continue
+    }
+    for (const specifier of specifiers) {
       if (specifier.startsWith('.') && resolve(dirname(file), specifier).startsWith(cli)) problems.push(`${relative(plugin.root, file)} imports ${specifier} from cli/, which the release leaves out: move the shared code into src/`)
       if (isSource && isBuiltin(specifier)) problems.push(`${relative(plugin.root, file)} imports ${specifier}: Claude Code runs mods with no Node or Bun, so use fs, process, or http, imported from @cmodjs/core/mod.js`)
     }
   }
-  if (problems.length > 0) return { status: 'fail', text: `${problems.length} import${problems.length === 1 ? '' : 's'} a mod cannot use`, fix: problems.join('\n    fix: ') }
+  if (problems.length > 0) return { status: 'fail', text: `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} with the mod's imports`, fix: problems.join('\n    fix: ') }
   return { status: 'pass', text: 'Imports reach only the mod, its packages, and claude-code' }
 }
 
@@ -297,7 +332,7 @@ async function testFiles(plugin: Plugin): Promise<{ path: string; isKitTest: boo
   const root = await testRoot(plugin.root)
   if (!existsSync(root)) return []
   for (const path of await walk(root, plugin.root)) {
-    if (/\.test\.[jt]sx?$/.test(path)) tests.push({ path, isKitTest: importsOf((await readText(path)) ?? '').includes('claude-code/testing') })
+    if (/\.test\.[jt]sx?$/.test(path)) tests.push({ path, isKitTest: /['"]claude-code\/testing['"]/.test((await readText(path)) ?? '') })
   }
   return tests
 }
@@ -349,11 +384,6 @@ async function walk(folder: string, root = folder): Promise<string[]> {
     if (entry.isFile()) files.push(path)
   }
   return files
-}
-
-function importsOf(source: string): string[] {
-  const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]/g
-  return [...source.matchAll(pattern)].map((match) => match[1] as string)
 }
 
 function isBuiltin(specifier: string): boolean {

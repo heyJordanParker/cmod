@@ -1,5 +1,5 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, longestMs, messageOf, process, sessions, settings, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, longestMs, messageOf, Note, process, sessions, settings, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
@@ -113,16 +113,16 @@ export const cmodPlugin = defineMod({
     let following = Promise.resolve()
     let synced: { readonly project: string; readonly watched: readonly string[]; readonly stamp: string } | undefined
     const changedAt = async (paths: readonly string[]) => Promise.all(paths.map(async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? 0))
-    const followRules = async () => {
+    const followRules = async (): Promise<string[]> => {
       const project = await claude.session.root()
-      if (synced?.project === project && (await changedAt(synced.watched)).join(',') === synced.stamp) return
+      if (synced?.project === project && (await changedAt(synced.watched)).join(',') === synced.stamp) return []
       const startedAt = await claude.clock.now()
       const result = JSON.parse(await runCmod(claude, ['rules', '--project', project, '--json'], await claude.session.id())) as SyncedRules
       const times = await changedAt(result.watched)
       synced = { project, watched: result.watched, stamp: times.some((at) => at >= startedAt - 1000) ? '' : times.join(',') }
-      await noteRules(result)
+      return rulesNotes(result)
     }
-    const noteRules = async (result: SyncedRules) => {
+    const rulesNotes = (result: SyncedRules): string[] => {
       const now = new Map(result.linked.map(({ mod: name, rules }) => [name, new Map(rules.filter((rule) => rule.isGlobal).map((rule) => [rule.name, rule.text]))]))
       const notes = [...now].flatMap(([name, globals]) => {
         const before = applied === undefined ? (result.placed.includes(name) ? undefined : globals) : applied.get(name)
@@ -135,17 +135,24 @@ export const cmodPlugin = defineMod({
       })
       const gone = applied === undefined ? result.removed : [...applied.keys()].filter((name) => !now.has(name))
       applied = now
-      for (const text of [...notes, ...gone.map((name) => `The ${name} mod's rules no longer apply.`)]) {
-        const added = await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
-        if (added.deny !== undefined) mod.log(`Claude Code refused the rules note: ${added.deny}`)
-      }
+      return [...notes, ...gone.map((name) => `The ${name} mod's rules no longer apply.`)]
     }
-    const keepRules = async () => {
-      following = following.then(followRules).catch((error: unknown) => report({ id: 'rules', message: "Could not link the mods' rules", error }))
+    const keepRules = async (): Promise<readonly string[]> => {
+      let notes: readonly string[] = []
+      following = following.then(async () => void (notes = await followRules())).catch((error: unknown) => report({ id: 'rules', message: "Could not link the mods' rules", error }))
       await following
+      return notes
     }
-    sessions.current.beforeSessionStart(keepRules)
-    sessions.current.beforePrompt(keepRules, { timeoutMs: 60_000 })
+    sessions.current.beforeSessionStart(async () => {
+      const notes = await keepRules()
+      return notes.length === 0 ? undefined : { note: notes.join('\n\n') }
+    })
+    sessions.current.beforePrompt(
+      async () => {
+        for (const text of await keepRules()) await sessions.current.send({ type: Note, text })
+      },
+      { timeoutMs: 60_000 },
+    )
 
     sessions.current.onTurnEnd(async () => {
       mod.state.session.tip = await tipOf(mod)

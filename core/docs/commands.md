@@ -205,7 +205,7 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 - `state` prints what a running conversation resumes from.
 - `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later. The cmod plugin runs it to hear other running sessions.
 - `--json` prints JSON instead of one line each.
-- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-6.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-7.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 ## Run in an install script
 

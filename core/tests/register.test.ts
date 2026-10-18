@@ -1,8 +1,12 @@
 import { expect, test } from 'bun:test'
-import type { EngineInterface, On, RenderElement } from 'claude-code'
+import type { EngineInterface, HookFailure, On, RenderElement } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
-import { defineMod, sessions } from '../src/mod.js'
+import { commands, defineMod, sessions } from '../src/mod.js'
+import { permissions } from '../src/jobs/permissions.js'
 import { processEvents } from '../src/session/session.js'
+import { Message } from '../src/session/context/turn/message/message.js'
+import { ToolCall } from '../src/session/context/turn/message/tool-call.js'
+import { conversationMethods } from '../src/runtime/sessions.js'
 import { scriptsSha256 } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
@@ -11,6 +15,7 @@ type Registration = {
   readonly pattern: string
   readonly hasMatcher: boolean
   readonly hook: (...args: never[]) => unknown
+  caught?: (...args: never[]) => unknown
 }
 
 function fakeOn() {
@@ -20,12 +25,21 @@ function fakeOn() {
     const hasMatcher = hook !== undefined
     const twin = registrations.find((registration) => registration.pattern === pattern && !registration.hasMatcher)
     if (!hasMatcher && twin !== undefined) throw new Error(`on("${pattern}") is registered twice without a matcher. Register each event once, or give the second a matcher.`)
-    registrations.push({ pattern, hasMatcher, hook: (hasMatcher ? hook : matcherOrHook) as Registration['hook'] })
-    return { catch: () => undefined }
+    const registration: Registration = { pattern, hasMatcher, hook: (hasMatcher ? hook : matcherOrHook) as Registration['hook'] }
+    registrations.push(registration)
+    return {
+      catch: (handler: (...args: never[]) => unknown) => void (registration.caught = handler),
+    }
   }
   return {
     on: on as unknown as On,
     registrations,
+    fail(event: string, $: EngineInterface, e: unknown, below: unknown, error: HookFailure, caller = 'engine'): Promise<unknown> {
+      const caught = registrations.find((registration) => registration.pattern === event)?.caught
+      if (caught === undefined) throw new Error(`on("${event}") has no .catch`)
+      const next = Object.assign(async () => below, { event, error, called: false, origin: { plugin: caller } })
+      return Promise.resolve((caught as (...args: unknown[]) => unknown)($, e, next))
+    },
     dispatch(event: string, $: EngineInterface, e: unknown, below: unknown): Promise<unknown> {
       const chain = registrations.filter((registration) => registration.pattern === event)
       const call = async (index: number, current: unknown): Promise<unknown> => {
@@ -140,6 +154,7 @@ test('registerMod registers each Claude Code event once, and no permission check
     'ui.scroll',
     'ui.close',
     'cmod.call',
+    'session.compact',
   ])
 })
 
@@ -152,6 +167,123 @@ test('registerPermissionCheck registers tool.check and PermissionRequest once ea
   expect(fake.registrations.map((registration) => registration.pattern).slice(-2)).toEqual(['tool.check', 'classic.PermissionRequest'])
 })
 
+test('every hook registerMod and registerPermissionCheck add after session.start carries a .catch', () => {
+  const fake = fakeOn()
+
+  registerMod(fake.on, demo, {})
+  registerPermissionCheck(fake.on)
+
+  expect(fake.registrations.filter((registration) => registration.caught === undefined).map((registration) => registration.pattern)).toEqual(['session.start'])
+})
+
+test('a hook Claude Code stopped shows its failure, and the event goes on as if the mod were not there', async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  await $.store.set('cmod:announced', { version: '1.0.0', added: [] })
+  registerMod(fake.on, demo, {})
+  await fake.dispatch('session.start', $, {}, {})
+  const below = { additionalContext: ['from below'] }
+
+  let redraws = 0
+  Object.assign($.ui, { invalidate: () => void (redraws += 1) })
+
+  const timedOut = await fake.fail('classic.PostToolBatch', $, {}, below, { kind: 'timeout', budget: 1000 })
+  const drawnOnce = redraws
+  await fake.fail('classic.PostToolBatch', $, {}, below, { kind: 'timeout', budget: 1000 })
+  const reentered = await fake.fail('classic.Stop', $, {}, below, { kind: 're-entry', budget: 1000 })
+  const shown = textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)
+
+  expect([timedOut, reentered]).toEqual([below, below])
+  expect([drawnOnce > 0, redraws]).toEqual([true, drawnOnce])
+  expect(shown).toContain('Claude Code stopped its PostToolBatch hook')
+  expect(shown).not.toContain('Stop hook')
+})
+
+test('a before ask that reaches the mod inside its own hook answers nothing and shows no failure', async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  const guard = defineMod({ name: 'demo', setup: () => void sessions.current.beforeToolCall(() => undefined, { onFailure: 'refuse' }) })
+  registerMod(fake.on, guard, {})
+  await fake.dispatch('session.start', $, {}, {})
+  const ask = { to: 'demo', method: conversationMethods.before, input: { session: 'session-1', event: ToolCall, change: { type: Message, message: { id: 't1', at: '', type: ToolCall, session: 'session-1', context: 1, callId: 't1', name: 'Bash', input: {}, cwd: '/work/app', files: { read: [], changed: [] } } } } }
+
+  expect(await fake.fail('cmod.call', $, ask, { deny: 'unanswered' }, { kind: 're-entry', budget: 1000 }, 'cmod')).toEqual({ value: null })
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).not.toContain('stopped')
+})
+
+test('a permission check, a permission dialog, or a command whose hook Claude Code stopped is refused in its own answer, and the permissions job denies', async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  Object.assign($, { command: { list: async () => [{ name: 'deploy', source: 'plugin' }] } })
+  const guard = defineMod({
+    name: 'demo',
+    setup() {
+      sessions.current.beforePermissionCheck({ name: 'Bash', decision: 'allow' }, () => undefined, { onFailure: 'refuse' })
+      sessions.current.beforePermissionRequest(() => undefined)
+      commands.beforeRun({ name: 'deploy', source: 'plugin' }, () => undefined, { onFailure: 'refuse' })
+    },
+  })
+  registerMod(fake.on, guard, {})
+  registerPermissionCheck(fake.on)
+  await fake.dispatch('session.start', $, {}, {})
+  const stopped: HookFailure = { kind: 'timeout', budget: 1000 }
+  const checked = (tool: string) => ({ tool, input: {}, tool_use_id: 'toolu_1' })
+
+  expect(await fake.fail('tool.check', $, checked('Bash'), { decision: 'allow' }, stopped)).toEqual({ decision: 'deny', reason: 'demo: it ran past the 10 s Claude Code gives a hook' })
+  expect(await fake.fail('tool.check', $, checked('Read'), { decision: 'allow' }, stopped)).toEqual({ decision: 'allow' })
+  expect(await fake.fail('classic.PermissionRequest', $, { session_id: 'session-1', cwd: '/work/app', tool_name: 'Bash', tool_input: {} }, {}, stopped)).toEqual({ decision: { behavior: 'deny', message: 'demo: it ran past the 10 s Claude Code gives a hook' } })
+  expect(await fake.fail('command.run', $, { command: 'deploy', args: '', origin: { kind: 'composer' } }, { text: 'Deployed' }, stopped)).toEqual({ text: 'demo: it ran past the 10 s Claude Code gives a hook' })
+  expect(await fake.fail('command.run', $, { command: 'status', args: '', origin: { kind: 'composer' } }, { text: 'Clean' }, stopped)).toEqual({ text: 'Clean' })
+})
+
+test('a permissions job whose hook Claude Code stopped denies the call', async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  registerMod(fake.on, defineMod({ name: 'demo', setup: (mod) => mod.use(permissions({ deny: [{ command: 'git push --force' }] })) }), {})
+  registerPermissionCheck(fake.on)
+  await fake.dispatch('session.start', $, {}, {})
+
+  expect(await fake.fail('tool.check', $, { tool: 'Read', input: {}, tool_use_id: 'toolu_1' }, { decision: 'allow' }, { kind: 'throw', message: 'its hooks worker ended', budget: 1000 })).toEqual({
+    decision: 'deny',
+    reason: 'Claude Code stopped the permissions job of demo, so it denies the call: its hooks worker ended',
+  })
+})
+
+test("a before ask whose hook Claude Code stopped still refuses for a listener with onFailure: 'refuse'", async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  Object.assign($, { cmod: { call: async () => null } })
+  const guard = defineMod({
+    name: 'demo',
+    setup() {
+      sessions.current.beforeToolCall({ name: 'Bash' }, () => undefined, { onFailure: 'refuse' })
+      sessions.current.beforeToolCall({ name: 'Read' }, () => undefined)
+    },
+  })
+  registerMod(fake.on, guard, {})
+  await fake.dispatch('session.start', $, {}, {})
+  const ask = (name: string) => ({ to: 'demo', method: conversationMethods.before, input: { session: 'session-1', event: ToolCall, change: { type: Message, message: { id: 't1', at: '', type: ToolCall, session: 'session-1', context: 1, callId: 't1', name, input: {}, cwd: '/work/app', files: { read: [], changed: [] } } } } })
+
+  const bash = await fake.fail('cmod.call', $, ask('Bash'), { deny: 'unanswered' }, { kind: 'throw', message: 'boom', budget: 1000 }, 'cmod')
+  const read = await fake.fail('cmod.call', $, ask('Read'), { deny: 'unanswered' }, { kind: 'throw', message: 'boom', budget: 1000 }, 'cmod')
+
+  expect([bash, read]).toEqual([{ value: { refuse: 'demo: boom' } }, { value: null }])
+})
+
+test("a model switch whose hook Claude Code stopped is refused for a beforeModelChange listener with onFailure: 'refuse'", async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  const keepsOpus = defineMod({ name: 'demo', setup: () => void sessions.current.beforeModelChange({ model: /haiku/ }, () => undefined, { onFailure: 'refuse' }) })
+  registerMod(fake.on, keepsOpus, {})
+  await fake.dispatch('session.start', $, {}, {})
+  const switched = (to_model: string) => ({ session_id: 'session-1', cwd: '/work/app', from_model: 'opus', to_model, source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 })
+
+  const toHaiku = await fake.fail('classic.PreModelSwitch', $, switched('haiku'), {}, { kind: 'timeout', budget: 1000 })
+  const toSonnet = await fake.fail('classic.PreModelSwitch', $, switched('sonnet'), {}, { kind: 'timeout', budget: 1000 })
+
+  expect([toHaiku, toSonnet]).toEqual([{ permissionDecision: 'deny', permissionDecisionReason: 'demo: it ran past the 10 s Claude Code gives a hook' }, {}])
+})
+
 test('session.start through the engine chain reads the plugin, runs setup, and announces the mod once', async () => {
   const fake = fakeOn()
   const { $, shown } = engine(files)
@@ -160,7 +292,7 @@ test('session.start through the engine chain reads the plugin, runs setup, and a
   await fake.dispatch('session.start', $, {}, {})
   const answer = await fake.dispatch('classic.PostToolBatch', $, { hook_event_name: 'PostToolBatch', session_id: 'session-1', cwd: '/work/app', tool_calls: [{ tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }] }, {})
 
-  expect(answer).toEqual({ additionalContext: ['demo saw Edit'] })
+  expect(answer).toEqual({ additionalContext: ['<demo_mod>\ndemo saw Edit\n</demo_mod>'] })
   expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo  Installed')
   expect(shown.logs).toEqual([])
 })

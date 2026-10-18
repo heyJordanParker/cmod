@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { ContextEnd, ContextStart } from '../../src/session/context/context.js'
 import { InstructionFile } from '../../src/session/context/turn/message/instruction-file.js'
-import { instructionPathOf, Message, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
+import { instructionPathOf, Message, rowOfAppend, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
 import { Note } from '../../src/session/context/turn/message/note.js'
 import { Notice } from '../../src/session/context/turn/message/notice.js'
 import { Prompt } from '../../src/session/context/turn/message/prompt.js'
@@ -165,6 +165,42 @@ test("a rewritten task notification keeps the envelope that ends the task, with 
 
   expect(kinds(notified)).toEqual([Note, TaskEnd])
   expect(notified[0]?.type === Message && notified[0].message).toMatchObject({ text: 'Found it in tree.ts.', from: { type: 'task' } })
+})
+
+test("each mod's note in a hook's row is a Note from that mod, and another plugin's untagged context is none", () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Read the docs'))
+  const row = line({ type: 'attachment', attachment: { type: 'hook_additional_context', hookName: 'PostToolUse', content: ['<tracer_mod>\nsrc/CLAUDE.md is held.\n</tracer_mod>\n\n<modes_mod>\nRead only.\n</modes_mod>', 'from another plugin'] } })
+
+  const notes = conversation.add(row)
+
+  expect(notes.map((change) => change.type === Message && change.message)).toMatchObject([
+    { type: Note, text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'tracer' } },
+    { type: Note, text: 'Read only.', from: { type: 'mod', name: 'modes' } },
+  ])
+  expect(withTexts(row, new Map([[1, 'Read and write.']]))).toEqual(['<tracer_mod>\nsrc/CLAUDE.md is held.\n</tracer_mod>\n\n<modes_mod>\nRead and write.\n</modes_mod>', 'from another plugin'])
+})
+
+test("a hook's row as the running session appends it gives the same Notes, and a note cleared to '' leaves no tag", () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Read the docs'))
+  const text = '<system-reminder>\nPostToolUse:Bash hook additional context: <alpha_mod>\nAlpha note\n</alpha_mod>\n<Beta.Tools_mod>\nBeta note\n</Beta.Tools_mod>\n</system-reminder>'
+  const row = rowOfAppend({ uuid: 'h1', door: 'hook-context', origin: undefined, message: { type: 'attachment', name: 'hook_additional_context', content: [{ type: 'text', text }] } }, '2026-10-18T10:00:00.000Z', '/work')
+
+  expect(conversation.add(row).map((change) => change.type === Message && change.message)).toMatchObject([
+    { type: Note, text: 'Alpha note', from: { type: 'mod', name: 'alpha' } },
+    { type: Note, text: 'Beta note', from: { type: 'mod', name: 'Beta.Tools' } },
+  ])
+  expect(withTexts(row, new Map([[0, '']]))).toEqual([{ type: 'text', text: '<system-reminder>\nPostToolUse:Bash hook additional context: \n<Beta.Tools_mod>\nBeta note\n</Beta.Tools_mod>\n</system-reminder>' }])
+})
+
+test("a compaction's note is a Note from its mod, though the compaction wrote it as a user message", () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Go on'))
+
+  const noted = conversation.add(line({ type: 'user', isCompactSummary: true, message: { role: 'user', content: '<tracer_mod>\nDocs held: none.\n</tracer_mod>' } }))
+
+  expect(noted.map((change) => change.type === Message && change.message)).toMatchObject([{ type: Note, text: 'Docs held: none.', from: { type: 'mod', name: 'tracer' } }])
 })
 
 test('clearing every text block of a reply clears each one, not only the first', () => {

@@ -36,7 +36,7 @@ test("an installed mod's setup runs during session.start and its beforeToolResul
 
   const answer = await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/a.ts' }, tool_response: {} })
 
-  expect(answer).toEqual({ additionalContext: ['touch-tracker saw Read'] })
+  expect(answer).toEqual({ additionalContext: ['<touch-tracker_mod>\ntouch-tracker saw Read\n</touch-tracker_mod>'] })
   expect(tested.state.session.touched).toEqual(['Read'])
 })
 
@@ -102,7 +102,7 @@ test('sessions.current.send adds a Note Claude reads, and a Prompt asks Claude f
 
   expect(tested.shown.notes).toEqual(['CI failed on main.'])
   expect(tested.shown.prompts).toEqual(['Find the cause of the CI failure and fix it.'])
-  expect(tested.calls.find(({ call }) => call === 'session.append')?.args).toEqual([{ message: { type: 'user', content: [{ type: 'text', text: 'CI failed on main.' }] } }])
+  expect(tested.calls.find(({ call }) => call === 'session.append')?.args).toEqual([{ message: { type: 'user', content: [{ type: 'text', text: '<ci-watch_mod>\nCI failed on main.\n</ci-watch_mod>' }] } }])
 })
 
 test('sessions.current.send rejects with the reason when a plugin refuses the Note', async () => {
@@ -415,7 +415,7 @@ test('a before listener that throws is shown, and the listeners after it still a
 
   const answer = await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' }, { additionalContext: ['from settings'] })
 
-  expect(answer).toEqual({ additionalContext: ['from settings', 'The build is red.'] })
+  expect(answer).toEqual({ additionalContext: ['from settings', '<briefing_mod>\nThe build is red.\n</briefing_mod>'] })
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeSessionStart listener failed', description: 'the notes file is missing' })
 })
 
@@ -1041,7 +1041,7 @@ test("commands.beforeRun rewrites a command's args and adds a note beside its ou
 
   const answer = await claudeCodeOf(tested).fire('command.run', { command: 'review', args: '12', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } }, { text: 'Reviewing' })
 
-  expect(answer).toEqual({ text: 'Reviewing', context: ['Review against DESIGN.md.'] })
+  expect(answer).toEqual({ text: 'Reviewing', context: ['<reviewer_mod>\nReview against DESIGN.md.\n</reviewer_mod>'] })
   expect(await tested.raise.beforeRun({ name: 'review', args: '7', from: { type: Person } })).toEqual({ args: '7 --strict', note: 'Review against DESIGN.md.' })
 })
 

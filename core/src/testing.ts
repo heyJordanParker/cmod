@@ -23,7 +23,7 @@ import type { Options, OptionValues } from './options.js'
 import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
-import { closingContext, foldBefore, installBefore, withAnswer } from './runtime/before.js'
+import { closingContext, foldBefore, installBefore, withAnswer, type Answers } from './runtime/before.js'
 import { permissionRoutes } from './runtime/permission-check.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
@@ -34,7 +34,7 @@ import { MissingOptions } from './runtime/options.js'
 import { conversationMethods } from './runtime/sessions.js'
 import type { ShownToast } from './runtime/toaster.js'
 import { Message } from './session/context/turn/message/message.js'
-import { Note } from './session/context/turn/message/note.js'
+import { Note, untagged } from './session/context/turn/message/note.js'
 import { Prompt } from './session/context/turn/message/prompt.js'
 import { Mod, Person } from './session/context/turn/message/sender.js'
 import type { SessionChange } from './session/conversation.js'
@@ -215,7 +215,7 @@ export function testMod<State extends object, Declared extends Options = Options
     hooks: {
       place: async () => conversations.place(),
       wants: async (event) => conversations.wants(name, event),
-      decide: (event, change) => foldBefore(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })),
+      fold: () => (event, change) => foldBefore(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })),
     },
   })
 
@@ -273,7 +273,8 @@ export function testMod<State extends object, Declared extends Options = Options
 
   const asked = async (event: BeforeEvent, change: SessionChange) => {
     await start()
-    return (await askMod(event, change)) ?? undefined
+    const answer = ((await askMod(event, change)) as Partial<Answers> | null | undefined) ?? undefined
+    return answer?.note === undefined ? answer : { ...answer, note: untagged(answer.note) }
   }
 
   const raise = Object.fromEntries([
@@ -470,7 +471,7 @@ function plainOutput({ component, props }: Args<'ui.render'>): RenderElement {
 }
 
 function replyOf({ text, context }: CommandRunResult): CommandReply {
-  return { ...(text === undefined ? {} : { text }), ...(context === undefined ? {} : { note: context.join('\n') }) }
+  return { ...(text === undefined ? {} : { text }), ...(context === undefined ? {} : { note: context.map(untagged).join('\n') }) }
 }
 
 async function modSteps(): Promise<Steps> {

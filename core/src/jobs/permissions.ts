@@ -41,10 +41,14 @@ export function permissions<State extends object = Record<never, never>>(rules: 
       }
     }
 
-    router.add('tool.check', async (e, next) => {
-      const [below, ours] = await Promise.all([next(e), verdictOf(e)])
-      return ours === undefined ? below : stricterVerdict<Verdict>(below, ours)
-    })
+    router.add(
+      'tool.check',
+      async (e, next) => {
+        const [below, ours] = await Promise.all([next(e), verdictOf(e)])
+        return ours === undefined ? below : stricterVerdict<Verdict>(below, ours)
+      },
+      (_e, error) => ({ decision: 'deny', reason: `Claude Code stopped the permissions job of ${job.mod.name}, so it denies the call: ${error.message}` }),
+    )
     job.announce(count === undefined ? 'permission rules from its state' : `${count} permission rule${count === 1 ? '' : 's'}`)
   }
 }

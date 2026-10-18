@@ -97,6 +97,8 @@ Starts the mod: loads its state, runs `setup`, and adds its listeners, panes, an
 - `raise.beforeTaskStart({ title, agentType?, model? })` asks about a task about to start.
 - `raise.beforeTurnEnd({ answer?, failure? })` asks about the open turn ending. It rejects when no turn is open: add a `Prompt` first.
 - `raise.beforeContextEnd()` asks about a compaction of the open context. `{ task }` asks about the compaction of a task's context, a task `tested.startTask` started.
+- `raise.beforeSessionStart({ source: 'compact' })` asks about the main agent's compaction. `{ source: 'compact', task }` asks about a subagent's, which only `sessions.current.goal.beforeSessionStart` hears.
+- A `note` that `raise` returns is the mod's own text. What Claude Code receives, as `claudeCodeOf(tested).fire` shows it, holds the note inside the mod's tag, such as `<guard_mod>…</guard_mod>`.
 
 ```ts
 test('a force push is refused', async () => {
@@ -279,7 +281,7 @@ type Fakes = {
   prompt: { submit? }
   model: { complete? }
   agent: { list?, spawn? }
-  clock: { after?, every? }
+  clock: { now?, after?, every? }
   cmod: { call? }
   tool: { call? }
 }
@@ -292,7 +294,7 @@ Set a fake to answer a call:
 - `files` already fills the `fs` fakes: a write is read back, and `list` lists the given files. The fake file system resolves a relative path against `/`, not against the session's working folder, so a mod under test reads `${sessions.current.project}/<file>` rather than a relative path. `fs.list()` with no path rejects.
 - `ui.open` places every pane by default. A fake that answers `{ isPlaced: false }` holds a pane back.
 - `ui.scroll` answers `{}` by default, as when the window moved. A fake that answers `{ deny }` refuses the scroll.
-- `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
+- `clock.now()` answers the real time unless a fake gives its own, so a test of a deadline can move time. `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
 - `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
 - `settings.read` answers `{}` by default, as Claude Code does with no `settings.json` files.

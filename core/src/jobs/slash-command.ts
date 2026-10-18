@@ -3,6 +3,7 @@ import type { Disposable, Job, Mod } from '../mod.js'
 import { parse } from '../vendor.js'
 import type { Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
+import { modNote } from '../session/context/turn/message/note.js'
 import { messageOf } from '../utils/text.js'
 import { withinDeadline } from './context.js'
 
@@ -40,7 +41,7 @@ export function slashCommand<State extends object = Record<never, never>>(option
     const answering = router.add('command.run', async (e, next) => {
       if (e.command !== registered) return next(e)
       try {
-        return answerOf(await withinDeadline(mod, deadline, `/${name}`, () => reply({ args: e.args, positionals: splitWords(e.args) }, mod)))
+        return answerOf(mod.name, await withinDeadline(mod, deadline, `/${name}`, () => reply({ args: e.args, positionals: splitWords(e.args) }, mod)))
       } catch (error) {
         return { text: `/${name} failed: ${oneLine(error)}` }
       }
@@ -54,10 +55,10 @@ export function slashCommand<State extends object = Record<never, never>>(option
   }
 }
 
-function answerOf(reply: CommandReply | void): CommandRunResult {
+function answerOf(name: string, reply: CommandReply | void): CommandRunResult {
   if (reply === undefined) return {}
   if (typeof reply === 'string') return { text: reply }
-  return { ...(reply.text === undefined ? {} : { text: reply.text }), ...(reply.note === undefined ? {} : { context: [reply.note] }) }
+  return { ...(reply.text === undefined ? {} : { text: reply.text }), ...(reply.note === undefined ? {} : { context: [modNote(name, reply.note)] }) }
 }
 
 function splitWords(args: string): string[] {

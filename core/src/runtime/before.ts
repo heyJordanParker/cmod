@@ -3,7 +3,7 @@ import type { Disposable } from '../mod.js'
 import { ContextEnd } from '../session/context/context.js'
 import { InstructionFile, isRulePath } from '../session/context/turn/message/instruction-file.js'
 import { instructionPathOf, Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
-import { Note } from '../session/context/turn/message/note.js'
+import { Note, untagged } from '../session/context/turn/message/note.js'
 import { Notice } from '../session/context/turn/message/notice.js'
 import { Prompt } from '../session/context/turn/message/prompt.js'
 import { Reply } from '../session/context/turn/message/reply.js'
@@ -37,7 +37,7 @@ export type Answers = {
   readonly owner: { readonly model: string }
 }
 
-export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly decide: Decide }
+export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly fold: () => Decide }
 
 const appended: readonly BeforeEvent[] = [Note, Reply, Notice]
 
@@ -56,9 +56,9 @@ export function relayOf(e: Frozen<Args<'session.receive'>>): string | undefined 
 }
 
 export function installBefore({ claude, router, hooks }: { readonly claude: Claude; readonly router: Router; readonly hooks: BeforeHooks }): Disposable {
-  const { place, wants, decide } = hooks
+  const { place, wants, fold } = hooks
   const now = () => new Date().toISOString()
-  const asked = async (event: BeforeEvent, change: SessionChange) => (await decide(event, change)) ?? {}
+  const asked = async (event: BeforeEvent, change: SessionChange, decide: Decide = fold()) => (await decide(event, change)) ?? {}
   const message = (where: Place, unplaced: Unplaced, task: string | undefined, isInTurn = true): SessionChange => {
     const turn = isInTurn ? (task === undefined ? where.turn : where.taskTurns[task]) : undefined
     const context = task === undefined ? where.context : (where.tasks[task]?.context ?? where.context)
@@ -79,7 +79,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const answer = await asked(ToolResult, message(where, result, task))
     const below = await next(e as never)
     const rewritten = answer.output === undefined || isFailure ? {} : name.startsWith('mcp__') ? { updatedMCPToolOutput: answer.output } : { updatedToolOutput: answer.output }
-    const failed = answer.isError === true && !isFailure ? { block: answer.note ?? `${name} failed.` } : {}
+    const failed = answer.isError === true && !isFailure ? { block: answer.note === undefined ? `${name} failed.` : untagged(answer.note) } : {}
     return { ...withNote(below, answer.isError === true ? undefined : answer.note), ...rewritten, ...failed }
   }
   const added: Disposable[] = [
@@ -136,9 +136,10 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (!found.some((each) => wanted.has(each.type))) return next(e)
       const where = await place()
       const texts = new Map<number, string>()
+      const decide = fold()
       for (const [part, unplaced] of found.entries()) {
         if (!wanted.has(unplaced.type)) continue
-        const answer = await asked(unplaced.type, message(where, unplaced, e.agentId))
+        const answer = await asked(unplaced.type, message(where, unplaced, e.agentId), decide)
         if (answer.text !== undefined) texts.set(part, answer.text)
       }
       return next(texts.size === 0 ? e : { ...e, message: { ...e.message, content: withTexts(row, texts) as typeof e.message.content } })

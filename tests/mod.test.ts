@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { EngineCreateResult, HookStream, On, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { EngineCreateResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
@@ -54,6 +54,10 @@ function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]): { r
   return counted
 }
 
+const cmodNote = (text: string) => `<cmod_mod>\n${text}\n</cmod_mod>`
+
+const appendedNotes = (tested: ReturnType<typeof testMod>) => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
+
 test("a mod's global rules linked after Claude Code started reach Claude as one note, and a later unlink says they no longer apply", async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const rules = [
@@ -62,20 +66,21 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   ]
   const linked = { linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed: ['house-style'], removed: [], watched }
   const rulesRuns = answerRules(tested, [linked, { linked: [], placed: [], removed: ['house-style'], watched }])
-  const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
   await settled()
+
   await prompt(tested, 'hello')
 
-  expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.'])
+  expect(started.additionalContext).toEqual([cmodNote('The house-style mod adds these rules from now on:\n\nWrite a test before each fix.')])
+  expect(appendedNotes(tested)).toEqual([])
   expect(rulesRuns.runs).toBe(1)
 
   await changeSettings(tested)
   await prompt(tested, 'again')
   await settled()
 
-  expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.', "The house-style mod's rules no longer apply."])
+  expect(appendedNotes(tested)).toEqual([cmodNote("The house-style mod's rules no longer apply.")])
   expect(rulesRuns.runs).toBe(2)
 })
 
@@ -101,15 +106,15 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
   const tests = { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' }
   const old = { name: 'old-api', isGlobal: true, text: 'Use the old API.' }
   answerRules(tested, [linked([tests, old], ['house-style']), linked([tests], [])])
-  const notes = () => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
   await settled()
   await changeSettings(tested)
   await prompt(tested, 'hello')
   await settled()
 
-  expect(notes()).toEqual(['The house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.', 'These rules of the house-style mod no longer apply:\n\nUse the old API.'])
+  expect(started.additionalContext).toEqual([cmodNote('The house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.')])
+  expect(appendedNotes(tested)).toEqual([cmodNote('These rules of the house-style mod no longer apply:\n\nUse the old API.')])
 })
 
 const settled = () => Bun.sleep(0)
@@ -393,8 +398,11 @@ test('/mods shows the installer steps a mod still needs, and Finish setup runs t
 
 test('cmod.call denies a call no mod takes with the install command', async () => {
   const hooks = new Map<string, (...args: unknown[]) => Promise<EngineCreateResult>>()
-  const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => void hooks.set(event, hook)
-  register(on as unknown as On, {})
+  const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => {
+    hooks.set(event, hook)
+    return { catch: () => undefined }
+  }
+  register(on, {})
 
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
 

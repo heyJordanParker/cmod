@@ -120,7 +120,6 @@ export type OnMethods = { readonly [Name in EventName as `on${Name}`]: OnMethod<
 
 export type BeforeMethods = { readonly [Name in BeforeName as `before${Name}`]: BeforeMethod<PayloadOf<Name>, AnswerOf<Name>> }
 
-
 export type RecordPart = OnMethods &
   BeforeMethods & {
     search(text: string, matcher?: Matcher<Message>): AsyncIterable<Message>
@@ -327,7 +326,7 @@ export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: 
 
 export type ProcessBeforeMethods = { readonly [Name in keyof ProcessAnswer as `before${Name}`]: BeforeMethod<ProcessAsked[Name], ProcessAnswer[Name]> }
 
-export type CurrentSession = Session & ProcessOnMethods & ProcessBeforeMethods
+export type CurrentSession = Omit<Session, 'goal'> & ProcessOnMethods & ProcessBeforeMethods & { readonly goal: Goal & Pick<ProcessBeforeMethods, 'beforeSessionStart'> }
 
 export type SessionScope = {
   readonly running?: boolean

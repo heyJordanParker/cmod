@@ -180,6 +180,8 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
     if (hidden.get(id) === hides) return id
     hidden.delete(id)
+    const shown = entries.get(id)
+    if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) return id
     const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
     const details = async () => {
       const modVersion = await claude.fs

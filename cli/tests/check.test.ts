@@ -77,7 +77,7 @@ test('cmod check has Claude Code write .claude-plugin/types/ again when a link i
 })
 
 const declaringCore = {
-  'node_modules/@cmodjs/core/register.js': 'let registered\nexport const registerMod = (_addHook, definition) => { registered = definition }\nexport const registeredMod = () => registered\n',
+  'node_modules/@cmodjs/core/register.js': "let registered\nexport const registerMod = (addHook, definition) => {\n  addHook('classic.Setup', () => undefined).catch(() => undefined)\n  registered = definition\n}\nexport const registeredMod = () => registered\n",
   'node_modules/@cmodjs/core/options.js': 'export const userConfigOf = (options) => Object.fromEntries(Object.entries(options).map(([key, option]) => [key, { type: "string", title: option.title, description: "" }]))\n',
   'hooks/hooks.json': JSON.stringify({ modules: ['./register.ts'] }),
   'hooks/register.ts': "import { registerMod } from '../node_modules/@cmodjs/core/register.js'\nexport function register(addHook, options) {\n  registerMod(addHook, { name: 'demo', options: { branch: { title: 'Branch' } }, setup() {} }, options)\n}\n",
@@ -178,6 +178,15 @@ test('cmod check fails a mod whose source hears permissions when register.ts doe
   await writeFiles(root, { 'src/mod.ts': "import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'\n" })
 
   expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n– package.json "cmod" asks for no permissions\n')
+
+  await writeFiles(root, {
+    'src/mod.ts': "// sessions.current.onPermissionCheck((check) => mod.log(check.name))\n/* import { readFileSync } from 'node:fs' */\nimport type { Stats } from 'node:fs'\nexport type Size = Stats['size']\n",
+    'src/view.js': 'export const view = () => <b>hi</b>\n',
+  })
+  const commented = (await cmod(home, 'check', root)).stdout
+
+  expect(commented).toContain('Reading the permissions…\n– package.json "cmod" asks for no permissions\n')
+  expect(commented).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
 })
 
 test('cmod check names the line of a metadata block it cannot read', async () => {

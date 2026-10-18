@@ -1,6 +1,7 @@
 import type { EventResult, Timer } from 'claude-code'
 import { isObject } from '../records.js'
 import type { Claude } from '../runtime/claude.js'
+import { untagged } from '../session/context/turn/message/note.js'
 import { elements } from './fake-elements.js'
 import { fakeFiles } from './fake-files.js'
 
@@ -21,7 +22,7 @@ export type Fakes = {
   prompt: { submit?: Claude['prompt']['submit'] }
   model: { complete?: Claude['model']['complete'] }
   agent: { list?: Claude['agent']['list']; spawn?: Claude['agent']['spawn'] }
-  clock: { after?: Claude['clock']['after']; every?: Claude['clock']['every'] }
+  clock: { now?: Claude['clock']['now']; after?: Claude['clock']['after']; every?: Claude['clock']['every'] }
   cmod: { call?: Claude['cmod']['call'] }
   tool: { call?: Claude['tool']['call'] }
 }
@@ -79,7 +80,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   }
 
   const appendNote: Claude['session']['append'] = async ({ message }) => {
-    shown.notes.push(message.content.map((block) => (typeof block['text'] === 'string' ? block['text'] : '')).join(''))
+    shown.notes.push(untagged(message.content.map((block) => (typeof block['text'] === 'string' ? block['text'] : '')).join('')))
     return { message, uuid: `note-${shown.notes.length}` }
   }
   const submitPrompt: Claude['prompt']['submit'] = async ({ text }) => {
@@ -175,7 +176,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       keys: async () => [...store.keys()],
     },
     clock: {
-      now: async () => Date.now(),
+      now: () => (fakes.clock.now === undefined ? Promise.resolve(Date.now()) : fakes.clock.now()),
       after: faked('clock.after', () => fakes.clock.after ?? realTimer),
       every: faked('clock.every', () => fakes.clock.every ?? idleInterval),
     },

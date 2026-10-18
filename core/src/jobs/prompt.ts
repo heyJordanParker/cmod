@@ -2,6 +2,7 @@ import type { Job, JobContext, Mod } from '../mod.js'
 import type { Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
 import { onStateChange } from '../runtime/state.js'
+import { modNote } from '../session/context/turn/message/note.js'
 import { listed, messageOf } from '../utils/text.js'
 import { callEffects, type Call } from '../utils/call-effects.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
@@ -80,7 +81,7 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
     const value = await textFor()
     if (value === undefined || value === given) return
     given = value
-    await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: `# ${name}\n${value}` }] } }).then((added) => {
+    await claude.session.append({ message: { type: 'user', content: [{ type: 'text', text: modNote(job.mod.name, `# ${name}\n${value}`) }] } }).then((added) => {
       if (added.deny !== undefined) log(`Claude Code refused the new text: ${added.deny}`)
     })
   }

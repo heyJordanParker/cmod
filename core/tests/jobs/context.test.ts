@@ -60,7 +60,7 @@ test("a prompt callback gets the work tree that holds the edited file as the cal
   const answer = await claudeCodeOf(tested).fire('tool.call', edit, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.spawn').map((call) => call.args)).toEqual([[{ argv: ['git', 'status'], cwd: `${root}/worktrees/design` }]])
-  expect(answer.context).toEqual(['# status\nOn branch design\n'])
+  expect(answer.context).toEqual(['<dent_mod>\n# status\nOn branch design\n\n</dent_mod>'])
 })
 
 test("the current session's cwd follows a move", async () => {

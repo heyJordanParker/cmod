@@ -1,7 +1,7 @@
 import type { ClassicHookEvent, ClassicHookInputs } from 'claude-code'
 import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
-import type { RoutedHook } from './router.js'
+import type { RoutedFailure, RoutedHook } from './router.js'
 import type { Failure } from './toaster.js'
 import { callEffects, type CallBase, type FileAccess } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
@@ -49,6 +49,14 @@ export function classicHook<H extends Hook>(event: H, hook: HookListener<H>, rep
     return mergeClassic((await next(e)) as HookFields, ours)
   }
   return routed as unknown as RoutedHook<RoutedEvent>
+}
+
+export function classicFailure<H extends Hook>(failed: (input: ClassicHookInputs[H], error: Error) => HookFields | undefined | Promise<HookFields | undefined>): RoutedFailure<RoutedEvent> {
+  const routed = async (e: unknown, error: Error, next: (e: unknown) => Promise<unknown>) => {
+    const ours = await failed(e as ClassicHookInputs[H], error)
+    return ours === undefined ? undefined : mergeClassic((await next(e)) as HookFields, ours)
+  }
+  return routed as unknown as RoutedFailure<RoutedEvent>
 }
 
 const frontmatter = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/
