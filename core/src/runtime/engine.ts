@@ -8,6 +8,7 @@ export type Engine = {
   readonly router: Router
   readonly toolCalls: ToolCalls
   readonly report: (failure: Failure) => void
+  readonly hasPermissionCheck: () => boolean
 }
 
 const engines = new WeakMap<object, Engine>()

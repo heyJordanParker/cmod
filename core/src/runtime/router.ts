@@ -8,7 +8,6 @@ export type RoutedHook<N extends RoutedEvent> = (e: Frozen<Args<N>>, next: Route
 
 export type Router = {
   add<N extends RoutedEvent>(event: N, hook: RoutedHook<N>): Disposable
-  has(event: RoutedEvent): boolean
   dispatch<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
 }
 
@@ -29,7 +28,6 @@ export function createRouter(): Router {
         },
       }
     },
-    has: (event) => hooks.has(event),
     dispatch<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>> {
       const chain = hooks.get(event)
       const call = async (index: number, current: unknown): Promise<unknown> => {

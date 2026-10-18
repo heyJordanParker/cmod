@@ -4,7 +4,7 @@ import type { Allowed, FileChange, Disposable, Imports, Mod, ModDefinition, Pane
 import type { Options, OptionValues } from '../options.js'
 import { changelogPage, consentPath, dataFolder, finishStepsMethod, isAtLeast, marketplaceOf, oldestCmodFor, openPageMethod, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, recordPath, scriptsSha256, settingsPagesMethod, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
-import { firstLine, formatExit, listed, messageOf } from '../utils/text.js'
+import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
 import { announcedOf, announcementMs, announcementOf } from './announce.js'
@@ -12,7 +12,7 @@ import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
 import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
 import { keepEngine } from './engine.js'
-import { classicHook, permissionEvents, userSkillHook, type Hook, type HookListener, type RoutedEvent } from './hooks.js'
+import { classicHook, userSkillHook, type Hook, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
 import { checkedAnswer, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
 import { cmodError, lastLineOf, locatingPrograms, readLines, type Programs } from './programs.js'
@@ -957,7 +957,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     return served ?? answerCall(definition.name, api, e)
   })
   const agents = toolCalls(claude, router)
-  keepEngine(mod, { claude: checked, router, toolCalls: agents, report })
+  keepEngine(mod, { claude: checked, router, toolCalls: agents, report, hasPermissionCheck: () => runtime.permissionRoutes() !== undefined })
   const names = new Set<string>()
   const reserveName = (type: string, name: string, taken: string): Disposable => {
     const key = `${type}:${name}`
@@ -972,10 +972,6 @@ async function createMod<State extends object, Declared extends Options>(definit
   await failsAs('the details of its session did not load', () => followCurrent(undefined))
   await failsAs('its setup function threw', () => definition.setup(mod))
   isSetUp = true
-  const permissionHooks = permissionEvents.filter((event) => router.has(event))
-  if (permissionHooks.length > 0 && runtime.permissionRoutes() === undefined) {
-    throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`)
-  }
   await failsAs('its open panes did not load', () => area.restorePanes())
   return { mod, added, imports, raise: client.raise }
 }

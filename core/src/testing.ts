@@ -23,7 +23,7 @@ import type { Options, OptionValues } from './options.js'
 import { readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
-import { foldBefore, installBefore } from './runtime/before.js'
+import { closingContext, foldBefore, installBefore, withAnswer } from './runtime/before.js'
 import { permissionRoutes } from './runtime/permission-check.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
@@ -75,12 +75,14 @@ type MessageBefore = Exclude<BeforeName, 'TaskStart' | 'TurnEnd' | 'ContextEnd'>
 
 type DraftOf<Name extends MessageBefore> = Omit<Extract<MessageDraft, { readonly type: (typeof sessionEvents)[Name] }>, 'type'>
 
+type RaisedOf<Name extends MessageBefore> = Name extends 'ToolResult' ? Omit<DraftOf<Name>, 'output'> & { readonly output: unknown } : DraftOf<Name>
+
 export type Raise = {
-  readonly [Name in MessageBefore as `before${Name}`]: (message: DraftOf<Name>, options?: { readonly task?: string }) => Promise<AnswerOf<Name> | undefined>
+  readonly [Name in MessageBefore as `before${Name}`]: (message: RaisedOf<Name>, options?: { readonly task?: string }) => Promise<AnswerOf<Name> | undefined>
 } & {
   beforeTaskStart(task: { readonly title: string; readonly agentType?: string; readonly model?: string }): Promise<AnswerOf<'TaskStart'> | undefined>
   beforeTurnEnd(ending?: Pick<Turn, 'answer' | 'failure'>): Promise<AnswerOf<'TurnEnd'> | undefined>
-  beforeContextEnd(): Promise<AnswerOf<'ContextEnd'> | undefined>
+  beforeContextEnd(options?: { readonly task?: string }): Promise<AnswerOf<'ContextEnd'> | undefined>
 } & {
   readonly [Name in ProcessName as `on${Name}`]: (payload: Placed<ProcessPayload[Name]>) => Promise<void>
 } & {
@@ -277,9 +279,11 @@ export function testMod<State extends object, Declared extends Options = Options
   const raise = Object.fromEntries([
     ...beforeEvents
       .filter((named) => named !== 'TaskStart' && named !== 'TurnEnd' && named !== 'ContextEnd')
-      .map((named) => [`before${named}`, async (draft: object, placed?: { readonly task?: string }) => {
+      .map((named) => [`before${named}`, async (draft: { readonly output?: unknown }, placed?: { readonly task?: string }) => {
         await start()
-        return asked(sessionEvents[named], { type: Message, message: conversations.draft({ ...draft, type: sessionEvents[named] } as MessageDraft, placed?.task) })
+        const isResult = named === 'ToolResult'
+        const message = conversations.draft({ ...draft, ...(isResult ? { output: '' } : {}), type: sessionEvents[named] } as MessageDraft, placed?.task)
+        return asked(sessionEvents[named], withAnswer({ type: Message, message }, { output: draft.output }))
       }]),
     ['beforeTaskStart', async ({ title, agentType = 'general-purpose', model }: { readonly title: string; readonly agentType?: string; readonly model?: string }) => {
       await start()
@@ -291,10 +295,12 @@ export function testMod<State extends object, Declared extends Options = Options
       if (turn === undefined) throw new Error(`${name} has no turn open to end. Open one with tested.add({ type: Prompt, text: '…' }).`)
       return asked(TurnEnd, { type: TurnEnd, turn: { ...turn, ...ending, closedAt: new Date().toISOString() } })
     }],
-    ['beforeContextEnd', async () => {
+    ['beforeContextEnd', async (placed: { readonly task?: string } = {}) => {
       await start()
-      const { context, contextOpenedAt } = conversations.place()
-      return asked(ContextEnd, { type: ContextEnd, context: { number: context, openedAt: contextOpenedAt, closedAt: new Date().toISOString() } })
+      const where = conversations.place()
+      const task = placed.task === undefined ? undefined : where.tasks[placed.task]
+      if (placed.task !== undefined && task === undefined) throw new Error(`${name} has no task ${placed.task}. Start it with tested.startTask.`)
+      return asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, new Date().toISOString()) })
     }],
     ...[...Object.entries(processEvents).flatMap(([named, event]) => [`on${named}`, ...('before' in event ? [`before${named}`] : [])]), 'onRun', 'beforeRun'].map((method) => [method, async (payload: object) => {
       await start()

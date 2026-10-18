@@ -48,7 +48,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 
 1. Installs its packages.
 2. Checks its layout.
-3. Checks that each step runs a script, and prints the permissions the person grants at install and can grant later, as the person reads them ([permissions.md](permissions.md)). It fails a `hooks/register.ts` that calls `registerPermissionCheck` without `"approve": true`.
+3. Checks that each step runs a script, and prints the permissions the person grants at install and can grant later, as the person reads them ([permissions.md](permissions.md)). It adds `"approve": true` when the mod answers the permission check, with a `beforePermissionCheck` or `beforePermissionRequest` listener or the `permissions` job, and `hooks/register.ts` calls `registerPermissionCheck`. It fails a mod whose `src/` hears permissions while `register.ts` does not call `registerPermissionCheck`.
 4. Writes the options `defineMod` declares into `.claude-plugin/plugin.json` `userConfig`, keeping the file's own formatting, so Claude Code shows them in `/config` ([options.md](options.md)). It loads `hooks/register.ts` to read them, without starting the mod.
 5. Checks its imports.
 6. Looks for prebuilt binaries outside `cli/`.

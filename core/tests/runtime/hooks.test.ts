@@ -30,6 +30,17 @@ async function ran(tested: Tested, name: string, input: Record<string, unknown>,
   await tested.raise.beforeToolResult({ callId: 'toolu_1', output: '', ...(isError ? { isError } : {}) })
 }
 
+test("raise.beforeToolResult hands the listener the tool's raw answer, as Claude Code does", async () => {
+  const outputs: unknown[] = []
+  const tested = testMod(defineMod({ name: 'patch-reader', setup: () => void sessions.current.beforeToolResult((result) => void outputs.push(result.output)) }))
+  const answered = { filePath: '/work/src/app.ts', structuredPatch: [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ['-a', '+b'] }] }
+
+  await tested.add({ type: ToolCall, name: 'Edit', input: { file_path: '/work/src/app.ts', old_string: 'a', new_string: 'b' }, callId: 'toolu_1' })
+  await tested.raise.beforeToolResult({ callId: 'toolu_1', output: answered })
+
+  expect(outputs).toEqual([answered])
+})
+
 test("an Edit's file is in files.changed on its call and on its result, failed or not", async () => {
   const { tested, seen } = fileWatcher()
   const edit = { file_path: '/work/src/app.ts', old_string: 'a', new_string: 'b' }

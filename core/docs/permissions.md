@@ -29,7 +29,7 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 
 Reading files, drawing panes and renders, toasts, slash commands, tools of the mod's own, listeners on the mod's own session, and a `refuse` answer need no permission. Writing a Claude Code settings file with `fs.write` is refused with every permission, and names the `settings` call to use instead ([mod.md](mod.md#settings-claude-code-s-settings-files)).
 
-`cmod check` adds `"approve": true` to `package.json` when `hooks/register.ts` calls `registerPermissionCheck` and the line is missing, and says so.
+`cmod check` adds `"approve": true` to `package.json` when the mod answers the permission check, with a `beforePermissionCheck` or `beforePermissionRequest` listener or the `permissions` job, and the line is missing, and says so. A mod that only listens with `onPermissionCheck` or `onPermissionRequest` needs no `approve`.
 
 ## What the person sees
 

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
 import { installerPaneOf } from '../../src/runtime/installer.js'
 import { defineStep } from '../../src/installer.js'
+import { permissions } from '../../src/jobs/permissions.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { defineMod, sessions, type CwdChange, type Mod } from '../../src/mod.js'
 import { option } from '../../src/options.js'
@@ -1018,15 +1019,36 @@ test('a step left on Not now is listed to /mods, and finishing from /mods opens 
   expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: [] })
 })
 
-test('a mod that decides permissions without registerPermissionCheck does not start, and names the line to add', async () => {
+test('a mod that hears permissions without registerPermissionCheck does not start, and names the line to add', async () => {
   const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => undefined)
+  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.onPermissionCheck(() => undefined) }), () => undefined)
 
   await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
 
   expect(lifecycle.toasts).toEqual(
-    failed('it decides permissions on classic.PermissionRequest, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod'),
+    failed("its setup function threw: guard: onPermissionCheck hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod."),
   )
+})
+
+test('the permissions job without registerPermissionCheck throws where it is used, in setup or after it', async () => {
+  const forcePush = permissions({ deny: [{ command: 'git push --force', reason: 'Never force-push.' }] })
+  const advice = "guard: the permissions job hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod."
+  const inSetup = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.use(forcePush) }), () => undefined)
+  let started: Mod | undefined
+  const later = createLifecycle(defineMod({ name: 'guard', setup: (mod) => void (started = mod) }), () => undefined)
+
+  await inSetup.start(fakeClaude({ name: 'guard', root }).claude, given({ ...pending, name: 'guard', isInstalled: true }))
+  await later.start(fakeClaude({ name: 'guard', root }).claude, given({ ...pending, name: 'guard', isInstalled: true }))
+
+  expect(inSetup.toasts).toEqual(failed(`its setup function threw: ${advice}`))
+  expect(later.phase).toBe('active')
+  let thrown: unknown
+  try {
+    started?.use(forcePush)
+  } catch (error) {
+    thrown = error
+  }
+  expect(thrown).toEqual(new Error(advice))
 })
 
 test('a mod that decides permissions starts once registerPermissionCheck registered the permission events', async () => {

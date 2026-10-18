@@ -129,7 +129,7 @@ test('cmod check names each machine package.json "os" and "cpu" allow that a cmo
   )
 })
 
-test('cmod check shows what the person grants at install, and adds approve when register.ts calls registerPermissionCheck', async () => {
+test('cmod check shows what the person grants at install, and adds approve only for a mod that answers the permission check', async () => {
   const home = await temporaryHome()
   const root = join(home, 'guard')
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
@@ -142,14 +142,42 @@ test('cmod check shows what the person grants at install, and adds approve when 
 
   expect(shown.stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
 
-  await writeFiles(root, { 'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n  registerPermissionCheck(addHook)\n}\n' })
+  await writeFiles(root, {
+    'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n  registerPermissionCheck(addHook)\n}\n',
+    'src/mod.ts': 'sessions.current.onPermissionCheck((check) => mod.log(check.name))\n',
+  })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
+
+  await writeFiles(root, { 'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ ask: 'Check first.' }))\n" })
 
   const added = await cmod(home, 'check', root)
 
   expect(added.stdout).toContain(
-    '✔ Added "approve": true to package.json "cmod", because hooks/register.ts calls registerPermissionCheck\n    At install the person grants: Connect to api.github.com; Approve Claude\'s tool calls for you\n',
+    '✔ Added "approve": true to package.json "cmod", because the mod answers Claude Code\'s permission check\n    At install the person grants: Connect to api.github.com; Approve Claude\'s tool calls for you\n',
   )
   expect(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).cmod).toEqual({ permissions: { network: ['api.github.com'], approve: true } })
+})
+
+test('cmod check fails a mod whose source hears permissions when register.ts does not call registerPermissionCheck', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'guard')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'guard' }),
+    'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n}\n',
+    'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ ask: 'Check first.' }))\n",
+    'src/targets.ts': "import type { Call } from '../node_modules/@cmodjs/core/jobs/permissions.js'\n",
+  })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain(
+    "Reading the permissions…\n✘ src/mod.ts hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck\n    fix: Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.\n",
+  )
+
+  await writeFiles(root, { 'src/mod.ts': "import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'\n" })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n– package.json "cmod" asks for no permissions\n')
 })
 
 test('cmod check names the line of a metadata block it cannot read', async () => {

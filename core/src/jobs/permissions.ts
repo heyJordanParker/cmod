@@ -2,6 +2,7 @@ import type { Args, Frozen } from 'claude-code'
 import type { Job, Mod } from '../mod.js'
 import type { Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
+import { withoutPermissionCheck } from '../runtime/sessions.js'
 import { inputOf } from '../utils/call-effects.js'
 import { decidePermission, stricterVerdict, type PermissionRules as RulesFor, type Rule as RuleFor, type Verdict } from './permissions/decide-permission.js'
 import { targetOf } from './permissions/match-target.js'
@@ -20,7 +21,8 @@ export function permissions<State extends object = Record<never, never>>(rules: 
   if (count === 0) throw new Error('permissions: give it a deny or an ask rule, or remove it from setup.')
 
   return (job) => {
-    const { router, toolCalls } = engineOf(job.mod)
+    const { router, toolCalls, hasPermissionCheck } = engineOf(job.mod)
+    if (!hasPermissionCheck()) throw new Error(withoutPermissionCheck(job.mod.name, 'the permissions job'))
     const readWorkspace = workspaceReader(job)
 
     const verdictOf = async (e: Frozen<Args<'tool.check'>>): Promise<Verdict | undefined> => {

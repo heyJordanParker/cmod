@@ -189,7 +189,7 @@ type Rule<State> = Target & {
 - When cmod cannot read the call or the session, it denies the call with the reason.
 - For a PowerShell command, or a Bash command cmod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one. A `!` pattern leaves nothing out of such a line, so the rule errs toward matching.
 - `permissions({})` throws `permissions: give it a deny or an ask rule, or remove it from setup.`
-- A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it the mod does not start.
+- A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it `mod.use(permissions(…))` throws, so a mod that uses it in `setup` does not start.
 
 `when` gets the call, typed by the target's key. `jobs/permissions.js` exports each type, and `Call` is any of them:
 

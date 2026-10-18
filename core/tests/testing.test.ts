@@ -656,3 +656,15 @@ test('raise.beforeTurnEnd asks about the open turn, and says how to open one whe
   await tested.add({ type: Prompt, text: 'Ship it' })
   expect(await tested.raise.beforeTurnEnd()).toEqual({ refuse: 'Run the tests first.' })
 })
+
+test("raise.beforeContextEnd asks about the session's compaction, or a task's with { task }", async () => {
+  const ending: { readonly number: number; readonly task?: string }[] = []
+  const tested = testMod(defineMod({ name: 'keeper', setup: () => void sessions.current.goal.beforeContextEnd(({ number, task }) => void ending.push(task === undefined ? { number } : { number, task })) }))
+  const task = await tested.startTask({ title: 'Read the logs' })
+  await tested.compact()
+
+  await tested.raise.beforeContextEnd()
+  await tested.raise.beforeContextEnd({ task })
+  await expect(tested.raise.beforeContextEnd({ task: 'task-missing' })).rejects.toThrow('keeper has no task task-missing. Start it with tested.startTask.')
+  expect(ending).toEqual([{ number: 2 }, { number: 1, task }])
+})

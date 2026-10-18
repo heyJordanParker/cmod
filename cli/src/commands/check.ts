@@ -32,7 +32,7 @@ exists, tests/tsconfig.json,
 lints it, runs its tests with bun test and with claude plugin test, and checks
 its name. Each failure names its fix.`
 
-type Result = { status: 'pass' | 'fail' | 'skip'; text: string; fix?: string }
+type Result = { status: 'pass' | 'skip'; text: string } | { status: 'fail'; text: string; fix: string }
 
 type Check = { heading: string; run(plugin: Plugin): Promise<Result> }
 
@@ -129,8 +129,11 @@ function downloadsIn(script: string): { program: string; listed: string[] }[] {
 
 async function checkPermissions(plugin: Plugin): Promise<Result> {
   let permissions = plugin.steps.permissions ?? []
-  const register = (await readText(join(plugin.root, 'hooks', 'register.ts'))) ?? ''
-  const isAdded = /\bregisterPermissionCheck\s*\(/.test(register) && !permissions.includes('approve')
+  const sources = await sourcesOf(plugin.root)
+  const hasPermissionCheck = /\bregisterPermissionCheck\s*\(/.test(sources.find(({ file }) => file === registerFile)?.text ?? '')
+  const hearing = hasPermissionCheck ? undefined : sources.find(({ text }) => permissionListener.test(text) || answersPermissions(text))
+  if (hearing !== undefined) return { status: 'fail', text: `${hearing.file} hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck`, fix: 'Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.' }
+  const isAdded = hasPermissionCheck && !permissions.includes('approve') && sources.some(({ text }) => answersPermissions(text))
   if (isAdded) {
     const path = join(plugin.root, 'package.json')
     const manifest = (await readJson(path)) as Record<string, unknown>
@@ -139,10 +142,24 @@ async function checkPermissions(plugin: Plugin): Promise<Result> {
     await writeAtomically(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, permissions: { ...declared, approve: true } } }, null, 2)}\n`)
     permissions = [...permissions, 'approve']
   }
-  if (existsSync(join(plugin.root, 'rules')) && !permissions.includes('prompt')) return { status: 'fail', text: 'rules/ holds rules Claude reads, so package.json "cmod" needs "permissions": { "prompt": true }' }
+  if (existsSync(join(plugin.root, 'rules')) && !permissions.includes('prompt')) return { status: 'fail', text: 'rules/ holds rules Claude reads, and package.json "cmod" does not ask for "prompt"', fix: 'Add "permissions": { "prompt": true } to package.json "cmod", then run cmod check again.' }
   if (permissions.length === 0) return { status: 'skip', text: 'package.json "cmod" asks for no permissions' }
-  const added = isAdded ? 'Added "approve": true to package.json "cmod", because hooks/register.ts calls registerPermissionCheck\n    ' : ''
+  const added = isAdded ? 'Added "approve": true to package.json "cmod", because the mod answers Claude Code\'s permission check\n    ' : ''
   return { status: 'pass', text: `${added}At install the person grants: ${permissions.map(permissionWords).join('; ')}` }
+}
+
+const registerFile = join('hooks', 'register.ts')
+
+const scriptFile = /\.(m?[jt]sx?|cts|cjs)$/
+
+const permissionListener = /\bonPermission(?:Check|Request)\s*\(/
+
+const answersPermissions = (text: string) => /\bbeforePermission(?:Check|Request)\s*\(/.test(text) || /\bimport\s*\{[^}]*\bpermissions\b[^}]*\}\s*from\s*['"][^'"]*\/jobs\/permissions\.js['"]/.test(text)
+
+async function sourcesOf(root: string): Promise<{ readonly file: string; readonly text: string }[]> {
+  const source = join(root, 'src')
+  const files = [join(root, registerFile), ...(existsSync(source) ? await walk(source, root) : [])].filter((file) => scriptFile.test(file) && !/\.test\.[^.]+$/.test(file))
+  return Promise.all(files.map(async (file) => ({ file: relative(root, file), text: (await readText(file)) ?? '' })))
 }
 
 async function checkMetadata(plugin: Plugin): Promise<Result> {
@@ -186,7 +203,7 @@ async function checkImports(plugin: Plugin): Promise<Result> {
   const problems: string[] = []
   const cli = join(plugin.root, 'cli') + sep
   for (const file of await walk(plugin.root)) {
-    if (!/\.(m?[jt]sx?|cts|cjs)$/.test(file)) continue
+    if (!scriptFile.test(file)) continue
     const isSource = file.startsWith(join(plugin.root, 'src') + sep)
     for (const specifier of importsOf((await readText(file)) ?? '')) {
       if (specifier.startsWith('.') && resolve(dirname(file), specifier).startsWith(cli)) problems.push(`${relative(plugin.root, file)} imports ${specifier} from cli/, which the release leaves out: move the shared code into src/`)

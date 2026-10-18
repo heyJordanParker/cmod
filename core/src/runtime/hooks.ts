@@ -35,8 +35,6 @@ export type RoutedEvent =
   | 'agent.spawn'
   | 'turn.start'
 
-export const permissionEvents: readonly RoutedEvent[] = ['tool.check', 'classic.PermissionRequest']
-
 type CallFiles = { readonly read: string[]; readonly changed: string[] }
 
 export function classicHook<H extends Hook>(event: H, hook: HookListener<H>, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {

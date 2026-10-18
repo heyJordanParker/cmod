@@ -93,9 +93,10 @@ Starts the mod: loads its state, runs `setup`, and adds its listeners, panes, an
 
 - Each process method takes its payload without `session` and `cwd`, which `raise` fills: `raise.beforeModelChange({ model: 'haiku', previous: 'opus', source: 'command', … })`, `raise.onCwdChange({ previous: '/work/old' })`, `raise.beforeRun({ name: 'compact', args: '', from: { type: Person } })`.
 - Each message `before` method takes a `MessageDraft` without its `type`, placed in the open turn: `raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })` and `raise.beforePrompt({ text: 'Deploy to prod' })`. `{ task }` places it in a task.
+- `raise.beforeToolResult({ callId, output })` passes `output` to the listener as given, so a test gives what the tool answered Claude Code: `{ stdout: 'ok', stderr: '' }` for Bash, or Edit's `{ filePath, structuredPatch }`. A `ToolResult` that `tested.add` adds holds the text Claude read, as a transcript does.
 - `raise.beforeTaskStart({ title, agentType?, model? })` asks about a task about to start.
 - `raise.beforeTurnEnd({ answer?, failure? })` asks about the open turn ending. It rejects when no turn is open: add a `Prompt` first.
-- `raise.beforeContextEnd()` asks about a compaction of the open context.
+- `raise.beforeContextEnd()` asks about a compaction of the open context. `{ task }` asks about the compaction of a task's context, a task `tested.startTask` started.
 
 ```ts
 test('a force push is refused', async () => {

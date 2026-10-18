@@ -15,7 +15,13 @@ In Claude Code, add the mod's marketplace and install the mod:
 /plugin install <mod>@<marketplace>
 ```
 
-Claude Code installs the cmod plugin with the mod. cmod then fetches the cmod program and opens the mod's installer pane, and the mod runs its install step once you accept. The pane names each command the mod runs, each key it binds, and each permission it asks for, such as "connect to api.github.com" or "run gh on your computer". It then asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. The mod can reach nothing else through cmod. A progress bar shows each step. A notice tells you when the mod is ready.
+Claude Code installs the cmod plugin with the mod. To install the cmod plugin on its own, as an author building a mod does:
+
+```text
+/plugin install cmod --marketplace heyJordanParker/cmod
+```
+
+Once a mod is installed, cmod fetches the cmod program and opens the mod's installer pane, and the mod runs its install step once you accept. The pane names each command the mod runs, each key it binds, and each permission it asks for, such as "connect to api.github.com" or "run gh on your computer". It then asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. The mod can reach nothing else through cmod. A progress bar shows each step. A notice tells you when the mod is ready.
 
 `/mods` lists every mod with the one-line description from its `plugin.json`, whether Claude Code has it turned off, its settings, its permissions, its keys, its own pages, and its changelog. When a mod installs or updates, a toast says what it adds or what changed, in the words its author wrote in its `CHANGELOG.md`. Turn a permission off there and the mod loses it before its next call. `Turn off` and `Turn on` run `cmod disable` and `cmod enable`, and `Remove` asks once, then runs `cmod remove <mod>`.
 

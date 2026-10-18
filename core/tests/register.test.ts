@@ -331,9 +331,10 @@ test('only registerPermissionCheck brings in the permission answers, so the bund
 
   const plain = await bundled('plain', '')
   const deciding = await bundled('deciding', 'registerPermissionCheck(on)')
+  const hearsPermissions = /\(\s*"(tool\.check|PermissionRequest|classic\.PermissionRequest)",/
 
-  expect([plain.includes('updatedPermissions'), plain.includes("behavior: \"allow\"")]).toEqual([false, false])
-  expect([deciding.includes('updatedPermissions'), deciding.includes("behavior: \"allow\"")]).toEqual([true, true])
+  expect([plain.includes('updatedPermissions'), plain.includes("behavior: \"allow\""), hearsPermissions.test(plain)]).toEqual([false, false, false])
+  expect([deciding.includes('updatedPermissions'), deciding.includes("behavior: \"allow\""), hearsPermissions.test(deciding)]).toEqual([true, true, true])
 })
 
 test("registerMod names each event as a string literal, which Claude Code's hooks loader requires, and registers every hook a mod hears", async () => {

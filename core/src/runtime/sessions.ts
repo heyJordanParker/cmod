@@ -133,6 +133,10 @@ export function isInScope(scope: Scope, session: string, change: SessionChange, 
   return (change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.id === scope.turn
 }
 
+export function withoutPermissionCheck(name: string, hearer: string): string {
+  return `${name}: ${hearer} hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.`
+}
+
 export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>) => Disposable
 
 export function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
@@ -469,8 +473,8 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     const isBefore = method.startsWith('before')
     if (named === 'PermissionCheck' || named === 'PermissionRequest') {
       const routes = permissionRoutes?.()
-      if (routes !== undefined) return routes(method, { raise, hookOn, routeOn, current: () => current })
-      return named === 'PermissionCheck' ? routeOn('tool.check', (e, next) => next(e)) : hookOn('PermissionRequest', () => undefined)
+      if (routes === undefined) throw new Error(withoutPermissionCheck(name, method))
+      return routes(method, { raise, hookOn, routeOn, current: () => current })
     }
     const event: { readonly on: string; readonly before?: string } = processEvents[named as ProcessName]
     const hook = (isBefore ? event.before : undefined) ?? event.on

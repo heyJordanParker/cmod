@@ -59,7 +59,6 @@ When a step fails, the mod does not start. An error toast above the prompt names
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
-- `it decides permissions on <events>, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod` when `setup` adds a `beforePermissionCheck` or `beforePermissionRequest` listener, or a job that decides permissions, and `register.ts` does not register the permission check.
 
 Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)).
 
@@ -125,7 +124,7 @@ registeredMod(): ModDefinition | undefined
 
 `registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. `options` is what Claude Code passes `register`: the values of the mod's options ([options.md](options.md)). `registeredMod` returns the definition `registerMod` got, for `cmod check` to read the mod's options without starting it. `registerMod` leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
 
-A mod that decides permissions calls `registerPermissionCheck` after `registerMod`. That covers `sessions.current.beforePermissionCheck`, `sessions.current.beforePermissionRequest`, and the `permissions` job:
+A mod that hears permissions calls `registerPermissionCheck` after `registerMod`. That covers `sessions.current.onPermissionCheck`, `beforePermissionCheck`, `onPermissionRequest`, `beforePermissionRequest`, and the `permissions` job:
 
 ```ts
 export function register(addHook: On, options: PluginOptions): void {
@@ -134,7 +133,7 @@ export function register(addHook: On, options: PluginOptions): void {
 }
 ```
 
-Such a mod also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. A mod that decides permissions without it does not start, and its error toast names the line to add.
+A mod that answers, with a `before` method or the `permissions` job, also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. Without it, each of those methods and `mod.use(permissions(…))` throws `<mod>: <method> hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.` where it is called, so a mod that calls one in `setup` does not start. `cmod check` fails a mod whose `src/` uses one while `register.ts` does not call `registerPermissionCheck`.
 
 Keep `register.ts` this small. Claude Code checks a hooks module before it loads it, and refuses some shapes, such as a `$` passed to a function in another module. The plugin directory reads the bundled module too, and flags it when the name of `register`'s first parameter is declared anywhere else in the bundle. `@cmodjs/core` declares `on` as a key, so name that parameter `addHook`. Declare `register` as a function, as here: `cmod publish` bundles the hooks module into one file, and Claude Code refuses a bundled `register` that is not one.
 

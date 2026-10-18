@@ -157,7 +157,7 @@ A listener that throws shows the error toast `The <method> listener failed`, suc
 
 ### Give a listener time
 
-A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, so a slow call such as `http.fetch` can stop with it:
+A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, so a slow call such as `http.fetch` can stop with it. Time a listener spends waiting on a call, such as `process.run`, never counts against the 10 seconds Claude Code gives a hook's own code, so a listener that waits can use its whole `timeoutMs`:
 
 ```ts
 sessions.current.onTurnEnd(async (turn, { signal }) => {
@@ -219,6 +219,8 @@ An answer that changes text needs the `prompt` permission, a `beforeToolCall` an
 | `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `ToolBatch`: `calls`, each `{ callId, name, input, output? }` | `{ note }` |
 | `beforeTodoCreate`, `onTodoCreate`, `beforeTodoComplete`, `onTodoComplete` | a todo is added to or ticked on the checklist | `Todo`: `id`, `subject`, `description?`, `teammate?` | `{ refuse }` |
 | `beforeReplyDisplay`, `onReplyDisplay` | a reply is about to show | `ReplyDisplay`: `replyId`, `index`, `isLast`, `text` | `{ text }`, what the person sees |
+
+The four `PermissionCheck` and `PermissionRequest` methods work only in a mod whose `hooks/register.ts` calls `registerPermissionCheck` ([mod.md](mod.md#register-the-mod-with-claude-code)). Without it they throw where they are called.
 
 Every payload also carries where it happened: `session`, `cwd`, and `agentType?` and `permissionMode?` when Claude Code reports them. A matcher keeps the payloads it matches:
 

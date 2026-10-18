@@ -12,7 +12,7 @@ import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
-import type { ConversationState, SessionChange, TaskData } from '../session/conversation.js'
+import type { ContextData, ConversationState, RunningTask, SessionChange, TaskData } from '../session/conversation.js'
 import { Task, TaskStart } from '../session/goal/task.js'
 import { sessionEvents, type BeforeEvent, type SessionEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
@@ -210,12 +210,15 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const where = await place()
       const task = e.agentId === undefined ? undefined : where.tasks[e.agentId]
       if (e.agentId !== undefined && task === undefined) return next(e)
-      const context = task === undefined ? { number: where.context, openedAt: where.contextOpenedAt } : { number: task.context, openedAt: task.contextOpenedAt ?? task.openedAt, task: task.id }
-      const answer = await asked(ContextEnd, { type: ContextEnd, context: { ...context, closedAt: now() } })
+      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) })
       return answer.refuse === undefined ? next(e) : { skip: answer.refuse }
     }),
   ]
   return { dispose: () => added.forEach((each) => each.dispose()) }
+}
+
+export function closingContext(where: Place, task: RunningTask | undefined, closedAt: string): ContextData {
+  return task === undefined ? { number: where.context, openedAt: where.contextOpenedAt, closedAt } : { number: task.context, openedAt: task.contextOpenedAt ?? task.openedAt, closedAt, task: task.id }
 }
 
 export function withAnswer(change: SessionChange, answer: Partial<Answers>): SessionChange {
