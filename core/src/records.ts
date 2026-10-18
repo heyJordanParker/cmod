@@ -282,6 +282,10 @@ function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall
   return { [key]: command }
 }
 
+export function bundleDefines(permissions: readonly string[]): Record<string, string> {
+  return permissions.includes('approve') ? {} : { 'globalThis.cmodWithoutApprove': 'true' }
+}
+
 export function scriptPaths(command: string): string[] {
   const words = command
     .split(/[\s;&|()<>]+/)

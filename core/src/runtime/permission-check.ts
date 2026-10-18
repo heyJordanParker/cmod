@@ -16,6 +16,8 @@ type Verdict = { readonly decision: 'allow' | 'ask' | 'deny'; readonly reason?: 
 
 const verdictName = (decision: Verdict['decision']) => (decision === 'deny' ? 'refuse' : decision)
 
+type BuildFlags = { readonly cmodWithoutApprove?: true }
+
 export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, hookOn, routeOn, current }) => {
   const isBefore = method.startsWith('before')
   if (method.endsWith('PermissionCheck')) {
@@ -39,8 +41,11 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
         const answer = await raise(method, payload)
         if (answer === undefined || below.decision === 'deny') return below
         if (typeof answer['refuse'] === 'string') return { decision: 'deny', reason: answer['refuse'] }
-        if (typeof answer['ask'] === 'string') return { decision: 'ask', reason: answer['ask'] }
-        return answer['allow'] === true ? { decision: 'allow' } : below
+        if (!(globalThis as BuildFlags).cmodWithoutApprove) {
+          if (typeof answer['ask'] === 'string') return { decision: 'ask', reason: answer['ask'] }
+          if (answer['allow'] === true) return { decision: 'allow' }
+        }
+        return below
       },
       isBefore ? failed : undefined,
     )
@@ -57,7 +62,10 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
       const answer = await raise(method, payload)
       if (answer === undefined) return undefined
       if (typeof answer['refuse'] === 'string') return refused(answer['refuse'], answer['interrupt'])
-      return answer['allow'] === true ? { decision: defined({ behavior: 'allow', updatedInput: answer['input'], updatedPermissions: answer['updates'] }) } : undefined
+      if (!(globalThis as BuildFlags).cmodWithoutApprove) {
+        if (answer['allow'] === true) return { decision: defined({ behavior: 'allow', updatedInput: answer['input'], updatedPermissions: answer['updates'] }) }
+      }
+      return undefined
     },
     isBefore
       ? (input, error) => {

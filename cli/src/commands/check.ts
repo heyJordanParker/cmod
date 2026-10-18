@@ -138,7 +138,7 @@ async function checkPermissions(plugin: Plugin): Promise<Result> {
   const hasPermissionCheck = /\bregisterPermissionCheck\s*\(/.test(sources.find(({ file }) => file === registerFile)?.code ?? '')
   const hearing = hasPermissionCheck ? undefined : sources.find(({ code }) => permissionListener.test(code) || answersPermissions(code))
   if (hearing !== undefined) return { status: 'fail', text: `${hearing.file} hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck`, fix: 'Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.' }
-  const isAdded = hasPermissionCheck && !permissions.includes('approve') && sources.some(({ code }) => answersPermissions(code))
+  const isAdded = hasPermissionCheck && !permissions.includes('approve') && sources.some(({ code }) => approvesCalls(code))
   if (isAdded) {
     const path = join(plugin.root, 'package.json')
     const manifest = (await readJson(path)) as Record<string, unknown>
@@ -149,8 +149,9 @@ async function checkPermissions(plugin: Plugin): Promise<Result> {
   }
   if (existsSync(join(plugin.root, 'rules')) && !permissions.includes('prompt')) return { status: 'fail', text: 'rules/ holds rules Claude reads, and package.json "cmod" does not ask for "prompt"', fix: 'Add "permissions": { "prompt": true } to package.json "cmod", then run cmod check again.' }
   if (permissions.length === 0) return { status: 'skip', text: 'package.json "cmod" asks for no permissions' }
-  const added = isAdded ? 'Added "approve": true to package.json "cmod", because the mod answers Claude Code\'s permission check\n    ' : ''
-  return { status: 'pass', text: `${added}At install the person grants: ${permissions.map(permissionWords).join('; ')}` }
+  const added = isAdded ? 'Added "approve": true to package.json "cmod", because the mod allows or asks on Claude Code\'s permission check\n    ' : ''
+  const unlisted = permissions.includes('approve') ? "\n    Anthropic's plugin directory does not list a mod that approves Claude's tool calls" : ''
+  return { status: 'pass', text: `${added}At install the person grants: ${permissions.map(permissionWords).join('; ')}${unlisted}` }
 }
 
 const registerFile = join('hooks', 'register.ts')
@@ -160,6 +161,8 @@ const scriptFile = /\.(m?[jt]sx?|cts|cjs)$/
 const permissionListener = /\bonPermission(?:Check|Request)\s*\(/
 
 const answersPermissions = (code: string) => /\bbeforePermission(?:Check|Request)\s*\(/.test(code) || /\bimport\s*\{[^}]*\bpermissions\b[^}]*\}\s*from\s*['"][^'"]*\/jobs\/permissions\.js['"]/.test(code)
+
+const approvesCalls = (code: string) => answersPermissions(code) && /\b(?:allow\s*:\s*true|ask\s*:)/.test(code)
 
 type Source = { readonly file: string; readonly code: string }
 

@@ -29,7 +29,9 @@ They sit in the `package.json` `cmod` key, beside `install` and `keys`, because 
 
 Reading files, drawing panes and renders, toasts, slash commands, tools of the mod's own, listeners on the mod's own session, and a `refuse` answer need no permission. Writing a Claude Code settings file with `fs.write` is refused with every permission, and names the `settings` call to use instead ([mod.md](mod.md#settings-claude-code-s-settings-files)).
 
-`cmod check` adds `"approve": true` to `package.json` when the mod answers the permission check, with a `beforePermissionCheck` or `beforePermissionRequest` listener or the `permissions` job, and the line is missing, and says so. A mod that only listens with `onPermissionCheck` or `onPermissionRequest` needs no `approve`.
+`cmod check` adds `"approve": true` to `package.json` when the mod allows or asks, with a `beforePermissionCheck` or `beforePermissionRequest` answer or an `ask` rule of the `permissions` job, and the line is missing, and says so. A mod that only refuses, or only listens with `onPermissionCheck` or `onPermissionRequest`, needs no `approve`.
+
+Anthropic's plugin directory does not list a mod that can approve Claude's tool calls. So `cmod publish` leaves the code that allows and asks out of the bundle of a mod that does not declare `"approve": true`, and that mod can be listed. A mod that declares it installs through cmod and the [Mods page](https://claudemodmanager.com/mods), and `cmod check` says the directory does not list it.
 
 ## What the person sees
 

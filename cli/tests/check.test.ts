@@ -149,12 +149,16 @@ test('cmod check shows what the person grants at install, and adds approve only 
 
   expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
 
+  await writeFiles(root, { 'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ refuse: 'No deploys.' }))\n" })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
+
   await writeFiles(root, { 'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ ask: 'Check first.' }))\n" })
 
   const added = await cmod(home, 'check', root)
 
   expect(added.stdout).toContain(
-    '✔ Added "approve": true to package.json "cmod", because the mod answers Claude Code\'s permission check\n    At install the person grants: Connect to api.github.com; Approve Claude\'s tool calls for you\n',
+    '✔ Added "approve": true to package.json "cmod", because the mod allows or asks on Claude Code\'s permission check\n    At install the person grants: Connect to api.github.com; Approve Claude\'s tool calls for you\n    Anthropic\'s plugin directory does not list a mod that approves Claude\'s tool calls\n',
   )
   expect(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).cmod).toEqual({ permissions: { network: ['api.github.com'], approve: true } })
 })

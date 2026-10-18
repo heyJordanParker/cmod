@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, posix } from 'node:path'
 import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
-import { isObject, scriptPaths } from '@cmodjs/core/src/records.js'
+import { bundleDefines, isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { validatePlugin } from '../claude.js'
@@ -215,7 +215,8 @@ export async function bundledHooks(root: string, tree = root): Promise<{ hooks: 
     const install = existsSync(join(root, 'node_modules')) ? '' : ` ${tilde(root)} has no node_modules, so run bun install there, then run the command again.`
     return new Error(`Bundling hooks/${module} failed: ${reason}${install}`)
   }
-  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'] }).catch((error: unknown) => {
+  const { steps } = await readPlugin(root)
+  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'], define: bundleDefines(steps.permissions ?? []) }).catch((error: unknown) => {
     throw failed(error instanceof AggregateError ? error.errors.map(String).join('\n') : messageOf(error))
   })
   const [bundled] = built.outputs

@@ -7,7 +7,7 @@ import { processEvents } from '../src/session/session.js'
 import { Message } from '../src/session/context/turn/message/message.js'
 import { ToolCall } from '../src/session/context/turn/message/tool-call.js'
 import { conversationMethods } from '../src/runtime/sessions.js'
-import { scriptsSha256 } from '../src/records.js'
+import { bundleDefines, scriptsSha256 } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
 
@@ -439,7 +439,7 @@ declare const Bun: {
   Glob: new (pattern: string) => { scan(options: { cwd: string }): AsyncIterable<string> }
   file(path: string): { text(): Promise<string> }
   write(path: string, text: string): Promise<number>
-  build(options: { entrypoints: string[]; format: 'esm'; target: 'browser'; external: string[] }): Promise<{ outputs: { text(): Promise<string> }[] }>
+  build(options: { entrypoints: string[]; format: 'esm'; target: 'browser'; external: string[]; define: Record<string, string> }): Promise<{ outputs: { text(): Promise<string> }[] }>
 }
 
 test('no module a hook loads holds import(), which makes Claude Code refuse the whole hooks module', async () => {
@@ -453,20 +453,22 @@ test('no module a hook loads holds import(), which makes Claude Code refuse the 
   expect(holding).toEqual([])
 })
 
-test('only registerPermissionCheck brings in the permission answers, so the bundle of a mod that decides no permissions passes the plugin directory', async () => {
-  const bundled = async (name: string, body: string) => {
+test('only registerPermissionCheck with the approve permission brings in an allow, so the bundle of a mod that only refuses passes the plugin directory', async () => {
+  const bundled = async (name: string, body: string, permissions: readonly string[]) => {
     const entry = `${import.meta.dir}/../node_modules/.bundle-${name}.ts`
     await Bun.write(entry, `import { registerMod, registerPermissionCheck } from '${import.meta.dir}/../src/register.ts'\nexport function register(on) {\n  registerMod(on, { name: 'demo', setup() {} }, {})\n  ${body}\n}\n`)
-    const built = await Bun.build({ entrypoints: [entry], format: 'esm', target: 'browser', external: ['claude-code'] })
+    const built = await Bun.build({ entrypoints: [entry], format: 'esm', target: 'browser', external: ['claude-code'], define: bundleDefines(permissions) })
     return (await built.outputs[0]?.text()) ?? ''
   }
+  const shape = (code: string) => ({
+    hearsPermissions: /\(\s*"(tool\.check|PermissionRequest|classic\.PermissionRequest)",/.test(code),
+    refuses: code.includes('decision: "deny"') && code.includes('behavior: "deny"'),
+    allows: code.includes('decision: "allow"') || code.includes('behavior: "allow"') || code.includes('decision: "ask"') || code.includes('updatedPermissions'),
+  })
 
-  const plain = await bundled('plain', '')
-  const deciding = await bundled('deciding', 'registerPermissionCheck(on)')
-  const hearsPermissions = /\(\s*"(tool\.check|PermissionRequest|classic\.PermissionRequest)",/
-
-  expect([plain.includes('updatedPermissions'), plain.includes("behavior: \"allow\""), hearsPermissions.test(plain)]).toEqual([false, false, false])
-  expect([deciding.includes('updatedPermissions'), deciding.includes("behavior: \"allow\""), hearsPermissions.test(deciding)]).toEqual([true, true, true])
+  expect(shape(await bundled('plain', '', ['approve']))).toEqual({ hearsPermissions: false, refuses: false, allows: false })
+  expect(shape(await bundled('refusing', 'registerPermissionCheck(on)', []))).toEqual({ hearsPermissions: true, refuses: true, allows: false })
+  expect(shape(await bundled('approving', 'registerPermissionCheck(on)', ['approve']))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
 })
 
 test("registerMod names each event as a string literal, which Claude Code's hooks loader requires, and registers every hook a mod hears", async () => {
