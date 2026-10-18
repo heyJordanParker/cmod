@@ -4,6 +4,20 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-18
+
+### Added
+- `tested.raise.beforeContextEnd({ task })` tests a mod's answer to the compaction of a task's context.
+- `cmod check` fails a mod whose `src/` hears permissions while `hooks/register.ts` does not call `registerPermissionCheck`.
+
+### Changed
+- `cmod check` adds `"approve": true` only for a mod that answers the permission check, with a `before` method or the `permissions` job. A mod that only listens with `onPermissionCheck` or `onPermissionRequest` no longer asks the person to let it approve tool calls.
+
+### Fixed
+- A mod that never calls `registerPermissionCheck` carries no permission hook at all. On 2.0.1 every mod's bundle registered one that only passed the check on, and Anthropic's plugin directory refused it as unable to show that the mod leaves each permission decision with the person.
+- `onPermissionCheck`, `beforePermissionCheck`, `onPermissionRequest`, `beforePermissionRequest`, and `mod.use(permissions(…))` throw where they are called when `hooks/register.ts` does not call `registerPermissionCheck`, and name the line to add. On 2.0.1 one added after `setup` heard nothing and said nothing.
+- `tested.raise.beforeToolResult` hands the listener its `output` as given, so a test can give what a tool answers Claude Code, such as Edit's `structuredPatch`. On 2.0.1 it turned the output into text.
+
 ## [2.0.1] - 2026-10-17
 
 cmod 2.0.1 fixes what mods ran into on 2.0.0 and makes cmod lighter: a prompt no longer waits on a cmod process, and nothing it reads blocks for minutes behind the conversation index.

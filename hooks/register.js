@@ -294,7 +294,7 @@ function readKeys(keys) {
   }
   return { keys: commands };
 }
-var coreVersion = "2.0.1";
+var coreVersion = "2.1.0";
 function oldestCmodFor(steps) {
   if (steps.permissions?.some((item) => item.startsWith("config:")) === true)
     return "1.6.0";
@@ -3619,12 +3619,14 @@ function installBefore({ claude, router, hooks }) {
       const task = e.agentId === undefined ? undefined : where.tasks[e.agentId];
       if (e.agentId !== undefined && task === undefined)
         return next(e);
-      const context = task === undefined ? { number: where.context, openedAt: where.contextOpenedAt } : { number: task.context, openedAt: task.contextOpenedAt ?? task.openedAt, task: task.id };
-      const answer = await asked(ContextEnd, { type: ContextEnd, context: { ...context, closedAt: now() } });
+      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) });
       return answer.refuse === undefined ? next(e) : { skip: answer.refuse };
     })
   ];
   return { dispose: () => added.forEach((each) => each.dispose()) };
+}
+function closingContext(where, task, closedAt) {
+  return task === undefined ? { number: where.context, openedAt: where.contextOpenedAt, closedAt } : { number: task.context, openedAt: task.contextOpenedAt ?? task.openedAt, closedAt, task: task.id };
 }
 function withAnswer(change, answer) {
   if (change.type === Message && answer.output !== undefined && change.message.type === ToolResult)
@@ -4858,7 +4860,6 @@ function optionalTextField(use, name) {
 }
 
 // node_modules/@cmodjs/core/runtime/hooks.js
-var permissionEvents = ["tool.check", "classic.PermissionRequest"];
 function classicHook(event, hook, report) {
   const routed = async (e, next) => {
     const ours = await Promise.resolve().then(() => hook(e)).catch((error) => {
@@ -5017,6 +5018,9 @@ function isInScope(scope, session, change, isUnder) {
   if (change.type === Message)
     return change.message.turn === scope.turn;
   return (change.type === TurnStart || change.type === TurnEnd) && change.turn.prompt.id === scope.turn;
+}
+function withoutPermissionCheck(name, hearer) {
+  return `${name}: ${hearer} hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.`;
 }
 function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn, permissionRoutes }) {
   const call = (method, input) => claude.cmod.call({ to: cmodPluginName, method, input });
@@ -5351,11 +5355,9 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     const isBefore = method.startsWith("before");
     if (named === "PermissionCheck" || named === "PermissionRequest") {
       const routes = permissionRoutes?.();
-      if (routes !== undefined)
-        return routes(method, { raise, hookOn, routeOn, current: () => current2 });
-      return named === "PermissionCheck" ? routeOn("tool.check", (e, next) => next(e)) : hookOn("PermissionRequest", () => {
-        return;
-      });
+      if (routes === undefined)
+        throw new Error(withoutPermissionCheck(name, method));
+      return routes(method, { raise, hookOn, routeOn, current: () => current2 });
     }
     const event = processEvents[named];
     const hook = (isBefore ? event.before : undefined) ?? event.on;
@@ -7161,7 +7163,6 @@ function createRouter() {
         }
       };
     },
-    has: (event) => hooks.has(event),
     dispatch(event, e, next) {
       const chain = hooks.get(event);
       const call = async (index, current2) => {
@@ -8856,7 +8857,7 @@ async function createMod(definition, runtime) {
     return served ?? answerCall(definition.name, api, e);
   });
   const agents = toolCalls(claude, router);
-  keepEngine(mod, { claude: checked, router, toolCalls: agents, report });
+  keepEngine(mod, { claude: checked, router, toolCalls: agents, report, hasPermissionCheck: () => runtime.permissionRoutes() !== undefined });
   const names = new Set;
   const reserveName = (type, name, taken) => {
     const key = `${type}:${name}`;
@@ -8873,10 +8874,6 @@ async function createMod(definition, runtime) {
   await failsAs("the details of its session did not load", () => followCurrent(undefined));
   await failsAs("its setup function threw", () => definition.setup(mod));
   isSetUp = true;
-  const permissionHooks = permissionEvents.filter((event) => router.has(event));
-  if (permissionHooks.length > 0 && runtime.permissionRoutes() === undefined) {
-    throw new Error(`it decides permissions on ${listed(permissionHooks)}, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod`);
-  }
   await failsAs("its open panes did not load", () => area.restorePanes());
   return { mod, added, imports, raise: client.raise };
 }
@@ -9126,7 +9123,7 @@ function definePane(pane) {
   return pane;
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-oWAVhr/release/src/mods.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hugurN/release/src/mods.ts
 var modsMemory = { selected: null, tab: "options", notice: null, removing: null, views: [] };
 var tabs = [
   { key: "options", label: "Options" },
@@ -9363,7 +9360,7 @@ function modsPanel(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-oWAVhr/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hugurN/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null };
 var cmodSession = { tip: null };
 var newestMessages = 8;
@@ -9496,7 +9493,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-oWAVhr/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hugurN/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
