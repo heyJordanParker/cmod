@@ -34,7 +34,7 @@ type Sessions = {
   readonly current: CurrentSession
   list(options?: { running?: boolean; since?: string; everyProject?: boolean }): Promise<Session[]>
   search(text: string, matcher?: Matcher<Message>, options?: { running?: boolean; since?: string; everyProject?: boolean; before?: Message }): AsyncIterable<Message>
-  onMessage(matcher?, listener, options?): Disposable   // and every on method below
+  onMessage(matcher?, listener, options?): Subscription   // and every on method below
 }
 ```
 
@@ -76,8 +76,8 @@ type Session = {
   turns(options?: { last?: number }): Promise<Turn[]>
   messages(options?: { after?: string; last?: number }): Promise<Message[]>
   search(text: string, matcher?: Matcher<Message>): AsyncIterable<Message>
-  onMessage(matcher?, listener, options?): Disposable      // and every on method below
-  beforePrompt(matcher?, listener, options?): Disposable   // and every before method below
+  onMessage(matcher?, listener, options?): Subscription      // and every on method below
+  beforePrompt(matcher?, listener, options?): Subscription   // and every before method below
   send(message: { type: Prompt | Note; text: string; as?: Person | Session }): Promise<void>
   startTask(task: { prompt: string; title: string; agentType?: string; model?: string; name?: string; cwd?: string }): Promise<Task>
   callTool(call: { name: string; input: Record<string, unknown> }): Promise<ToolResult>
@@ -109,11 +109,13 @@ const explorers = (await sessions.current.goal.tasks()).filter((task) => task.ow
 
 A session that has ended keeps its record, so every read works on it.
 
+`sessions.current` adds two members for the rows Claude Code draws, `scrollTo(message, options?)` and `caption(toolCall, text)` ([ui.md](ui.md#the-conversations-rows)).
+
 ### Listen to a record
 
 ```ts
-part.on<Event>(listener: (payload, time: { deadline: number; signal: AbortSignal }) => unknown, options?: { timeoutMs?: number }): Disposable
-part.on<Event>(matcher: Matcher<payload>, listener, options?): Disposable
+part.on<Event>(listener: (payload, time: { deadline: number; signal: AbortSignal }) => unknown, options?: { timeoutMs?: number }): Subscription
+part.on<Event>(matcher: Matcher<payload>, listener, options?): Subscription
 ```
 
 Each event has its own method, such as `onReply` or `onTaskStart`, which runs `listener` for each new message, turn, context, task, goal change, or usage change, as it happens. `sessions`, a session, its goal, a task, a context, and a turn each have every `on` method, and each hears what happens inside it: an event reaches the part it happens in and every part above it.
@@ -153,7 +155,7 @@ sessions.current.onToolCall({ name: /^(Edit|Write)$/ }, (call) => void (mod.stat
 sessions.current.onTaskStart({ owner: { agentType: 'Explore' } }, (task) => mod.log(`Exploring: ${task.title}`))
 ```
 
-A listener that throws shows the error toast `The <method> listener failed`, such as `The onReply listener failed`. `dispose()` on the `Disposable` stops the listener.
+A listener that throws shows the error toast `The <method> listener failed`, such as `The onReply listener failed`. `remove()` on the `Subscription` stops the listener.
 
 ### Give a listener time
 
@@ -170,8 +172,8 @@ An `on` listener that passes its time stops quietly. A `before` listener that pa
 ### Change what happens
 
 ```ts
-part.before<Event>(listener: (payload, time) => Answer | void, options?: { timeoutMs?: number; onFailure?: 'pass' | 'refuse' }): Disposable
-part.before<Event>(matcher: Matcher<payload>, listener, options?): Disposable
+part.before<Event>(listener: (payload, time) => Answer | void, options?: { timeoutMs?: number; onFailure?: 'pass' | 'refuse' }): Subscription
+part.before<Event>(matcher: Matcher<payload>, listener, options?): Subscription
 ```
 
 Each `before` method, such as `beforeToolCall`, runs `listener` just before something happens, and its answer changes or refuses it. Returning nothing lets it happen as it was. Each part except `sessions` has every `before` method, and hears what is about to happen inside it, the way `on` methods do.
@@ -277,7 +279,7 @@ mod.use(slashCommand({
     const task = await sessions.current.startTask({ prompt: 'Summarize README.md in one line.', title: 'Summarize the README', agentType: 'Explore' })
     task.onTaskEnd(async (ended) => {
       const [answer] = await ended.owner.messages({ last: 1 })
-      if (answer?.type === Reply) mod.ui.toast(answer.text)
+      if (answer?.type === Reply) mod.toast(answer.text)
     })
     return 'Summarizing the README.'
   },
@@ -300,14 +302,14 @@ type MessageOf<Type> = {
 }
 ```
 
-- `id` names the transcript row the message is in. When one row holds several messages, such as a reply with its tool calls, each `id` ends in `:<n>`. `mod.ui.scroll({ to: { requestId: message.id.split(':')[0] } })` scrolls to the message's row ([ui.md](ui.md#scrolling)).
+- `id` names the transcript row the message is in. When one row holds several messages, such as a reply with its tool calls, each `id` ends in `:<n>`. `sessions.current.scrollTo(message)` scrolls to the message's row ([ui.md](ui.md#the-conversations-rows)).
 - `at` is its ISO time. `session` is the session's id, and `context` the number of the context it is in, from 1.
 - `turn` is the `id` of the prompt that opened its turn. A task's message names its owner's turn. A message before the first prompt has none.
 - `task` is the id of the task whose message it is. A message of the session itself has none.
 
 | Type | Constant | Its own fields |
 | --- | --- | --- |
-| `'prompt'` | `Prompt` | `text`, `from`: the prompt that opens a turn. A command Claude Code sends as a prompt reads as typed, such as `/review 12`. |
+| `'prompt'` | `Prompt` | `text`, `from`: the prompt that opens a turn. A command Claude Code sends as a prompt reads as typed, such as `/review 12`. A command a mod runs, such as cmod's `/reload-plugins`, is no prompt, and `commands.onRun` hears it. |
 | `'note'` | `Note` | `text`, `from`: text Claude reads that is not a prompt, such as a mod's note or a task's notification. |
 | `'reply'` | `Reply` | `text`: what Claude said. |
 | `'toolCall'` | `ToolCall` | `callId`, `name`, `input`, `cwd`, `files`: a tool Claude called, the folder it called it in, and the files it reads and changes. |
@@ -396,7 +398,7 @@ type Task = {
 
 ```ts
 sessions.current.onTurnEnd((turn) => {
-  if (turn.failure !== undefined) mod.ui.toast.error(`Claude stopped: ${turn.failure.text}`)
+  if (turn.failure !== undefined) mod.toast.error(`Claude stopped: ${turn.failure.text}`)
 })
 ```
 - `abort()` stops a turn while it runs, a task's turn included, and needs the `prompt` permission. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.

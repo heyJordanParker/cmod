@@ -20,7 +20,7 @@ import type {
 import type { CommandReply } from './jobs/slash-command.js'
 import type { ModDefinition } from './mod.js'
 import type { Options, OptionValues } from './options.js'
-import { readSteps, storeFolder, type Steps } from './records.js'
+import { hotkeyCommand, readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
 import { closingContext, foldBefore, installBefore, withAnswer, type Answers } from './runtime/before.js'
@@ -47,14 +47,30 @@ import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
 import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft } from './testing/fake-sessions.js'
 import { listed, messageOf } from './utils/text.js'
-import { componentOf, type ComponentPlace, type PlaceProps } from './ui/places.js'
+import { componentOf, type Row, type StyleProps } from './ui/styles.js'
+import { areas, TurnEnd as TurnEndArea, type Area } from './ui/areas.js'
+import { drawWith, elementOf } from './ui/elements.js'
+import { drawnParts } from './runtime/parts.js'
+import { serveWidgets, type Widgets } from './runtime/widgets.js'
+import { engineOf } from './runtime/engine.js'
+import { pagesOf } from './runtime/pages.js'
+import { partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
 export type { FakeSession, MessageDraft } from './testing/fake-sessions.js'
 export type { RoutedEvent } from './runtime/hooks.js'
 export type { ShownToast } from './runtime/toaster.js'
 
-export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent'] }
+export type ShownPart = {
+  readonly id: string
+  readonly params: unknown
+  lines(options?: { readonly columns?: number }): Promise<string[]>
+  press(key: string, link?: string): Promise<void>
+  input(key: string, text: string, type?: UiInputArgument['kind']): Promise<void>
+  select(key: string, value: string): Promise<void>
+}
+
+export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent']; readonly pane: ShownPart; readonly page: ShownPart }
 
 export type TestOptions<State extends object, Declared extends Options = Options> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
@@ -104,14 +120,14 @@ export type TestedMod<State extends object> = {
   compact(): Promise<void>
   startSession(start: { readonly source: 'startup' | 'resume' | 'clear' | 'fork'; readonly id?: string }): Promise<void>
   startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): Promise<string>
-  lines(paneId: string): Promise<string[]>
-  lines<P extends ComponentPlace>(place: P, props: Omit<PlaceProps<P>, 'Default'>, requestId?: string): Promise<string[]>
+  lines(area: Area, props?: { readonly columns?: number }): Promise<string[]>
+  lines<K extends Row>(kind: K, props: Omit<StyleProps<K>, 'Default'>, requestId?: string): Promise<string[]>
   type(line: string): Promise<CommandReply>
+  hotkey(name: string): Promise<void>
   callTool(name: string, input: Record<string, unknown>): Promise<EventResult<'tool.call'>>
-  press(paneId: string, key: string, link?: string): Promise<void>
-  input(paneId: string, key: string, text: string, type?: UiInputArgument['kind']): Promise<void>
-  select(paneId: string, key: string, value: string): Promise<void>
+  press(area: Area, key: string): Promise<void>
   moveTo(projectRoot: string, cwd?: string): Promise<void>
+  readonly api: Readonly<Record<string, (input?: unknown) => Promise<unknown>>>
   readonly state: Readonly<State>
   readonly calls: readonly TestCall[]
   readonly fakes: Fakes
@@ -153,7 +169,56 @@ export function testMod<State extends object, Declared extends Options = Options
     },
   })
   conversations.start(sessionId)
-  fake.fakes.cmod.call = fakeDependencies(name, options.dependencies ?? {}, conversations)
+  const callMod = async (method: string, input: unknown, caller = cmodPluginName) => calledAnswer(caller, await lifecycle.route('cmod.call', { to: name, method, input, caller } as unknown as Frozen<Args<'cmod.call'>>, async () => ({ deny: notInstalled(name) })))
+  let declaredPages: ReturnType<typeof pagesOf> = []
+  let openPages: { readonly id: string; readonly params: unknown }[] = []
+  let shownPage: { readonly id: string; readonly params: unknown; readonly isFocused: boolean } | undefined
+  const tellShown = () => callMod(partMethods.shown, { open: openPages, shown: shownPage?.id ?? null, isFocused: shownPage?.isFocused ?? false })
+  const applyRequests = async (requests: readonly PageRequest[]) => {
+    for (const request of requests) {
+      if ('open' in request) {
+        const isSettings = declaredPages.some((page) => page.id === request.open && page.place === 'settings')
+        if (!isSettings) openPages = [...openPages.filter((page) => page.id !== request.open), { id: request.open, params: request.params ?? null }]
+        shownPage = { id: request.open, params: request.params ?? null, isFocused: request.focus === true }
+      } else if ('close' in request) {
+        openPages = openPages.filter((page) => page.id !== request.close)
+        if (shownPage?.id === request.close) shownPage = undefined
+      } else if ('settings' in request) {
+        const first = declaredPages.find((page) => page.place === 'settings')
+        shownPage = first === undefined ? undefined : { id: first.id, params: null, isFocused: true }
+      }
+    }
+    await tellShown()
+  }
+  let widgets: Promise<Widgets> | undefined
+  const updated = async ({ parts, redraw, requests }: PartsUpdate) => {
+    if (parts !== undefined) declaredPages = pagesOf(parts)
+    if (parts !== undefined || redraw !== undefined) (await widgetsOf()).update(name, { ...(parts === undefined ? {} : { parts }), ...(redraw === undefined ? {} : { redraw }) })
+    if (requests !== undefined && requests.length > 0) await applyRequests(requests)
+  }
+  const pressPart = (input: PartPress) => callMod(partMethods.press, input).then((update) => updated((update ?? {}) as PartsUpdate))
+  const servedWidgets = async (): Promise<Widgets> => {
+    const own = name === cmodPluginName && lifecycle.mod !== undefined ? engineOf(lifecycle.mod).widgets : undefined
+    if (own !== undefined) return own
+    const claude: Claude = { ...fake.claude, cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) } }
+    const report = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
+    const press = (_mod: string, input: PartPress) => void pressPart(input).catch((error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' }))
+    return serveWidgets({
+      claude,
+      router: cmodPlugin,
+      store: storeFolder({ HOME: await fake.claude.env.home(), XDG_DATA_HOME: await fake.claude.env.dataHome() }),
+      report,
+      turnClosedBy: () => conversations.lastTurn(),
+      parts: drawnParts({ claude, report, press }),
+    })
+  }
+  const widgetsOf = () => (widgets ??= servedWidgets())
+  const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations)
+  fake.fakes.cmod.call = async (call) => {
+    if (call.to !== cmodPluginName || call.method !== partMethods.changed) return dependencies(call)
+    await updated(call.input as PartsUpdate)
+    return { isHeld: (call.input as PartsUpdate).isAsked === true }
+  }
   const appendRow = fake.claude.session.append
   fake.claude.session.append = async (args) => {
     const added = await appendRow(args)
@@ -221,15 +286,25 @@ export function testMod<State extends object, Declared extends Options = Options
 
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {
     await start()
+    if (event === 'ui.render') {
+      await widgetsOf()
+      await fake.settle()
+    }
     return cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (below ?? claudeCodeAnswer(event, e)) as EventResult<N>))
+  }
+
+  const runCommand = async (command: string, args: string): Promise<CommandRunResult> => {
+    await start()
+    const reached: Set<string> = new Set()
+    const ownRun = async (): Promise<CommandRunResult> => (reached.add(command), {})
+    const answer = await cmodPlugin.dispatch('command.run', { command, args, origin: { kind: 'composer' }, presentation }, (passed) => lifecycle.route('command.run', passed, ownRun))
+    if (reached.has(command) && answer.text === undefined) throw new Error(!fake.shown.commands.includes(command) ? `${name} has no slash command /${command}. Add it in setup with mod.use(slashCommand({ name: '${command}', … })).` : `${name}: /${command} reached Claude Code's own run of the command, so Claude Code shows "${name} registered /${command} but no command.run hook answered it". Answer it without calling next(e).`)
+    return answer
   }
 
   const drawPane = async (paneId: string) => {
     await start()
-    if (!fake.shown.openPanes.has(paneId)) {
-      const opening = [...fake.shown.commands.map((command) => `tested.type('/${command}')`), 'pane.open() in the mod'].join(', or with ')
-      throw new Error(`The pane "${paneId}" of ${name} is not open, and a user sees a pane only while it is open. Open it first with ${opening}.`)
-    }
+    if (!fake.shown.openPanes.has(paneId)) throw new Error(`The pane "${paneId}" of ${name} closed, and a user sees a pane only while it is open.`)
     const opened = fake.calls.findLast((call) => call.call === 'ui.open' && (call.args[0] as PaneOpenArgs).id === paneId)?.args[0] as PaneOpenArgs | undefined
     const columns = opened?.columns ?? defaultColumns
     const isFocused = (await fake.claude.ui.panes()).some((open) => open.id === paneId && open.isFocused)
@@ -238,13 +313,92 @@ export function testMod<State extends object, Declared extends Options = Options
     return { drawing, columns }
   }
 
-  const drawnElement = async (paneId: string, type: 'Button' | 'Input' | 'Select' | 'Markdown', key: string) => {
-    const props = findElement((await drawPane(paneId)).drawing, type, key)
-    if (props === undefined) throw new Error(`The pane "${paneId}" of ${name} draws no ${type} with the ${type === 'Button' ? 'key or label' : 'key'} "${key}".`)
-    return props
+  const drawPage = async (pageId: string, columns = defaultColumns) => {
+    await start()
+    const page = shownPage
+    if (page?.id !== pageId) throw new Error(`The page "${pageId}" of ${name} no longer shows, and a user sees a page only while it shows.`)
+    const drawn = (await callMod(partMethods.draw, { page: pageId, params: page.params, columns, isFocused: page.isFocused })) as DrawnPart | null
+    await fake.settle()
+    const tree = drawn?.tree ?? null
+    const drawing = tree === null || drawn === null ? elements.Box({}) : (drawWith(elements, () => elementOf(tree, '', (handler, args) => void pressPart({ draw: drawn.draw, handler, args }))) as RenderElement)
+    return { drawing, columns }
   }
 
-  const eventIn = (paneId: string, key: string) => ({ plugin: name, element: key, component: 'Pane' as const, requestId: paneId, surface: 'terminal' as const })
+  const shownNow = (isPane: boolean): { readonly id: string; readonly params: unknown } => {
+    if (isPane) {
+      const id = [...fake.shown.openPanes].at(-1)
+      if (id === undefined) throw new Error(`No pane of ${name} shows. Open one with pane.open(), from a slash command, a hotkey, or setup.`)
+      return { id, params: undefined }
+    }
+    if (shownPage === undefined) throw new Error(`No page of ${name} shows in the Sidebar. Open one with page.open(), or Settings with mod.settings.open().`)
+    return shownPage
+  }
+
+  const shownPart = (isPane: boolean): ShownPart => {
+    const kind = isPane ? 'pane' : 'page'
+    const draw = async (columns?: number) => {
+      await start()
+      const { id } = shownNow(isPane)
+      return { id, ...(isPane ? await drawPane(id) : await drawPage(id, columns)) }
+    }
+    const drawnElement = async (type: 'Button' | 'Input' | 'Select' | 'Markdown', key: string) => {
+      const { id, drawing } = await draw()
+      const props = findElement(drawing, type, key)
+      if (props === undefined) throw new Error(`The ${kind} "${id}" of ${name} draws no ${type} with the ${type === 'Button' ? 'key or label' : 'key'} "${key}".`)
+      return { id, props }
+    }
+    const eventIn = (id: string, key: string) => ({ plugin: name, element: key, component: 'Pane' as const, requestId: id, surface: 'terminal' as const })
+    return {
+      get id() {
+        return shownNow(isPane).id
+      },
+      get params() {
+        return shownNow(isPane).params
+      },
+      lines: async (lineOptions) => {
+        const { drawing, columns } = await draw(lineOptions?.columns)
+        return rowsOf(drawing, columns).map((row) => row.trimEnd())
+      },
+      async press(key, link) {
+        const { id, props } = await drawnElement(link === undefined ? 'Button' : 'Markdown', key)
+        if (link !== undefined && props['onLinkPress'] === undefined) throw new Error(`The Markdown "${key}" in the ${kind} "${id}" of ${name} has no onLinkPress, so Claude Code opens its links itself.`)
+        const pressed: UiPressArgument = { ...eventIn(id, String(props['key'])), ...(link === undefined ? {} : { link: { href: link } }) }
+        const run = async (e: Frozen<UiPressArgument>) => {
+          if (e.link === undefined) await (props['onPress'] as (e: Frozen<UiPressArgument>) => unknown)(e)
+          else await (props['onLinkPress'] as (link: PressedLink, e: Frozen<UiPressArgument>) => unknown)(e.link, e)
+          return { element: e.element }
+        }
+        if (isPane) await lifecycle.route('ui.press', pressed, run)
+        else await run(pressed)
+        await fake.settle()
+      },
+      async input(key, text, type = 'submit') {
+        const { id, props } = await drawnElement('Input', key)
+        const typed: UiInputArgument = { ...eventIn(id, key), kind: type, value: text }
+        await (props[type === 'submit' ? 'onSubmit' : 'onInput'] as ((value: string, e: UiInputArgument) => unknown) | undefined)?.(text, typed)
+        await fake.settle()
+      },
+      async select(key, value) {
+        const { id, props } = await drawnElement('Select', key)
+        const choices = (props['options'] as readonly { readonly value: string }[]).map((option) => option.value)
+        if (!choices.includes(value)) throw new Error(`The Select "${key}" in the ${kind} "${id}" of ${name} has no option "${value}". Its options are ${choices.map((option) => `"${option}"`).join(', ')}.`)
+        const picked: UiSelectArgument = { ...eventIn(id, key), value }
+        await (props['onSelect'] as (value: string, e: UiSelectArgument) => unknown)(value, picked)
+        await fake.settle()
+      },
+    }
+  }
+
+  const isArea = (target: string): target is Area => (areas as readonly string[]).includes(target)
+
+  const drawWidgets = async (area: Area, columns = defaultColumns) => {
+    await start()
+    const served = await widgetsOf()
+    await fake.settle()
+    const turn = area === TurnEndArea ? conversations.lastTurn() : undefined
+    if (area === TurnEndArea && turn?.closedAt === undefined) throw new Error(`${name} has no ended turn, so TurnEnd draws nothing. End one with tested.add({ type: Prompt, text: '…' }), then tested.endTurn().`)
+    return { drawing: elements.Box({ flexDirection: 'column', children: [...(await served.draw(area, elements, columns, turn))] }), columns }
+  }
 
   const drawSlot = async (component: RenderComponent, props: object, requestId = `${component}_${(slotDraws += 1)}`) => {
     await start()
@@ -363,20 +517,21 @@ export function testMod<State extends object, Declared extends Options = Options
       await start()
       return settled(conversations.startTask(task))
     },
-    lines: async (target: string, props?: object, requestId?: string) => {
-      const component = componentOf(target as ComponentPlace)
-      if (props !== undefined && component === undefined) throw new Error(`lines takes a pane id, or a place render draws and its props, and ${target} is neither a place such as ToolCall nor called without props.`)
-      const { drawing, columns } = props === undefined || component === undefined ? await drawPane(target) : await drawSlot(component, props, requestId)
+    lines: async (target: string, props?: { readonly columns?: number }, requestId?: string) => {
+      if (isArea(target) && (props === undefined || Object.keys(props).every((key) => key === 'columns'))) {
+        const { drawing, columns } = await drawWidgets(target, props?.columns)
+        return rowsOf(drawing, columns).map((row) => row.trimEnd())
+      }
+      const component = componentOf(target as Row)
+      if (props === undefined || component === undefined) throw new Error(`lines takes an area, such as AbovePrompt, or a row kind, such as ToolCall, with its props, and ${target} is neither. Read a pane with tested.shown.pane.lines() and a page with tested.shown.page.lines().`)
+      const { drawing, columns } = await drawSlot(component, props, requestId)
       return rowsOf(drawing, columns).map((row) => row.trimEnd())
     },
     async type(line) {
       const typed = /^\/(\S+)\s*(.*)$/s.exec(line)
       if (typed === null) throw new Error(`type takes a slash command the way the user types it, such as tested.type('/help'), and "${line}" does not start with /.`)
       const [, command = '', args = ''] = typed
-      const unanswered: CommandRunResult = {}
-      const answer = await route('command.run', { command, args, origin: { kind: 'composer' }, presentation }, unanswered)
-      if (answer === unanswered) throw new Error(`${name} has no slash command /${command}. Add it in setup with mod.use(slashCommand({ name: '${command}', … })).`)
-      return replyOf(answer)
+      return replyOf(await runCommand(command, args))
     },
     async callTool(toolName, input) {
       const tool = `mcp__${name}__${toolName}`
@@ -389,28 +544,28 @@ export function testMod<State extends object, Declared extends Options = Options
       if (answer === unanswered) throw new Error(`${name} has no tool ${toolName}. Add it in setup with mod.use(tool({ name: '${toolName}', … })).`)
       return answer
     },
-    async press(paneId, key, link) {
-      const props = await drawnElement(paneId, link === undefined ? 'Button' : 'Markdown', key)
-      if (link !== undefined && props['onLinkPress'] === undefined) throw new Error(`The Markdown "${key}" in the pane "${paneId}" of ${name} has no onLinkPress, so Claude Code opens its links itself.`)
-      const pressed: UiPressArgument = { ...eventIn(paneId, String(props['key'])), ...(link === undefined ? {} : { link: { href: link } }) }
-      await lifecycle.route('ui.press', pressed, async (e) => {
-        if (e.link === undefined) await (props['onPress'] as (e: UiPressArgument) => unknown)(e)
-        else await (props['onLinkPress'] as (link: PressedLink, e: UiPressArgument) => unknown)(e.link, e)
-        return { element: e.element }
-      })
+    async hotkey(hotkeyName) {
+      if ((definition.hotkeys as Readonly<Record<string, unknown>> | undefined)?.[hotkeyName] === undefined) throw new Error(`${name} has no hotkey ${hotkeyName}. Declare it in defineMod: hotkeys: { ${hotkeyName}: { title: '…', default: 'ctrl+…' } }.`)
+      await runCommand(hotkeyCommand(name, hotkeyName), '')
+      await fake.settle()
     },
-    async input(paneId, key, text, type = 'submit') {
-      const props = await drawnElement(paneId, 'Input', key)
-      const typed: UiInputArgument = { ...eventIn(paneId, key), kind: type, value: text }
-      await (props[type === 'submit' ? 'onSubmit' : 'onInput'] as ((value: string, e: UiInputArgument) => unknown) | undefined)?.(text, typed)
+    async press(area: Area, key: string) {
+      const { drawing } = await drawWidgets(area)
+      const keys = [key, ...(await widgetsOf()).widgets().filter((widget) => widget.mod === name).map((widget) => `${widget.key}:${key}`)]
+      const button = keys.map((each) => findElement(drawing, 'Button', each)).find((found) => found !== undefined)
+      if (button === undefined) throw new Error(`The widgets of ${name} in ${area} draw no Button with the key or label "${key}".`)
+      await (button['onPress'] as () => unknown)()
+      await fake.settle()
     },
-    async select(paneId, key, value) {
-      const props = await drawnElement(paneId, 'Select', key)
-      const options = (props['options'] as readonly { readonly value: string }[]).map((option) => option.value)
-      if (!options.includes(value)) throw new Error(`The Select "${key}" in the pane "${paneId}" of ${name} has no option "${value}". Its options are ${options.map((option) => `"${option}"`).join(', ')}.`)
-      const picked: UiSelectArgument = { ...eventIn(paneId, key), value }
-      await (props['onSelect'] as (value: string, e: UiSelectArgument) => unknown)(value, picked)
-    },
+    api: new Proxy({}, {
+      get: (_target, method) =>
+        method === 'then'
+          ? undefined
+          : async (input?: unknown) => {
+              await start()
+              return callMod(String(method), input ?? null, 'tester')
+            },
+    }),
     async moveTo(nextRoot, nextCwd = nextRoot) {
       await start()
       if (nextRoot !== projectRoot) {
@@ -438,6 +593,8 @@ export function testMod<State extends object, Declared extends Options = Options
         return lifecycle.toasts
       },
       sent: conversations.sent,
+      pane: shownPart(true),
+      page: shownPart(false),
     },
   }
   keepClaudeCode(tested, { fire })

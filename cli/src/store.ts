@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { consentPath, parseConsent, recordPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { consentPath, parseConsent, pluginsChangedPath, recordPath, storeFolder } from '@cmodjs/core/src/records.js'
 import { readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
 import { interruptProgress } from './progress.js'
@@ -12,6 +12,11 @@ let ownStartTime: Promise<string> | undefined
 
 export function storePath(...parts: string[]): string {
   return join(storeFolder(process.env), ...parts)
+}
+
+export async function markPluginsChanged(): Promise<void> {
+  const store = storeFolder(process.env)
+  if (existsSync(store)) await writeAtomically(pluginsChangedPath(store), `${Date.now()} ${process.pid}\n`)
 }
 
 export async function recordNames(): Promise<string[]> {

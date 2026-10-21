@@ -50,6 +50,8 @@ export const skillPrefix = 'Base directory for this skill:'
 
 const rowTypes: readonly string[] = ['user', 'assistant', 'attachment', 'system']
 
+const interruption = /^\[Request interrupted by user( for tool use)?\]$/
+
 const memoryPath = /^Contents of (.+?)(?: \([^)\n]*\))?:\r?$/m
 
 export function instructionPathOf(text: string): string {
@@ -126,9 +128,12 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   if (text === '') return []
   if (text.startsWith(skillPrefix)) return [{ ...base, type: Skill, name: basename(text.slice(skillPrefix.length).split('\n')[0]?.trim() ?? ''), text }]
   if (text.startsWith('<task-notification')) return [{ ...base, type: Note, text: tagOf(text, 'summary') ?? text, from: { type: Task } }]
-  if (row.isMeta) return [{ ...base, type: Note, text, from: senderOf(row.origin, isInTask) }]
+  if (interruption.test(text)) return []
+  const from = senderOf(row.origin, isInTask)
+  if (row.isMeta) return [{ ...base, type: Note, text, from }]
   const prompt = promptText(text)
-  return prompt === undefined ? [] : [{ ...base, type: Prompt, text: prompt, from: senderOf(row.origin, isInTask) }]
+  const isPluginCommand = from.type === Mod && tagOf(text, 'command-name') !== undefined
+  return prompt === undefined || isPluginCommand ? [] : [{ ...base, type: Prompt, text: prompt, from }]
 }
 
 function isModNotesRow(row: Row): boolean {

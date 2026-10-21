@@ -1,9 +1,8 @@
-import { changelogPage, isObject, marketplaceOf, permissionWords } from '../records.js'
+import { isObject, marketplaceOf, permissionWords } from '../records.js'
 import { changeLines, changelogSections, unreleased } from '../utils/changelog.js'
 import { ifMissing } from '../utils/paths.js'
 import { listed } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName } from './dependencies.js'
 import type { Plugin } from './lifecycle.js'
 
 export type Announced = { readonly version: string; readonly added: readonly string[] }
@@ -20,20 +19,20 @@ export function announcedOf(saved: unknown): Announced | undefined {
   return { version: saved['version'], added: Array.isArray(saved['added']) ? saved['added'].map(String) : [] }
 }
 
-export async function announcementOf(claude: Claude, plugin: Plugin, granted: ReadonlySet<string>, added: readonly string[], previous: Announced | undefined): Promise<Announcement> {
+export async function announcementOf(claude: Claude, plugin: Plugin, granted: ReadonlySet<string>, added: readonly string[], previous: Announced | undefined, openSettings: (tab?: 'changelog') => Promise<void>): Promise<Announcement> {
   const read = (path: string) => claude.fs.read(`${plugin.root}/${path}`).catch(ifMissing(undefined))
   const manifest = jsonOf(await read('.claude-plugin/plugin.json'))
   const field = (key: string) => (isObject(manifest) && typeof manifest[key] === 'string' ? manifest[key] : undefined)
-  const open = (page?: string) => () => claude.cmod.call({ to: cmodPluginName, method: 'openSettings', input: { mod: plugin.name, ...(page === undefined ? {} : { page }) } })
+  const open = (tab?: 'changelog') => () => openSettings(tab)
   if (previous === undefined) {
-    const { program, keys } = plugin.steps
+    const { program, hotkeys } = plugin.steps
     const rules = (await claude.fs.list(`${plugin.root}/rules`).catch(ifMissing([]))).filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md')).map((entry) => entry.name.slice(0, -'.md'.length)).toSorted()
     const lines = [
       field('description'),
       added.length > 0 ? `Adds ${listed(added)}.` : undefined,
       rules.length > 0 ? `Adds ${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}: ${listed(rules)}.` : undefined,
       program === undefined ? undefined : `Installed the ${program} program.`,
-      ...Object.entries(keys ?? {}).map(([key, command]) => `Binds ${key} to /${command}.`),
+      ...Object.values(hotkeys ?? {}).map(({ title, default: combo }) => `Binds ${combo} to ${title}.`),
       ...[...granted].map((item) => `${permissionWords(item)}.`),
     ]
     return { message: 'Installed', ...described(lines), action: { label: 'Settings', onClick: open() } }
@@ -57,7 +56,7 @@ export async function announcementOf(claude: Claude, plugin: Plugin, granted: Re
   return {
     message: `Updated to ${version}`,
     ...described(lines),
-    ...(sections.length > 0 ? { action: { label: 'Changelog', onClick: open(changelogPage) } } : {}),
+    ...(sections.length > 0 ? { action: { label: 'Changelog', onClick: open('changelog') } } : {}),
   }
 }
 

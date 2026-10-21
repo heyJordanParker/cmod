@@ -1,12 +1,11 @@
 import { expect, spyOn, test } from 'bun:test'
 import type { Args, Frozen, RenderElement } from 'claude-code'
-import { defineMod, Reply, type ModDefinition, type PlaceProps } from '../../src/mod.js'
+import { defineMod, Reply, type ModDefinition, type StyleProps } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
 import { textOf } from '../../src/testing/fake-elements.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
-import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Markdown, Text } from '../../src/ui/elements.js'
 import { BlockQuote, CodeBlock, Heading, HtmlBlock, List, markdownBlocks, Paragraph, Table, ThematicBreak } from '../../src/ui/markdown.js'
 
@@ -20,18 +19,18 @@ declare global {
   }
 }
 
-function Shouted({ text }: PlaceProps<typeof Heading>): RenderElement {
+function Shouted({ text }: StyleProps<typeof Heading>): RenderElement {
   return <Text bold>{text.toUpperCase()}</Text>
 }
 
-function MermaidBlock({ lang, value, Default }: PlaceProps<typeof CodeBlock>): RenderElement {
+function MermaidBlock({ lang, value, Default }: StyleProps<typeof CodeBlock>): RenderElement {
   return lang === 'mermaid' ? <Text>diagram: {value}</Text> : <Default />
 }
 
 const everyBlock = defineMod({
   name: 'blocks',
   setup(mod) {
-    for (const [name, place] of Object.entries(markdownPlaces)) mod.ui.render(place, ({ Default, ...block }) => <Text>{`${name} ${JSON.stringify(block)}`}</Text>)
+    for (const [name, place] of Object.entries(markdownPlaces)) mod.styles.add({ kind: place, render: (_mod, { Default, ...block }) => <Text>{`${name} ${JSON.stringify(block)}`}</Text> })
   },
 })
 
@@ -56,7 +55,7 @@ test('a markdown place draws its blocks and leaves the rest to Default', async (
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, ({ depth, text, Default }) => (depth === 1 ? <Text bold>{text.toUpperCase()}</Text> : <Default />))
+        mod.styles.add({ kind: Heading, render: (_mod, { depth, text, Default }) => (depth === 1 ? <Text bold>{text.toUpperCase()}</Text> : <Default />) })
       },
     }),
   )
@@ -82,7 +81,7 @@ test('a reply whose first block a mod draws keeps the bullet', async () => {
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, Shouted)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
     }),
   )
@@ -97,7 +96,7 @@ test("a mod's piece after the first has a blank line above it", async () => {
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, Shouted)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
     }),
   )
@@ -112,7 +111,7 @@ test("a mod's block opening a later text block of the reply has a blank line abo
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, Shouted)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
     }),
   )
@@ -127,12 +126,15 @@ test('a first block that draws its own row above Default keeps the bullet on the
     defineMod({
       name: 'labels',
       setup(mod) {
-        mod.ui.render(Heading, ({ Default }) => (
-          <Box flexDirection="column">
-            <Text>Heading:</Text>
-            <Default />
-          </Box>
-        ))
+        mod.styles.add({
+          kind: Heading,
+          render: (_mod, { Default }) => (
+            <Box flexDirection="column">
+              <Text>Heading:</Text>
+              <Default />
+            </Box>
+          ),
+        })
       },
     }),
   )
@@ -147,7 +149,7 @@ test('a reply whose first block a mod leaves to Default keeps the bullet Claude 
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        mod.ui.render(CodeBlock, MermaidBlock)
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
       },
     }),
   )
@@ -162,7 +164,7 @@ test('a CodeBlock render draws a custom language and leaves other languages to D
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        mod.ui.render(CodeBlock, MermaidBlock)
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
       },
     }),
   )
@@ -177,7 +179,7 @@ test('a block still streaming is drawn by Default', async () => {
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, Shouted)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
     }),
   )
@@ -193,7 +195,7 @@ test('a heading stays drawn by its render while the paragraph directly below it 
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, Shouted)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
     }),
   )
@@ -208,7 +210,7 @@ test('a streaming reply parses its finished blocks once', async () => {
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        mod.ui.render(CodeBlock, MermaidBlock)
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
       },
     }),
   )
@@ -230,7 +232,7 @@ test('a list that continues across a blank line while streaming draws as one lis
     defineMod({
       name: 'lists',
       setup(mod) {
-        mod.ui.render(List, ({ start, text }) => <Text>{`List from ${start}: ${JSON.stringify(text)}`}</Text>)
+        mod.styles.add({ kind: List, render: (_mod, { start, text }) => <Text>{`List from ${start}: ${JSON.stringify(text)}`}</Text> })
       },
     }),
   )
@@ -280,42 +282,44 @@ test("a markdown component that throws keeps Claude's drawing of its block", asy
     defineMod({
       name: 'broken',
       setup(mod) {
-        mod.ui.render(Heading, () => {
-          throw new Error('no font')
+        mod.styles.add({
+          kind: Heading,
+          render: () => {
+            throw new Error('no font')
+          },
         })
       },
     }),
   )
 
   expect(await tested.lines(Reply, { text: '# Plan\n\nBody', isFirstOfReply: true })).toEqual(['AssistantMessage', '  text: "# Plan"', '  isFirstOfReply: true', '  AssistantMessage', '    text: "Body"', '    isFirstOfReply: false'])
-  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds a render of Heading.')
-  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The Heading render failed', description: 'threw, so Claude Code draws its own: no font' })
+  expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the style of Heading.')
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The Heading style failed', description: 'threw, so Claude Code draws its own: no font' })
 })
 
-test('Markdown in a pane applies the mod\'s markdown places', async () => {
+test("Markdown in a pane applies the mod's block styles", async () => {
   const tested = testMod(
     defineMod({
       name: 'notes',
       async setup(mod) {
-        mod.ui.render(Heading, ({ depth, text, Default }) => (depth === 1 ? <Text bold>{text.toUpperCase()}</Text> : <Default />))
-        mod.ui.render(CodeBlock, MermaidBlock)
-        const pane = mod.ui.pane(
-          definePane({
-            id: 'notes',
-            title: 'Notes',
-            render: () => (
-              <Box flexDirection="column">
-                <Markdown text={'# Notes\n\n## Shopping\n\nBuy milk.\n\n```mermaid\ngraph TD\n```'} />
-              </Box>
-            ),
-          }),
-        )
+        mod.styles.add({ kind: Heading, render: (_mod, { depth, text, Default }) => (depth === 1 ? <Text bold>{text.toUpperCase()}</Text> : <Default />) })
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
+        const pane = mod.panes.add({
+          id: 'notes',
+          title: 'Notes',
+          render: () => (
+            <Box flexDirection="column">
+              <Markdown text={'# Notes\n\n## Shopping\n\nBuy milk.\n\n```mermaid\ngraph TD\n```'} />
+            </Box>
+          ),
+        })
         await pane.open()
       },
     }),
   )
 
-  expect(await tested.lines('notes')).toEqual(['NOTES', '', '## Shopping', '', 'Buy milk.', '', 'diagram: graph TD'])
+  await tested.start()
+  expect(await tested.shown.pane.lines()).toEqual(['NOTES', '', '## Shopping', '', 'Buy milk.', '', 'diagram: graph TD'])
 })
 
 test("a pane's Markdown puts a blank line above a mod's block, as a reply does", async () => {
@@ -323,18 +327,19 @@ test("a pane's Markdown puts a blank line above a mod's block, as a reply does",
     defineMod({
       name: 'notes',
       async setup(mod) {
-        mod.ui.render(Heading, Shouted)
-        await mod.ui.pane(definePane({ id: 'notes', title: 'Notes', render: () => <Markdown text={'Before\n\n# Plan'} /> })).open()
+        mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
+        await mod.panes.add({ id: 'notes', title: 'Notes', render: () => <Markdown text={'Before\n\n# Plan'} /> }).open()
       },
     }),
   )
 
-  expect(await tested.lines('notes')).toEqual(['Before', '', 'PLAN'])
+  await tested.start()
+  expect(await tested.shown.pane.lines()).toEqual(['Before', '', 'PLAN'])
 })
 
-const drawHeading = ({ text }: PlaceProps<typeof Heading>) => Text({ bold: true, children: text.toUpperCase() })
+const drawHeading = ({ text }: StyleProps<typeof Heading>) => Text({ bold: true, children: text.toUpperCase() })
 
-const drawDiagram = ({ lang, value, Default }: PlaceProps<typeof CodeBlock>) => (lang === 'mermaid' ? Text({ children: `diagram: ${value}` }) : Default({}))
+const drawDiagram = ({ lang, value, Default }: StyleProps<typeof CodeBlock>) => (lang === 'mermaid' ? Text({ children: `diagram: ${value}` }) : Default({}))
 
 const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
 
@@ -351,7 +356,7 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
     defineMod({
       name: 'headings',
       setup(mod) {
-        mod.ui.render(Heading, drawHeading)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) })
       },
     }),
   )
@@ -359,7 +364,7 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        mod.ui.render(CodeBlock, drawDiagram)
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) })
       },
     }),
   )
@@ -367,8 +372,8 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
     defineMod({
       name: 'both',
       setup(mod) {
-        mod.ui.render(Heading, drawHeading)
-        mod.ui.render(CodeBlock, drawDiagram)
+        mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) })
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) })
       },
     }),
   )
@@ -382,8 +387,8 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
 })
 
 test("a reply drawn by two mods keeps every block under the bullet's text", async () => {
-  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => mod.ui.render(Heading, drawHeading) }))
-  const diagrams = await started(defineMod({ name: 'architecture-diagrams', setup: (mod) => mod.ui.render(CodeBlock, drawDiagram) }))
+  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => void mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) }) }))
+  const diagrams = await started(defineMod({ name: 'architecture-diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '## Request flow\n\n```mermaid\ngraph LR\n```\n\nThe flowchart shows a request.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
   const diagramsAbove = rows(await diagrams.route('ui.render', reply, (e) => headings.route('ui.render', e, drawsLikeClaude)))
@@ -394,15 +399,15 @@ test("a reply drawn by two mods keeps every block under the bullet's text", asyn
 })
 
 test("a reply Claude's text opens keeps a mod's later block under the bullet's text", async () => {
-  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => mod.ui.render(Heading, drawHeading) }))
+  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => void mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) }) }))
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: 'One sentence.\n\n### Done', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
   expect(rows(await headings.route('ui.render', reply, drawsLikeClaude))).toEqual(['⏺ One sentence.', '', '  DONE'])
 })
 
 test('a mod that renders no markdown place never loads vendor-markdown', () => {
-  const plain = loadsVendorMarkdown("mod.ui.render(ToolCall, () => Text({ children: 'row' }))", 'ToolCall', "{ tool_use_id: 'toolu_1', tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }")
-  const markdown = loadsVendorMarkdown("mod.ui.render(Heading, () => Text({ children: 'heading' }))", 'Reply', "{ text: '# Plan', isFirstOfReply: true }")
+  const plain = loadsVendorMarkdown("mod.styles.add({ kind: ToolCall, render: () => Text({ children: 'row' }) })", 'ToolCall', "{ tool_use_id: 'toolu_1', tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }")
+  const markdown = loadsVendorMarkdown("mod.styles.add({ kind: Heading, render: () => Text({ children: 'heading' }) })", 'Reply', "{ text: '# Plan', isFirstOfReply: true }")
 
   expect(plain).toBe('false')
   expect(markdown).toBe('true')
@@ -429,9 +434,9 @@ test('a markdown place component takes the props its block carries', () => {
   defineMod({
     name: 'typed',
     setup(mod) {
-      mod.ui.render(Heading, ({ depth, text, Default }) => (depth === 1 ? <Text>{text}</Text> : <Default />))
+      mod.styles.add({ kind: Heading, render: (_mod, { depth, text, Default }) => (depth === 1 ? <Text>{text}</Text> : <Default />) })
       // @ts-expect-error
-      mod.ui.render(Heading, ({ lang }) => <Text>{lang}</Text>)
+      mod.styles.add({ kind: Heading, render: (_mod, { lang }) => <Text>{lang}</Text> })
     },
   })
 })

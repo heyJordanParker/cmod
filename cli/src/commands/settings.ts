@@ -35,7 +35,7 @@ export async function run(argv: string[]): Promise<number> {
   const refused = settingPaths(changed)
     .map((path) => path.join('.'))
     .filter((path) => !isSettingCovered(granted, path))
-  if (refused.length > 0) throw new Error(`${name} has no grant to ${refused.map((path) => `"${permissionWords(`config:${path}`)}"`).join(', ')}. It needs "permissions": { "config": [${refused.map((path) => `"${path}"`).join(', ')}] } in package.json "cmod", turned on in /mods ${name}.`)
+  if (refused.length > 0) throw new Error(`${name} has no grant to ${refused.map((path) => `"${permissionWords(`config:${path}`)}"`).join(', ')}. It needs "permissions": { "config": [${refused.map((path) => `"${path}"`).join(', ')}] } in package.json "cmod", turned on in Settings.`)
   const project = values.project ?? process.cwd()
   const changes = Object.entries(changed).map(([key, value]) => ({ file: settingsFileOf(source as SettingsSource, project, key), key, value }))
   await changeSettings(name, changes)

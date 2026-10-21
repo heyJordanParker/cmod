@@ -1,5 +1,5 @@
 import type { FromSchema, JSONSchema } from 'json-schema-to-ts'
-import type { Disposable, Job, Mod } from '../mod.js'
+import type { Job, Mod } from '../mod.js'
 import { Validator } from '../vendor.js'
 import { toolDeadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
@@ -9,12 +9,14 @@ import { withinDeadline } from './context.js'
 
 const toolName = /^[A-Za-z0-9_-]{1,64}$/
 
+export type Tool = { readonly name: string; remove(): void }
+
 export function tool<const Schema extends object = { type: 'object' }, State extends object = Record<never, never>>(options: {
   readonly name: string
   readonly description: string
   readonly inputSchema?: Schema
   readonly execute: (input: Schema extends JSONSchema ? FromSchema<Schema> : never, mod: Mod<State>) => unknown
-}): Job<Disposable & { readonly name: string }, State> {
+}): Job<Tool, State> {
   const { name, description, inputSchema, execute } = options
   return (job) => {
     const { mod, announce, reserveName } = job
@@ -50,9 +52,9 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
     })
     return {
       name: `mcp__${claude.plugin.name}__${name}`,
-      dispose() {
-        answering.dispose()
-        named.dispose()
+      remove() {
+        answering.remove()
+        named.remove()
       },
     }
   }

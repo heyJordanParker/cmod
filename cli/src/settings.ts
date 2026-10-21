@@ -200,7 +200,7 @@ export async function bindKeys(keys: Readonly<Record<string, string>>): Promise<
     const action = `command:${command}`
     const current = blocks.map((block) => block.bindings[key]).find((value) => value !== undefined)
     if (current !== undefined && current !== action) {
-      kept.push(`${tilde(path)} binds ${key} to ${JSON.stringify(current)}, so it stays. To use /${command} on ${key}, put "${key}": "${action}" in its Chat bindings.`)
+      kept.push(`${tilde(path)} binds ${key} to ${JSON.stringify(current)}, so it stays, and the ${command.replace('--', ' hotkey ')} has no combo. Pick one for it in Settings.`)
       continue
     }
     bound[key] = command
@@ -220,6 +220,12 @@ export async function bindKeys(keys: Readonly<Record<string, string>>): Promise<
   }
   await writeAtomically(path, next)
   return { bound, kept }
+}
+
+export async function modBindings(mod: string, recorded: Readonly<Record<string, string>>): Promise<Record<string, string>> {
+  const { path, text } = await readConfig(keybindingsPath())
+  const actions = chatBlocks(text, path).flatMap((block) => Object.entries(block.bindings))
+  return Object.fromEntries(actions.flatMap(([key, action]) => (typeof action === 'string' && action.startsWith('command:') && (action.startsWith(`command:${mod}--`) || recorded[key] === action.slice('command:'.length)) ? [[key, action.slice('command:'.length)]] : [])))
 }
 
 export async function unbindKeys(keys: Readonly<Record<string, string>>): Promise<void> {

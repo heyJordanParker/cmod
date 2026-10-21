@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util'
 import { configurePlugin, listPlugins } from '../claude.js'
 import { manifestOptions } from './install.js'
 
-export const summary = "Set one of a plugin's options, as /mods and a mod's first start do."
+export const summary = "Set one of a plugin's options, as Settings and a mod's first start do."
 
 export const help = `Usage: cmod option <name> <key> <value>
 
@@ -10,7 +10,7 @@ ${summary}
 
 Sets the option <key> of an installed plugin through Claude Code, as /config
 does, such as cmod option ci-watch branch main. A list option takes its items
-separated by commas. The /mods panel and the option questions a mod asks at
+separated by commas. Settings and the option questions a mod asks at
 its first start run it, and the mod reads the new value at its next start.`
 
 export async function run(argv: string[]): Promise<number> {

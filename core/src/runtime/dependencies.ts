@@ -1,4 +1,5 @@
 import type { Args, CmodDependencies, EventResult, Frozen } from 'claude-code'
+import { installFix } from '../records.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import type { Router } from './router.js'
@@ -46,5 +47,5 @@ export function answeringOwnCalls(claude: Claude, router: Router): Claude {
 }
 
 export function notInstalled(name: string): string {
-  return `${name} is not installed. Add it with /plugin.`
+  return `${name} is not installed. ${installFix}`
 }

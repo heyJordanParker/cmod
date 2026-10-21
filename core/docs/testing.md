@@ -19,7 +19,7 @@ test('/todo adds the item to the project list', async () => {
 })
 ```
 
-Assert what a person or Claude sees: `tested.lines(...)`, `tested.shown`, `tested.state`, and what `tested.raise...`, `tested.type(...)`, and `tested.callTool(...)` return.
+Assert what a person or Claude sees: `tested.shown.page.lines()`, `tested.lines(...)`, `tested.shown`, `tested.state`, and what `tested.raise...`, `tested.type(...)`, and `tested.callTool(...)` return.
 
 ## TestOptions
 
@@ -46,7 +46,7 @@ type TestOptions<State, Options> = {
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `sessions.current.project` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `sessions.current.cwd` | `projectRoot` |
-| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Add it with /plugin.` |
+| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Install it in Plugins.` |
 | `files` | The fake file system, absolute path to text | no files |
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
 | `sessions` | The earlier conversations `sessions.list` and `sessions.search` read, each `{ id, messages?, goal?, … }` ([Build a conversation](#build-a-conversation)) | none: only the current session, `test-session` |
@@ -68,14 +68,14 @@ type TestedMod<State> = {
   compact(): Promise<void>
   startSession(start: { source: 'startup' | 'resume' | 'clear' | 'fork'; id?: string }): Promise<void>
   startTask(task: { title: string; agentType?: string; model?: string; openedBy?: string; parent?: string }): Promise<string>
-  lines(paneId: string): Promise<string[]>
-  lines(place, props, requestId?): Promise<string[]>
+  lines(area: Area, props?: { columns?: number }): Promise<string[]>
+  lines(kind: Row, props, requestId?): Promise<string[]>
   type(line: string): Promise<CommandReply>
+  hotkey(name: string): Promise<void>
   callTool(name: string, input: Record<string, unknown>): Promise<EventResult<'tool.call'>>
-  press(paneId: string, key: string, link?: string): Promise<void>
-  input(paneId: string, key: string, text: string, type?: 'submit' | 'change'): Promise<void>
-  select(paneId: string, key: string, value: string): Promise<void>
+  press(area: Area, key: string): Promise<void>
   moveTo(projectRoot: string, cwd?: string): Promise<void>
+  readonly api: { [method: string]: (input?: unknown) => Promise<unknown> }
   readonly state: Readonly<State>
   readonly calls: readonly TestCall[]
   readonly fakes: Fakes
@@ -85,7 +85,7 @@ type TestedMod<State> = {
 
 ### start
 
-Starts the mod: loads its state, runs `setup`, and adds its listeners, panes, and jobs. `raise`, `fire`, `lines`, `type`, `callTool`, `press`, `input`, `select`, and `moveTo` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
+Starts the mod: loads its state, runs `setup`, and adds its listeners, pages, panes, widgets, and jobs. `raise`, `fire`, `lines`, `type`, `hotkey`, `callTool`, `press`, `moveTo`, and `api` start the mod first, so a test calls `start` only before it reads `state` or `shown` with nothing else to run. It rejects with the reason when the mod does not start.
 
 ### raise
 
@@ -121,8 +121,8 @@ fire(event: 'tool.check' | 'prompt.context' | 'cmod.call' | 'ui.render' | 'ui.sc
 
 - `fire('tool.check', { tool: 'Edit', input: { … }, tool_use_id: 'toolu_1' }, { decision: 'allow' })` asks the mod's `permissions` job and `beforePermissionCheck` listeners about any call. `below` is Claude Code's own verdict.
 - `fire('prompt.context', { blocks: [] }, { blocks: [] })` starts the conversation's context, which gives each `prompt` job its first block.
-- `fire('cmod.call', { to, method, input })` calls a method of the mod's `api`, as another mod's `mod.dependencies` does, and returns `{ value }` with what the method returned, or `{ deny }` with the reason it failed.
-- `ui.render`, `ui.scroll`, and `ui.close` are what `lines` and a pane's own events raise. `lines` is the way to draw.
+- `fire('cmod.call', { to, method, input })` calls a method `setup` returned, as another mod's `mod.dependencies` does, and returns `{ value }` with what the method returned, or `{ deny }` with the reason it failed. `tested.api.<method>(input)` does the same and resolves the value, or rejects with the reason.
+- `ui.render`, `ui.scroll`, and `ui.close` are what `lines` and a pane's own events raise. `shown.pane.lines()` and `lines` are the way to draw.
 
 ```ts
 expect(await tested.fire('cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } })).toEqual({ value: { restored: true } })
@@ -210,30 +210,41 @@ A `before` listener on the current session answers what `raise` asks, such as `t
 
 ### lines
 
-- `lines(paneId)` draws an open pane and returns its rows of text. It rejects a pane that is not open: open it first with `tested.type('/<command>')` or `pane.open()` in the mod. The render gets the props `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`, the main conversation's view.
+- `shown.page.lines()` draws the page the mod shows in the Sidebar now, and `shown.pane.lines()` the pane it shows now, and each returns its rows of text. Each rejects when the mod shows none, such as `No pane of notes shows. Open one with pane.open(), from a slash command, a hotkey, or setup.` A page gets `params`, `isFocused`, and `columns`, 80 unless `lines({ columns })` gives another. A pane gets `params`, `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`. `shown.page.id` and `shown.pane.id` name what shows, and `params` holds its params.
 - A `Button` draws as Claude Code draws it: `[ Save ]`, or `1: Save` when it is `plain` with a `hotkey`, or `Save` when it is `plain` alone. Borders and colors are not drawn.
-- `lines(place, props, requestId?)` draws a place render with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the render changed. Draw `Reply` with a reply's `text` to test a markdown place render. Draws that pass one `requestId` grow one streamed reply. `AbovePrompt` ends with the toasts shown now, under the mod's own rows.
+- `lines(area)` draws the mod's widgets in that area, in the rows the person would see, and returns them. A new widget is in the first row of its first area. A layout given in `files` as `/test/home/.local/share/cmod/widgets.json` places the widgets another way. `{ columns }` sets the row's width, 80 by default. `lines(TurnEnd)` draws under the last turn that ended, and rejects when none has: end one with `tested.endTurn()` first.
+- `lines(kind, props, requestId?)` draws the mod's style of that kind with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the style changed. Draw `Reply` with a reply's `text` to test a markdown style. Draws that pass one `requestId` grow one streamed reply.
 
 ```ts
 import { expect, test } from 'bun:test'
-import type { RenderPropsOf } from 'claude-code'
-import { AbovePrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
+import { BelowPrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { hints } from '../src/mod.js'
+import { prompts } from '../src/mod.js'
 
-const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
-
-test('the band shows the prompt count', async () => {
-  const tested = testMod(hints)
+test('the prompt count shows below the prompt', async () => {
+  const tested = testMod(prompts)
   await tested.add({ type: Prompt, text: 'hello' })
 
-  expect(await tested.lines(AbovePrompt, band)).toContain('Prompts: 1')
+  expect(await tested.lines(BelowPrompt)).toEqual(['Prompts: 1'])
 })
 ```
 
 ### type
 
-`type('/<command> <arguments>')` runs a slash command as the person types it and returns its reply, `{ text?, note? }`. The mod's `commands.beforeRun` listeners hear it first, so `type('/compact')` tests a listener that refuses a built-in. It rejects a line that does not start with `/`, and a command nothing in the mod answers.
+`type('/<command> <arguments>')` runs a slash command as the person types it and returns its reply, `{ text?, note? }`. The mod's `commands.beforeRun` listeners hear it first, so `type('/compact')` tests a listener that refuses a built-in. It rejects a line that does not start with `/`, a command nothing in the mod answers, and a command of the mod that calls `next(e)` on to Claude Code's own run of it, which shows the person `<mod> registered /<command> but no command.run hook answered it`. `hotkey` rejects the same way.
+
+### hotkey
+
+`hotkey(name)` presses the hotkey `defineMod` declared under `name`, as the person pressing its combo does, and awaits its listeners. A page it opens shows as `shown.page`. It rejects a name the mod does not declare.
+
+```ts
+test('the hotkey shows the prompt count in the Sidebar', async () => {
+  const tested = testMod(myMod)
+  await tested.add({ type: Prompt, text: 'hello' })
+  await tested.hotkey('toggle')
+  expect(await tested.shown.page.lines()).toEqual(['Prompts this session: 1'])
+})
+```
 
 ### callTool
 
@@ -241,17 +252,18 @@ test('the band shows the prompt count', async () => {
 
 ### press, input, and select
 
-`press`, `input`, and `select` act on an element of an open pane as the person does, and await its handler. Each passes the handler the event Claude Code passes, with `component: 'Pane'`, `requestId` the pane's id, and `surface: 'terminal'`. Each rejects when the pane does not draw the element: `The pane "<pane>" of <mod> draws no <Element> with the key "<key>".`
+`shown.page` and `shown.pane` act on an element of what shows as the person does, and await its handler. Each rejects when it does not draw the element: `The pane "<pane>" of <mod> draws no <Element> with the key "<key>".`, or the same for a page.
 
-- `press(paneId, key)` presses the `Button` whose `key` or `label` is `key`, and runs its `onPress`.
-- `press(paneId, key, link)` presses the link `link` in the `Markdown` whose `key` is `key`, and runs its `onLinkPress`.
-- `input(paneId, key, text)` types `text` into the `Input` whose `key` is `key` and presses Enter, which runs its `onSubmit`. With `type` `'change'` it runs `onInput` instead, as one edit does.
-- `select(paneId, key, value)` picks the option `value` of the `Select` whose `key` is `key`, and runs its `onSelect`. It rejects an option the `Select` does not have.
+- `press(key)` presses the `Button` whose `key` or `label` is `key`, and runs its `onPress`.
+- `press(key, link)` presses the link `link` in the `Markdown` whose `key` is `key`, and runs its `onLinkPress`.
+- `input(key, text)` types `text` into the `Input` whose `key` is `key` and presses Enter, which runs its `onSubmit`. With a third argument `'change'` it runs `onInput` instead, as one edit does.
+- `select(key, value)` picks the option `value` of the `Select` whose `key` is `key`, and runs its `onSelect`. It rejects an option the `Select` does not have.
+- `tested.press(area, key)` presses a `Button` one of the mod's widgets draws in that area, the way the person presses it in a row.
 
 ```ts
-await tested.input('history', 'search', 'deploy')
-await tested.select('history', 'agent', 'explorer')
-expect(await tested.lines('history')).toContain('deploy by explorer')
+await tested.shown.page.input('search', 'deploy')
+await tested.shown.page.select('agent', 'explorer')
+expect(await tested.shown.page.lines()).toContain('deploy by explorer')
 ```
 
 ### moveTo
@@ -276,7 +288,7 @@ type Fakes = {
   settings: { read? }
   config: { list? }
   command: { list?, run? }
-  ui: { ask?, open?, scroll? }
+  ui: { ask?, open?, scroll?, copy?, focus? }
   session: { messages?, append? }
   prompt: { submit? }
   model: { complete? }
@@ -294,6 +306,7 @@ Set a fake to answer a call:
 - `files` already fills the `fs` fakes: a write is read back, and `list` lists the given files. The fake file system resolves a relative path against `/`, not against the session's working folder, so a mod under test reads `${sessions.current.project}/<file>` rather than a relative path. `fs.list()` with no path rejects.
 - `ui.open` places every pane by default. A fake that answers `{ isPlaced: false }` holds a pane back.
 - `ui.scroll` answers `{}` by default, as when the window moved. A fake that answers `{ deny }` refuses the scroll.
+- `clipboard.write(text)` reaches `ui.copy({ text })`, so a test keeps each copied text with a fake that answers `{ isCopied: true }`.
 - `clock.now()` answers the real time unless a fake gives its own, so a test of a deadline can move time. `clock.after(ms, fn)` and `clock.every(ms, fn)` each return `{ cancel() }`, and so must a fake of either. `clock.after` runs a real timer by default. `clock.every` never fires unless a fake keeps `fn` for the test to call, so a test of `mod.every` keeps it and calls it once per tick.
 - `session.append` and `prompt.submit` take every note and prompt by default, into `shown.notes` and `shown.prompts`. A fake that answers `{ deny }` or `{ drop }` refuses one.
 - `model.complete` has no default: set it to the answer the model gives, such as `async () => ({ isAnswered: true, text: 'no', usage })`.
@@ -333,18 +346,28 @@ type Shown = {
   readonly prompts: string[]
   readonly logs: string[]
   readonly debug: string[]
-  readonly statuses: (string | undefined)[]
   readonly openPanes: Set<string>
   readonly commands: string[]
   readonly tools: string[]
   readonly schedules: { readonly id: string; readonly cron: string; readonly prompt: string }[]
   readonly sent: { readonly session: string; readonly type: string; readonly text: string; readonly as?: string }[]
+  readonly page: ShownPart
+  readonly pane: ShownPart
+}
+
+type ShownPart = {
+  readonly id: string
+  readonly params: unknown
+  lines(options?: { columns?: number }): Promise<string[]>
+  press(key: string, link?: string): Promise<void>
+  input(key: string, text: string, type?: 'submit' | 'change'): Promise<void>
+  select(key: string, value: string): Promise<void>
 }
 
 type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 ```
 
-What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send` or a `prompt` that follows the state, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, each status line text, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
+What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send` or a `prompt` that follows the state, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
 ```ts
 test('the Mode prompt follows the mode', async () => {

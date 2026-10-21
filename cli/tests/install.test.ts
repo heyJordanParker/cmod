@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
-import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterEach(deleteTemporaryHomes)
 
@@ -105,8 +105,45 @@ test('cmod install <name> of a linked plugin says it is linked, and asks Claude 
   const result = await cmod(home, 'install', 'linked')
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toBe(`– linked@inline is linked from ${checkout}, so saving its files updates it. Run /reload-plugins in a session that is running.\n`)
+  expect(result.stdout).toBe(`– linked@inline is linked from ${checkout}, so saving its files updates it.\n`)
   expect(await claudeCalls(home)).toBe('plugin list --json\n')
+})
+
+test('cmod runs the Claude Code that started it, so a claude missing from PATH changes nothing', async () => {
+  const home = await marketplaceHome({ 'file-tree': modFiles('file-tree') })
+  await rename(join(home, 'bin/claude'), join(home, 'claude-code'))
+
+  const listed = await cmodWith(home, { CLAUDE_CODE_EXECPATH: join(home, 'claude-code') }, 'list')
+
+  expect(listed.exitCode).toBe(0)
+  expect(await claudeCalls(home)).toBe('plugin list --json\n')
+})
+
+test('cmod runs the claude on PATH when the Claude Code that started it was updated away', async () => {
+  const home = await marketplaceHome({ 'file-tree': modFiles('file-tree') })
+
+  const listed = await cmodWith(home, { CLAUDE_CODE_EXECPATH: join(home, 'versions/2.1.301') }, 'list')
+
+  expect(listed.exitCode).toBe(0)
+  expect(await claudeCalls(home)).toBe('plugin list --json\n')
+})
+
+test('cmod install says nothing about a cmod plugin that is already installed, and turns on one the person turned off', async () => {
+  const home = await marketplaceHome({ 'file-tree': modFiles('file-tree'), diagrams: modFiles('diagrams') })
+  expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
+  await claudeCalls(home)
+
+  const again = await cmod(home, 'install', 'diagrams@market', '--yes')
+
+  expect(again.stdout).not.toContain('cmod@cmod')
+  await claudeCalls(home)
+  const installed = JSON.parse(await readFile(join(home, 'installed/cmod@cmod'), 'utf8'))
+  await writeFiles(home, { 'installed/cmod@cmod': JSON.stringify({ ...installed, enabled: false }) })
+
+  const turnedOn = await cmod(home, 'install', 'file-tree@market', '--yes')
+
+  expect(turnedOn.stdout).toContain('✔ Turned cmod@cmod on in Claude Code\n')
+  expect(await claudeCalls(home)).toContain('plugin enable cmod@cmod --json\n')
 })
 
 test('install <name>@<marketplace> installs that plugin through Claude Code, prints one line per step, and list shows it ready', async () => {
@@ -116,8 +153,7 @@ test('install <name>@<marketplace> installs that plugin through Claude Code, pri
 
   expect(installed.exitCode).toBe(0)
   expect(installed.stdout).toContain('✔ Installed file-tree@market into Claude Code\n')
-  expect(installed.stdout).toContain('✔ Installed cmod@cmod into Claude Code\n')
-  expect(installed.stdout).toContain('✔ file-tree 0.1.0 is ready\n')
+  expect(installed.stdout).toContain('✔ file-tree 0.1.0 is ready\n  Start Claude Code to use file-tree. A session that is running starts it on its own.\n')
   expect(installed.stdout).not.toContain(claudeCodeLine)
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin install file-tree@market --json\n')
 
@@ -216,12 +252,17 @@ test('cmod disable and cmod enable turn a mod off and on through Claude Code, an
   expect((await cmod(home, 'install', 'demo@market', '--yes')).exitCode).toBe(0)
   await claudeCalls(home)
 
+  const installed = await readFile(join(storeOf(home), 'plugins-changed'), 'utf8')
+
   const off = await cmod(home, 'disable', 'demo')
+  const turnedOff = await readFile(join(storeOf(home), 'plugins-changed'), 'utf8')
   const on = await cmod(home, 'enable', 'demo@market')
 
+  expect(turnedOff).not.toBe(installed)
+  expect(await readFile(join(storeOf(home), 'plugins-changed'), 'utf8')).not.toBe(turnedOff)
   expect(off.exitCode).toBe(0)
-  expect(off.stdout).toContain('✔ Turned demo@market off in Claude Code. A running session follows after /reload-plugins.\n')
-  expect(on.stdout).toContain('✔ Turned demo@market on in Claude Code. A running session follows after /reload-plugins.\n')
+  expect(off.stdout).toContain('✔ Turned demo@market off in Claude Code and every running session.\n')
+  expect(on.stdout).toContain('✔ Turned demo@market on in Claude Code and every running session.\n')
   expect(await claudeCalls(home)).toBe('plugin list --json\nplugin disable demo@market --json\nplugin list --json\nplugin enable demo@market --json\n')
   expect(existsSync(join(storeOf(home), 'records/demo.json'))).toBe(true)
 })
@@ -241,7 +282,7 @@ test('cmod option sets one declared option through claude plugin configure, and 
   expect(missing.stderr).toBe('cmod option: demo has no option colour. Its options are: branch.\n')
 })
 
-test('cmod option sets an option of a linked mod by the id Claude Code lists it under, as /mods and the first-start questions do', async () => {
+test('cmod option sets an option of a linked mod by the id Claude Code lists it under, as Settings and the first-start questions do', async () => {
   const home = await marketplaceHome({})
   const checkout = join(home, 'Developer/linked')
   await writeFiles(home, {
@@ -274,6 +315,25 @@ test('cmod update <name> of a plain plugin updates it through Claude Code, nothi
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain('✔ Updated plain@market through Claude Code\n')
   expect(await claudeCalls(home)).toBe('plugin list --json\nplugin update plain@market --json\nplugin list --json\n')
+  expect(existsSync(storeOf(home))).toBe(false)
+})
+
+test('cmod update cmod updates every copy of the cmod plugin, and asks no consent for the hotkeys the cmod plugin binds itself', async () => {
+  const home = await marketplaceHome({})
+  const copy = (id: string) => JSON.stringify({ id, version: '4.0.0', scope: 'user', enabled: true, installPath: join(home, 'cmod-plugin') })
+  await writeFiles(home, {
+    'cmod-plugin/.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '4.0.0' }),
+    'cmod-plugin/package.json': JSON.stringify({ name: 'cmod', cmod: { hotkeys: { sidebar: { title: 'Show or hide the Sidebar', default: 'ctrl+q' } } } }),
+    'available/cmod@cmod': copy('cmod@cmod'),
+    'installed/cmod@cmod': copy('cmod@cmod'),
+    'available/cmod@market': copy('cmod@market'),
+    'installed/cmod@market': copy('cmod@market'),
+  })
+
+  const result = await cmod(home, 'update', 'cmod')
+
+  expect(result.exitCode).toBe(0)
+  expect(await claudeCalls(home)).toBe('plugin list --json\nplugin update cmod@cmod --json\nplugin update cmod@market --json\nplugin list --json\n')
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
@@ -344,7 +404,7 @@ test('cmod update of a plugin whose new version adds steps installs the cmod plu
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain('✔ Installed cmod@cmod into Claude Code\n')
-  expect(result.stdout).toContain('✔ demo 0.2.0 is ready\n')
+  expect(result.stdout).toContain('✔ demo 0.2.0 is ready\n  Start Claude Code to use demo. In a session that is already open, run /reload-plugins once, so it loads the cmod plugin and demo.\n')
   expect(await readFile(join(storeOf(home), 'data/demo/runs'), 'utf8')).toBe('ran\n')
   expect(await claudeCalls(home)).toBe(
     'plugin list --json\nplugin update demo@market --json\nplugin list --json\nplugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n',
@@ -360,7 +420,7 @@ test('cmod update with no name skips linked plugins', async () => {
   })
   expect((await cmod(home, 'install', 'plain@market')).exitCode).toBe(0)
   await claudeCalls(home)
-  const linkedLine = `– linked@inline is linked from ${checkout}, so saving its files updates it. Run /reload-plugins in a session that is running.\n`
+  const linkedLine = `– linked@inline is linked from ${checkout}, so saving its files updates it.\n`
 
   const all = await cmod(home, 'update')
 
@@ -389,6 +449,20 @@ test('cmod list shows a plugin with no cmod steps as Claude Code holds it', asyn
     'NAME              VERSION  STATE\ncmod@cmod         0.1.0    enabled\nfile-tree@market  0.1.0    enabled\nplain@market      2.0.0    disabled: hooks/hooks.json is not valid\n',
   )
   expect(existsSync(storeOf(home))).toBe(false)
+})
+
+test('cmod list says why Claude Code turned a mod off, and --json names each dependency it needs newer', async () => {
+  const home = await marketplaceHome({ 'file-tree': stepFreeFiles('file-tree') })
+  const unmet = 'Requires "cmod@market" >=4.0.3, installed 4.0.2'
+  await writeFiles(home, {
+    'installed/file-tree@market': JSON.stringify({ id: 'file-tree@market', version: '0.1.0', scope: 'user', enabled: true, installPath: join(home, 'market/file-tree'), errors: [unmet], errorDetails: [{ type: 'dependency-version-unsatisfied', plugin: 'file-tree', dependency: 'cmod@market' }] }),
+  })
+
+  const listed = await cmod(home, 'list')
+  const json = await cmod(home, 'list', '--json')
+
+  expect(listed.stdout).toContain(`file-tree@market  0.1.0    Claude Code turned it off: ${unmet}\n`)
+  expect(JSON.parse(json.stdout)).toContainEqual({ name: 'file-tree@market', version: '0.1.0', state: `Claude Code turned it off: ${unmet}`, unsatisfied: ['cmod@market'] })
 })
 
 test('cmod list shows the cmod plugin ready when the cmod program is its version or newer, with no record', async () => {

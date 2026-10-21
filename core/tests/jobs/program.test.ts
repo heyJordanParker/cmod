@@ -161,7 +161,7 @@ test('a program the mod has no grant to run stops at once and names the line to 
 
   expect(handle?.state).toBe('fatal')
   await expect((handle as Program).ready()).rejects.toThrow(
-    'preview calls process.spawn(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod". Add it, then run /reload-plugins.',
+    'preview calls process.spawn(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod".',
   )
   expect(tested.calls.filter((call) => call.call === 'clock.after')).toEqual([])
 })

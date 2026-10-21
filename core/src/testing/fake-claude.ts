@@ -1,6 +1,8 @@
 import type { EventResult, Timer } from 'claude-code'
 import { isObject } from '../records.js'
 import type { Claude } from '../runtime/claude.js'
+import { cmodPluginName } from '../runtime/dependencies.js'
+import { partMethods } from '../runtime/ui.js'
 import { untagged } from '../session/context/turn/message/note.js'
 import { elements } from './fake-elements.js'
 import { fakeFiles } from './fake-files.js'
@@ -34,7 +36,6 @@ export type Shown = {
   readonly prompts: string[]
   readonly logs: string[]
   readonly debug: string[]
-  readonly statuses: (string | undefined)[]
   readonly openPanes: Set<string>
   readonly commands: string[]
   readonly tools: string[]
@@ -59,7 +60,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const calls: TestCall[] = []
   const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
   const emptyDisk = fakeFiles({})
-  const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], statuses: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
+  const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
   const store = new Map<string, unknown>()
@@ -77,6 +78,11 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const rejected = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Promise<Result>) | undefined) => {
     const run = faked(call, answer)
     return async (...args: Args): Promise<Result> => run(...args)
+  }
+
+  const cmodTakesParts: Claude['cmod']['call'] = async (input) => {
+    if (input.to === cmodPluginName && input.method === partMethods.changed) return null
+    throw new Error(`cmod.call(${JSON.stringify(input)}) has no fake answer. Set fakes.cmod.call on the tested mod.`)
   }
 
   const appendNote: Claude['session']['append'] = async ({ message }) => {
@@ -107,9 +113,6 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const claude: Claude = {
     plugin,
     ui: {
-      status: (text) => {
-        shown.statuses.push(text)
-      },
       log: (text, options) => {
         const lines = options?.to === 'debug' ? shown.debug : shown.logs
         lines.push(text)
@@ -214,7 +217,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       dataHome: async () => undefined,
       configHome: async () => undefined,
     },
-    cmod: { call: rejected('cmod.call', () => fakes.cmod.call) },
+    cmod: { call: rejected('cmod.call', () => fakes.cmod.call ?? cmodTakesParts) },
   }
 
   const settle = async () => {

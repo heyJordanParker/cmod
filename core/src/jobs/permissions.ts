@@ -6,6 +6,7 @@ import { withoutPermissionCheck } from '../runtime/sessions.js'
 import { inputOf } from '../utils/call-effects.js'
 import { decidePermission, stricterVerdict, type PermissionRules as RulesFor, type Rule as RuleFor, type Verdict } from './permissions/decide-permission.js'
 import { targetOf } from './permissions/match-target.js'
+import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
 import { withinDeadline, workspaceReader } from './context.js'
 
@@ -16,7 +17,7 @@ export type PermissionRules<State extends object = Record<never, never>> = Rules
 
 const deadline: Deadline = { ms: 2000, job: 'permissions' }
 
-export function permissions<State extends object = Record<never, never>>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<void, State> {
+export function permissions<State extends object = Record<never, never>>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<Subscription, State> {
   const count = typeof rules === 'function' ? undefined : checkedCount(rules)
   if (count === 0) throw new Error('permissions: give it a deny or an ask rule, or remove it from setup.')
 
@@ -41,7 +42,8 @@ export function permissions<State extends object = Record<never, never>>(rules: 
       }
     }
 
-    router.add(
+    job.announce(count === undefined ? 'permission rules from its state' : `${count} permission rule${count === 1 ? '' : 's'}`)
+    return router.add(
       'tool.check',
       async (e, next) => {
         const [below, ours] = await Promise.all([next(e), verdictOf(e)])
@@ -49,7 +51,6 @@ export function permissions<State extends object = Record<never, never>>(rules: 
       },
       (_e, error) => ({ decision: 'deny', reason: `Claude Code stopped the permissions job of ${job.mod.name}, so it denies the call: ${error.message}` }),
     )
-    job.announce(count === undefined ? 'permission rules from its state' : `${count} permission rule${count === 1 ? '' : 's'}`)
   }
 }
 

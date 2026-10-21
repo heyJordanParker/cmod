@@ -3,6 +3,7 @@ import type { Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
 import { onStateChange } from '../runtime/state.js'
 import { modNote } from '../session/context/turn/message/note.js'
+import type { Subscription } from '../utils/subscription.js'
 import { listed, messageOf } from '../utils/text.js'
 import { callEffects, type Call } from '../utils/call-effects.js'
 import { matchTarget, targetOf, type Target } from './permissions/match-target.js'
@@ -18,13 +19,13 @@ type PromptOptions<State extends object> = {
 
 const deadline: Deadline = { ms: 5000, job: 'prompt' }
 
-export function prompt<State extends object = Record<never, never>>({ name, prompt: text, after }: PromptOptions<State>): Job<void, State> {
+export function prompt<State extends object = Record<never, never>>({ name, prompt: text, after }: PromptOptions<State>): Job<Subscription, State> {
   if (name.trim() === '') throw new Error('prompt: give the block a name. Claude reads the text under it.')
   const targets = after === undefined ? [] : Array.isArray(after) ? after : [after]
   for (const target of targets) targetOf(target)
 
   return (job) => {
-    job.reserveName('prompt', name, `prompt: ${job.mod.name} adds the name "${name}" two times. Give each prompt its own name.`)
+    const reserved = job.reserveName('prompt', name, `prompt: ${job.mod.name} adds the name "${name}" two times. Give each prompt its own name.`)
 
     const log = (reason: string) => job.mod.log(`prompt "${name}" added nothing: ${reason}`)
     const textFor = async (input: PromptInput) => {
@@ -42,29 +43,30 @@ export function prompt<State extends object = Record<never, never>>({ name, prom
       return value === undefined ? undefined : `# ${name}\n${value}`
     }
 
-    if (targets.length > 0) {
-      addAfterCalls(job, targets, headedText, log)
-      job.announce(`the ${name} prompt after ${listed(targets.map(targetWords))}`)
-    } else {
-      addKeptCurrent(job, name, () => textFor({}), log)
-      job.announce(`the ${name} prompt`)
+    job.announce(targets.length > 0 ? `the ${name} prompt after ${listed(targets.map(targetWords))}` : `the ${name} prompt`)
+    const added = targets.length > 0 ? addAfterCalls(job, targets, headedText, log) : addKeptCurrent(job, name, () => textFor({}), log)
+    return {
+      remove() {
+        added.remove()
+        reserved.remove()
+      },
     }
   }
 }
 
-function addKeptCurrent<State extends object>(job: JobContext<State>, name: string, textFor: () => Promise<string | undefined>, log: (reason: string) => void): void {
+function addKeptCurrent<State extends object>(job: JobContext<State>, name: string, textFor: () => Promise<string | undefined>, log: (reason: string) => void): Subscription {
   const { claude, router } = engineOf(job.mod)
   let given: string | undefined
   let hasStarted = false
   let isQueued = false
   let updates = Promise.resolve()
 
-  router.add('classic.SessionStart', (e, next) => {
+  const starting = router.add('classic.SessionStart', (e, next) => {
     hasStarted = e.source === 'resume' || e.source === 'compact'
     if (!hasStarted) given = undefined
     return next(e)
   })
-  router.add('prompt.context', async (e, next) => {
+  const adding = router.add('prompt.context', async (e, next) => {
     const below = await next(e)
     hasStarted = true
     if (below.blocks.some((block) => block.name === name)) {
@@ -85,15 +87,22 @@ function addKeptCurrent<State extends object>(job: JobContext<State>, name: stri
       if (added.deny !== undefined) log(`Claude Code refused the new text: ${added.deny}`)
     })
   }
-  onStateChange(job.mod.state, () => {
+  const following = onStateChange(job.mod.state, () => {
     if (isQueued) return
     isQueued = true
     updates = updates.then(update).catch((error: unknown) => log(messageOf(error)))
   })
+  return {
+    remove() {
+      starting.remove()
+      adding.remove()
+      following.remove()
+    },
+  }
 }
 
-function addAfterCalls<State extends object>(job: JobContext<State>, targets: Target[], textFor: (input: PromptInput) => Promise<string | undefined>, log: (reason: string) => void): void {
-  afterCall(
+function addAfterCalls<State extends object>(job: JobContext<State>, targets: Target[], textFor: (input: PromptInput) => Promise<string | undefined>, log: (reason: string) => void): Subscription {
+  return afterCall(
     job,
     async (use, workspace) => {
       const effects = callEffects(use, workspace)

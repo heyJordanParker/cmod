@@ -1,26 +1,48 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readlinkSync, realpathSync } from 'node:fs'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isObject } from '@cmodjs/core/src/records.js'
+import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { version as cmodVersion } from '../package.json'
 import { tilde, writeAtomically } from './files.js'
 import type { Plugin } from './plugin.js'
 import { capture, run, runAttached, spawn, type Captured } from './process.js'
 
-export type InstalledPlugin = { id: string; name: string; version: string; scope: string; enabled: boolean; installPath: string; errors: string[] }
+export type InstalledPlugin = { id: string; name: string; version: string; scope: string; enabled: boolean; installPath: string; errors: string[]; unsatisfied: string[] }
 
 export type Marketplace = { name: string; source: string; repo?: string; path?: string; installLocation?: string }
 
 const claudeApiMs = 60_000
 
+let startedBy: string | undefined
+
+const claudeCode = (): string => (startedBy ??= present(process.env['CLAUDE_CODE_EXECPATH']) ?? parentClaudeCode() ?? 'claude')
+
+const present = (path: string | undefined) => (path !== undefined && path !== '' && existsSync(path) ? path : undefined)
+
+function parentClaudeCode(): string | undefined {
+  const parent = process.platform === 'linux' ? readlinkOf(`/proc/${process.ppid}/exe`) : Bun.spawnSync(['/bin/ps', '-o', 'comm=', '-p', String(process.ppid)]).stdout.toString().trim()
+  return parent !== undefined && /(?:^|\/)claude$|\/claude\/versions\/[^/]+$/.test(parent) ? present(parent) : undefined
+}
+
+function readlinkOf(path: string): string | undefined {
+  try {
+    return readlinkSync(path)
+  } catch (error) {
+    return ifMissing(undefined)(error)
+  }
+}
+
 export async function listPlugins(): Promise<InstalledPlugin[]> {
-  const entries = parse(await run(['claude', 'plugin', 'list', '--json']), 'claude plugin list --json')
+  const entries = parse(await run([claudeCode(), 'plugin', 'list', '--json']), 'claude plugin list --json')
   if (!Array.isArray(entries)) throw new Error('claude plugin list --json printed no list. Update Claude Code to 2.1.289 or later.')
   return entries.filter(isObject).map((entry) => {
     const id = String(entry['id'])
     const errors = Array.isArray(entry['errors']) ? entry['errors'].map(String) : []
-    return { id, name: id.slice(0, id.lastIndexOf('@')), version: String(entry['version']), scope: String(entry['scope']), enabled: entry['enabled'] === true, installPath: String(entry['installPath']), errors }
+    const details = Array.isArray(entry['errorDetails']) ? entry['errorDetails'].filter(isObject) : []
+    const unsatisfied = details.filter((detail) => detail['type'] === 'dependency-version-unsatisfied' && typeof detail['dependency'] === 'string').map((detail) => String(detail['dependency']))
+    return { id, name: id.slice(0, id.lastIndexOf('@')), version: String(entry['version']), scope: String(entry['scope']), enabled: entry['enabled'] === true, installPath: String(entry['installPath']), errors, unsatisfied }
   })
 }
 
@@ -32,13 +54,13 @@ export async function findPlugin(folder: string): Promise<InstalledPlugin> {
 }
 
 export async function listMarketplaces(): Promise<Marketplace[]> {
-  const entries = parse(await run(['claude', 'plugin', 'marketplace', 'list', '--json']), 'claude plugin marketplace list --json')
+  const entries = parse(await run([claudeCode(), 'plugin', 'marketplace', 'list', '--json']), 'claude plugin marketplace list --json')
   if (!Array.isArray(entries)) throw new Error('claude plugin marketplace list --json printed no list. Update Claude Code to 2.1.289 or later.')
   return entries.filter(isObject) as Marketplace[]
 }
 
 export async function addMarketplace(source: string): Promise<void> {
-  await run(['claude', 'plugin', 'marketplace', 'add', source])
+  await run([claudeCode(), 'plugin', 'marketplace', 'add', source])
 }
 
 export async function addClaudeApi(plugin: Plugin): Promise<void> {
@@ -52,7 +74,7 @@ export async function addClaudeApi(plugin: Plugin): Promise<void> {
     await writeAtomically(join(cmodPlugin, '.claude-plugin', 'plugin.json'), `${JSON.stringify({ name: 'cmod', version: cmodVersion })}\n`)
     const pluginDirs = plugin.name === 'cmod' ? [plugin.root] : [cmodPlugin, plugin.root]
     const env = { ...process.env, CLAUDE_CONFIG_DIR: join(scratch, 'config'), CLAUDE_CODE_PLUGIN_DIR_WATCH: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }
-    const claude = spawn(['claude', ...pluginDirs.flatMap((dir) => ['--plugin-dir', dir]), '-p', 'ok'], { cwd: plugin.root, env, stdout: 'ignore', stderr: 'ignore' })
+    const claude = spawn([claudeCode(), ...pluginDirs.flatMap((dir) => ['--plugin-dir', dir]), '-p', 'ok'], { cwd: plugin.root, env, stdout: 'ignore', stderr: 'ignore' })
     const timeout = setTimeout(() => claude.kill(), claudeApiMs)
     await claude.exited
     clearTimeout(timeout)
@@ -63,7 +85,7 @@ export async function addClaudeApi(plugin: Plugin): Promise<void> {
 }
 
 export async function changePlugin(action: 'install' | 'uninstall' | 'update' | 'enable' | 'disable', id: string): Promise<void> {
-  const result = await capture(['claude', 'plugin', action, id, '--json'])
+  const result = await capture([claudeCode(), 'plugin', action, id, '--json'])
   const lastLine = result.stdout.trim().split('\n').at(-1) ?? ''
   const outcome = lastLine.startsWith('{') ? parse(lastLine, `claude plugin ${action} --json`) : undefined
   if (result.exitCode !== 0 || !isObject(outcome) || outcome['outcome'] !== 'ok') {
@@ -74,20 +96,20 @@ export async function changePlugin(action: 'install' | 'uninstall' | 'update' | 
 
 export async function configurePlugin(id: string, values: Readonly<Record<string, string>>): Promise<void> {
   if (Object.keys(values).length === 0) return
-  const result = await capture(['claude', 'plugin', 'configure', id, '--values-stdin', '--json'], { stdin: { text: JSON.stringify(values) } })
+  const result = await capture([claudeCode(), 'plugin', 'configure', id, '--values-stdin', '--json'], { stdin: { text: JSON.stringify(values) } })
   if (result.exitCode !== 0) throw new Error(`claude plugin configure ${id} failed: ${(result.stderr.trim() || result.stdout.trim()).split('\n').slice(-3).join('\n')}`)
 }
 
 export function validatePlugin(path: string): Promise<Captured> {
-  return capture(['claude', 'plugin', 'validate', path, '--strict'])
+  return capture([claudeCode(), 'plugin', 'validate', path, '--strict'])
 }
 
 export function testPlugin(root: string): Promise<Captured> {
-  return capture(['claude', 'plugin', 'test', root])
+  return capture([claudeCode(), 'plugin', 'test', root])
 }
 
 export function startSession(args: readonly string[]): Promise<number> {
-  return runAttached(['claude', ...args])
+  return runAttached([claudeCode(), ...args])
 }
 
 export function optionValues(given: readonly string[] | undefined, userConfig: Readonly<Record<string, unknown>>, plugin: string): Record<string, string> {

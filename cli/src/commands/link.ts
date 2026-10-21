@@ -6,7 +6,7 @@ import { startProgress } from '../progress.js'
 import { addPluginFolder, settingsPath } from '../settings.js'
 import { findPlugin } from '../claude.js'
 import { installCmodPlugin, setOptions } from './install.js'
-import { noteNextStep, setupInTerminal } from './setup.js'
+import { setupInTerminal } from './setup.js'
 
 export const summary = 'Load a checkout in every new Claude Code session.'
 
@@ -45,6 +45,6 @@ export async function run(argv: string[]): Promise<number> {
   if (values.option !== undefined) await setOptions(await findPlugin(plugin.root), values.option, progress)
 
   const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
-  if (code === 0) noteNextStep(plugin, progress)
+  if (code === 0) progress.note(`Start a new Claude Code session to use ${plugin.name}. Claude Code reads linked folders only when a session starts, and then reloads the mod each time you save it.`)
   return code
 }

@@ -1247,29 +1247,33 @@ test("a holder file with cmod's own process ID is not held", async () => {
   expect(existsSync(lock)).toBe(false)
 }, 10_000)
 
-async function createKeysMod(home: string, keys: Record<string, unknown>): Promise<string> {
+const cycle = { title: 'Switch mode', default: 'shift+tab' }
+const review = { title: 'Review', default: 'alt+m' }
+const clear = { title: 'Clear', default: 'ctrl+k' }
+
+async function createHotkeysMod(home: string, hotkeys: Record<string, unknown>): Promise<string> {
   const root = join(home, 'modes')
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'modes', cmod: { keys } }),
+    'package.json': JSON.stringify({ name: 'modes', cmod: { hotkeys } }),
   })
   return root
 }
 
 const keybindings = (home: string) => join(home, '.claude/keybindings.json')
 
-test('setup binds the mod keys in the Chat bindings, keeps a key the person bound, and teardown removes only the keys that still run its commands', async () => {
+test('setup binds the mod hotkeys in the Chat bindings, keeps a combo the person bound, and teardown removes only the combos that still run its hotkeys', async () => {
   const home = await temporaryHome()
-  const root = await createKeysMod(home, { 'shift+tab': '/mode', 'alt+m': '/mode', 'ctrl+k': '/mode' })
+  const root = await createHotkeysMod(home, { cycle, review, clear })
   await writeFiles(home, { '.claude/keybindings.json': `{\n  "bindings": [\n    { "context": "Chat", "bindings": { "ctrl+k": "chat:clearInput" } }\n  ]\n}\n` })
 
   const asked = await cmod(home, 'setup', root, '--events')
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\tshift+tab to /mode, alt+m to /mode and ctrl+k to /mode\n`)
-  expect(result.stdout).toBe('log ~/.claude/keybindings.json binds ctrl+k to "chat:clearInput", so it stays. To use /mode on ctrl+k, put "ctrl+k": "command:mode" in its Chat bindings.\ndone modes 0.1.0\n')
-  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'shift+tab': 'command:mode', 'alt+m': 'command:mode' } }] })
-  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'shift+tab': 'mode', 'alt+m': 'mode' })
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\tshift+tab to Switch mode, alt+m to Review and ctrl+k to Clear\n`)
+  expect(result.stdout).toBe('log ~/.claude/keybindings.json binds ctrl+k to "chat:clearInput", so it stays, and the modes hotkey clear has no combo. Pick one for it in Settings.\ndone modes 0.1.0\n')
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'shift+tab': 'command:modes--cycle', 'alt+m': 'command:modes--review' } }] })
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'shift+tab': 'modes--cycle', 'alt+m': 'modes--review' })
 
   const edited = JSON.parse(await readFile(keybindings(home), 'utf8'))
   edited.bindings[0].bindings['alt+m'] = 'command:review'
@@ -1279,9 +1283,68 @@ test('setup binds the mod keys in the Chat bindings, keeps a key the person boun
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'alt+m': 'command:review' } }] })
 })
 
+test('an update from cmod 3 moves the key its record bound to a slash command onto the hotkey that declares that combo', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { review })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const recordFile = join(home, '.local/share/cmod/records/modes.json')
+  const record = JSON.parse(await readFile(recordFile, 'utf8'))
+  await writeFiles(home, { '.local/share/cmod/records/modes.json': JSON.stringify({ ...record, keys: { 'alt+m': 'review-modes' } }), '.claude/keybindings.json': '{ "bindings": [{ "context": "Chat", "bindings": { "alt+m": "command:review-modes" } }] }\n' })
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }) })
+
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(result.stdout).toBe('done modes 0.2.0\n')
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'alt+m': 'command:modes--review' } }] })
+})
+
+test('cmod hotkey moves a hotkey to another combo, an update keeps it, and a combo taken by something else fails', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { cycle, review })
+  await writeFiles(home, { '.claude/keybindings.json': '{ "bindings": [{ "context": "Chat", "bindings": { "ctrl+k": "chat:clearInput" } }] }\n' })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  const moved = await cmod(home, 'hotkey', 'modes', 'cycle', 'ctrl+e')
+  const taken = await cmod(home, 'hotkey', 'modes', 'review', 'ctrl+k')
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }) })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(moved.stdout).toBe('Bound ctrl+e to Switch mode for modes.\n')
+  expect(taken.stderr).toBe('cmod hotkey: ctrl+k already runs something else in ~/.claude/keybindings.json. Pick another combo.\n')
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'alt+m': 'command:modes--review', 'ctrl+e': 'command:modes--cycle' } }] })
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'ctrl+e': 'modes--cycle', 'alt+m': 'modes--review' })
+})
+
+test('an update whose new hotkey defaults to a combo the person rebound keeps the person’s combo and leaves the new hotkey unbound', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { cycle })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'hotkey', 'modes', 'cycle', 'alt+m')
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'modes', cmod: { hotkeys: { cycle, review } } }) })
+
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'alt+m': 'modes--cycle' })
+})
+
+test('a combo the person rebinds by hand in keybindings.json survives an update, and teardown removes it', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { cycle, review })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await writeFiles(home, { '.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle', 'alt+n': 'command:modes--review' } }] }) })
+
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }) })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const updated = JSON.parse(await readFile(keybindings(home), 'utf8'))
+  await cmod(home, 'teardown', 'modes')
+
+  expect(updated).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle', 'alt+n': 'command:modes--review' } }] })
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [] })
+})
+
 test('setup writes keybindings.json under CLAUDE_CONFIG_DIR through its symbolic link, adding a Chat block when none exists', async () => {
   const home = await temporaryHome()
-  const root = await createKeysMod(home, { 'shift+tab': '/mode' })
+  const root = await createHotkeysMod(home, { cycle })
   await writeFiles(home, { 'dotfiles/keybindings.json': '{ "bindings": [{ "context": "Global", "bindings": { "ctrl+t": "app:toggleTodos" } }] }\n' })
   await writeFiles(home, { 'config/.keep': '' })
   await symlink(join(home, 'dotfiles/keybindings.json'), join(home, 'config/keybindings.json'))
@@ -1293,27 +1356,27 @@ test('setup writes keybindings.json under CLAUDE_CONFIG_DIR through its symbolic
   expect(JSON.parse(await readFile(join(home, 'dotfiles/keybindings.json'), 'utf8'))).toEqual({
     bindings: [
       { context: 'Global', bindings: { 'ctrl+t': 'app:toggleTodos' } },
-      { context: 'Chat', bindings: { 'shift+tab': 'command:mode' } },
+      { context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } },
     ],
   })
 })
 
-test('an upgrade that drops a key removes its binding, and a changed key asks consent again', async () => {
+test('an upgrade that drops a hotkey removes its binding, and a changed hotkey asks consent again', async () => {
   const home = await temporaryHome()
-  const root = await createKeysMod(home, { 'shift+tab': '/mode', 'alt+m': '/mode' })
+  const root = await createHotkeysMod(home, { cycle, review })
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await createKeysMod(home, { 'shift+tab': '/mode' })
+  await createHotkeysMod(home, { cycle })
 
   const asked = await cmod(home, 'setup', root, '--events')
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
   expect(asked.exitCode).toBe(10)
-  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:mode' } }] })
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
 })
 
 test('teardown removes a Chat block it leaves empty, and keeps the other blocks', async () => {
   const home = await temporaryHome()
-  const root = await createKeysMod(home, { 'shift+tab': '/mode' })
+  const root = await createHotkeysMod(home, { cycle })
   await writeFiles(home, { '.claude/keybindings.json': '{ "bindings": [{ "context": "Global", "bindings": { "ctrl+t": "app:toggleTodos" } }] }\n' })
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
@@ -1322,24 +1385,24 @@ test('teardown removes a Chat block it leaves empty, and keeps the other blocks'
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Global', bindings: { 'ctrl+t': 'app:toggleTodos' } }] })
 })
 
-test('a key bound to anything but one of the mod commands is refused', async () => {
+test('a hotkey default that is not a combo is refused', async () => {
   const home = await temporaryHome()
-  const root = await createKeysMod(home, { 'shift+tab': 'chat:cycleMode' })
+  const root = await createHotkeysMod(home, { cycle: { title: 'Switch mode', default: 'tab' } })
 
   const result = await cmod(home, 'setup', root, '--events')
 
-  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.keys" binds "shift+tab" to "chat:cycleMode". Bind each key to one of the mod's commands, such as "shift+tab": "/mode".\n`)
+  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod": hotkeys.cycle defaults to "tab", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".\n`)
   expect(existsSync(keybindings(home))).toBe(false)
 })
 
-test('the consent question lists the keys it binds', async () => {
+test('the consent question lists the hotkeys it binds', async () => {
   const home = await temporaryHome()
-  const root = await createKeysMod(home, { 'shift+tab': '/mode' })
+  const root = await createHotkeysMod(home, { cycle })
 
   const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(10)
-  expect(result.stdout).toContain('  It binds keys in ~/.claude/keybindings.json:\n    shift+tab  /mode\n')
+  expect(result.stdout).toContain('  It binds hotkeys in ~/.claude/keybindings.json:\n    shift+tab      Switch mode\n')
   expect(result.stdout).not.toContain('It runs these commands')
   expect(result.stdout).toContain('modes is not set up: it needs your consent. Run the command again with --yes after reading what it does.')
 })
@@ -1451,7 +1514,7 @@ test('a current mod whose approval is gone sets up without asking', async () => 
   const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toBe('✔ demo 0.1.0 is already set up\n  Start Claude Code to use demo, or run /reload-plugins in a session that is running.\n')
+  expect(result.stdout).toBe('✔ demo 0.1.0 is already set up\n  Start Claude Code to use demo. A session that is running starts it on its own.\n')
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 
@@ -1628,6 +1691,24 @@ test('a linked mod whose version moved past its last release builds its program 
   )
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.3.0/hello'))
   expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello from the checkout\n')
+})
+
+test("a linked mod's failed build runs again only once a file in its program folder changes", async () => {
+  const home = await temporaryHome()
+  const root = await createProgramMod(home, 'http://127.0.0.1:9/owner/hello-mod')
+  const build = 'echo built >> ../builds; echo "error: expected ;" >&2; exit 1'
+  await writeFiles(root, { 'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }) })
+  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: root } }) })
+  const failure = `failed 1\tBuilding hello with "${build}" exited 1: error: expected ;. Fix the build in ~/hello-mod/cli, then save a file there or run the command again.\nretries changed\n`
+
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)
+  await writeFiles(root, { 'README.md': 'outside the program folder\n' })
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)
+  expect(await readFile(join(root, 'builds'), 'utf8')).toBe('built\n')
+
+  await writeFiles(root, { 'cli/main.ts': 'export {}\n' })
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)
+  expect(await readFile(join(root, 'builds'), 'utf8')).toBe('built\nbuilt\n')
 })
 
 test('teardown --events prints missing for a plugin with no record, deletes its data folder, and exits 0', async () => {

@@ -8,7 +8,7 @@ import { runStep } from '../process.js'
 import { removeData, removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
 import { unlinkRules } from '../rules.js'
-import { restoreSettings, unbindKeys } from '../settings.js'
+import { modBindings, restoreSettings, unbindKeys } from '../settings.js'
 import { modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 import { holdSignals, printEvent, printFailure, stepEnvironment, uninterruptible } from './setup.js'
 
@@ -92,7 +92,7 @@ async function removeSetup(record: InstallRecord, emit: (event: RunnerEvent) => 
       return 1
     }
   }
-  await unbindKeys(record.keys)
+  await unbindKeys(await modBindings(record.name, record.keys))
   await restoreSettings(record.name)
   if (record.program !== null) await removeProgram(record.program)
   await removeData(record.name)

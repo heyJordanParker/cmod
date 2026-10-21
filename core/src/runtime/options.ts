@@ -1,6 +1,6 @@
 import type { PluginOptions } from 'claude-code'
 import { fitsOption, isUnset, type Option, type Options } from '../options.js'
-import { configFolders } from '../records.js'
+import { configFolders, secretFix } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import type { Failure } from './toaster.js'
@@ -72,7 +72,7 @@ export function createOptions({
     for (const [key, value] of Object.entries(file)) {
       const option = declared[key]
       if (option === undefined) ignore(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? 'Remove it.' : `Remove it, or use one of: ${Object.keys(declared).join(', ')}.`}`)
-      else if (option.type === 'secret') ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.`)
+      else if (option.type === 'secret') ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it. ${secretFix}`)
       else {
         const misfit = fitsOption(option, value)
         if (misfit === undefined) kept[key] = value

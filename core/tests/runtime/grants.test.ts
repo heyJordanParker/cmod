@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { defineMod, fs, http, model, process, Prompt, sessions, settings, type Mod } from '../../src/mod.js'
-import { formatEvent, oldestCmodFor, parseEvent, permissionWords, readSteps, scriptsSha256 } from '../../src/records.js'
+import { formatEvent, parseEvent, permissionWords, readSteps, scriptsSha256 } from '../../src/records.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
@@ -55,7 +55,7 @@ test('a declared permission the person turned off fails with where to turn it on
   const plugin: Plugin = { name: 'ci-watch', root: '/plugins/ci-watch', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: { permissions: ['model'] }, granted: [] }
   await lifecycle.start(fake.claude, async () => plugin)
 
-  await expect(model.complete({ prompt: 'Green?' } as never)).rejects.toThrow('ci-watch calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in /mods ci-watch.')
+  await expect(model.complete({ prompt: 'Green?' } as never)).rejects.toThrow('ci-watch calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.')
 })
 
 test('a fetch over a socket needs the socket path, and has names a permission the way package.json writes it', async () => {
@@ -260,11 +260,11 @@ test("the cmod plugin passes on a mod's changed tool input, which that mod's own
   expect(lifecycle.toasts.filter(({ type }) => type === 'warning')).toEqual([])
 })
 
-test('needs-consent carries the permissions the person has not granted yet, after the keys', () => {
-  const event = { type: 'needs-consent', sha256: 'abc', install: './setup/install.sh', uninstall: '', keys: 'ctrl+l to /ci', permissions: ['network:api.github.com', 'prompt'] } as const
+test('needs-consent carries the permissions the person has not granted yet, after the hotkeys', () => {
+  const event = { type: 'needs-consent', sha256: 'abc', install: './setup/install.sh', uninstall: '', hotkeys: 'ctrl+l to Show the runs', permissions: ['network:api.github.com', 'prompt'] } as const
 
   expect(parseEvent(formatEvent(event))).toEqual(event)
-  expect(parseEvent('needs-consent abc\t./setup/install.sh\t\t')).toEqual({ ...event, keys: '', permissions: [] })
+  expect(parseEvent('needs-consent abc\t./setup/install.sh\t\t')).toEqual({ ...event, hotkeys: '', permissions: [] })
 })
 
 test('the consent hash changes when the permissions change', async () => {
@@ -272,12 +272,6 @@ test('the consent hash changes when the permissions change', async () => {
   const base = await scriptsSha256({ permissions: ['prompt'] }, files)
 
   expect(await scriptsSha256({ permissions: ['prompt', 'network:api.github.com'] }, files)).not.toBe(base)
-})
-
-test('a mod that asks for a config list needs cmod 1.6, for tasks 1.0, and other permissions need 0.2', () => {
-  expect(oldestCmodFor({ permissions: ['tasks'] })).toBe('1.0.0')
-  expect(oldestCmodFor({ permissions: ['config:statusLine'] })).toBe('1.6.0')
-  expect(oldestCmodFor({ permissions: ['prompt', 'network:api.github.com'] })).toBe('0.2.0')
 })
 
 test('a mod hears and reads its own session with no grant, and another session only with the conversation grant', async () => {

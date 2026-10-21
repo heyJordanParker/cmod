@@ -29,7 +29,7 @@ const prompt = computed(() =>
     '3. Read `node_modules/@cmodjs/core/docs/index.md`, then the doc for each part you use. They match the installed cmod version, and your training data does not.',
     '4. Build the mod, with tests for what it does.',
     '5. Run `cmod check` after every change, and fix what it reports until it passes.',
-    '6. Run `cmod link`, then tell me to run /reload-plugins and how to try the mod.',
+    '6. Run `cmod link`, then tell me how to try the mod.',
     '',
     'When the description leaves something open, pick the simplest option and tell me what you picked.',
   ].join('\n'),

@@ -91,8 +91,8 @@ function boxRows({ props, children = [] }: Drawn, width: number): string[] {
   const left = space('Left', 'X')
   const direction = String(props['flexDirection'] ?? 'row')
   const ordered = direction.endsWith('-reverse') ? [...children].reverse() : children
-  const inner = width - left - space('Right', 'X')
-  const rows = direction.startsWith('column') ? stacked(ordered, inner, size('rowGap') ?? size('gap') ?? 0) : sideBySide(ordered, inner, size('columnGap') ?? size('gap') ?? 0)
+  const inner = Math.min(width, size('width') ?? width) - left - space('Right', 'X')
+  const rows = direction.startsWith('column') ? stacked(ordered, inner, size('rowGap') ?? size('gap') ?? 0) : sideBySide(ordered, inner, size('columnGap') ?? size('gap') ?? 0, props['justifyContent'] === 'space-between')
   return [...blankRows(space('Top', 'Y')), ...rows.map((row) => paddedTo(`${' '.repeat(left)}${row}`, size('minWidth') ?? 0)), ...blankRows(space('Bottom', 'Y'))]
 }
 
@@ -101,7 +101,7 @@ function stacked(children: readonly RenderNode[], width: number, gap: number): s
   return blocks.flatMap((block, index) => [...blankRows(index === 0 ? 0 : gap), ...block])
 }
 
-function sideBySide(children: readonly RenderNode[], width: number, gap: number): string[] {
+function sideBySide(children: readonly RenderNode[], width: number, gap: number, isSpread = false): string[] {
   const laid = children
     .map((child) => ({ child, natural: rowsOf(child, Number.POSITIVE_INFINITY) }))
     .filter(({ natural }) => natural.length > 0)
@@ -111,7 +111,10 @@ function sideBySide(children: readonly RenderNode[], width: number, gap: number)
   const blocks = laid.map(({ child, natural, canShrink }) => (overflow <= 0 || !canShrink || total === 0 ? natural : rowsOf(child, widthOf(natural) - Math.ceil((overflow * widthOf(natural)) / total))))
   const height = Math.max(0, ...blocks.map((block) => block.length))
   const columns = blocks.map(widthOf)
-  return Array.from({ length: height }, (_, row) => blocks.map((block, index) => paddedTo(block[row] ?? '', index === blocks.length - 1 ? 0 : (columns[index] ?? 0))).join(' '.repeat(gap)))
+  const spaces = blocks.length - 1
+  const free = isSpread && Number.isFinite(width) ? Math.max(width - columns.reduce((sum, each) => sum + each, 0) - gap * spaces, 0) : 0
+  const gapAfter = (index: number) => gap + Math.floor(free / spaces) + (index < free % spaces ? 1 : 0)
+  return Array.from({ length: height }, (_, row) => blocks.map((block, index) => `${paddedTo(block[row] ?? '', index === spaces ? 0 : (columns[index] ?? 0))}${index === spaces ? '' : ' '.repeat(gapAfter(index))}`).join(''))
 }
 
 function minWidthOf(node: RenderNode): number {

@@ -1,4 +1,5 @@
 import type { ClassicHookInputs } from 'claude-code'
+import type { Subscription } from '../utils/subscription.js'
 import type { Claude } from './claude.js'
 import type { Failure } from './toaster.js'
 
@@ -34,10 +35,11 @@ const keptProjects = 20
 
 const listeners = new WeakMap<object, Set<() => void>>()
 
-export function onStateChange(state: object, listener: () => void): void {
+export function onStateChange(state: object, listener: () => void): Subscription {
   const own = listeners.get(state) ?? new Set()
   own.add(listener)
   listeners.set(state, own)
+  return { remove: () => void own.delete(listener) }
 }
 
 export async function sessionsWith(claude: Pick<Claude, 'store'>, name: string, key: string, value: unknown): Promise<string[]> {

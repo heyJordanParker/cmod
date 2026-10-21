@@ -18,7 +18,7 @@ export const ciWatch = defineMod({
     branch: option.text({ title: 'Branch', description: 'The branch to watch', default: 'main' }),
   },
   setup(mod) {
-    mod.ui.toast(`Watching ${mod.options.branch} every ${mod.options.every} minutes`)
+    mod.toast(`Watching ${mod.options.branch} every ${mod.options.every} minutes`)
   },
 })
 ```
@@ -49,7 +49,7 @@ Each value is, in order of precedence:
 3. The value the person set in `/config`.
 4. The `default` in the declaration.
 
-An option with no default and no value is asked before `setup` runs, on a page of the installer pane: one field per option, each saved to `/config` through `cmod option` as the person submits it. A secret is set in `/config` itself, where Claude Code keeps it in the keychain, and the page says so. When the person chooses Not now, or no one can answer, as in `claude -p`, the mod does not start: its error toast says `it needs <title>` and `Set it in /config.`, and Claude Code reloads the mod once the value is set.
+An option with no default and no value is asked before `setup` runs, on a page of the installer pane: one field per option, each saved to `/config` through `cmod option` as the person submits it. A secret is set in `/config` itself, where Claude Code keeps it in the keychain, and the page says so. When the person chooses Not now, or no one can answer, as in `claude -p`, the mod does not start: its error toast says `it needs <title>` and `Retry asks for it.`, and `Retry` opens the question again. A secret has an `Open /config` button, because Claude Code keeps secrets in /config and the keychain.
 
 `cmod install`, `cmod link`, and `cmod try` set options from the terminal with `--option key=value`, once per option ([commands.md](commands.md)).
 

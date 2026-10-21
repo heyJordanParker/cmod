@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type Disposable, type TaskOwner, type Turn } from '../../src/mod.js'
+import { defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type Subscription, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { Message } from '../../src/session/context/turn/message/message.js'
 import { TaskStart } from '../../src/session/goal/task.js'
@@ -536,8 +536,8 @@ test('beforeTaskStart picks the model a task runs on', async () => {
   expect(await claudeCodeOf(tested).fire('agent.spawn', { ...spawn, subagentType: 'Plan' } as never)).toEqual({ agentId: 'agent-1', model: 'opus' } as never)
 })
 
-test('a disposed before listener stops answering', async () => {
-  let listening: Disposable | undefined
+test('a removed before listener stops answering', async () => {
+  let listening: Subscription | undefined
   const tested = testMod(
     defineMod({
       name: 'guard',
@@ -548,13 +548,13 @@ test('a disposed before listener stops answering', async () => {
     { permissions: ['conversation', 'prompt'] },
   )
   await tested.start()
-  listening?.dispose()
+  listening?.remove()
 
   expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'Go', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Go', origin: { kind: 'composer' } })
 })
 
-test('a before listener disposed after /clear stops answering in the new session', async () => {
-  let listening: Disposable | undefined
+test('a before listener removed after /clear stops answering in the new session', async () => {
+  let listening: Subscription | undefined
   const tested = testMod(
     defineMod({
       name: 'guard',
@@ -568,7 +568,7 @@ test('a before listener disposed after /clear stops answering in the new session
   await claudeCodeOf(tested).fire('SessionStart', { source: 'clear', session_id: 'after-clear' })
   await tested.settle()
 
-  listening?.dispose()
+  listening?.remove()
   await tested.settle()
 
   expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'Continue', origin: { kind: 'composer' } })

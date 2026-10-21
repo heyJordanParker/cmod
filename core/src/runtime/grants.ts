@@ -1,4 +1,4 @@
-import { isObject, isSettingCovered, permissionWords, settingPaths } from '../records.js'
+import { grantFix, isObject, isSettingCovered, permissionWords, settingPaths } from '../records.js'
 import { relativePath } from '../utils/paths.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
@@ -198,7 +198,7 @@ function writeItem(grants: Grants, path: string): string | undefined {
 
 export function refusal(grants: Pick<Grants, 'name' | 'declared' | 'home'>, call: string, item: string): string {
   const { name } = grants
-  if (isCovered(new Set(grants.declared), item, grants.home)) return `${name} calls ${call} without your grant to "${permissionWords(item)}". Turn it on in /mods ${name}.`
+  if (isCovered(new Set(grants.declared), item, grants.home)) return `${name} calls ${call} without your grant to "${permissionWords(item)}". ${grantFix}`
   return `${name} calls ${call}, which needs ${declaration(item, grants.home)} in package.json "cmod".`
 }
 

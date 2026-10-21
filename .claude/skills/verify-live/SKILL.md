@@ -36,7 +36,7 @@ Template:
     env -i HOME=<scratch>/home CLAUDE_CONFIG_DIR=<scratch>/home/.claude ANTHROPIC_BASE_URL=http://127.0.0.1:8317 ANTHROPIC_API_KEY=isolated-probe-placeholder CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CMOD_DIST_SERVER=file://<scratch>/releases PATH=<scratch>/home/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin TERM=xterm-256color LANG=en_US.UTF-8 tmux -S <scratch>/tmux.sock new-session -d -s <session> -x 200 -y 50 -c <project> '<absolute path of claude> --debug-file <scratch>/logs/debug-1.log'
 
 ### Install the mods from a local directory marketplace
-Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-core, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The cmod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases.
+Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-core, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The cmod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases. Claude Code 2.1.305 loads a directory marketplace's plugin from the marketplace folder, not from the `installPath` in `installed_plugins.json`, so a fixture change goes into the marketplace folder.
 
 ## 3. Write the run book
 

@@ -63,7 +63,7 @@ export function program(options: { readonly command: readonly string[]; readonly
           for (const waiter of waiting.splice(0)) waiter.resolve(address)
         }
       } catch (error) {
-        if (error instanceof PermissionRefused) return stop(`${messageOf(error)} Add it, then run /reload-plugins.`)
+        if (error instanceof PermissionRefused) return stop(messageOf(error))
         lastError = messageOf(error)
       }
       if (address !== undefined) ownAddresses.delete(address.socketPath ?? new URL(address.url).host)

@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { dataFolder, isObject, pluginName, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { home, ifMissing, readJson, readLink, readText, tilde } from './files.js'
+import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
 import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
@@ -82,12 +82,48 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
 }
 
 export async function buildProgram(program: Program, wanted: readonly string[], progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<string[]> {
-  const lock = await takeLock(storePath('builds', `${Bun.hash(resolve(program.folder)).toString(36)}.lock`))
+  const lock = await takeLock(`${buildPath(program)}.lock`)
   try {
-    return await runBuild(program, wanted, progress, environment)
+    const builds = await runBuild(program, wanted, progress, environment)
+    await rm(`${buildPath(program)}.failed`, { force: true })
+    return builds
   } finally {
     await lock[Symbol.asyncDispose]()
   }
+}
+
+function buildPath(program: Program): string {
+  return storePath('builds', Bun.hash(resolve(program.folder)).toString(36))
+}
+
+async function buildUnlessFailed(program: Program, build: () => Promise<unknown>): Promise<void> {
+  const failed = `${buildPath(program)}.failed`
+  const before = await readText(failed)
+  const sources = await sourcesStamp(program)
+  if (before?.startsWith(`${sources}\n`) === true) throw new Error(before.slice(sources.length + 1))
+  try {
+    await build()
+  } catch (error) {
+    await writeAtomically(failed, `${sources}\n${messageOf(error)}`)
+    throw error
+  }
+}
+
+async function sourcesStamp(program: Program): Promise<string> {
+  const skipped = new Set(['node_modules', '.git', program.output.split('/')[0]])
+  const lines: string[] = []
+  const visit = async (folder: string): Promise<void> => {
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      const path = join(folder, entry.name)
+      if (entry.isDirectory() && !skipped.has(entry.name)) await visit(path)
+      else if (entry.isFile()) {
+        const { mtimeMs, size } = await stat(path)
+        lines.push(`${relative(program.folder, path)} ${mtimeMs} ${size}`)
+      }
+    }
+  }
+  await visit(program.folder)
+  return Bun.hash(lines.sort().join('\n')).toString(36)
 }
 
 async function runBuild(program: Program, wanted: readonly string[], progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<string[]> {
@@ -99,8 +135,8 @@ async function runBuild(program: Program, wanted: readonly string[], progress: P
     else progress.log(event.text)
   })
   if (result.exitCode !== 0) {
-    progress.fail(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, result.lastError)}.`)
-    throw new Error(`Fix the build in ${tilde(program.folder)}, then run the command again.`)
+    progress.fail(`Could not build ${program.name}`)
+    throw new Error(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, result.lastError)}. Fix the build in ${tilde(program.folder)}, then save a file there or run the command again.`)
   }
   const folder = join(program.folder, program.output)
   const names = machines.map((each) => `${program.name}-${each}`)
@@ -140,7 +176,7 @@ async function storeBuild(program: Program, version: string, progress: Progress,
 export async function fetchProgram(plugin: Plugin, name: string, emit: (event: RunnerEvent) => void): Promise<void> {
   const target = storePath('bin', name, plugin.version, name)
   const checkout = existsSync(target) || !(await isLinked(plugin.root)) ? undefined : await readProgram(plugin)
-  if (checkout?.name === name) await storeBuild(checkout, plugin.version, reporting(emit), process.env)
+  if (checkout?.name === name) await buildUnlessFailed(checkout, () => storeBuild(checkout, plugin.version, reporting(emit), process.env))
   if (!existsSync(target)) {
     if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so cmod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
     const release = `${releaseDownloads(plugin.repository)}/v${plugin.version}`

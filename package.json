@@ -2,10 +2,17 @@
   "name": "cmod",
   "private": true,
   "type": "module",
-  "cmod": { "program": "cmod", "permissions": { "run": ["cmod"], "conversation": true, "prompt": true } },
+  "cmod": {
+    "program": "cmod",
+    "permissions": { "run": ["cmod"], "conversation": true, "prompt": true },
+    "hotkeys": {
+      "sidebar": { "title": "Show or hide the Sidebar", "default": "ctrl+q" },
+      "settings": { "title": "Show or hide Settings", "default": "meta+s" }
+    }
+  },
   "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^3.1.0",
-    "@cmodjs/core": "^3.1.0"
+    "@cmodjs/cli": "^4.0.0",
+    "@cmodjs/core": "^4.0.0"
   }
 }

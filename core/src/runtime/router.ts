@@ -1,5 +1,5 @@
 import type { Args, EventResult, Frozen } from 'claude-code'
-import type { Disposable } from '../mod.js'
+import type { Subscription } from '../utils/subscription.js'
 import type { RoutedEvent } from './hooks.js'
 
 export type RouterNext<N extends RoutedEvent> = (e: Frozen<Args<N>>) => Promise<EventResult<N>>
@@ -9,7 +9,7 @@ export type RoutedHook<N extends RoutedEvent> = (e: Frozen<Args<N>>, next: Route
 export type RoutedFailure<N extends RoutedEvent> = (e: Frozen<Args<N>>, error: Error, next: RouterNext<N>) => EventResult<N> | undefined | Promise<EventResult<N> | undefined>
 
 export type Router = {
-  add<N extends RoutedEvent>(event: N, hook: RoutedHook<N>, failed?: RoutedFailure<N>): Disposable
+  add<N extends RoutedEvent>(event: N, hook: RoutedHook<N>, failed?: RoutedFailure<N>): Subscription
   dispatch<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
   dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>): Promise<EventResult<N>>
 }
@@ -24,7 +24,7 @@ export function createRouter(): Router {
       const route = { hook, ...(failed === undefined ? {} : { failed }) } as Route
       routes.set(event, [...(routes.get(event) ?? []), route])
       return {
-        dispose() {
+        remove() {
           const chain = (routes.get(event) ?? []).filter((each) => each !== route)
           if (chain.length === 0) routes.delete(event)
           else routes.set(event, chain)

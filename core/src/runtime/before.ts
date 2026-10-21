@@ -1,5 +1,5 @@
 import type { Args, Frozen } from 'claude-code'
-import type { Disposable } from '../mod.js'
+import type { Subscription } from '../utils/subscription.js'
 import { ContextEnd } from '../session/context/context.js'
 import { InstructionFile, isRulePath } from '../session/context/turn/message/instruction-file.js'
 import { instructionPathOf, Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
@@ -55,7 +55,7 @@ export function relayOf(e: Frozen<Args<'session.receive'>>): string | undefined 
   return isFromCmod ? relayTag.exec(e.text)?.[1] : undefined
 }
 
-export function installBefore({ claude, router, hooks }: { readonly claude: Claude; readonly router: Router; readonly hooks: BeforeHooks }): Disposable {
+export function installBefore({ claude, router, hooks }: { readonly claude: Claude; readonly router: Router; readonly hooks: BeforeHooks }): Subscription {
   const { place, wants, fold } = hooks
   const now = () => new Date().toISOString()
   const asked = async (event: BeforeEvent, change: SessionChange, decide: Decide = fold()) => (await decide(event, change)) ?? {}
@@ -82,7 +82,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const failed = answer.isError === true && !isFailure ? { block: answer.note === undefined ? `${name} failed.` : untagged(answer.note) } : {}
     return { ...withNote(below, answer.isError === true ? undefined : answer.note), ...rewritten, ...failed }
   }
-  const added: Disposable[] = [
+  const added: Subscription[] = [
     router.add('prompt.submit', async (e, next) => {
       if (!(await wants(Prompt))) return next(e)
       const where = await place()
@@ -215,7 +215,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return answer.refuse === undefined ? next(e) : { skip: answer.refuse }
     }),
   ]
-  return { dispose: () => added.forEach((each) => each.dispose()) }
+  return { remove: () => added.forEach((each) => each.remove()) }
 }
 
 export function closingContext(where: Place, task: RunningTask | undefined, closedAt: string): ContextData {

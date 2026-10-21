@@ -140,7 +140,8 @@ test('a failed build shows one sentence that ends with one period', async () => 
   const result = await cmod(home, 'link', checkout)
 
   expect(result.exitCode).toBe(1)
-  expect(result.stdout).toContain(`✘ Building hello with "${build}" exited 2: make: no rule for dist.\n`)
+  expect(result.stdout).toContain('✘ Could not build hello\n')
+  expect(result.stderr).toBe(`cmod link: Building hello with "${build}" exited 2: make: no rule for dist. Fix the build in ~/Developer/hello-mod/cli, then save a file there or run the command again.\n`)
 })
 
 test('link installs the cmod plugin through Claude Code when claude plugin list lacks it', async () => {

@@ -9,7 +9,7 @@ import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
-import { declaredOptions, readPlugin } from '../plugin.js'
+import { cmodFloor, cmodRangeOf, readDeclared, readPlugin } from '../plugin.js'
 import { capture, run as runCommand } from '../process.js'
 import { buildProgram, declaredMachines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
@@ -88,10 +88,18 @@ export async function run(argv: string[]): Promise<number> {
   }
   const notes = changelogSections(await answer('show', 'HEAD:CHANGELOG.md')).find((section) => section.version === plugin.version)?.text
   if (notes === undefined || notes === '') throw new Error(`The committed CHANGELOG.md has no "## [${plugin.version}]" section with notes. Write what changed for the people who use ${plugin.name} under it, commit it, then run cmod publish again.`)
-  const declared = await declaredOptions(plugin.root)
+  const declared = await readDeclared(plugin.root)
   const written = (await readJson(`${plugin.root}/.claude-plugin/plugin.json`)) as Record<string, unknown>
   if (declared.type === 'declared' && JSON.stringify(written['userConfig'] ?? {}) !== JSON.stringify(declared.userConfig)) {
     throw new Error('.claude-plugin/plugin.json userConfig differs from the options defineMod declares, so Claude Code would ask for and store the wrong options. Run cmod check, which writes them, commit .claude-plugin/plugin.json, then run cmod publish again.')
+  }
+  if (declared.type === 'declared' && JSON.stringify(plugin.steps.hotkeys ?? {}) !== JSON.stringify(declared.hotkeys)) {
+    throw new Error('package.json "cmod.hotkeys" differs from the hotkeys defineMod declares, so cmod would bind the wrong combos. Run cmod check, which writes them, commit package.json, then run cmod publish again.')
+  }
+  const floor = await cmodFloor(plugin)
+  const range = cmodRangeOf(written)
+  if (floor !== undefined && range !== floor) {
+    throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.slice(2)}, so it needs "${floor}", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
   }
 
   const listed = plugin.packageJson?.['files']

@@ -1,12 +1,13 @@
 import type { Job } from '../mod.js'
 import { onStateChange } from '../runtime/state.js'
 import { engineOf } from '../runtime/engine.js'
+import type { Subscription } from '../utils/subscription.js'
 
 export type ScheduledPrompt = { readonly cron: string; readonly prompt: string }
 
 const scheduleCounts = new WeakMap<object, number>()
 
-export function schedule<State extends object = Record<never, never>>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<void, State> {
+export function schedule<State extends object = Record<never, never>>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<Subscription, State> {
   if (typeof entry !== 'function') checked(entry)
 
   return (job) => {
@@ -51,12 +52,25 @@ export function schedule<State extends object = Record<never, never>>(entry: Sch
       .then((left) => (typeof left === 'string' ? remove(left) : undefined))
       .then(update)
       .catch((error: unknown) => report('failed', error))
-    onStateChange(mod.state, () => {
+    const following = onStateChange(mod.state, () => {
       if (isQueued) return
       isQueued = true
       updates = updates.then(update).catch((error: unknown) => report('failed', error))
     })
     job.announce(typeof entry === 'function' ? 'a schedule from its state' : `a schedule at ${entry.cron}`)
+    return {
+      remove() {
+        following.remove()
+        updates = updates
+          .then(async () => {
+            if (current === undefined) return
+            const { id } = current
+            current = undefined
+            await remove(id)
+          })
+          .catch((error: unknown) => report('failed', error))
+      },
+    }
   }
 }
 

@@ -4,10 +4,7 @@ import { defineMod } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
-import { definePane } from '../../src/ui/define-pane.js'
 import { Box, Image, Text } from '../../src/ui/elements.js'
-
-type CounterState = { session: { count: number } }
 
 function Count({ count }: { readonly count: number }): RenderElement {
   return <Text bold>Count: {count}</Text>
@@ -17,17 +14,15 @@ const counter = defineMod({
   name: 'counter',
   state: { session: { count: 2 } },
   async setup(mod) {
-    const pane = mod.ui.pane(
-      definePane<CounterState>({
-        id: 'counter',
-        title: 'Counter',
-        render: (mod) => (
-          <Box flexDirection="column">
-            <Count count={mod.state.session.count} />
-          </Box>
-        ),
-      }),
-    )
+    const pane = mod.panes.add({
+      id: 'counter',
+      title: 'Counter',
+      render: (current) => (
+        <Box flexDirection="column">
+          <Count count={current.state.session.count} />
+        </Box>
+      ),
+    })
     await pane.open()
   },
 })
@@ -35,7 +30,7 @@ const counter = defineMod({
 test('a component imports Box and draws without receiving the element table', async () => {
   const tested = testMod(counter)
 
-  expect(await tested.lines('counter')).toEqual(['Count: 2'])
+  expect(await tested.shown.pane.lines()).toEqual(['Count: 2'])
 })
 
 test('an element built outside a render draws once a render places it', async () => {
@@ -49,12 +44,12 @@ test('an element built outside a render draws once a render places it', async ()
     defineMod({
       name: 'early',
       async setup(mod) {
-        await mod.ui.pane(definePane({ id: 'early', title: 'Early', render: () => early })).open()
+        await mod.panes.add({ id: 'early', title: 'Early', render: () => early }).open()
       },
     }),
   )
 
-  expect(await tested.lines('early')).toEqual(['Count: 7', 'built at setup'])
+  expect(await tested.shown.pane.lines()).toEqual(['Count: 7', 'built at setup'])
 })
 
 test('Image draws', async () => {
@@ -65,7 +60,7 @@ test('Image draws', async () => {
     defineMod({
       name: 'charts',
       async setup(mod) {
-        await mod.ui.pane(definePane({ id: 'chart', title: 'Chart', render: () => Image(chart) })).open()
+        await mod.panes.add({ id: 'chart', title: 'Chart', render: () => Image(chart) }).open()
       },
     }),
   )

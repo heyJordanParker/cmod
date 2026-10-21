@@ -140,13 +140,13 @@ test('registerMod registers each Claude Code event once, and no permission check
     'classic.PostCompact',
     'classic.Stop',
     'classic.StopFailure',
-    'classic.FileChanged',
     'classic.WorktreeCreate',
     'classic.WorktreeRemove',
     'tool.call',
     'prompt.submit',
     'prompt.context',
     'command.run',
+    'command.describe',
     'session.measure',
     'skill.prompt',
     'ui.render',
@@ -326,7 +326,7 @@ test('a pane opened during setup is drawn again once the mod is active', async (
   const opensPane = defineMod({
     name: 'demo',
     async setup(mod) {
-      await mod.ui.pane({ id: 'files', title: 'Files', render: () => Text({ children: 'src/' }) }).open()
+      await mod.panes.add({ id: 'files', title: 'Files', render: () => Text({ children: 'src/' }) }).open()
     },
   })
   registerMod(fake.on, opensPane, {})
@@ -480,5 +480,5 @@ test("registerMod names each event as a string literal, which Claude Code's hook
 
   expect([...source.matchAll(/addHook\(\s*([^,]+),/g)].map((match) => match[1]).filter((name) => !/^'[a-zA-Z.]+'$/.test(name ?? ''))).toEqual([])
   const heard = Object.values(processEvents).flatMap((event): string[] => ['before' in event ? [event.on, event.before] : [event.on]].flat())
-  expect([...heard, 'ConfigChange', 'FileChanged'].filter((hook) => !hook.includes('.') && hook !== 'CwdChanged' && !classic.includes(`classic.${hook}`))).toEqual([])
+  expect([...heard, 'ConfigChange'].filter((hook) => !hook.includes('.') && hook !== 'CwdChanged' && !classic.includes(`classic.${hook}`))).toEqual([])
 })

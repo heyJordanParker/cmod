@@ -1,7 +1,9 @@
 import type { Claude } from './claude.js'
+import type { Pages } from './pages.js'
 import type { Router } from './router.js'
 import type { Failure } from './toaster.js'
 import type { ToolCalls } from './tool-calls.js'
+import type { Widgets } from './widgets.js'
 
 export type Engine = {
   readonly claude: Claude
@@ -9,6 +11,9 @@ export type Engine = {
   readonly toolCalls: ToolCalls
   readonly report: (failure: Failure) => void
   readonly hasPermissionCheck: () => boolean
+  readonly answerInput: <Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>) => Promise<Answer>
+  readonly widgets?: Widgets
+  readonly pages?: Pages
 }
 
 const engines = new WeakMap<object, Engine>()

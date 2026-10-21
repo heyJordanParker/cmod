@@ -1,4 +1,4 @@
-import type { Disposable } from '../utils/disposable.js'
+import type { Subscription } from '../utils/subscription.js'
 import type { Matcher } from '../utils/matcher.js'
 import type { Sender } from './context/turn/message/sender.js'
 import type { Context, ContextEnd, ContextStart } from './context/context.js'
@@ -107,13 +107,13 @@ export type ListenerTime = { readonly deadline: number; readonly signal: AbortSi
 export type Listener<Payload, Answer = void> = (payload: Payload, time: ListenerTime) => Answer | void | Promise<Answer | void>
 
 export type OnMethod<Payload> = {
-  (listener: Listener<Payload, unknown>, options?: ReadOptions): Disposable
-  (matcher: Matcher<Payload>, listener: Listener<Payload, unknown>, options?: ReadOptions): Disposable
+  (listener: Listener<Payload, unknown>, options?: ReadOptions): Subscription
+  (matcher: Matcher<Payload>, listener: Listener<Payload, unknown>, options?: ReadOptions): Subscription
 }
 
 export type BeforeMethod<Payload, Answer> = {
-  (listener: Listener<Payload, Answer>, options?: AnswerOptions): Disposable
-  (matcher: Matcher<Payload>, listener: Listener<Payload, Answer>, options?: AnswerOptions): Disposable
+  (listener: Listener<Payload, Answer>, options?: AnswerOptions): Subscription
+  (matcher: Matcher<Payload>, listener: Listener<Payload, Answer>, options?: AnswerOptions): Subscription
 }
 
 export type OnMethods = { readonly [Name in EventName as `on${Name}`]: OnMethod<PayloadOf<Name>> }
@@ -326,7 +326,11 @@ export type ProcessOnMethods = { readonly [Name in ProcessName as `on${Name}`]: 
 
 export type ProcessBeforeMethods = { readonly [Name in keyof ProcessAnswer as `before${Name}`]: BeforeMethod<ProcessAsked[Name], ProcessAnswer[Name]> }
 
-export type CurrentSession = Omit<Session, 'goal'> & ProcessOnMethods & ProcessBeforeMethods & { readonly goal: Goal & Pick<ProcessBeforeMethods, 'beforeSessionStart'> }
+export type CurrentSession = Omit<Session, 'goal'> & ProcessOnMethods & ProcessBeforeMethods & {
+  readonly goal: Goal & Pick<ProcessBeforeMethods, 'beforeSessionStart'>
+  scrollTo(message: Message, options?: { readonly block?: 'start' | 'center' | 'end' | 'nearest' }): Promise<void>
+  caption(toolCall: Message & { readonly type: typeof ToolCall }, text: string | undefined): void
+}
 
 export type SessionScope = {
   readonly running?: boolean

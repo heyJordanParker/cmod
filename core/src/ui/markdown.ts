@@ -1,8 +1,8 @@
 import type { Nodes, RootContent } from 'mdast'
 import { fromMarkdown, gfm, gfmFromMarkdown, toString } from '../vendor-markdown.js'
-import type { PlaceProps } from './places.js'
+import type { StyleProps } from './styles.js'
 
-type Block = { readonly text: string; readonly source: string }
+type BlockText = { readonly text: string; readonly source: string }
 
 type BlockFields = {
   heading: { readonly depth: 1 | 2 | 3 | 4 | 5 | 6 }
@@ -12,30 +12,30 @@ type BlockFields = {
   html: { readonly value: string }
 }
 
-export type BlockProps<Type extends string> = Type extends keyof BlockFields ? Block & BlockFields[Type] : Block
+export type BlockProps<Type extends string> = Type extends keyof BlockFields ? BlockText & BlockFields[Type] : BlockText
 
-export type MarkdownPiece<Render> = { readonly text: string } | { readonly render: Render; readonly props: Block }
+export type MarkdownPiece<Render> = { readonly text: string } | { readonly render: Render; readonly props: BlockText }
 
 export type MarkdownReader = <Render>(text: string, renderOf: (type: string) => Render | undefined, replyId?: string) => readonly MarkdownPiece<Render>[]
 
-export type MarkdownPlace<Type extends string = string> = {
+export type Block<Type extends string = string> = {
   readonly name: string
   readonly markdown: Type
   createReader(): MarkdownReader
 }
 
-function markdownPlace<const Type extends string>(name: string, markdown: Type): MarkdownPlace<Type> {
+function blockKind<const Type extends string>(name: string, markdown: Type): Block<Type> {
   return { name, markdown, createReader }
 }
 
-export const Heading = markdownPlace('Heading', 'heading')
-export const Paragraph = markdownPlace('Paragraph', 'paragraph')
-export const CodeBlock = markdownPlace('CodeBlock', 'code')
-export const BlockQuote = markdownPlace('BlockQuote', 'blockquote')
-export const List = markdownPlace('List', 'list')
-export const Table = markdownPlace('Table', 'table')
-export const ThematicBreak = markdownPlace('ThematicBreak', 'thematicBreak')
-export const HtmlBlock = markdownPlace('HtmlBlock', 'html')
+export const Heading = blockKind('Heading', 'heading')
+export const Paragraph = blockKind('Paragraph', 'paragraph')
+export const CodeBlock = blockKind('CodeBlock', 'code')
+export const BlockQuote = blockKind('BlockQuote', 'blockquote')
+export const List = blockKind('List', 'list')
+export const Table = blockKind('Table', 'table')
+export const ThematicBreak = blockKind('ThematicBreak', 'thematicBreak')
+export const HtmlBlock = blockKind('HtmlBlock', 'html')
 
 type Parsed = {
   readonly type: string
@@ -44,7 +44,7 @@ type Parsed = {
   readonly isClosed: boolean
   readonly canSpanBlankLines: boolean
   readonly hasDefinition: boolean
-  readonly props: Block
+  readonly props: BlockText
 }
 
 type Reply = { readonly id: string; readonly text: string; readonly blocks: readonly Parsed[] }
@@ -163,7 +163,7 @@ function plainText(node: Nodes): string {
   return node.children.map(plainText).join(node.type === 'tableRow' ? '\t' : '\n')
 }
 
-export function markdownBlocks<P extends MarkdownPlace>(text: string, place: P): Omit<PlaceProps<P>, 'Default'>[] {
-  const blocks = parsed(text, 0).filter((block) => block.type === place.markdown)
-  return blocks.map((block) => block.props) as unknown as Omit<PlaceProps<P>, 'Default'>[]
+export function markdownBlocks<K extends Block>(text: string, kind: K): Omit<StyleProps<K>, 'Default'>[] {
+  const blocks = parsed(text, 0).filter((block) => block.type === kind.markdown)
+  return blocks.map((block) => block.props) as unknown as Omit<StyleProps<K>, 'Default'>[]
 }

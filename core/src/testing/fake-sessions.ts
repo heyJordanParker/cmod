@@ -14,7 +14,7 @@ import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import type { Place } from '../runtime/before.js'
 import type { Claude } from '../runtime/claude.js'
-import { conversationMethods, everySession, isHeardBy, resultOf, type Subscription } from '../runtime/sessions.js'
+import { conversationMethods, everySession, isHeardBy, resultOf, type Listened } from '../runtime/sessions.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { firstLine, messageOf } from '../utils/text.js'
 
@@ -43,7 +43,7 @@ type Kept = {
   readonly tasks: Map<string, TaskData>
 }
 
-type Heard = { readonly event: Subscription['event']; readonly matcher: unknown }
+type Heard = { readonly event: Listened['event']; readonly matcher: unknown }
 
 
 export type FakeSessions = {
@@ -56,6 +56,7 @@ export type FakeSessions = {
   compact(): void
   startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): string
   start(id: string): void
+  lastTurn(): TurnData | undefined
   readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string }[]
 }
 
@@ -191,7 +192,7 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
     },
     [conversationMethods.watchBefore](request, caller) {
       const targets = watches.get(caller) ?? new Map<string, readonly string[]>()
-      targets.set(String(request['session']), (Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Subscription[]) : []).map(({ event }) => event))
+      targets.set(String(request['session']), (Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Listened[]) : []).map(({ event }) => event))
       watches.set(caller, targets)
       return null
     },
@@ -223,7 +224,7 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
       return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', name: '', input: {}, cwd: project(), files: noFiles, output: '', isError: false }
     },
     [conversationMethods.subscribe](request, caller) {
-      const list = Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Subscription[]) : []
+      const list = Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Listened[]) : []
       const sessions = heard.get(caller) ?? new Map<string, readonly Heard[]>()
       sessions.set(String(request['session']), list.map(({ event, matcher }) => ({ event, matcher: matcher === undefined ? undefined : receivedMatcher(matcher) })))
       heard.set(caller, sessions)
@@ -272,6 +273,7 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
       session.data = { ...session.data, isRunning: true }
       if (session.conversation.state.context === 0) record(session, session.conversation.startContext(now()))
     },
+    lastTurn: () => [...currentSession().turns.values()].filter((turn) => turn.prompt.task === undefined).at(-1),
     sent,
   }
 }

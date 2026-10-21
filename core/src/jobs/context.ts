@@ -8,6 +8,7 @@ import type { Call } from '../utils/call-effects.js'
 import { findProjectScope, type Workspace } from './permissions/find-project-scope.js'
 import { targetOf, type Target } from './permissions/match-target.js'
 import type { FileSystem } from '../utils/paths.js'
+import type { Subscription } from '../utils/subscription.js'
 
 type Session = Omit<Workspace, 'projectRoot' | 'cwd'>
 
@@ -32,10 +33,10 @@ export function workspaceReader({ mod }: JobContext): () => Promise<Workspace> {
   }
 }
 
-export function afterCall<State extends object>(job: JobContext<State>, contextAfter: (call: Call, workspace: Workspace) => Promise<readonly string[]>, failed: (error: unknown) => readonly string[]): void {
+export function afterCall<State extends object>(job: JobContext<State>, contextAfter: (call: Call, workspace: Workspace) => Promise<readonly string[]>, failed: (error: unknown) => readonly string[]): Subscription {
   const { router, toolCalls } = engineOf(job.mod)
   const readWorkspace = workspaceReader(job)
-  router.add('tool.call', async (e, next) => {
+  return router.add('tool.call', async (e, next) => {
     const before = Promise.all([toolCalls.agentOf(e.tool_use_id).then((agent): Call => ({ tool: e.tool, input: toolInputOf(e), ...agent })), readWorkspace()])
     await Promise.allSettled([before])
     const result = await next(e)

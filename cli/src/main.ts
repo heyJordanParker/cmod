@@ -5,6 +5,7 @@ import * as disable from './commands/disable.js'
 import * as download from './commands/download.js'
 import * as enable from './commands/enable.js'
 import * as history from './commands/history.js'
+import * as hotkey from './commands/hotkey.js'
 import * as install from './commands/install.js'
 import * as link from './commands/link.js'
 import * as list from './commands/list.js'
@@ -22,6 +23,7 @@ import * as unlink from './commands/unlink.js'
 import * as update from './commands/update.js'
 import { interruptProgress } from './progress.js'
 import { syncRules } from './rules.js'
+import { markPluginsChanged } from './store.js'
 
 type Command = { summary: string; help: string; run(argv: string[]): Promise<number> }
 
@@ -42,6 +44,7 @@ const commands: Record<string, Command> = {
   teardown,
   permission,
   option,
+  hotkey,
   settings,
   rules,
   history,
@@ -49,6 +52,8 @@ const commands: Record<string, Command> = {
 }
 
 const changesRules: readonly string[] = ['install', 'update', 'remove', 'enable', 'disable', 'link', 'unlink', 'setup', 'teardown', 'permission']
+
+const changesPlugins: readonly string[] = ['install', 'update', 'remove', 'enable', 'disable', 'link', 'unlink', 'try']
 
 const overview = `Usage: cmod <command> [arguments]
 
@@ -82,6 +87,8 @@ if (name === '--version' || name === '-v') {
       interruptProgress()
       process.stderr.write(`cmod ${name}: ${messageOf(error)}\n`)
       process.exitCode = 1
+    } finally {
+      if (changesPlugins.includes(name)) await markPluginsChanged()
     }
   }
 }

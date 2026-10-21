@@ -139,6 +139,32 @@ test("a mod's marketplace lists the cmod plugin from cmod's release branch, so i
   expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' } })
 })
 
+test('publish refuses a cmod dependency other than >= the @cmodjs/core the mod bundles, and names cmod check', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'cmod', version: '^4.0.0' }] }),
+    'package.json': JSON.stringify({ name: 'greeter' }),
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.2.0' }),
+  })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe(
+    'cmod publish: .claude-plugin/plugin.json depends on cmod "^4.0.0", and this mod bundles @cmodjs/core 4.2.0, so it needs ">=4.2.0", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.\n',
+  )
+})
+
+test('publish of the cmod plugin, which installs @cmodjs/core and depends on no cmod, releases it', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, { '.gitignore': 'node_modules\n', 'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.0.0' }) })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+})
+
 async function committedHooksMod(home: string, files: Record<string, string> = {}): Promise<string> {
   const root = join(home, 'greeter')
   await writeFiles(root, {

@@ -1,30 +1,30 @@
 # Define a mod
 
-`defineMod` describes a mod: its name, its state, the methods it offers other mods, and the `setup` function that attaches everything to Claude Code. `registerMod` registers the definition with Claude Code.
+`defineMod` describes a mod: its name, its state, its options, its hotkeys, and the `setup` function that adds everything to Claude Code and returns the methods it offers other mods. `registerMod` registers the definition with Claude Code.
 
 ## defineMod
 
 ```ts
-defineMod<State, Name, Options>(definition: ModDefinition<State, Name, Options>): ModDefinition<State, Name, Options>
+defineMod<State, Name, Options, Hotkeys>(definition: ModDefinition<State, Name, Options, Hotkeys>): ModDefinition<State, Name, Options, Hotkeys>
 ```
 
 ```ts
-type ModDefinition<State, Name, Options> = {
+type ModDefinition<State, Name, Options, Hotkeys> = {
   readonly name: Name
   readonly state?: State
   readonly options?: Options
-  readonly api?: { … }
+  readonly hotkeys?: Hotkeys
   readonly installer?: readonly Step<State>[]
-  setup(mod: Mod<State, Options>): unknown
+  setup(mod: Mod<State, Options, Hotkeys>): Api | void | Promise<Api | void>
 }
 ```
 
 - `name` is the mod's name. Use the `name` in `.claude-plugin/plugin.json`. Claude Mod Manager (cmod) keys the saved state and the options by this name, and the data folder and the Skill overrides by the plugin's name, so the two must match. `defineMod` throws `defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.` for a blank name.
 - `state` holds the starting values, grouped by how long they last. [state.md](state.md) explains the groups.
 - `options` declares what a person sets, such as a token, and types `mod.options`. [options.md](options.md) explains them.
-- `api` holds the methods other mods call. [dependencies.md](dependencies.md) explains it.
+- `hotkeys` declares the key combos the mod listens for, each with a title and a default combo the person can change ([Hotkeys](#hotkeys)).
 - `installer` lists the steps the person finishes in Claude Code after the permissions and the options, such as signing in. [install-steps.md](install-steps.md#steps-in-claude-code) explains them.
-- `setup` runs once when the mod starts. It adds listeners, panes, renders, and jobs. It may be `async`.
+- `setup` runs once when the mod starts. It adds listeners, pages, panes, widgets, styles, and jobs. It may be `async`. What it returns is the mod's API: an object of methods other mods call. Return nothing for a mod that offers none. [dependencies.md](dependencies.md) explains it.
 
 ```tsx
 import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
@@ -37,7 +37,7 @@ export const greeter = defineMod({
     sessions.current.onPrompt(() => {
       if (mod.state.session.isGreeted) return
       mod.state.session.isGreeted = true
-      mod.ui.toast(`Hello from ${mod.name}`)
+      mod.toast(`Hello from ${mod.name}`)
     })
   },
 })
@@ -47,15 +47,17 @@ export const greeter = defineMod({
 
 Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod the person has not accepted yet opens the installer pane, `Install <name>`, which lists its permissions and the changes it makes to the computer, and waits for Accept ([install-steps.md](install-steps.md)). An option with no default and no value is asked on the next page of the same pane. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the pane again for each `installer` step the mod declares that is not done.
 
-The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, a render of AbovePrompt and /deploy.`, what its install step set up, and each permission the person allowed, with a Settings button for `/mods <name>`. The first time a new version starts, the toast is `Updated to <version>`: the first three changes of that version's `CHANGELOG.md` section, the version the machine ran before, and a Changelog button ([Release notes](#release-notes)). A mod with no changelog lists what it adds now and no longer adds instead. A new session, `/reload-plugins`, and a version the machine already ran show no toast.
+The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, the Branch widget and /deploy.`, what its install step set up, and each permission the person allowed, with a Settings button that opens Settings at the mod. The first time a new version starts, the toast is `Updated to <version>`: the first three changes of that version's `CHANGELOG.md` section, the version the machine ran before, and a Changelog button ([Release notes](#release-notes)). A mod with no changelog lists what it adds now and no longer adds instead. A new session, `/reload-plugins`, and a version the machine already ran show no toast.
 
 When a step fails, or the person declines the install, the mod stays stopped. Once another session sets it up, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
+
+A mod that loads while a session runs, such as after `/reload-plugins` or `/plugin install`, hears no SessionStart from Claude Code. cmod runs its `onSessionStart` and `beforeSessionStart` listeners before the next prompt instead, once, with the source `resume`.
 
 When a step fails, the mod does not start. An error toast above the prompt names the failure, with the fix under it:
 
 - `<mod>: state.<group> is not a lifetime. …` or `<mod>: state.<group> is not an object of values. …` when the declared state is not valid ([state.md](state.md)).
 - `its state did not load: <error>` when reading the saved values fails.
-- `it needs <titles>` when the person chose Not now on an option with no default, or no one can answer, as in `claude -p` ([options.md](options.md)). This one says `Set it in /config.` instead, and Claude Code reloads the mod once the value is set.
+- `it needs <titles>` when the person chose Not now on an option with no default, or no one can answer, as in `claude -p` ([options.md](options.md)). This one says `Retry asks for it.`, and `Retry` opens the question again.
 - `its setup function threw: <error>` when `setup` throws or rejects.
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
@@ -98,7 +100,7 @@ A mod's `CHANGELOG.md`, at its root, holds what changed in each version, written
 ```
 
 - `cmod publish` releases the version's section as the GitHub release's notes, and refuses a version with no section ([commands.md](commands.md#cmod-publish)). Every release ships the file.
-- The Updated toast shows the first three changes of the new version's section, and its Changelog button opens `/mods <name> changelog`, the whole file with the installed version at the top of the view.
+- The Updated toast shows the first three changes of the new version's section, and its Changelog button opens the mod's Changelog in Settings, the whole file with the installed version at the top of the view.
 - A linked checkout whose version has no section yet shows its `[Unreleased]` section, so the notes show as soon as the version moves.
 - `cmod new` writes the file with an `[Unreleased]` and a `[0.1.0]` section.
 
@@ -141,82 +143,87 @@ Keep `register.ts` this small. Claude Code checks a hooks module before it loads
 
 ## mod: this mod
 
-`setup` gets `mod`, of type `Mod<State, Options>`. Every listener, render, and job gets the same `mod`. `mod` holds what belongs to this mod: its name, its folders, its values, its grants, and what it adds to Claude Code.
+`setup` gets `mod`, of type `Mod<State, Options, Hotkeys>`. Every listener, render, and job gets the same `mod`. `mod` holds what belongs to this mod: its name, its folders, its values, its grants, its hotkeys, and what it adds to Claude Code.
 
 ```ts
-type Mod<State, Options> = {
+type Mod<State, Options, Hotkeys> = {
   readonly name: string
   readonly folder: string
   readonly dataFolder: string
   readonly state: Readonly<State>
   readonly options: OptionValues<Options>
   readonly permissions: Permissions
-  every(ms, listener): Disposable
-  after(ms, listener): Disposable
+  readonly hotkeys: { readonly [name in keyof Hotkeys]: Hotkey }
+  every(ms, listener): Timer
+  after(ms, listener): Timer
   use(job): Handle
-  log(text): void
-  readonly ui: { pane, render, toast, ask, copy, scroll, notice }
-  readonly settings: { page, open }
+  log(text, options?): void
+  readonly sidebar: { add(page): Page }
+  readonly settings: { add(page): Page; open(): Promise<void> }
+  readonly panes: { add(pane): Pane }
+  readonly widgets: { add(widget): Widget }
+  readonly styles: { add(style): Style }
+  readonly toast: Toast
+  ask(question, options?): Promise<string>
   readonly dependencies: CmodDependencies
 }
 ```
 
-| Member | What it is | Docs |
-| --- | --- | --- |
-| `name` | The mod's name from `defineMod`. | |
-| `folder` | The plugin's own folder, where the files the mod ships live. | |
-| `dataFolder` | The mod's own folder in the cmod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. cmod deletes it when the mod is removed. | [install-steps.md](install-steps.md) |
-| `state` | The mod's values. Assign to a key to change it. | [state.md](state.md) |
-| `options` | The values a person set for the mod's options, typed from their declaration. Read-only. | [options.md](options.md) |
-| `permissions` | Says whether the person granted each permission. | [permissions.md](permissions.md) |
-| `every` and `after` | Run a listener on a timer while the session runs. | below |
-| `use` | Adds a job, such as a slash command or a tool, and returns its handle. | [jobs.md](jobs.md) |
-| `log` | Writes a line, under the mod's name, to Claude Code's debug log. | below |
-| `ui` | Panes, renders at a place Claude Code draws, toasts, questions, the clipboard, scrolling, and a line under a permission dialog. | [ui.md](ui.md) |
-| `settings` | Adds the mod's own pages to `/mods`, and opens them. | below |
-| `dependencies` | Calls the methods of other mods. | [dependencies.md](dependencies.md) |
+- `name` is the mod's name from `defineMod`.
+- `folder` is the plugin's own folder, where the files the mod ships live.
+- `dataFolder` is the mod's own folder in the cmod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. cmod deletes it when the mod is removed ([install-steps.md](install-steps.md)).
+- `state` holds the mod's values. Assign to a key to change it ([state.md](state.md)).
+- `options` holds the values a person set for the mod's options, typed from their declaration. Read-only ([options.md](options.md)).
+- `permissions` says whether the person granted each permission ([permissions.md](permissions.md)).
+- `hotkeys` holds each hotkey `defineMod` declared ([Hotkeys](#hotkeys)).
+- `every` and `after` run a listener on a timer while the session runs.
+- `use` adds a job, such as a slash command or a tool, and returns its handle ([jobs.md](jobs.md)).
+- `log` writes a line, under the mod's name, to Claude Code's debug log.
+- `sidebar`, `settings`, `panes`, `widgets`, and `styles` add the mod's pages, panes, widgets, and styles. `toast` shows a short message and `ask` asks a question ([ui.md](ui.md)).
+- `dependencies` calls the methods of other mods ([dependencies.md](dependencies.md)).
 
 Everything that is Claude Code's or the computer's rather than the mod's is an import from `mod.js`, so a function in any file calls it without being handed `mod`:
 
 ```ts
-import { commands, config, fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
+import { clipboard, commands, config, fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
 ```
 
-| Import | What it is | Docs |
-| --- | --- | --- |
-| `sessions` | The conversations: the one the mod runs in, every other one, and search across them. Everything that happens in a session, from a prompt to a permission dialog, is a method on it. | [session.md](session.md) |
-| `commands` | Every slash command: lists them, runs one, and hears or changes each run. | below |
-| `settings` | Claude Code's `settings.json` files: the person's, the project's, and the project's local one. | below |
-| `config` | The rows of Claude Code's `/config` menu. | below |
-| `model` | Asks a model one question, outside the conversation. | below |
-| `fs` | Reads, writes, lists, and finds files. | below |
-| `metadata` | Reads and changes the mod's keys in one file's metadata. | below |
-| `process` | Runs a program. | below |
-| `http` | Fetches a URL. | below |
+- `sessions` is the conversations: the one the mod runs in, every other one, and search across them. Everything that happens in a session, from a prompt to a permission dialog, is a method on it ([session.md](session.md)).
+- `commands` is every slash command: it lists them, runs one, and hears or changes each run.
+- `settings` is Claude Code's `settings.json` files: the person's, the project's, and the project's local one.
+- `config` is the rows of Claude Code's `/config` menu.
+- `model` asks a model one question, outside the conversation.
+- `fs` reads, writes, lists, finds, and watches files.
+- `metadata` reads and changes the mod's keys in one file's metadata.
+- `process` runs a program.
+- `http` fetches a URL.
+- `clipboard` puts text on the person's clipboard ([ui.md](ui.md#toasts)).
 
 Each import works once the mod has started, in `setup` and anything it adds. Each one checks the permission it needs, and rejects with the line to add or the grant to turn on when the person has not granted it ([permissions.md](permissions.md)).
 
-### Disposable
+### Take back what the mod added
 
-`mod.every`, `mod.after`, `mod.ui.render`, and every `on` and `before` method each return a `Disposable`. `dispose()` takes back what the call added, so a mod turns a feature off and on while it runs. Everything a mod adds is taken back when the mod stops, so a mod that keeps a feature for the whole session ignores the `Disposable`.
+Every `add` call, every `on` and `before` method, `fs.onChange`, `settings.beforeFileChange`, and `hotkey.onPress` return a part or a `Subscription`, and each has `remove()`, which takes back what the call added. So a mod turns a feature off and on while it runs. Everything a mod adds is taken back when the mod stops, so a mod that keeps a feature for the whole session ignores what the call returns.
 
 ```ts
-type Disposable = { dispose(): void }
+type Subscription = { remove(): void }
 ```
 
 ```ts
 const watching = sessions.current.onToolCall({ name: 'Edit' }, () => void (mod.state.session.edits += 1))
-mod.use(slashCommand({ name: 'stop-counting', description: 'Stop counting edits', reply: () => watching.dispose() }))
+mod.use(slashCommand({ name: 'stop-counting', description: 'Stop counting edits', reply: () => watching.remove() }))
 ```
 
 ### mod.every and mod.after
 
 ```ts
-mod.every(ms: number, listener: () => unknown): Disposable
-mod.after(ms: number, listener: () => unknown): Disposable
+mod.every(ms: number, listener: () => unknown): Timer
+mod.after(ms: number, listener: () => unknown): Timer
+
+type Timer = { readonly isRunning: boolean; stop(): void }
 ```
 
-`every` runs `listener` every `ms` milliseconds until the session ends or the mod disposes it. A tick that comes while the last run is still going is skipped, so a slow run never stacks up. `after` runs `listener` once, `ms` milliseconds from now, unless the mod disposes it first. A run that throws shows the error toast `The every <ms> ms timer failed`, or `The after <ms> ms timer failed`, and the next tick of an `every` runs again. `ms` is a whole number above 0 and at most `2147483647`, and any other `ms` stops `setup` with `<mod>: mod.every is <ms>. Give a whole number of milliseconds above 0 and at most 2147483647.`
+`every` runs `listener` every `ms` milliseconds until the session ends or the mod calls `stop()`. A tick that comes while the last run is still going is skipped, so a slow run never stacks up. `after` runs `listener` once, `ms` milliseconds from now, unless the mod calls `stop()` first. `isRunning` is true until the timer stops, and an `after` timer stops once it ran. A run that throws shows the error toast `The every <ms> ms timer failed`, or `The after <ms> ms timer failed`, and the next tick of an `every` runs again. `ms` is a whole number above 0 and at most `2147483647`, and any other `ms` stops `setup` with `<mod>: mod.every is <ms>. Give a whole number of milliseconds above 0 and at most 2147483647.`
 
 A watch that reacts on its own is `every` plus `mod.state` plus a `prompt` with no trigger: `every` checks the outside world, writes what it found to `mod.state`, and the panes and the prompt follow the state ([jobs.md](jobs.md#prompt)).
 
@@ -237,18 +244,39 @@ mod.log(text: string, options?: { to?: 'debug' | 'transcript' }): void
 
 With `{ to: 'transcript' }`, the line shows dim in the conversation, where the person reads it and Claude never does, such as "Formatted 3 files" after a turn.
 
-### mod.settings
+### Hotkeys
+
+A hotkey is a key combo the mod listens for, such as `alt+shift+p` to show a page. The mod declares each one with a title and a default combo, and the person changes the combo in Settings, under the mod, Hotkeys, the way VS Code handles an extension's keybindings.
 
 ```ts
-mod.settings.page(page: Pane<State>): void
-mod.settings.open(pageId?: string): Promise<void>
+hotkeys?: { readonly [name: string]: { readonly title: string; readonly default: Combo } }
+
+type Hotkey = {
+  readonly title: string
+  readonly combo: Combo | undefined
+  onPress(listener: () => unknown): Subscription
+}
 ```
 
-`/mods` shows each mod's description, options, permissions, keys, and changelog, and turns a mod off or removes it. `page` adds a page of the mod's own to its entry there, drawn as any pane is ([ui.md](ui.md)). The id `changelog` is taken by the Changelog page, so `page` refuses it. `open` opens that page, or with no id opens the mod's entry in `/mods`. `open` rejects for an id `page` did not add.
+- A name is letters, digits, and `_`, starting with a letter. `title` is the label Settings shows beside the combo.
+- A combo is one or two of `ctrl`, `alt`, `shift`, and `meta`, in that order, then a key: a letter, a digit, `f1` to `f12`, `tab`, `enter`, `escape`, `space`, `backspace`, `delete`, an arrow, `home`, `end`, `pageup`, `pagedown`, or a mark such as `/`. `ctrl+q`, `alt+shift+p`, and `ctrl+shift+k` are combos.
+- `defineMod` throws for a name, a title, or a combo that is not one, and for two hotkeys with one default.
+- `cmod check` writes the hotkeys into `package.json` `"cmod".hotkeys`, and `cmod publish` refuses a mod whose `package.json` differs from `defineMod`. The install question lists each combo, and `cmod setup` binds it in Claude Code's `keybindings.json`. A combo the person already bound to something else keeps their binding, and the hotkey has no combo until they pick one in Settings.
+- `combo` is the combo bound when the mod started, or `undefined` when `keybindings.json` binds none to the hotkey, such as when another binding kept the default.
+- `onPress` runs `listener` each time the person presses the combo. A page or pane the listener opens shows at any width, because the press is the person's own ([ui.md](ui.md#the-sidebar-and-its-pages)).
+- `tested.hotkey(name)` presses a hotkey in a test ([testing.md](testing.md)).
 
 ```tsx
-mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: (current) => <Text>{current.state.session.lastRun}</Text> }))
-mod.use(slashCommand({ name: 'ci-runs', description: 'Show the CI runs', reply: () => void mod.settings.open('runs') }))
+export const notes = defineMod({
+  name: 'notes',
+  hotkeys: {
+    toggle: { title: 'Show or hide the notes', default: 'alt+shift+n' },
+  },
+  setup(mod) {
+    const page = mod.sidebar.add(notesPage)
+    mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
+  },
+})
 ```
 
 ## commands: slash commands
@@ -256,8 +284,8 @@ mod.use(slashCommand({ name: 'ci-runs', description: 'Show the CI runs', reply: 
 ```ts
 commands.list(): Promise<CommandInfo[]>
 commands.run(name: string, args?: string): Promise<{ text?: string; note?: string }>
-commands.beforeRun(matcher?, listener: (run: CommandRun) => Answer | void, options?): Disposable
-commands.onRun(matcher?, listener: (run: CommandRun) => unknown, options?): Disposable
+commands.beforeRun(matcher?, listener: (run: CommandRun) => Answer | void, options?): Subscription
+commands.onRun(matcher?, listener: (run: CommandRun) => unknown, options?): Subscription
 
 type CommandInfo = { name: string; description: string; source: 'builtin' | 'plugin' | 'user' | 'mcp'; plugin?: string }
 type CommandRun = { name: string; args: string; source?: 'builtin' | 'plugin' | 'user' | 'mcp'; from: Sender; session: string; cwd: string }
@@ -285,7 +313,7 @@ settings.project.read(): Promise<Settings>
 settings.project.update(values: Readonly<Record<string, unknown>>): Promise<void>
 settings.local.read(): Promise<Settings>
 settings.local.update(values: Readonly<Record<string, unknown>>): Promise<void>
-settings.beforeFileChange(matcher?, listener: (change: SettingsFileChange) => { refuse: string } | void): Disposable
+settings.beforeFileChange(matcher?, listener: (change: SettingsFileChange) => { refuse: string } | void): Subscription
 ```
 
 `settings.user` is the person's own `~/.claude/settings.json`, `settings.project` is the project's `.claude/settings.json`, and `settings.local` is the project's `.claude/settings.local.json`.
@@ -385,7 +413,7 @@ fs.list(path?: string): Promise<Entry[]>
 fs.exists(path: string): Promise<boolean>
 fs.stat(path: string, options?: { resolve: boolean }): Promise<Stat>
 fs.find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
-fs.onChange({ path: string | readonly string[] }, listener: (change: FileChange) => unknown): Disposable
+fs.onChange({ path: string | readonly string[] }, listener: (change: FileChange) => unknown): Subscription
 ```
 
 ```ts
@@ -400,10 +428,10 @@ type Stat = { isFile: boolean; isFolder: boolean; isLink: boolean; size: number;
 - `list` lists a folder, the working folder without a path. A symbolic link is neither a file nor a folder, with `isLink` true. `modifiedAt` is the time it last changed, in milliseconds since 1970.
 - `exists` answers whether the path leads to a file or a folder.
 - `stat` answers what the path leads to, following a symbolic link, and rejects a missing path. With `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
-- `onChange` hears each file Claude Code sees change, appear, or go at a path or under a folder. Claude Code reads the paths it watches when a session starts, so `onChange` works only in `setup`, and a call later throws. A relative path is under the project. `path` takes strings only, unlike other matchers, because the paths go to Claude Code as they are:
+- `onChange` hears each file that changes, appears, or goes at a path or under a folder, the mod's own saves included. cmod checks the paths twice a second, and at most 2000 files under one call's folders. A call over more stops, with an error toast that names its paths. It works from `setup` or any time later, and for a path that does not exist yet. A relative path is under the session's working folder. `path` takes strings only, unlike other matchers:
 
 ```ts
-fs.onChange({ path: `${mod.dataFolder}/history` }, ({ path, type }) => mod.ui.toast(`${path}: ${type}`))
+fs.onChange({ path: `${mod.dataFolder}/history` }, ({ path, type }) => mod.toast(`${path}: ${type}`))
 ```
 
 A file the mod ships is under `mod.folder`. A file the mod keeps for itself belongs in `mod.dataFolder`.
@@ -494,7 +522,7 @@ export const notes = defineMod({
   setup(mod) {
     sessions.current.onTurnEnd(async () => {
       await fs.write(`${mod.dataFolder}/last-stop.txt`, new Date().toISOString()).catch((error: unknown) => {
-        mod.ui.toast.error('Could not save the last stop', { description: messageOf(error) })
+        mod.toast.error('Could not save the last stop', { description: messageOf(error) })
       })
     })
   },
@@ -528,7 +556,7 @@ import { sessions } from '../node_modules/@cmodjs/core/mod.js'
 
 sessions.current.onToolCall({ name: 'Bash' }, (call) => {
   for (const { argv, folder } of parseShell(String(call.input['command'])).commands) {
-    if (basename(argv[0]) === 'trace') mod.ui.toast(`trace runs in ${resolve(call.cwd, folder)}`)
+    if (basename(argv[0]) === 'trace') mod.toast(`trace runs in ${resolve(call.cwd, folder)}`)
   }
 })
 ```

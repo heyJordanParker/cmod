@@ -3,14 +3,12 @@ import type { ProcessRunResult } from 'claude-code'
 import type { Fakes, TestCall } from '@cmodjs/core/testing.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
-import { statusLine } from '../src/jobs/status-line.js'
 import { tool } from '../src/jobs/tool.js'
-import { defineMod, fs, process, Prompt, PromptHint, Reply, sessions, type Mod } from '../src/mod.js'
+import { BelowPrompt, Dashboard, defineMod, fs, process, Prompt, Reply, sessions, TurnEnd, type Mod, type PaneInit } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
-import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Image, Input, Markdown, Select, Text } from '../src/ui/elements.js'
 import { Heading } from '../src/ui/markdown.js'
 
@@ -153,7 +151,7 @@ test('testMod answers a call to a mod it does not fake with where to add it', as
     },
   })
 
-  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Add it with /plugin.' })
+  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Install it in Plugins.' })
 })
 
 const project = '/work/dent'
@@ -186,7 +184,7 @@ test('testMod scope project makes the mod a project plugin, and projectRoot alon
 
 type NotesState = { global: { notes: readonly string[] } }
 
-const notesPane = definePane<NotesState>({
+const notesPane: PaneInit<NotesState> = {
   id: 'notes',
   title: 'Notes',
   columns: 24,
@@ -205,125 +203,142 @@ const notesPane = definePane<NotesState>({
         }),
       ],
     }),
-})
+}
 
 const notes = defineMod({
   name: 'notes',
   state: { global: { notes: ['Buy milk', 'Call the plumber about the sink'] } },
   setup(mod) {
-    const pane = mod.ui.pane(notesPane)
+    const pane = mod.panes.add(notesPane)
     mod.use(slashCommand({ name: 'notes', description: 'Show or hide the notes', reply: () => pane.toggle() }))
   },
 })
 
-test('lines reads a pane as rows of text', async () => {
+test('shown.pane reads the pane the person sees as rows of text', async () => {
   const tested = testMod(notes)
   await tested.type('/notes')
 
-  expect(await tested.lines('notes')).toEqual(['Notes  2 saved', '', '  Buy milk', '  Call the plumber about', '  the sink', '', '[ Clear ]'])
+  expect(tested.shown.pane.id).toBe('notes')
+  expect(await tested.shown.pane.lines()).toEqual(['Notes  2 saved', '', '  Buy milk', '  Call the plumber about', '  the sink', '', '[ Clear ]'])
 })
 
-test("tested.lines shows an Image's alt text", async () => {
+test("shown.pane shows an Image's alt text", async () => {
   const tested = testMod(
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        void mod.ui.pane({ id: 'diagram', title: 'Diagram', render: () => Box({ flexDirection: 'column', children: [Text({ children: 'Login flow' }), Image({ source: { png: '' }, columns: 40, rows: 10, alt: 'A login flow diagram' })] }) }).open()
+        void mod.panes.add({ id: 'diagram', title: 'Diagram', render: () => Box({ flexDirection: 'column', children: [Text({ children: 'Login flow' }), Image({ source: { png: '' }, columns: 40, rows: 10, alt: 'A login flow diagram' })] }) }).open()
       },
     }),
   )
 
-  expect(await tested.lines('diagram')).toEqual(['Login flow', 'A login flow diagram'])
+  expect(await tested.shown.pane.lines()).toEqual(['Login flow', 'A login flow diagram'])
 })
 
-test("lines draws a pane with the scroll and view Claude Code passes, the main conversation's at the top", async () => {
+test("shown.pane draws with the scroll and view Claude Code passes, the main conversation's at the top", async () => {
   const tested = testMod(
     defineMod({
       name: 'scroller',
       setup(mod) {
-        void mod.ui.pane({ id: 'rows', title: 'Rows', render: (_mod, { scroll, view }) => Text({ children: `${scroll.offset} of ${scroll.bodyRows} rows, ${view.agentId ?? 'main'}` }) }).open()
+        void mod.panes.add({ id: 'rows', title: 'Rows', render: (_mod, { scroll, view }) => Text({ children: `${scroll.offset} of ${scroll.bodyRows} rows, ${view.agentId ?? 'main'}` }) }).open()
       },
     }),
   )
 
-  expect(await tested.lines('rows')).toEqual(['0 of 24 rows, main'])
+  expect(await tested.shown.pane.lines()).toEqual(['0 of 24 rows, main'])
 })
 
 type SearchState = { session: { query: string; draft: string; agent: string; opened: string[]; copiedFrom: string } }
+
+const searchPane: PaneInit<SearchState> = {
+  id: 'history',
+  title: 'History',
+  render: ({ state: { session } }) =>
+    Box({
+      flexDirection: 'column',
+      children: [
+        Input({ key: 'search', placeholder: 'Search', onInput: (draft) => void (session.draft = draft), onSubmit: (query) => void (session.query = query) }),
+        Select({ key: 'agent', options: [{ value: 'all' }, { value: 'explorer' }], onSelect: (agent) => void (session.agent = agent) }),
+        Markdown({ key: 'messages', text: '[run 42](https://example.com/run/42)', onLinkPress: ({ href }) => void (session.opened = [...session.opened, href]) }),
+        Button({ label: 'Copy', onPress: (e) => void (session.copiedFrom = `${e.surface} ${e.component} ${e.requestId}`) }),
+        Text({ children: `${session.query} by ${session.agent}` }),
+      ],
+    }),
+}
 
 const search = defineMod({
   name: 'history',
   state: { session: { query: '', draft: '', agent: 'all', opened: [] as string[], copiedFrom: '' } },
   setup(mod) {
-    void mod.ui
-      .pane(
-        definePane<SearchState>({
-          id: 'history',
-          title: 'History',
-          render: ({ state: { session } }) =>
-            Box({
-              flexDirection: 'column',
-              children: [
-                Input({ key: 'search', placeholder: 'Search', onInput: (draft) => void (session.draft = draft), onSubmit: (query) => void (session.query = query) }),
-                Select({ key: 'agent', options: [{ value: 'all' }, { value: 'explorer' }], onSelect: (agent) => void (session.agent = agent) }),
-                Markdown({ key: 'messages', text: '[run 42](https://example.com/run/42)', onLinkPress: ({ href }) => void (session.opened = [...session.opened, href]) }),
-                Button({ label: 'Copy', onPress: (e) => void (session.copiedFrom = `${e.surface} ${e.component} ${e.requestId}`) }),
-                Text({ children: `${session.query} by ${session.agent}` }),
-              ],
-            }),
-        }),
-      )
-      .open()
+    void mod.panes.add(searchPane).open()
   },
 })
 
 test('a test types into an Input, picks a Select option, and presses a link, the way the person does', async () => {
   const tested = testMod(search)
 
-  await tested.input('history', 'search', 'dep', 'change')
-  await tested.input('history', 'search', 'deploy')
-  await tested.select('history', 'agent', 'explorer')
-  await tested.press('history', 'messages', 'https://example.com/run/42')
-  await tested.press('history', 'Copy')
+  await tested.shown.pane.input('search', 'dep', 'change')
+  await tested.shown.pane.input('search', 'deploy')
+  await tested.shown.pane.select('agent', 'explorer')
+  await tested.shown.pane.press('messages', 'https://example.com/run/42')
+  await tested.shown.pane.press('Copy')
 
   expect(tested.state.session).toEqual({ query: 'deploy', draft: 'dep', agent: 'explorer', opened: ['https://example.com/run/42'], copiedFrom: 'terminal Pane history' })
-  expect(await tested.lines('history')).toContain('deploy by explorer')
+  expect(await tested.shown.pane.lines()).toContain('deploy by explorer')
 })
 
 test('input, select, and a link press refuse an element the pane does not draw', async () => {
   const tested = testMod(search)
 
-  await expect(tested.input('history', 'filter', 'x')).rejects.toThrow('The pane "history" of history draws no Input with the key "filter".')
-  await expect(tested.select('history', 'agent', 'tester')).rejects.toThrow('The Select "agent" in the pane "history" of history has no option "tester". Its options are "all", "explorer".')
-  await expect(tested.press('history', 'log', 'https://example.com')).rejects.toThrow('The pane "history" of history draws no Markdown with the key "log".')
+  await expect(tested.shown.pane.input('filter', 'x')).rejects.toThrow('The pane "history" of history draws no Input with the key "filter".')
+  await expect(tested.shown.pane.select('agent', 'tester')).rejects.toThrow('The Select "agent" in the pane "history" of history has no option "tester". Its options are "all", "explorer".')
+  await expect(tested.shown.pane.press('log', 'https://example.com')).rejects.toThrow('The pane "history" of history draws no Markdown with the key "log".')
 })
 
-test('lines refuses a pane that is not open', async () => {
+test('shown.pane refuses when no pane shows', async () => {
   const tested = testMod(notes)
-  const refusal = `The pane "notes" of notes is not open, and a user sees a pane only while it is open. Open it first with tested.type('/notes'), or with pane.open() in the mod.`
+  const refusal = 'No pane of notes shows. Open one with pane.open(), from a slash command, a hotkey, or setup.'
 
-  await expect(tested.lines('notes')).rejects.toThrow(refusal)
-  await expect(tested.press('notes', 'Clear')).rejects.toThrow(refusal)
+  await expect(tested.shown.pane.lines()).rejects.toThrow(refusal)
+  await expect(tested.shown.pane.press('Clear')).rejects.toThrow(refusal)
   expect(tested.state.global.notes).toEqual(['Buy milk', 'Call the plumber about the sink'])
 })
 
-test('tested.lines draws a place render with Default', async () => {
+test('tested.lines draws a style with Default', async () => {
   const tested = testMod(
     defineMod({
-      name: 'hints',
+      name: 'durations',
       setup(mod) {
-        mod.ui.render(PromptHint, ({ hint, Default }) => Box({ flexDirection: 'column', children: [Default({ hint: hint.toUpperCase() }), Text({ dimColor: true, children: 'from hints' })] }))
+        mod.styles.add({ kind: TurnEnd, render: (_mod, { durationMs, Default }) => Box({ flexDirection: 'column', children: [Default({ durationMs: durationMs * 2 }), Text({ dimColor: true, children: 'from durations' })] }) })
       },
     }),
   )
 
-  expect(await tested.lines(PromptHint, { isDraft: false, isWorking: false, hint: '? for shortcuts' })).toEqual([
-    'PromptHint',
-    '  isDraft: false',
-    '  isWorking: false',
-    '  hint: "? FOR SHORTCUTS"',
-    'from hints',
-  ])
+  expect(await tested.lines(TurnEnd, { durationMs: 1000 } as never)).toEqual(['TurnDuration', '  durationMs: 2000', 'from durations'])
+})
+
+const counter = defineMod({
+  name: 'counter',
+  state: { session: { count: 0 } },
+  setup(mod) {
+    mod.widgets.add({
+      id: 'count',
+      title: 'Count',
+      areas: [BelowPrompt, Dashboard],
+      render: (current, { columns }) => Box({ gap: 1, children: [Text({ children: `${current.state.session.count} of ${columns}` }), Button({ key: 'add', label: 'Add', onPress: () => void (current.state.session.count += 1) })] }),
+    })
+  },
+})
+
+test('tested.lines draws a widget in its area, and tested.press presses its button', async () => {
+  const tested = testMod(counter)
+
+  expect(await tested.lines(BelowPrompt)).toEqual(['0 of 80 [ Add ]'])
+
+  await tested.press(BelowPrompt, 'add')
+
+  expect(await tested.lines(BelowPrompt, { columns: 40 })).toEqual(['1 of 40 [ Add ]'])
+  expect(await tested.lines(Dashboard)).toEqual([])
 })
 
 const journal = defineMod({
@@ -390,7 +405,7 @@ test('fs.list in testMod lists the files given', async () => {
 const headings = defineMod({
   name: 'headings',
   setup(mod) {
-    mod.ui.render(Heading, ({ text }) => Text({ bold: true, children: text.toUpperCase() }))
+    mod.styles.add({ kind: Heading, render: (_mod, { text }) => Text({ bold: true, children: text.toUpperCase() }) })
   },
 })
 
@@ -423,7 +438,7 @@ test('clock.every in testMod fires only when the test ticks it', async () => {
     state: { memory: { branch: 'main' } },
     setup(mod) {
       mod.every(1, () => void (mod.state.memory.branch = branch))
-      mod.use(statusLine({ text: (_usage, mod) => mod.state.memory.branch }))
+      mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt], render: (current) => Text({ children: current.state.memory.branch }) })
     },
   })
   const unticked = testMod(branchLine)
@@ -443,14 +458,14 @@ test('clock.every in testMod fires only when the test ticks it', async () => {
   await ticked.settle()
 
   expect(intervals).toEqual([1])
-  expect(unticked.shown.statuses).toEqual(['main'])
-  expect(ticked.shown.statuses).toEqual(['main', 'feature'])
+  expect(await unticked.lines(BelowPrompt)).toEqual(['main'])
+  expect(await ticked.lines(BelowPrompt)).toEqual(['feature'])
 })
 
 async function showGitLetters(mod: Mod): Promise<void> {
   const root = (await process.run(['git', 'rev-parse', '--show-toplevel'])).stdout.trim()
   const status = await process.run(['git', 'status', '--porcelain'], { cwd: root })
-  mod.ui.toast(`${root}: ${status.stdout.trim()}`)
+  mod.toast(`${root}: ${status.stdout.trim()}`)
 }
 
 const gitAnswer = (argv: readonly string[]): ProcessRunResult => ({ exitCode: 0, stdout: argv[1] === 'rev-parse' ? '/work/shop\n' : ' M README.md\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
@@ -574,14 +589,13 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
 test("fire('cmod.call') answers a method of the mod's api with { value }, as dependencies.md shows", async () => {
   const tracer = defineMod({
     name: 'tracer',
-    api: {
+    setup: () => ({
       signatures: async ({ path }: { path: string }) =>
         (await fs.read(path)).split('\n').flatMap((text, index) => {
           const name = /^export function (\w+)/.exec(text)?.[1]
           return name === undefined ? [] : [{ name, line: index + 1 }]
         }),
-    },
-    setup() {},
+    }),
   })
   const tested = testMod(tracer, { files: { '/work/a.ts': 'export function greet() {}\n' } })
 

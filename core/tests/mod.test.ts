@@ -3,7 +3,7 @@ import type { RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { commands, config, defineMod, fs, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Disposable, type Job, type Listener, type ListenerTime, type Mod, type PaneHandle, type Task } from '../src/mod.js'
+import { clipboard, commands, config, defineMod, fs, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
@@ -13,7 +13,6 @@ import { testMod, type FakeSession, type TestedMod } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
 import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
 import { findElement, textOf } from '../src/testing/fake-elements.js'
-import { definePane } from '../src/ui/define-pane.js'
 import { Box, Button, Text } from '../src/ui/elements.js'
 import type { TracerSignature } from './tracer.js'
 
@@ -313,13 +312,13 @@ test('a timeoutMs past 600000 ms or below 1 throws where the listener registers'
   await expect(never.start()).rejects.toThrow("never: onSessionStart's timeoutMs is 0. Give a whole number of milliseconds above 0 and at most 600000.")
 })
 
-test('mod.ui.toast with an id updates that toast in place', async () => {
+test('mod.toast with an id updates that toast in place', async () => {
   const tested = testMod(
     defineMod({
       name: 'notes',
       setup(mod) {
-        mod.ui.toast.loading('Saving notes', { id: 'save' })
-        mod.ui.toast.success('Saved 3 notes', { id: 'save', description: 'notes.md\nand 2 more' })
+        mod.toast.loading('Saving notes', { id: 'save' })
+        mod.toast.success('Saved 3 notes', { id: 'save', description: 'notes.md\nand 2 more' })
       },
     }),
   )
@@ -421,7 +420,7 @@ test('a before listener that throws is shown, and the listeners after it still a
 
 type CounterState = { session: { count: number } }
 
-const counterPane = definePane<CounterState>({
+const counterPane: PaneInit<CounterState> = {
   id: 'counter',
   title: 'Counter',
   render: (mod) =>
@@ -429,28 +428,28 @@ const counterPane = definePane<CounterState>({
       flexDirection: 'column',
       children: [Text({ children: `Count: ${mod.state.session.count}` }), Button({ label: 'Add one', onPress: () => (mod.state.session.count += 1) })],
     }),
-})
+}
 
 const counter = defineMod({
   name: 'counter',
   state: { session: { count: 0 } },
   setup(mod) {
-    void mod.ui.pane(counterPane).open()
+    void mod.panes.add(counterPane).open()
   },
 })
 
 test('a Button press changes mod.state and the pane draws the new state', async () => {
   const tested = testMod(counter)
-  expect(await tested.lines('counter')).toEqual(['Count: 0', '[ Add one ]'])
+  expect(await tested.shown.pane.lines()).toEqual(['Count: 0', '[ Add one ]'])
   expect(tested.shown.openPanes).toEqual(new Set(['counter']))
 
-  await tested.press('counter', 'Add one')
+  await tested.shown.pane.press('Add one')
 
   expect(tested.state.session.count).toBe(1)
-  expect(await tested.lines('counter')).toEqual(['Count: 1', '[ Add one ]'])
+  expect(await tested.shown.pane.lines()).toEqual(['Count: 1', '[ Add one ]'])
 })
 
-test('mod.ui.toast.promise draws a loading toast above the prompt that turns to success when its task ends', async () => {
+test('mod.toast.promise draws a loading toast above the prompt that turns to success when its task ends', async () => {
   let finish: (count: number) => void = () => undefined
   let unwrapped: Promise<number> | undefined
   const indexer = defineMod({
@@ -459,7 +458,7 @@ test('mod.ui.toast.promise draws a loading toast above the prompt that turns to 
       const task = new Promise<number>((resolve) => {
         finish = resolve
       })
-      unwrapped = mod.ui.toast.promise(task, { loading: 'Indexing files', success: (count) => `Indexed ${count} files`, error: 'Indexing failed' }).unwrap()
+      unwrapped = mod.toast.promise(task, { loading: 'Indexing files', success: (count) => `Indexed ${count} files`, error: 'Indexing failed' }).unwrap()
     },
   })
   const tested = testMod(indexer)
@@ -478,14 +477,14 @@ test('mod.ui.toast.promise draws a loading toast above the prompt that turns to 
   ])
 })
 
-test('mod.ui.toast.promise rejects only through unwrap, and shows the error toast', async () => {
+test('mod.toast.promise rejects only through unwrap, and shows the error toast', async () => {
   let unwrapped: Promise<unknown> | undefined
   const tested = testMod(
     defineMod({
       name: 'indexer',
       setup(mod) {
-        mod.ui.toast.promise(Promise.reject(new Error('disk full')), { loading: 'Indexing files', success: 'Indexed', error: (error) => `Indexing failed: ${messageOf(error)}` })
-        unwrapped = mod.ui.toast.promise(() => Promise.reject(new Error('disk full')), { loading: 'Indexing again', success: 'Indexed', error: 'Indexing failed again' }).unwrap()
+        mod.toast.promise(Promise.reject(new Error('disk full')), { loading: 'Indexing files', success: 'Indexed', error: (error) => `Indexing failed: ${messageOf(error)}` })
+        unwrapped = mod.toast.promise(() => Promise.reject(new Error('disk full')), { loading: 'Indexing again', success: 'Indexed', error: 'Indexing failed again' }).unwrap()
       },
     }),
   )
@@ -596,17 +595,16 @@ test('a Copy Claude Code refuses names the reason under the Report choices', asy
   expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('Could not copy it: no-clipboard')
 })
 
-test("mod.ui.copy rejects with Claude Code's reason", async () => {
-  let copy: Mod['ui']['copy'] | undefined
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void (copy = mod.ui.copy) }))
+test("clipboard.write rejects with Claude Code's reason", async () => {
+  const tested = testMod(defineMod({ name: 'notes', setup: () => undefined }))
   await tested.start()
   tested.fakes.ui.copy = async () => ({ isCopied: false, reason: 'no-surface' })
 
-  await expect(copy?.('a note')).rejects.toThrow('no-surface')
+  await expect(clipboard.write('a note')).rejects.toThrow('no-surface')
 })
 
 test('a press on a toast message unfolds its whole description, and a second press folds it', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.ui.toast.info('Saved 3 notes', { description: 'notes.md\ntodo.md\nideas.md' }) }))
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.toast.info('Saved 3 notes', { description: 'notes.md\ntodo.md\nideas.md' }) }))
   await tested.start()
   expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).not.toContain('ideas.md')
 
@@ -618,7 +616,7 @@ test('a press on a toast message unfolds its whole description, and a second pre
 })
 
 test('the band shows the newest three toasts, and +N more shows every toast', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => ['a', 'b', 'c', 'd'].forEach((note) => mod.ui.toast(`Note ${note}`)) }))
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => ['a', 'b', 'c', 'd'].forEach((note) => mod.toast(`Note ${note}`)) }))
   await tested.start()
   const drawn = () => tested.fire('ui.render', toastBand as never, belowBand).then(textOf)
 
@@ -631,7 +629,7 @@ test('the band shows the newest three toasts, and +N more shows every toast', as
 
 test('a toast expires after its duration once the band draws it, and waits while Claude Code shows a survey', async () => {
   const timers: { ms: number; fire: () => void }[] = []
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.ui.toast('Saved', { duration: 2000 }) }))
+  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.toast('Saved', { duration: 2000 }) }))
   tested.fakes.clock.after = (ms, fire) => {
     timers.push({ ms, fire })
     return { cancel: () => undefined }
@@ -654,7 +652,7 @@ test('an action that throws shows a failure toast instead of losing the error', 
     defineMod({
       name: 'notes',
       setup: (mod) =>
-        void mod.ui.toast('Saved', {
+        void mod.toast('Saved', {
           action: {
             label: 'Undo',
             onClick: () => {
@@ -1152,9 +1150,9 @@ test('sessions.current.messages reads this conversation, and each message names 
   expect((await sessions.current.messages({ last: 1 })).map((message) => message.type)).toEqual([Reply])
 })
 
-test('sessions.current.on hears each new message of its type, and dispose stops it', async () => {
+test('sessions.current.on hears each new message of its type, and remove stops it', async () => {
   const heard: string[] = []
-  let listening: Disposable | undefined
+  let listening: Subscription | undefined
   const tested = testMod(
     defineMod({
       name: 'history',
@@ -1168,7 +1166,7 @@ test('sessions.current.on hears each new message of its type, and dispose stops 
 
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.add({ type: Reply, text: 'Renamed it.' })
-  listening?.dispose()
+  listening?.remove()
   await tested.add({ type: Reply, text: 'Anything else?' })
 
   expect(heard).toEqual(['Renamed it.'])
@@ -1272,17 +1270,18 @@ test('sessions.current.startTask starts a task and returns it', async () => {
   expect(tested.calls.filter((call) => call.call === 'agent.spawn').map((call) => call.args)).toEqual([[{ prompt: 'Read README.md.', description: 'Read the readme', subagentType: 'explorer' }]])
 })
 
-test('mod.ui.scroll asks Claude Code to bring a row of a pane into view', async () => {
+test('pane.scrollTo asks Claude Code to bring a row of the pane into view', async () => {
   const tested = testMod(
     defineMod({
       name: 'log',
       async setup(mod) {
-        await mod.ui.pane(definePane({ id: 'log', title: 'Log', render: (paneMod) => Button({ label: 'Latest', onPress: () => paneMod.ui.scroll({ to: 'end', in: 'log' }) }) })).open()
+        const pane: Pane = mod.panes.add({ id: 'log', title: 'Log', render: () => Button({ label: 'Latest', onPress: () => pane.scrollTo('end') }) })
+        await pane.open()
       },
     }),
   )
 
-  await tested.press('log', 'Latest')
+  await tested.shown.pane.press('Latest')
 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
 })
@@ -1292,9 +1291,9 @@ test("a mod's call to its own name is answered by its own methods, since Claude 
   const tested = testMod(
     defineMod({
       name: 'tracer',
-      api: { signatures: (input: { readonly path: string }) => (input.path === 'src/a.ts' ? [{ name: 'count', line: 3 }] : []) },
       setup(mod) {
         mod.after(1, () => void mod.dependencies.tracer.signatures({ path: 'src/a.ts' }).then((signatures) => (found = signatures)))
+        return { signatures: (input: { readonly path: string }) => (input.path === 'src/a.ts' ? [{ name: 'count', line: 3 }] : []) }
       },
     }),
   )
@@ -1302,7 +1301,7 @@ test("a mod's call to its own name is answered by its own methods, since Claude 
   await tested.settle()
 
   expect(found).toEqual([{ name: 'count', line: 3 }])
-  expect(tested.calls.filter((call) => call.call === 'cmod.call')).toEqual([])
+  expect(tested.calls.filter((call) => call.call === 'cmod.call' && (call.args[0] as { readonly to: string }).to !== 'cmod')).toEqual([])
 })
 
 test('settings.beforeFileChange refuses an edit to the settings files it matches', async () => {
@@ -1328,33 +1327,76 @@ test('settings.beforeFileChange refuses an edit to the settings files it matches
   expect(heard).toEqual([{ source: 'project', path: '/work/app/.claude/settings.json' }])
 })
 
-test('fs.onChange watches a folder from session start and hears each file that changes under it', async () => {
+test('fs.onChange hears each file that changes, appears, or goes under a folder, from setup or later', async () => {
   const changes: unknown[] = []
-  let late: unknown
+  const ticks: (() => void)[] = []
   const tested = testMod(
     defineMod({
       name: 'reloader',
-      setup() {
-        fs.onChange({ path: '/work/app/history' }, (change) => {
-          changes.push(change)
-          try {
-            fs.onChange({ path: '/work/app/other' }, () => {})
-          } catch (error) {
-            late = (error as Error).message
-          }
-        })
+      setup(mod) {
+        mod.after(1, () => void fs.onChange({ path: '/work/app/history' }, (change) => void changes.push(change)))
       },
     }),
+    { files: { '/work/app/history/a.json': '{}', '/work/app/history/b.json': '{}', '/work/app/notes.md': '' } },
   )
+  tested.fakes.clock.after = (_ms, run) => (run(), { cancel: () => undefined })
+  tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
+  await tested.start()
+  await tested.settle()
+  const tick = async () => {
+    for (const run of ticks) run()
+    await tested.settle()
+  }
 
-  const started = await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' } as never)
-  await claudeCodeOf(tested).fire('FileChanged', { file_path: '/work/app/history/a.json', event: 'change' })
-  await claudeCodeOf(tested).fire('FileChanged', { file_path: '/work/app/notes.md', event: 'add' })
+  await tested.fakes.fs.write?.('/work/app/history/a.json', '{ "count": 1 }')
+  await tested.fakes.fs.write?.('/work/app/history/c.json', '{}')
+  await tested.fakes.fs.write?.('/work/app/notes.md', 'changed')
+  await tick()
+
+  expect(changes).toEqual([
+    { path: '/work/app/history/a.json', type: 'change' },
+    { path: '/work/app/history/c.json', type: 'add' },
+  ])
+})
+
+test('an fs.onChange listener that throws shows an error toast, and the next change still reaches it', async () => {
+  const heard: string[] = []
+  const ticks: (() => void)[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'reloader',
+      setup: () =>
+        void fs.onChange({ path: '/work/app/history' }, ({ path }) => {
+          heard.push(path)
+          if (path.endsWith('a.json')) throw new Error('bad history')
+        }),
+    }),
+    { files: { '/work/app/history/a.json': '{}', '/work/app/history/b.json': '{}' } },
+  )
+  tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
+  await tested.start()
   await tested.settle()
 
-  expect(started).toEqual({ watchPaths: ['/work/app/history'] })
-  expect(changes).toEqual([{ path: '/work/app/history/a.json', type: 'change' }])
-  expect(late).toBe('reloader: fs.onChange works only in setup, because Claude Code reads the paths it watches when a session starts.')
+  await tested.fakes.fs.write?.('/work/app/history/a.json', '{ "count": 1 }')
+  await tested.fakes.fs.write?.('/work/app/history/b.json', '{ "count": 1 }')
+  for (const run of ticks) run()
+  await tested.settle()
+
+  expect(heard).toEqual(['/work/app/history/a.json', '/work/app/history/b.json'])
+  expect(tested.shown.toasts).toContainEqual(expect.objectContaining({ type: 'error', message: 'The fs.onChange listener failed' }))
+})
+
+test('fs.onChange over more than 2000 files stops with an error toast that names its paths', async () => {
+  const files = Object.fromEntries(Array.from({ length: 2001 }, (_, index) => [`/work/app/cache/${index}.json`, '{}']))
+  const tested = testMod(defineMod({ name: 'reloader', setup: () => void fs.onChange({ path: '/work/app/cache' }, () => undefined) }), { files })
+  const cancelled: number[] = []
+  tested.fakes.clock.every = () => ({ cancel: () => void cancelled.push(1) })
+
+  await tested.start()
+  await tested.settle()
+
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'Could not read the files fs.onChange watches', description: 'fs.onChange watches at most 2000 files, and /work/app/cache holds more, so it stopped. Watch a smaller folder.' })
+  expect(cancelled).toEqual([1])
 })
 
 test("a method's listener takes the payload its event carries, with the time it has", () => {
@@ -1395,25 +1437,25 @@ test('mod.dataFolder is the cmod store folder of the plugin, the one a step gets
   expect(folder).toBe('/test/home/.local/share/cmod/data/diagrams')
 })
 
-const drawingPane = definePane({
+const drawingPane: PaneInit = {
   id: 'drawing',
   title: 'Drawing',
   columns: 100,
   rows: 30,
   render: (_mod, props) => Text({ children: `${props.placement} ${props.bodyColumns} ${props.isFocused}` }),
-})
+}
 
 function paneOpens(tested: { readonly calls: readonly TestCall[] }): unknown[] {
   return tested.calls.filter((call) => call.call === 'ui.open').map((call) => call.args[0])
 }
 
 test('a pane opens at its defined size, and render gets the Pane props', async () => {
-  let handle: PaneHandle | undefined
+  let handle: Pane | undefined
   const tested = testMod(
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        handle = mod.ui.pane(drawingPane)
+        handle = mod.panes.add(drawingPane)
       },
     }),
   )
@@ -1422,7 +1464,7 @@ test('a pane opens at its defined size, and render gets the Pane props', async (
   await handle?.open()
 
   expect(paneOpens(tested)).toEqual([{ id: 'drawing', title: 'Drawing', columns: 100, rows: 30 }])
-  expect(await tested.lines('drawing')).toEqual(['dock 100 false'])
+  expect(await tested.shown.pane.lines()).toEqual(['dock 100 false'])
 })
 
 test('a pane Claude Code holds back is not open, so the first toggle opens it instead of closing it', async () => {
@@ -1431,7 +1473,7 @@ test('a pane Claude Code holds back is not open, so the first toggle opens it in
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        handle = mod.ui.pane(drawingPane)
+        handle = mod.panes.add(drawingPane)
       },
     }),
   )
@@ -1450,15 +1492,15 @@ test('a pane Claude Code holds back is not open, so the first toggle opens it in
   expect(tested.calls.filter((call) => call.call === 'ui.open' || call.call === 'ui.close').map((call) => call.call)).toEqual(['ui.open', 'ui.open'])
 })
 
-test('a pane handle says whether its pane is the one shown and whether it has the keyboard', async () => {
-  let first: PaneHandle | undefined
-  let second: PaneHandle | undefined
+test('a pane says whether it is the one shown and whether it has the keyboard', async () => {
+  let first: Pane | undefined
+  let second: Pane | undefined
   const tested = testMod(
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        first = mod.ui.pane(drawingPane)
-        second = mod.ui.pane({ ...drawingPane, id: 'legend', title: 'Legend' })
+        first = mod.panes.add(drawingPane)
+        second = mod.panes.add({ ...drawingPane, id: 'legend', title: 'Legend' })
       },
     }),
   )
@@ -1478,12 +1520,12 @@ test('a pane handle says whether its pane is the one shown and whether it has th
 })
 
 test('the first toggle of a pane setup opened and Claude Code holds back opens it', async () => {
-  let handle: PaneHandle | undefined
+  let handle: Pane | undefined
   const tested = testMod(
     defineMod({
       name: 'diagrams',
       async setup(mod) {
-        handle = mod.ui.pane(drawingPane)
+        handle = mod.panes.add(drawingPane)
         await handle.open()
       },
     }),
@@ -1499,12 +1541,12 @@ test('the first toggle of a pane setup opened and Claude Code holds back opens i
 })
 
 test('a pane Claude Code shows later counts as open, so toggle closes it', async () => {
-  let handle: PaneHandle | undefined
+  let handle: Pane | undefined
   const tested = testMod(
     defineMod({
       name: 'diagrams',
       setup(mod) {
-        handle = mod.ui.pane(drawingPane)
+        handle = mod.panes.add(drawingPane)
       },
     }),
   )
@@ -1523,27 +1565,29 @@ test('a pane Claude Code shows later counts as open, so toggle closes it', async
   expect(tested.calls.filter((call) => call.call === 'ui.open' || call.call === 'ui.close').map((call) => call.call)).toEqual(['ui.open', 'ui.close'])
 })
 
-test('a pane size that is not a whole number above 0 throws in definePane', () => {
-  expect(() => definePane({ id: 'x', title: 'X', columns: 0, render: () => Text({}) })).toThrow('definePane: the pane "x" has columns 0. Use a whole number above 0, or leave it out.')
+test('a pane size that is not a whole number above 0 throws in panes.add', async () => {
+  const tested = testMod(defineMod({ name: 'sized', setup: (mod) => void mod.panes.add({ id: 'x', title: 'X', columns: 0, render: () => Text({}) }) }))
+
+  await expect(tested.start()).rejects.toThrow('sized: the pane "x" has columns 0. Use a whole number above 0, or leave it out.')
 })
 
 type DiagramsState = { session: { shown: number } }
 
 const diagramWidths = [60, 120, 120, undefined, 0.5]
 
-const diagramsPane = definePane<DiagramsState>({
+const diagramsPane: PaneInit<DiagramsState> = {
   id: 'diagrams',
   title: 'Diagrams',
   columns: (state) => diagramWidths[state.session.shown],
   render: (mod) =>
     Box({ flexDirection: 'column', children: [Text({ children: `Diagram ${mod.state.session.shown + 1}` }), Button({ label: 'Next', onPress: () => (mod.state.session.shown += 1) })] }),
-})
+}
 
 const diagrams = defineMod({
   name: 'diagrams',
   state: { session: { shown: 0 } },
   setup(mod) {
-    const pane = mod.ui.pane(diagramsPane)
+    const pane = mod.panes.add(diagramsPane)
     mod.use(slashCommand({ name: 'diagrams', description: 'Show or hide the diagrams', reply: () => pane.toggle() }))
   },
 })
@@ -1554,14 +1598,14 @@ test('a pane sized from state opens at the size its state gives', async () => {
   await tested.type('/diagrams')
 
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 120 }])
-  expect(await tested.lines('diagrams')).toEqual(['Diagram 2', '[ Next ]'])
+  expect(await tested.shown.pane.lines()).toEqual(['Diagram 2', '[ Next ]'])
 })
 
 test('an open pane resizes when the state changes its size', async () => {
   const tested = testMod(diagrams)
   await tested.type('/diagrams')
 
-  await tested.press('diagrams', 'Next')
+  await tested.shown.pane.press('Next')
 
   expect(paneOpens(tested)).toEqual([
     { id: 'diagrams', title: 'Diagrams', columns: 60 },
@@ -1573,9 +1617,9 @@ test('a state change that keeps the size does not reopen the pane', async () => 
   const tested = testMod(diagrams, { state: { session: { shown: 1 } } })
   await tested.type('/diagrams')
 
-  await tested.press('diagrams', 'Next')
+  await tested.shown.pane.press('Next')
 
-  expect(await tested.lines('diagrams')).toEqual(['Diagram 3', '[ Next ]'])
+  expect(await tested.shown.pane.lines()).toEqual(['Diagram 3', '[ Next ]'])
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 120 }])
 })
 
@@ -1595,7 +1639,7 @@ test("a size of undefined from the state asks for Claude Code's default size", a
   const tested = testMod(diagrams, { state: { session: { shown: 2 } } })
   await tested.type('/diagrams')
 
-  await tested.press('diagrams', 'Next')
+  await tested.shown.pane.press('Next')
 
   expect(paneOpens(tested)).toStrictEqual([
     { id: 'diagrams', title: 'Diagrams', columns: 120 },
@@ -1607,7 +1651,7 @@ test('a size from the state that is not a whole number above 0 keeps the pane at
   const tested = testMod(diagrams, { state: { session: { shown: 3 } } })
   await tested.type('/diagrams')
 
-  await tested.press('diagrams', 'Next')
+  await tested.shown.pane.press('Next')
 
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams' }])
   expect(tested.shown.debug).toEqual(['diagrams: the Diagrams pane kept its size: the pane "diagrams" gets columns 0.5 from its state. Return a whole number above 0, or undefined for Claude Code\'s default.'])
@@ -1615,7 +1659,7 @@ test('a size from the state that is not a whole number above 0 keeps the pane at
 
 type HistoryState = { project: { count: number; stepsBack: number } }
 
-const historyPane = definePane<HistoryState>({
+const historyPane: PaneInit<HistoryState> = {
   id: 'history',
   title: 'History',
   columns: (state) => diagramWidths[state.project.count - 1 - state.project.stepsBack],
@@ -1627,7 +1671,7 @@ const historyPane = definePane<HistoryState>({
         mod.state.project.stepsBack = 0
       },
     }),
-})
+}
 
 test('one action that sets two state keys resizes the pane once, to the final size', async () => {
   const tested = testMod(
@@ -1635,14 +1679,14 @@ test('one action that sets two state keys resizes the pane once, to the final si
       name: 'history',
       state: { project: { count: 3, stepsBack: 2 } },
       setup(mod) {
-        const pane = mod.ui.pane(historyPane)
+        const pane = mod.panes.add(historyPane)
         mod.use(slashCommand({ name: 'history', description: 'Show or hide the history', reply: () => pane.toggle() }))
       },
     }),
   )
   await tested.type('/history')
 
-  await tested.press('history', 'Draw')
+  await tested.shown.pane.press('Draw')
 
   expect(paneOpens(tested)).toStrictEqual([
     { id: 'history', title: 'History', columns: 60 },
@@ -1652,14 +1696,13 @@ test('one action that sets two state keys resizes the pane once, to the final si
 
 const tracer = defineMod({
   name: 'tracer',
-  api: {
+  setup: () => ({
     signatures: async ({ path }: { path: string }) =>
       (await fs.read(path)).split('\n').flatMap((text, index) => {
         const name = /^export function (\w+)/.exec(text)?.[1]
         return name === undefined ? [] : [{ name, line: index + 1 }]
       }),
-  },
-  setup() {},
+  }),
 })
 
 const outline = defineMod({
@@ -1679,7 +1722,7 @@ const outline = defineMod({
 })
 
 function relayTo(provider: Pick<TestedMod<object>, 'fire'>): Claude['cmod']['call'] {
-  return async (call) => calledAnswer('outline', await claudeCodeOf(provider).fire('cmod.call', call, { deny: `${call.to} is not installed. Add it with /plugin.` }))
+  return async (call) => calledAnswer('outline', await claudeCodeOf(provider).fire('cmod.call', call, { deny: `${call.to} is not installed. Install it in Plugins.` }))
 }
 
 test("a mod calls another mod's api and gets its result", async () => {
@@ -1696,7 +1739,7 @@ test('a call to a mod that is not installed fails with the install command', asy
   const consumer = testMod(outline)
   consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'file-tree', setup() {} })))
 
-  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Add it with /plugin.' })
+  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Install it in Plugins.' })
 })
 
 test("a listener whose call is refused shows the refusal once, without Claude Code's prefix", async () => {
@@ -1704,12 +1747,12 @@ test("a listener whose call is refused shows the refusal once, without Claude Co
 
   await consumer.raise.onSessionStart({ source: 'startup' })
 
-  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'tracer is not installed. Add it with /plugin.' })
+  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'tracer is not installed. Install it in Plugins.' })
 })
 
 test('an unknown method fails naming it', async () => {
   const provider = testMod(tracer)
-  const below = { deny: 'tracer is not installed. Add it with /plugin.' }
+  const below = { deny: 'tracer is not installed. Install it in Plugins.' }
 
   expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'tracer', method: 'callers', input: { name: 'parse' } }, below)).toEqual({ deny: 'tracer has no method callers.' })
   expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'tracer', method: 'constructor', input: {} }, below)).toEqual({ deny: 'tracer has no method constructor.' })
@@ -1767,46 +1810,144 @@ test("a dependency's method takes the input and returns the result its contract 
 test('a provider whose api method returns the wrong type fails tsc', () => {
   const wrong = defineMod({
     name: 'tracer',
-    api: {
-      // @ts-expect-error
-      signatures: async ({ path }: { path: string }) => `${path}:1`,
-    },
-    setup() {},
+    // @ts-expect-error
+    setup: () => ({ signatures: async ({ path }: { path: string }) => `${path}:1` }),
   })
 
   expect(wrong.name).toBe('tracer')
 })
 
-test("a mod's settings pages are listed to /mods and open by id, and open() with no id asks cmod to show the mod", async () => {
-  let started: Mod | undefined
+test('a setup that returns something other than methods does not start', async () => {
+  const tested = testMod(defineMod({ name: 'notes', setup: () => ({ count: 3 }) as never }))
+
+  await expect(tested.start()).rejects.toThrow('notes: setup returns its API, an object of methods other mods call, or nothing. It returned an object with values that are not methods.')
+})
+
+test('tested.api calls the methods setup returns, as another mod would', async () => {
+  const tested = testMod(tracer)
+  tested.fakes.fs.read = async () => 'export function parse(text: string) {}\n'
+
+  expect(await tested.api['signatures']?.({ path: 'src/a.ts' })).toEqual([{ name: 'parse', line: 1 }])
+  expect(await Promise.resolve(tested.api)).toBe(tested.api)
+})
+
+test('a slash command opens a Sidebar page with its params, and the page knows it shows', async () => {
+  let page: Page<{ readonly run: number }> | undefined
   const tested = testMod(
     defineMod({
       name: 'ci-watch',
       setup(mod) {
-        started = mod
-        mod.settings.page(definePane({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) }))
+        page = mod.sidebar.add<{ readonly run: number }>({ id: 'run', title: 'Run', render: (_mod, { params }) => Text({ children: `run ${params.run}` }) })
+        mod.use(slashCommand({ name: 'run', description: 'Show a run', reply: ({ args }) => page?.open({ params: { run: Number(args) }, focus: true }) }))
       },
     }),
   )
-  const asked: unknown[] = []
-  tested.fakes.cmod.call = async (input) => (asked.push(input), null)
-  await tested.start()
 
-  expect(await claudeCodeOf(tested).fire('cmod.call', { to: 'ci-watch', method: 'cmod:settingsPages', input: null })).toEqual({ value: [{ id: 'runs', title: 'Runs' }] })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'ci-watch', method: 'cmod:openPage', input: 'runs' })
-  expect(tested.shown.openPanes.has('runs')).toBe(true)
-  await started?.settings.open()
-  expect(asked).toEqual([{ to: 'cmod', method: 'openSettings', input: { mod: 'ci-watch' } }])
-  await expect(started?.settings.open('history') ?? Promise.resolve()).rejects.toThrow('ci-watch has no settings page "history". It has: runs.')
+  await tested.type('/run 42')
+
+  expect(tested.shown.page.id).toBe('run')
+  expect(await tested.shown.page.lines()).toEqual(['run 42'])
+  expect([page?.isOpen, page?.isShown, page?.isFocused, page?.params]).toEqual([true, true, true, { run: 42 }])
+  await page?.close()
+  expect([page?.isOpen, page?.isShown]).toEqual([false, false])
 })
 
-test("a settings page cannot take the id changelog, which opens the mod's CHANGELOG.md in /mods", async () => {
+test('a page a slash command opens reaches the cmod plugin as the person asking, so the Sidebar opens at any width', async () => {
+  const sent: unknown[] = []
   const tested = testMod(
     defineMod({
       name: 'ci-watch',
-      setup: (mod) => mod.settings.page(definePane({ id: 'changelog', title: 'Changes', render: () => Text({ children: 'v2' }) })),
+      setup(mod) {
+        const page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
+        mod.use(slashCommand({ name: 'runs', description: 'Show the runs', reply: () => page.open() }))
+        mod.every(1000, () => page.open())
+      },
+    }),
+  )
+  await tested.start()
+  tested.fakes.cmod.call = async (input) => (sent.push(input.input), { isHeld: true })
+
+  await tested.type('/runs')
+
+  expect(sent).toEqual([{ requests: [{ open: 'runs' }], isAsked: true }])
+})
+
+test("settings.open shows the mod's first Settings page, and a press there runs in the mod", async () => {
+  let settings: Mod['settings'] | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'ci-watch',
+      state: { global: { branch: 'main' } },
+      setup(mod) {
+        settings = mod.settings
+        mod.settings.add({ id: 'branches', title: 'Branches', render: (current) => Button({ label: `Watch ${current.state.global.branch === 'main' ? 'dev' : 'main'}`, onPress: () => void (current.state.global.branch = 'dev') }) })
+      },
+    }),
+  )
+  await tested.start()
+
+  await settings?.open()
+
+  expect(tested.shown.page.id).toBe('branches')
+  await tested.shown.page.press('Watch dev')
+  expect(tested.state.global.branch).toBe('dev')
+  expect(await tested.shown.page.lines()).toEqual(['[ Watch main ]'])
+})
+
+test("a mod's hotkey runs its listeners, and a listener removed no longer runs", async () => {
+  const pressed: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tree',
+      hotkeys: { toggle: { title: 'Show or hide the tree', default: 'ctrl+t' } },
+      setup(mod) {
+        const first = mod.hotkeys.toggle.onPress(() => void pressed.push('first'))
+        mod.hotkeys.toggle.onPress(() => {
+          pressed.push('second')
+          first.remove()
+        })
+      },
     }),
   )
 
-  await expect(tested.start()).rejects.toThrow(`ci-watch: the settings page id "changelog" opens the mod's CHANGELOG.md in /mods. Give the page another id.`)
+  await tested.hotkey('toggle')
+  await tested.hotkey('toggle')
+
+  expect(pressed).toEqual(['first', 'second', 'second'])
+  expect(tested.shown.commands).toContain('tree--toggle')
+})
+
+test("a hotkey's combo is the one keybindings.json binds to it, which a person may have changed, and undefined while none does", async () => {
+  let combos: unknown[] = []
+  const keybindings = { bindings: [{ context: 'Chat', bindings: { 'ctrl+e': 'command:tree--toggle', 'ctrl+k': 'command:other--toggle' } }] }
+  const tested = testMod(
+    defineMod({
+      name: 'tree',
+      hotkeys: { toggle: { title: 'Show or hide the tree', default: 'ctrl+t' }, reveal: { title: 'Reveal the file', default: 'ctrl+r' } },
+      setup: (mod) => void (combos = [mod.hotkeys.toggle.combo, mod.hotkeys.reveal.combo]),
+    }),
+    { files: { '/test/home/.claude/keybindings.json': JSON.stringify(keybindings) } },
+  )
+
+  await tested.start()
+
+  expect(combos).toEqual(['ctrl+e', undefined])
+})
+
+test('a hotkey default that is not a combo throws in defineMod', () => {
+  expect(() => defineMod({ name: 'tree', hotkeys: { toggle: { title: 'Toggle', default: 't' as never } }, setup: () => undefined })).toThrow('tree: hotkeys.toggle defaults to "t", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".')
+  expect(() => defineMod({ name: 'tree', hotkeys: { a: { title: 'A', default: 'ctrl+t' }, b: { title: 'B', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('tree: hotkeys.b defaults to ctrl+t, which hotkeys.a has too. Give each hotkey its own combo.')
+})
+
+test('a removed timer stops, and says it stopped', async () => {
+  let timer: Timer | undefined
+  let fired = 0
+  const tested = testMod(defineMod({ name: 'tick', setup: (mod) => void (timer = mod.every(1000, () => void (fired += 1))) }))
+  await tested.start()
+
+  expect(timer?.isRunning).toBe(true)
+  timer?.stop()
+
+  expect(timer?.isRunning).toBe(false)
+  expect(fired).toBe(0)
 })

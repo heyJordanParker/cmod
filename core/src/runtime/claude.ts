@@ -46,7 +46,6 @@ import type {
 export type Claude = {
   readonly plugin: { readonly name: string; readonly root: string }
   readonly ui: {
-    status(text: string | undefined): void
     log(text: string, options?: UiLogOptions): void
     notice(toolUseId: string, text: string | undefined): void
     invalidate(event: InvalidatableEventName): void

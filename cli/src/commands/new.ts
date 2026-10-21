@@ -15,8 +15,8 @@ export const help = `Usage: cmod new <name> [--project]
 
 ${summary}
 
-Creates a mod in ./<name>: a defineMod with one listener, one pane, and one render
-of the band above the prompt, a Skill, a rule, and a test. Then installs its
+Creates a mod in ./<name>: a defineMod with one listener, one pane, and one
+widget below the prompt, a Skill, a rule, and a test. Then installs its
 packages.
 
 Options:
@@ -74,19 +74,20 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
   const definition = name.replace(/-([a-z0-9])/g, (_, letter: string) => letter.toUpperCase())
   const state = `${definition.charAt(0).toUpperCase()}${definition.slice(1)}State`
   const files: Record<string, string> = {
-    '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: [{ name: 'cmod', version: `^${coreVersion}` }] }),
+    '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: [{ name: 'cmod', version: `>=${coreVersion}` }] }),
     '.gitignore': 'node_modules/\n.claude-plugin/types/\n',
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'CHANGELOG.md': `# Changelog
 
-What changed in each version of ${name}, for the people who use it. cmod publish releases the section for the version, and the Updated toast and /mods show it.
+What changed in each version of ${name}, for the people who use it. cmod publish releases the section for the version, and the Updated toast and Settings show it.
 
 ## [Unreleased]
 
 ## [0.1.0]
 
 ### Added
-- A pane and a line above the prompt that count the prompts of this session.
+- A Sidebar page and a widget below the prompt that count the prompts of this session.
+- The alt+shift+p hotkey, which shows or hides the page.
 - A rule that tells Claude where to read the count.
 `,
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
@@ -98,20 +99,22 @@ export function register(addHook: On, options: PluginOptions): void {
   registerMod(addHook, ${definition}, options)
 }
 `,
-    'src/mod.tsx': `import { AbovePrompt, defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
-import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
-import { PromptCount } from './components/prompt-count.js'
-import { promptsPane } from './panes/prompts.js'
+    'src/mod.tsx': `import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
+import { promptsPage } from './pages/prompts.js'
 import { initialState } from './state.js'
+import { promptsWidget } from './widgets/prompts.js'
 
 export const ${definition} = defineMod({
   name: '${name}',
   state: initialState,
+  hotkeys: {
+    toggle: { title: 'Show or hide the prompt count', default: 'alt+shift+p' },
+  },
 
   setup(mod) {
-    mod.ui.pane(promptsPane)
-    mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) =>
-      hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
+    const page = mod.sidebar.add(promptsPage)
+    mod.widgets.add(promptsWidget)
+    mod.hotkeys.toggle.onPress(() => page.toggle())
 
     sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
@@ -123,15 +126,26 @@ export const ${definition} = defineMod({
 
 export const initialState: ${state} = { session: { prompts: 0 } }
 `,
-    'src/panes/prompts.tsx': `import { definePane } from '../../node_modules/@cmodjs/core/ui/define-pane.js'
+    'src/pages/prompts.tsx': `import type { PageInit } from '../../node_modules/@cmodjs/core/mod.js'
 import { PromptCount } from '../components/prompt-count.js'
 import type { ${state} } from '../state.js'
 
-export const promptsPane = definePane<${state}>({
-  id: '${name}',
-  title: '${name}',
+export const promptsPage: PageInit<${state}> = {
+  id: 'prompts',
+  title: 'Prompts',
   render: (mod) => <PromptCount count={mod.state.session.prompts} />,
-})
+}
+`,
+    'src/widgets/prompts.tsx': `import { BelowPrompt, Dashboard, type WidgetInit } from '../../node_modules/@cmodjs/core/mod.js'
+import { PromptCount } from '../components/prompt-count.js'
+import type { ${state} } from '../state.js'
+
+export const promptsWidget: WidgetInit<${state}> = {
+  id: 'prompts',
+  title: 'Prompt count',
+  areas: [BelowPrompt, Dashboard],
+  render: (mod) => <PromptCount count={mod.state.session.prompts} />,
+}
 `,
     'src/components/prompt-count.tsx': `import type { RenderElement } from 'claude-code'
 import { Text } from '../../node_modules/@cmodjs/core/ui/elements.js'
@@ -141,12 +155,9 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 `,
     'tests/mod.test.ts': `import { expect, test } from 'bun:test'
-import type { RenderPropsOf } from 'claude-code'
-import { AbovePrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
+import { BelowPrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { ${definition} } from '../src/mod.js'
-
-const band: RenderPropsOf['AbovePrompt'] = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} }
 
 test('each prompt adds one to the count', async () => {
   const tested = testMod(${definition})
@@ -154,17 +165,18 @@ test('each prompt adds one to the count', async () => {
   expect(tested.state.session.prompts).toBe(1)
 })
 
-test('the band shows the prompt count', async () => {
+test('the prompt count shows below the prompt', async () => {
   const tested = testMod(${definition})
   await tested.add({ type: Prompt, text: 'hello' })
-  expect(await tested.lines(AbovePrompt, band)).toContain('Prompts this session: 1')
+  expect(await tested.lines(BelowPrompt)).toEqual(['Prompts this session: 1'])
+  expect(tested.shown.toasts.map(({ message }) => message)).toEqual(['Installed'])
 })
 
-test('the band leaves the prompt count out during a survey', async () => {
+test('the hotkey shows the prompt count in the Sidebar', async () => {
   const tested = testMod(${definition})
   await tested.add({ type: Prompt, text: 'hello' })
-  expect(await tested.lines(AbovePrompt, { ...band, hasSurvey: true })).not.toContain('Prompts this session: 1')
-  expect(tested.shown.toasts.map(({ message }) => message)).toEqual(['Installed'])
+  await tested.hotkey('toggle')
+  expect(await tested.shown.page.lines()).toEqual(['Prompts this session: 1'])
 })
 `,
     [`skills/${name}/SKILL.md`]: `---
@@ -172,10 +184,10 @@ name: ${name}
 description: Explains what the ${name} mod does. Use when the user asks about the ${name} mod.
 ---
 
-The ${name} mod counts the prompts of this session and shows the count in its pane and above the prompt.
+The ${name} mod counts the prompts of this session and shows the count in the Sidebar and below the prompt.
 `,
-    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, cmod: { permissions: { prompt: true } }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
-    'rules/prompt-count.md': `When the person asks how many prompts this session has, read the count the ${name} mod shows above the prompt.
+    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, cmod: { permissions: { prompt: true }, hotkeys: { toggle: { title: 'Show or hide the prompt count', default: 'alt+shift+p' } } }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
+    'rules/prompt-count.md': `When the person asks how many prompts this session has, read the count the ${name} mod shows below the prompt.
 `,
     'tsconfig.json': json({
       extends: './.claude-plugin/types/tsconfig.json',
@@ -193,8 +205,9 @@ The ${name} mod counts the prompts of this session and shows the count in its pa
 - \`node_modules/@cmodjs/core/docs/\` holds the docs of the installed \`@cmodjs/core\`. They match this version, and training data does not. Read the doc for the part you change, starting at \`index.md\`, before Claude Mod Manager (cmod) work.
 - \`tsc\` reads \`.claude-plugin/types/\`, which Claude Code writes when it loads the mod. \`cmod check\` writes it when it is missing or links into a folder that is gone, such as after \`cmod try\`, so run \`cmod check\` before \`tsc\` in a fresh clone.
 - \`src/mod.tsx\` holds the mod's \`defineMod\`. \`hooks/register.ts\` only registers it with Claude Code.
-- \`src/panes/\` holds one \`definePane\` per file.
-- \`src/components/\` holds the components panes and slot renders draw with.
+- \`src/pages/\` holds one Sidebar or Settings page per file, \`src/panes/\` one pane, and \`src/widgets/\` one widget.
+- \`src/components/\` holds the components pages, panes, widgets, and styles draw with.
+- \`cmod check\` writes the hotkeys \`defineMod\` declares into \`package.json\` \`"cmod.hotkeys"\`, which cmod binds at install.
 - \`rules/\` holds rules in Claude Code's rule format. cmod links the folder into Claude Code's rules folder while the mod is on and has the \`prompt\` permission.
 - \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.
 - \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release in a temporary folder without pushing, and leaves this checkout as it was.

@@ -1,20 +1,29 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, longestMs, messageOf, Note, process, sessions, settings, type Mod } from '../node_modules/@cmodjs/core/mod.js'
-import { parseEvent } from '../node_modules/@cmodjs/core/records.js'
+import { defineMod, fs, longestMs, messageOf, Note, process, sessions, settings, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { parseEvent, pluginsChangedPath, widgetsPath } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
-import { modsMemory, modsPanel, readConsent, type ModsState } from './mods.js'
+import { configRootOf, readConsent, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 
-export type CmodPluginState = { readonly global: { installedPlugins: readonly string[] | null }; readonly session: { tip: string | null } } & ModsState
+export type CmodPluginState = {
+  readonly global: { installedPlugins: readonly string[] | null; areHotkeysBound: boolean; pluginsCheckedAt: number | null }
+  readonly session: { tip: string | null } & SidebarState['session'] & SettingsState['session']
+  readonly memory: SettingsState['memory']
+}
 
-const cmodGlobal: CmodPluginState['global'] = { installedPlugins: null }
+const cmodGlobal: CmodPluginState['global'] = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null }
 
-const cmodSession: CmodPluginState['session'] = { tip: null }
+type Listed = { readonly name: string; readonly version: string; readonly state: string; readonly unsatisfied: readonly string[] }
+
+const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, ...settingsSession }
 
 const newestMessages = 8
+
+const reloadDelayMs = 500
 
 type SyncedRules = {
   readonly linked: readonly { readonly mod: string; readonly rules: readonly { readonly name: string; readonly isGlobal: boolean; readonly text: string }[] }[]
@@ -30,53 +39,122 @@ async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-const panels = new WeakMap<object, ReturnType<typeof modsPanel<CmodPluginState>>>()
-
-
 export const cmodPlugin = defineMod({
   name: 'cmod',
-  state: { global: cmodGlobal, session: cmodSession, memory: modsMemory },
-
-  api: {
-    async forkParent(_input: null, mod) {
-      const tip = await tipOf(mod)
-      if (tip === null) return null
-      const { claude } = engineOf(mod)
-      const current = await claude.session.id()
-      return (await sessionsWith(claude, mod.name, 'tip', tip)).find((session) => session !== current) ?? null
-    },
-    async openSettings(input: { readonly mod: string; readonly page?: string }, mod) {
-      const panel = panels.get(mod)
-      if (panel === undefined) throw new Error('cmod has not started its /mods panel yet.')
-      await panel.open(input.mod, input.page)
-      return null
-    },
-    async updateSettings(input: { readonly mod: string; readonly source: string; readonly project: string; readonly values: Readonly<Record<string, unknown>> }, mod) {
-      const { claude } = engineOf(mod)
-      await runCmod(claude, ['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project], await claude.session.id())
-      return null
-    },
+  state: { global: cmodGlobal, session: cmodSession, memory: settingsMemory },
+  hotkeys: {
+    sidebar: { title: 'Show or hide the Sidebar', default: 'ctrl+q' },
+    settings: { title: 'Show or hide Settings', default: 'meta+s' },
   },
 
-  setup(mod) {
+  async setup(mod) {
     const triedRemovals = new Set<string>()
-    const mods = modsPanel(mod)
-    panels.set(mod, mods)
+    const { claude, report, widgets } = engineOf(mod)
+    if (widgets === undefined) throw new Error('cmod draws no widgets, because the cmod plugin started without them.')
+
+    const shown = sidebar(mod, settingsView(mod))
+    mod.hotkeys.sidebar.onPress(() => shown.toggle())
+    mod.hotkeys.settings.onPress(() => shown.toggleSettings())
 
     mod.use(
       slashCommand({
         name: 'mods',
-        description: 'See your mods, turn them off or remove them, and change their options, permissions, keys, and pages',
-        argumentHint: '[mod] [page]',
+        description: 'Open Settings, where you turn your mods off or remove them, and change their options, permissions, hotkeys, pages, and widgets',
+        argumentHint: '[mod]',
         immediate: true,
-        async reply({ positionals }) {
-          const [name, page] = positionals
-          await mods.open(name, page)
-        },
+        reply: ({ positionals }) => shown.openSettings(positionals[0]),
       }),
     )
 
-    const { claude, report } = engineOf(mod)
+    const bindHotkeys = async () => {
+      let isBound = true
+      for (const [name, hotkey] of Object.entries(cmodPlugin.hotkeys ?? {})) {
+        if (mod.hotkeys[name as keyof typeof mod.hotkeys].combo !== undefined) continue
+        const { exitCode, stderr } = await process.run(['cmod', 'hotkey', mod.name, name, hotkey.default])
+        if (exitCode === 0) continue
+        isBound = false
+        report({ id: `hotkey:${name}`, message: `Could not bind ${hotkey.default} to ${hotkey.title}`, description: `cmod hotkey ${formatExit(exitCode, cmodError(stderr, 'hotkey'))}` })
+      }
+      mod.state.global.areHotkeysBound = isBound
+    }
+    if (!mod.state.global.areHotkeysBound) void bindHotkeys().catch((error: unknown) => report({ id: 'hotkeys', message: 'Could not bind the hotkeys', error }))
+
+    const store = await storeOf(mod)
+    const changed = pluginsChangedPath(store)
+    let seenChange = await fs.read(changed).catch(ifMissing(''))
+    let isReloading = false
+    let isWaitingForInput = false
+    const reloadIfChanged = async () => {
+      const change = await fs.read(changed).catch(ifMissing(''))
+      if (change === seenChange || isReloading) return
+      seenChange = change
+      isReloading = true
+      mod.after(reloadDelayMs, reload)
+    }
+    const reload = async () => {
+      try {
+        await claude.command.run({ command: 'reload-plugins' })
+        isWaitingForInput = false
+        await widgets.recheck()
+      } catch (error) {
+        const wasPromptRetry = isWaitingForInput
+        if (wasPromptRetry) report({ id: 'reload', message: 'Could not reload the mods', error })
+        isWaitingForInput = !wasPromptRetry
+      } finally {
+        isReloading = isWaitingForInput
+      }
+      if (!isReloading) await reloadIfChanged()
+    }
+    sessions.current.onPrompt(() => {
+      if (isWaitingForInput) mod.after(reloadDelayMs, reload)
+    })
+
+    const configRoot = await configRootOf(mod)
+    const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`
+    const isCmod = (id: string) => id.replace(/@[^@]*$/, '') === mod.name
+    const updatedFor = 'cmod:cmod-updated-for'
+    let isCheckingPlugins = false
+    const modifiedAt = async (path: string) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? null
+    const keepCmodCurrent = async (): Promise<void> => {
+      if (pluginsFile === undefined || isCheckingPlugins) return
+      const at = await modifiedAt(pluginsFile)
+      if (at === null || at === mod.state.global.pluginsCheckedAt) return
+      isCheckingPlugins = true
+      let checked: number | null = at
+      try {
+        const session = await claude.session.id()
+        const listed = async () => JSON.parse(await runCmod(claude, ['list', '--json'], session)) as readonly Listed[]
+        const needing = (rows: readonly Listed[]) => rows.filter((row) => row.unsatisfied.some(isCmod))
+        const before = await listed()
+        const copies = new Set(before.filter((row) => isCmod(row.name)).map((row) => row.version))
+        let off = needing(before)
+        const reason = off.length > 0 || copies.size > 1 ? JSON.stringify([off.map((row) => row.name).toSorted(), [...copies].toSorted()]) : ''
+        if (reason !== '' && reason !== (await claude.store.get(updatedFor))) {
+          await claude.store.set(updatedFor, reason)
+          await runCmod(claude, ['update', mod.name], session)
+          checked = await modifiedAt(pluginsFile)
+          off = needing(await listed())
+        }
+        if (reason === '') await claude.store.delete(updatedFor)
+        if (off.length > 0) report({ id: 'needs-cmod', message: `${off.map((row) => row.name).join(', ')} ${off.length === 1 ? 'is' : 'are'} off`, description: off.map((row) => row.state).join('\n'), retry: updateAgain })
+        mod.state.global.pluginsCheckedAt = checked
+      } finally {
+        isCheckingPlugins = false
+      }
+      if ((await modifiedAt(pluginsFile)) !== checked) await keepCmodCurrent()
+    }
+    const checkPlugins = () => void keepCmodCurrent().catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain }))
+    const updateAgain = async () => {
+      await claude.store.delete(updatedFor)
+      mod.state.global.pluginsCheckedAt = null
+      checkPlugins()
+    }
+    checkPlugins()
+
+    fs.onChange({ path: [widgetsPath(store), changed, ...(pluginsFile === undefined ? [] : [pluginsFile])] }, async ({ path }) => {
+      if (path === pluginsFile) return checkPlugins()
+      return path === changed ? reloadIfChanged() : widgets.reload()
+    })
 
     void readConsent(mod)
       .then(async (consent) => (Object.entries(consent).some(([name, granted]) => name !== mod.name && granted.includes('conversation')) ? runCmod(claude, ['history', 'index'], await claude.session.id()) : undefined))
@@ -87,7 +165,7 @@ export const cmodPlugin = defineMod({
       const outcome = parseEvent(stdout.trim().split('\n').at(-1) ?? '')
       const isAnswered = outcome.type === 'done' || outcome.type === 'missing' || outcome.type === 'failed'
       if (isAnswered) mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
-      if (outcome.type === 'done') mod.ui.toast.success(`${name} is uninstalled`, { description: 'A session that still runs it stops after /reload-plugins.' })
+      if (outcome.type === 'done') mod.toast.success(`${name} is uninstalled`)
       else if (outcome.type === 'failed') report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message })
       else if (exitCode !== 0) report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, 'teardown'))}` })
     }
@@ -157,5 +235,18 @@ export const cmodPlugin = defineMod({
     sessions.current.onTurnEnd(async () => {
       mod.state.session.tip = await tipOf(mod)
     })
+
+    return {
+      async forkParent() {
+        const tip = await tipOf(mod)
+        if (tip === null) return null
+        const current = await claude.session.id()
+        return (await sessionsWith(claude, mod.name, 'tip', tip)).find((session) => session !== current) ?? null
+      },
+      async updateSettings(input: { readonly mod: string; readonly source: string; readonly project: string; readonly values: Readonly<Record<string, unknown>> }) {
+        await runCmod(claude, ['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project], await claude.session.id())
+        return null
+      },
+    }
   },
 })

@@ -103,6 +103,7 @@ function environment(home: string): Record<string, string | undefined> {
     XDG_DATA_HOME: '',
     XDG_CONFIG_HOME: '',
     CLAUDE_CONFIG_DIR: '',
+    CLAUDE_CODE_EXECPATH: '',
     PATH: `${join(home, 'bin')}:${process.env['PATH']}`,
     CMOD_CORE: `file:${join(import.meta.dir, '..', '..', 'core')}`,
   }

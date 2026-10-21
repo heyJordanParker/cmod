@@ -1,3 +1,4 @@
+import { checkHotkeys, type HotkeyInit, type Hotkeys } from './hotkeys.js'
 import { listed, messageOf } from './utils/text.js'
 
 export type InstallRecord = {
@@ -15,7 +16,7 @@ export type Steps = {
   install?: string
   uninstall?: string
   program?: string
-  keys?: Readonly<Record<string, string>>
+  hotkeys?: Hotkeys
   permissions?: readonly string[]
 }
 
@@ -39,7 +40,7 @@ export type ReadFile = (path: string) => Promise<string | undefined>
 export type RunnerEvent =
   | { type: 'progress'; done: number; total: number; label: string }
   | { type: 'log'; text: string }
-  | { type: 'needs-consent'; sha256: string; install: string; uninstall: string; keys: string; permissions: readonly string[] }
+  | { type: 'needs-consent'; sha256: string; install: string; uninstall: string; hotkeys: string; permissions: readonly string[] }
   | { type: 'done'; name: string; version?: string }
   | { type: 'missing'; name: string }
   | { type: 'retries'; when: 'changed' | 'later' }
@@ -139,7 +140,7 @@ export function readSteps(pkg: unknown): Steps | undefined {
     ...readCommand(steps, 'install'),
     ...readCommand(steps, 'uninstall'),
     ...(program === undefined ? {} : { program }),
-    ...readKeys(steps['keys']),
+    ...readHotkeys(steps['hotkeys']),
     ...(permissions.length === 0 ? {} : { permissions }),
   }
 }
@@ -172,6 +173,12 @@ function readPermissions(steps: Record<string, unknown>): string[] {
   }
   return items
 }
+
+export const grantFix = 'Turn it on in Settings.'
+
+export const installFix = 'Install it in Plugins.'
+
+export const secretFix = 'Set it in /config, where Claude Code keeps it in your keychain.'
 
 export function permissionWords(item: string): string {
   const split = item.indexOf(':')
@@ -211,12 +218,6 @@ export function isSettingCovered(granted: Iterable<string>, path: string): boole
   return [...granted].some((each) => item === each || item.startsWith(`${each}.`))
 }
 
-export const settingsPagesMethod = 'cmod:settingsPages'
-
-export const changelogPage = 'changelog'
-
-export const openPageMethod = 'cmod:openPage'
-
 export const pendingStepsMethod = 'cmod:pendingSteps'
 
 export const finishStepsMethod = 'cmod:finishSteps'
@@ -239,6 +240,14 @@ export function consentPath(store: string): string {
   return `${store}/consent.json`
 }
 
+export function pluginsChangedPath(store: string): string {
+  return `${store}/plugins-changed`
+}
+
+export function widgetsPath(store: string): string {
+  return `${store}/widgets.json`
+}
+
 export function parseConsent(value: unknown, path: string): Record<string, string[]> {
   if (value === undefined) return Object.create(null)
   if (!isObject(value) || Object.values(value).some((items) => !Array.isArray(items) || items.some((item) => typeof item !== 'string'))) {
@@ -247,29 +256,35 @@ export function parseConsent(value: unknown, path: string): Record<string, strin
   return Object.assign(Object.create(null), value) as Record<string, string[]>
 }
 
-function readKeys(keys: unknown): Steps {
-  if (keys === undefined) return {}
-  if (!isObject(keys) || Object.keys(keys).length === 0) throw new Error('package.json "cmod.keys" must bind each key to a command, such as "keys": { "shift+tab": "/mode" }.')
-  const commands: Record<string, string> = {}
-  for (const [key, value] of Object.entries(keys)) {
-    const command = typeof value === 'string' ? /^\/([A-Za-z0-9][A-Za-z0-9._:-]*)$/.exec(value)?.[1] : undefined
-    if (key.trim() === '' || command === undefined) throw new Error(`package.json "cmod.keys" binds "${key}" to ${JSON.stringify(value)}. Bind each key to one of the mod's commands, such as "shift+tab": "/mode".`)
-    commands[key] = command
+function readHotkeys(hotkeys: unknown): Steps {
+  if (hotkeys === undefined) return {}
+  const fix = 'cmod check writes it from the hotkeys defineMod declares, so run cmod check.'
+  if (!isObject(hotkeys) || !Object.values(hotkeys).every((each) => isObject(each) && typeof each['title'] === 'string' && typeof each['default'] === 'string')) throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and default combo. ${fix}`)
+  return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
+}
+
+export const coreVersion = '4.0.0'
+
+export function hotkeyCommand(mod: string, hotkey: string): string {
+  return `${mod}--${hotkey}`
+}
+
+export function hotkeyBindings(mod: string, hotkeys: Hotkeys | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(hotkeys ?? {}).map(([name, { default: combo }]) => [combo, hotkeyCommand(mod, name)]))
+}
+
+export function boundCombos(keybindings: unknown): Map<string, string> {
+  const blocks = isObject(keybindings) && Array.isArray(keybindings['bindings']) ? keybindings['bindings'] : []
+  const combos = new Map<string, string>()
+  for (const block of blocks) {
+    if (!isObject(block) || block['context'] !== 'Chat' || !isObject(block['bindings'])) continue
+    for (const [combo, action] of Object.entries(block['bindings'])) if (typeof action === 'string' && action.startsWith('command:')) combos.set(action.slice('command:'.length), combo)
   }
-  return { keys: commands }
+  return combos
 }
 
-export const coreVersion = '3.1.0'
-
-export function oldestCmodFor(steps: Steps): string {
-  if (steps.permissions?.some((item) => item.startsWith('config:')) === true) return '1.6.0'
-  if (steps.permissions?.includes('tasks') === true) return '1.0.0'
-  if (steps.permissions !== undefined) return '0.2.0'
-  return Object.keys(steps.keys ?? {}).length > 0 ? '0.1.12' : '0.0.0'
-}
-
-export function keyWords(keys: Readonly<Record<string, string>> | undefined): string {
-  return listed(Object.entries(keys ?? {}).map(([key, command]) => `${key} to /${command}`))
+export function hotkeyWords(hotkeys: Hotkeys | undefined): string {
+  return listed(Object.values(hotkeys ?? {}).map(({ title, default: combo }) => `${combo} to ${title}`))
 }
 
 function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall'): Steps {
@@ -314,7 +329,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
     steps.install ?? '',
     steps.uninstall ?? '',
     steps.program ?? '',
-    ...(steps.keys === undefined ? [] : [JSON.stringify(Object.entries(steps.keys).sort())]),
+    ...(steps.hotkeys === undefined ? [] : [JSON.stringify(Object.entries(steps.hotkeys).sort())]),
     ...(steps.permissions === undefined ? [] : [JSON.stringify([...steps.permissions].sort())]),
   ].join('\0')
   for (const folder of [...folders].sort()) {
@@ -336,7 +351,7 @@ export function formatEvent(event: RunnerEvent): string {
     case 'log':
       return `log ${event.text}`
     case 'needs-consent':
-      return `needs-consent ${[event.sha256, event.install, event.uninstall, event.keys, ...event.permissions].join('\t')}`
+      return `needs-consent ${[event.sha256, event.install, event.uninstall, event.hotkeys, ...event.permissions].join('\t')}`
     case 'done':
       return event.version === undefined ? `done ${event.name}` : `done ${event.name} ${event.version}`
     case 'missing':
@@ -353,8 +368,8 @@ export function parseEvent(line: string): RunnerEvent {
   if (progress !== null) return { type: 'progress', done: Number(progress[1]), total: Number(progress[2]), label: progress[3] ?? '' }
   const consent = /^needs-consent (\S+)\t([^\t]*)\t([^\t]*)(?:\t(.*))?$/.exec(line)
   if (consent !== null) {
-    const [keys = '', ...permissions] = (consent[4] ?? '').split('\t')
-    return { type: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, keys, permissions: permissions.filter((item) => item !== '') }
+    const [hotkeys = '', ...permissions] = (consent[4] ?? '').split('\t')
+    return { type: 'needs-consent', sha256: consent[1] as string, install: consent[2] as string, uninstall: consent[3] as string, hotkeys, permissions: permissions.filter((item) => item !== '') }
   }
   const done = /^done (\S+)(?: (\S+))?$/.exec(line)
   if (done !== null) return { type: 'done', name: done[1] as string, ...(done[2] === undefined ? {} : { version: done[2] }) }

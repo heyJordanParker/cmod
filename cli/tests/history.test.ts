@@ -85,7 +85,7 @@ test('readers of a session longer than several write batches, running at once, e
   )
   const [first, second, task, turns] = results.map((result) => JSON.parse(result.stdout) as { id: string }[])
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
-  const db = new Database(join(home, '.local/share/cmod/history-7.sqlite'), { readonly: true })
+  const db = new Database(join(home, '.local/share/cmod/history-8.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
@@ -368,15 +368,15 @@ test('sessions leaves out a session no one prompted, and lists one whose first p
   expect(await json(home, 'sessions', '--project', project)).toEqual([late])
 })
 
-test('an index made by an older cmod is deleted, and the index is history-7.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-8.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite']
+  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite']
   await writeFiles(home, Object.fromEntries(older.map((name) => [`.local/share/cmod/${name}`, 'an older index\n'])))
 
   await json(home, 'sessions', '--project', project)
 
-  expect([...older, 'history-7.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, false, false, false, false, true])
+  expect([...older, 'history-8.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, false, false, false, false, false, true])
 })
 
 test("a task's compaction gives its owner a new context, and contexts --task lists both", async () => {

@@ -2,7 +2,7 @@ import type { Args, Frozen, RenderElement, RenderPropsOf } from 'claude-code'
 import type { Step } from '../installer.js'
 import type { Mod } from '../mod.js'
 import type { Option } from '../options.js'
-import { permissionWords } from '../records.js'
+import { permissionWords, secretFix } from '../records.js'
 import { Box, Button, drawWith, Input, Text } from '../ui/elements.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -12,7 +12,7 @@ export const installerPaneOf = (name: string): string => `installer-${name.repla
 export type Consent = {
   readonly install: string
   readonly uninstall: string
-  readonly keys: string
+  readonly hotkeys: string
   readonly permissions: readonly string[]
   readonly updates?: string | undefined
 }
@@ -32,25 +32,32 @@ export type Installer = {
   close(): Promise<void>
 }
 
-export function createInstaller(name: string, claude: () => Claude): Installer {
+export function createInstaller(name: string, claude: () => Claude, waiting: { show(open: () => Promise<void>): void; hide(): void }): Installer {
   const paneId = installerPaneOf(name)
   let page: Page | undefined
   let isOpen = false
+
+  const open = async () => {
+    isOpen = true
+    await claude().ui.open({ id: paneId, title: `Install ${name}`, focus: true, holdToasts: true, closeOnEscape: true })
+  }
 
   const show = async <Answer>(build: (answer: (value: Answer) => void) => Omit<Page, 'cancel'>, cancelled: Answer): Promise<Answer> => {
     page?.cancel()
     const answer = new Promise<Answer>((resolve) => {
       const done = (value: Answer) => {
         if (page === shown) page = undefined
+        waiting.hide()
         resolve(value)
       }
       const shown: Page = { ...build(done), cancel: () => done(cancelled) }
       page = shown
     })
-    if (!isOpen) {
-      isOpen = true
-      await claude().ui.open({ id: paneId, title: `Install ${name}`, focus: true, holdToasts: true, closeOnEscape: true })
-    }
+    waiting.show(open)
+    if (!isOpen) await open().catch((error: unknown) => {
+      waiting.hide()
+      throw error
+    })
     claude().ui.invalidate('ui.render')
     return answer
   }
@@ -70,11 +77,11 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
       isOpen = false
       page?.cancel()
     },
-    consent({ install, uninstall, keys, permissions, updates }) {
+    consent({ install, uninstall, hotkeys, permissions, updates }) {
       const changes = [
         ...(install === '' ? [] : [`Run ${install} now${uninstall === '' ? '' : `, and ${uninstall} when you remove it`}`]),
         ...(install === '' && uninstall !== '' ? [`Run ${uninstall} when you remove it`] : []),
-        ...(keys === '' ? [] : [`Bind ${keys}`]),
+        ...(hotkeys === '' ? [] : [`Bind ${hotkeys}`]),
         ...(updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]),
       ]
       return show<boolean>(
@@ -85,7 +92,7 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
               [
                 ...(permissions.length === 0 ? [] : [Box({ flexDirection: 'column', children: permissions.map((item) => bullet(permissionWords(item))) })]),
                 ...(changes.length === 0 ? [] : [Text({ children: permissions.length === 0 ? 'Change your computer:' : 'and change your computer:' }), Box({ flexDirection: 'column', children: changes.map(bullet) })]),
-                Text({ dimColor: true, children: 'You can turn each permission off later in /mods.' }),
+                Text({ dimColor: true, children: 'You can turn each permission off later in Settings.' }),
               ],
               [Button({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) }), Button({ key: 'accept', hotkey: 'a', label: 'Accept', onPress: () => answer(true) })],
             ),
@@ -103,11 +110,16 @@ export function createInstaller(name: string, claude: () => Claude): Installer {
               `${name} needs ${missing.length === 1 ? 'one setting' : `${missing.length} settings`}:`,
               missing.map(([key, option]) => {
                 const label = Text({ children: [Text({ bold: true, children: option.title }), option.description === '' ? '' : Text({ dimColor: true, children: `  ${option.description}` })] })
-                if (option.type === 'secret') return Box({ flexDirection: 'column', children: [label, Text({ dimColor: true, children: `Set it in /config, where Claude Code keeps it in your keychain, then press Next.` })] })
+                if (option.type === 'secret') {
+                  return Box({
+                    flexDirection: 'column',
+                    children: [label, Text({ dimColor: true, children: `${secretFix} Then press Next.` }), Button({ key: `secret:${key}`, label: 'Open /config', onPress: () => void claude().command.run({ command: 'config' }) })],
+                  })
+                }
                 const failure = failures.get(key)
                 const field = Input({
                   key: `option:${key}`,
-                  label: '› ',
+                  label: 'Value',
                   placeholder: option.type === 'choice' ? (option.choices ?? []).join(', ') : option.type === 'toggle' ? 'true or false' : option.type === 'list' ? 'comma-separated' : '',
                   value: saved.get(key) ?? '',
                   submitLabel: 'save',

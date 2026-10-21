@@ -1,4 +1,5 @@
 import type { Job } from '../mod.js'
+import type { Subscription } from '../utils/subscription.js'
 import { longestMs, type Deadline } from '../runtime/deadline.js'
 import { callEffects, type Call } from '../utils/call-effects.js'
 import { dirname } from '../vendor.js'
@@ -10,7 +11,7 @@ import { matchTarget, targetOf, type Target } from './permissions/match-target.j
 
 const defaultMs = 60_000
 
-export function check<State extends object = Record<never, never>>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State> {
+export function check<State extends object = Record<never, never>>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<Subscription, State> {
   const { after, run, timeoutMs = defaultMs } = options
   const targets = Array.isArray(after) ? after : [after]
   if (targets.length === 0) throw new Error("check: give after a target, such as { write: '**/*.ts' }.")
@@ -21,7 +22,8 @@ export function check<State extends object = Record<never, never>>(options: { re
   const deadline: Deadline = { ms: timeoutMs, job: 'check' }
 
   return (job) => {
-    afterCall(
+    job.announce(`a ${named}`)
+    return afterCall(
       job,
       async (use, workspace) => {
         const triggered = await triggeredRun(targets, run, use, workspace)
@@ -38,7 +40,6 @@ export function check<State extends object = Record<never, never>>(options: { re
       },
       (error) => [`The check job failed, so the ${named} did not run: ${messageOf(error)}`],
     )
-    job.announce(`a ${named}`)
   }
 }
 

@@ -47,7 +47,7 @@ export function locatingPrograms(claude: Claude): Programs {
   let names: ReadonlySet<string> = new Set()
   const located = (argv: readonly string[]): readonly string[] => {
     const [name, ...rest] = argv
-    return folder !== undefined && name !== undefined && names.has(name) ? [`${folder}/${name}`, ...rest] : argv
+    return folder !== undefined && name !== undefined && (name === 'cmod' || names.has(name)) ? [`${folder}/${name}`, ...rest] : argv
   }
   return {
     claude: {

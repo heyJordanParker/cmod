@@ -80,25 +80,77 @@ const declaringCore = {
   'node_modules/@cmodjs/core/register.js': "let registered\nexport const registerMod = (addHook, definition) => {\n  addHook('classic.Setup', () => undefined).catch(() => undefined)\n  registered = definition\n}\nexport const registeredMod = () => registered\n",
   'node_modules/@cmodjs/core/options.js': 'export const userConfigOf = (options) => Object.fromEntries(Object.entries(options).map(([key, option]) => [key, { type: "string", title: option.title, description: "" }]))\n',
   'hooks/hooks.json': JSON.stringify({ modules: ['./register.ts'] }),
-  'hooks/register.ts': "import { registerMod } from '../node_modules/@cmodjs/core/register.js'\nexport function register(addHook, options) {\n  registerMod(addHook, { name: 'demo', options: { branch: { title: 'Branch' } }, setup() {} }, options)\n}\n",
+  'hooks/register.ts': "import { registerMod } from '../node_modules/@cmodjs/core/register.js'\nexport function register(addHook, options) {\n  registerMod(addHook, { name: 'demo', options: { branch: { title: 'Branch' } }, hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+r' } }, setup() {} }, options)\n}\n",
 }
 
-test('cmod check writes the options defineMod declares into plugin.json userConfig, keeping the file as it was written', async () => {
+test('cmod check writes the options defineMod declares into plugin.json userConfig and its hotkeys into package.json, keeping each file as it was written', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
-  await writeFiles(root, { ...declaringCore, '.claude-plugin/plugin.json': '{\n    "name": "demo",\n    "version": "0.1.0"\n}\n', 'package.json': JSON.stringify({ name: 'demo' }) })
+  await writeFiles(root, { ...declaringCore, '.claude-plugin/plugin.json': '{\n    "name": "demo",\n    "version": "0.1.0"\n}\n', 'package.json': '{\n  "name": "demo"\n}\n' })
 
   const result = await cmod(home, 'check', root)
 
-  expect(result.stdout).toContain('Writing the options into plugin.json…\n✔ Wrote the option defineMod declares into plugin.json userConfig: branch\n')
+  expect(result.stdout).toContain(
+    'Writing the options and hotkeys…\n✔ Wrote the option defineMod declares into plugin.json userConfig: branch\n    Wrote the hotkey defineMod declares into package.json "cmod.hotkeys": runs\n',
+  )
   expect(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).toBe(
     '{\n    "name": "demo",\n    "version": "0.1.0",\n    "userConfig": {\n        "branch": {\n            "type": "string",\n            "title": "Branch",\n            "description": ""\n        }\n    }\n}\n',
   )
+  expect(JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))).toEqual({ name: 'demo', cmod: { hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+r' } } } })
 
   const again = await cmod(home, 'check', root)
 
-  expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n')
+  expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n    package.json "cmod.hotkeys" holds the hotkey defineMod declares: runs\n')
+})
+
+test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod installed, keeping the rest of the entry', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.2.0' }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', marketplace: 'cmod', version: '^4.0.0' }, 'tracer'] }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+  })
+
+  const result = await cmod(home, 'check', root)
+  const again = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.2.0", the @cmodjs/core this mod bundles, so every newer cmod runs it\n')
+  expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', marketplace: 'cmod', version: '>=4.2.0' }, 'tracer'])
+  expect(again.stdout).toContain('✔ plugin.json holds the cmod dependency ">=4.2.0"')
+})
+
+test('cmod check keeps the cmod range of a mod on @cmodjs/core 3, which cmod 4 does not run', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '3.1.0' }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', version: '^3.1.0' }] }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+  })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n– No @cmodjs/core 4 or later in node_modules, so the mod keeps its own cmod range\n')
+  expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', version: '^3.1.0' }])
+})
+
+test('cmod check adds the cmod dependency to a plugin.json that names none', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.0.0' }),
+    '.claude-plugin/plugin.json': '{\n  "name": "demo",\n  "version": "0.1.0"\n}\n',
+    'package.json': JSON.stringify({ name: 'demo' }),
+  })
+
+  await cmod(home, 'check', root)
+
+  expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', version: '>=4.0.0' }])
 })
 
 test('cmod check names each machine package.json "os" and "cpu" allow that a cmod download line has no build for', async () => {

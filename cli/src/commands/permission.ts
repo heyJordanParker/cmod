@@ -4,7 +4,7 @@ import { readText } from '../files.js'
 import { readPlugin } from '../plugin.js'
 import { approve, revokeApprovals } from '../store.js'
 
-export const summary = 'Turn one of a mod\'s permissions on or off, as a /mods toggle does.'
+export const summary = 'Turn one of a mod\'s permissions on or off, as a toggle in Settings does.'
 
 export const help = `Usage: cmod permission <mod> <name> [value] on|off
 
@@ -13,7 +13,7 @@ ${summary}
 Turns one permission the mod lists in its package.json "cmod.permissions" on or
 off, written the way the mod's mod.permissions.has takes it: a list permission
 with its value, such as network api.github.com, and any other with none, such as
-model. The /mods panel in Claude Code runs it, and the mod's next call sees it.`
+model. Settings in Claude Code runs it, and the mod's next call sees it.`
 
 const exampleValues: Readonly<Record<ListPermission, string>> = { network: 'api.github.com', run: 'gh', files: '~/.zshrc', config: 'cleanupPeriodDays' }
 

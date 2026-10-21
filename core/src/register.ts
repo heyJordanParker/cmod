@@ -21,7 +21,6 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
   const claude: Claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
     ui: {
-      status: (text) => $.ui.status(text),
       log: (text, options) => $.ui.log(text, options),
       notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
       invalidate: (event) => $.ui.invalidate(event),
@@ -112,7 +111,7 @@ function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.cal
 
 export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
   permissionCheck = undefined
-  registered = definition as ModDefinition<object>
+  registered = definition
   lifecycle = createLifecycle(definition, () => permissionCheck, options)
   addHook('session.start', startMod)
   addHook('classic.Setup', routeToMod).catch(routeFailure)
@@ -142,13 +141,13 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('classic.PostCompact', routeToMod).catch(routeFailure)
   addHook('classic.Stop', routeToMod).catch(routeFailure)
   addHook('classic.StopFailure', routeToMod).catch(routeFailure)
-  addHook('classic.FileChanged', routeToMod).catch(routeFailure)
   addHook('classic.WorktreeCreate', routeToMod).catch(routeFailure)
   addHook('classic.WorktreeRemove', routeToMod).catch(routeFailure)
   addHook('tool.call', routeToMod).catch(routeFailure)
   addHook('prompt.submit', routeToMod).catch(routeFailure)
   addHook('prompt.context', routeToMod).catch(routeFailure)
   addHook('command.run', routeToMod).catch(routeFailure)
+  addHook('command.describe', routeToMod).catch(routeFailure)
   addHook('session.measure', routeToMod).catch(routeFailure)
   addHook('skill.prompt', routeToMod).catch(routeFailure)
   addHook('ui.render', routeToMod).catch(routeFailure)

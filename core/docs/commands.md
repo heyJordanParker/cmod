@@ -12,7 +12,7 @@ Each command below restates what `cmod <command> --help` prints, for a mod autho
 cmod new <name> [--project]
 ```
 
-Creates a mod in `./<name>`: a `defineMod` with one listener, one pane, and one render of the band above the prompt, a Skill, a test, and a `CHANGELOG.md` ([mod.md](mod.md#release-notes)). Then installs its packages.
+Creates a mod in `./<name>`: a `defineMod` with one listener, a Sidebar page, a widget, and a hotkey that shows the page, a Skill, a test, and a `CHANGELOG.md` ([mod.md](mod.md#release-notes)). Then installs its packages.
 
 - `<name>` is lowercase letters, digits, and `-`, starting with a letter.
 - `--project` creates a project-scope plugin in `./.claude/skills/<name>/` of the repository in the current folder, which loads for everyone who trusts the repository. Run it in the repository's root.
@@ -25,7 +25,7 @@ Creates a mod in `./<name>`: a `defineMod` with one listener, one pane, and one 
 cmod link [path] [--yes] [--option key=value]...
 ```
 
-Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. A session that is already running loads it after `/reload-plugins`.
+Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. Claude Code reads that list only when a session starts, so a session that is already running loads the checkout once the person starts a new one. From then on, Claude Code reloads the checkout in each session when a file in it is saved.
 
 - `--yes` approves the mod's install and uninstall commands without asking.
 - `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option, under the id `claude plugin list` shows for the linked checkout, such as `my-mod@inline`. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
@@ -48,17 +48,21 @@ Runs every check this machine can run on the mod at `path` (default: the current
 
 1. Installs its packages.
 2. Checks its layout.
-3. Checks that each step runs a script, and prints the permissions the person grants at install and can grant later, as the person reads them ([permissions.md](permissions.md)). It adds `"approve": true` when the mod answers the permission check, with a `beforePermissionCheck` or `beforePermissionRequest` listener or the `permissions` job, and `hooks/register.ts` calls `registerPermissionCheck`. It fails a mod whose `src/` hears permissions while `register.ts` does not call `registerPermissionCheck`.
-4. Writes the options `defineMod` declares into `.claude-plugin/plugin.json` `userConfig`, keeping the file's own formatting, so Claude Code shows them in `/config` ([options.md](options.md)). It loads `hooks/register.ts` to read them, without starting the mod.
-5. Checks its imports.
-6. Looks for prebuilt binaries outside `cli/`.
-7. Bundles the hooks module as `cmod publish` does, and names each reason a bundle fails.
-8. Validates it with Claude Code, `claude plugin validate --strict`.
-9. Compiles it against Claude Code's API with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
-10. Lints it with `oxlint`.
-11. Runs, with `bun test`, every test file that does not import `claude-code/testing`. When `bunfig.toml` names a `[test]` `root`, it runs only the test files under that folder, as `bun test` does.
-12. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
-13. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
+3. Checks that each step runs a script.
+4. Checks that `package.json` `"os"` and `"cpu"` list only machines cmod runs mods on, darwin and linux on arm64 and x64, and that the install step downloads a program for each machine they list.
+5. Prints the permissions the person grants at install and can grant later, as the person reads them ([permissions.md](permissions.md)). It adds `"approve": true` when the mod allows or asks on the permission check and `hooks/register.ts` calls `registerPermissionCheck`. It fails a mod whose `src/` hears permissions while `register.ts` does not call `registerPermissionCheck`.
+6. Reads the metadata of every file in the mod, and names each file whose metadata cmod cannot read.
+7. Writes the options `defineMod` declares into `.claude-plugin/plugin.json` `userConfig`, and its hotkeys into `package.json` `"cmod"` `hotkeys`, keeping each file's own formatting, so Claude Code shows the options in `/config` ([options.md](options.md)). It loads `hooks/register.ts` to read them, without starting the mod.
+8. Writes the `cmod` dependency in `.claude-plugin/plugin.json` as `>=` the version of the `@cmodjs/core` the mod installed, such as `>=4.0.0`, so every newer cmod runs the mod. A mod still on `@cmodjs/core` 3 keeps its own range ([dependencies.md](dependencies.md#call-the-methods-mod-dependencies)).
+9. Checks its imports.
+10. Looks for prebuilt binaries outside `cli/`.
+11. Bundles the hooks module as `cmod publish` does, and names each reason a bundle fails.
+12. Validates it with Claude Code, `claude plugin validate --strict`.
+13. Compiles it against Claude Code's API with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
+14. Lints it with `oxlint`.
+15. Runs, with `bun test`, every test file that does not import `claude-code/testing`. When `bunfig.toml` names a `[test]` `root`, it runs only the test files under that folder, as `bun test` does.
+16. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
+17. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
 
 `cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the cmod store the first time. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
 
@@ -114,11 +118,14 @@ It needs, and refuses to start without:
 - a `package.json` with no dependency on a `file:` or `link:` path, which no user has
 - a `"files"` list, when `package.json` has one, whose every path matches a committed file
 - a `"program"` in the `cmod` key of `package.json` that names the program `cli/` declares, when `cli/` declares one
+- a `cmod` dependency in `.claude-plugin/plugin.json` of `>=` the `@cmodjs/core` the mod bundles, which `cmod check` writes
 - for a real publish, a working tree with no uncommitted changes, no `v<version>` or `<name>--v<version>` tag yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
 `--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
 
 ## Install mods
+
+`cmod install`, `cmod update`, `cmod remove`, `cmod enable`, `cmod disable`, `cmod link`, `cmod unlink`, and `cmod try` write the time to `plugins-changed` in the cmod store when they finish, also when they fail partway, such as an update that updated some mods. The cmod plugin of every running session watches that file and runs `/reload-plugins`, so each session runs the mods the person has now. A reload clears each mod's `memory` state. A machine where cmod set up no mod has no store, and these commands write nothing there. `cmod permission` needs no reload, because a mod sees its grants change before its next call.
 
 ### cmod install
 
@@ -142,7 +149,7 @@ Adds the plugin's marketplace to Claude Code and installs the plugin through Cla
 cmod update [name] [--yes]
 ```
 
-Updates the named plugin, or every plugin Claude Code has installed, through Claude Code, then runs the install step of each mod whose version or scripts changed. A linked plugin is skipped, because saving its files updates it. When Claude Code fails to update a plugin, `cmod update` names it, updates the rest, and exits 1. A running session loads the new version after `/reload-plugins`.
+Updates the named plugin, or every plugin Claude Code has installed, through Claude Code, then runs the install step of each mod whose version or scripts changed. A linked plugin is skipped, because saving its files updates it. When Claude Code fails to update a plugin, `cmod update` names it, updates the rest, and exits 1. Every running session then loads the new version.
 
 - `--yes` approves changed install and uninstall commands without asking.
 
@@ -161,15 +168,17 @@ cmod enable <name>
 cmod disable <name>
 ```
 
-Turns the plugin on or off through Claude Code, as `/plugin` does. A running session follows after `/reload-plugins`. A mod keeps its setup, its data, and its program while it is off, and runs no install or uninstall step either way. They refuse a plugin linked with `cmod link`, which `cmod unlink` stops loading. The `Turn off` and `Turn on` buttons in `/mods` run them.
+Turns the plugin on or off through Claude Code, as `/plugin` does, and every running session follows. A mod keeps its setup, its data, and its program while it is off, and runs no install or uninstall step either way. They refuse a plugin linked with `cmod link`, which `cmod unlink` stops loading. The `Turn off` and `Turn on` buttons in Settings run them.
 
 ### cmod list
 
 ```text
-cmod list
+cmod list [--json]
 ```
 
-Lists every plugin Claude Code has installed or linked, with its version. A mod shows whether cmod set it up, and any other plugin shows whether Claude Code enabled it. It also lists every mod Claude Code removed whose uninstall step has not run yet.
+Lists every plugin Claude Code has installed or linked, with its version. A mod shows whether cmod set it up, and any other plugin shows whether Claude Code enabled it. A plugin Claude Code turned off shows Claude Code's reason, such as `Requires "cmod@market" >=4.2.0, installed 4.0.0`. It also lists every mod Claude Code removed whose uninstall step has not run yet.
+
+- `--json` prints the list as JSON: one object per row with its `name`, `version`, `state`, and `unsatisfied`, the dependencies Claude Code turned the plugin off for because they are older than the plugin needs.
 
 - The `cmod` commands count a plugin as a mod only when its `package.json` has a `cmod` step key or cmod holds an install record for it. A mod made with `cmod new` has neither until its first Claude Code session sets it up, so until then `cmod list` shows it as `enabled`, like any other plugin.
 
@@ -205,7 +214,7 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 - `state` prints what a running conversation resumes from.
 - `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later. The cmod plugin runs it to hear other running sessions.
 - `--json` prints JSON instead of one line each.
-- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-7.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-8.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While a mod other than cmod holds the `conversation` permission, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 ## Run in an install script
 
@@ -227,7 +236,7 @@ cmod runs these itself. A person runs them to see a step's whole log, to finish 
 cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
 ```
 
-Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the keys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them.
+Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the hotkeys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them.
 
 ### cmod teardown
 
@@ -243,7 +252,15 @@ Runs a removed mod's saved uninstall step, then deletes its install record, the 
 cmod permission <mod> <name> [value] on|off
 ```
 
-Turns one permission of a set-up mod on or off, such as `cmod permission ci-watch model off` or `cmod permission ci-watch network api.github.com on`. A toggle in `/mods` runs it. It refuses a permission the mod's `package.json` `cmod.permissions` does not list, and the mod sees the change before its next call, with no reload ([permissions.md](permissions.md)).
+Turns one permission of a set-up mod on or off, such as `cmod permission ci-watch model off` or `cmod permission ci-watch network api.github.com on`. A toggle in Settings runs it. It refuses a permission the mod's `package.json` `cmod.permissions` does not list, and the mod sees the change before its next call, with no reload ([permissions.md](permissions.md)).
+
+### cmod hotkey
+
+```text
+cmod hotkey <mod> <hotkey> <combo>
+```
+
+Binds one hotkey of a mod to a new combo in Claude Code's `keybindings.json`, such as `cmod hotkey notes toggle ctrl+shift+n`, and removes the combo it had. A combo in Settings, under the mod, Hotkeys, runs it, and so does the cmod plugin for its own two hotkeys at its first start. It refuses a combo that is not one, and a combo the person already bound to something else, with `<combo> already runs something else in ~/.claude/keybindings.json. Pick another combo.` The mod's next update keeps the combo ([mod.md](mod.md#hotkeys)).
 
 ### cmod settings
 
@@ -267,4 +284,4 @@ Links the `rules/` folder of each mod that is on and has the `prompt` permission
 cmod option <name> <key> <value>
 ```
 
-Sets one option of an installed plugin through `claude plugin configure`, the way `/config` sets it, such as `cmod option ci-watch branch main`. A list option takes its items separated by commas. It refuses a key the plugin's `plugin.json` `userConfig` does not declare. A field in `/mods` and the option questions a mod asks at its first start run it, and the mod reads the new value at its next start ([options.md](options.md)).
+Sets one option of an installed plugin through `claude plugin configure`, the way `/config` sets it, such as `cmod option ci-watch branch main`. A list option takes its items separated by commas. It refuses a key the plugin's `plugin.json` `userConfig` does not declare. A field in Settings and the option questions a mod asks at its first start run it, and the mod reads the new value at its next start ([options.md](options.md)).

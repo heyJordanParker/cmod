@@ -1,20 +1,60 @@
 import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement } from 'claude-code'
-import type { Disposable, Mod, PaneHandle } from '../mod.js'
-import type { Pane } from '../ui/define-pane.js'
-import { Box, drawWith, Text } from '../ui/elements.js'
-import type { MarkdownReader } from '../ui/markdown.js'
-import { componentOf, nameOf, type Place, type PlaceProps } from '../ui/places.js'
+import type { Mod, Turn } from '../mod.js'
+import { isObject } from '../records.js'
+import { TurnEnd, type Area, type Widget, type WidgetContext, type WidgetInit } from '../ui/areas.js'
+import { Box, drawWith, elementData, Text, type Handler } from '../ui/elements.js'
+import type { Block, MarkdownReader } from '../ui/markdown.js'
+import { checkPane, checkPart, sizeKeys, type OpenOptions, type Page, type PageInit, type Pane, type PaneInit, type ScrollOptions, type ScrollTarget } from '../ui/panes.js'
+import { componentOf, nameOf, type Kind, type Style, type StyleInit } from '../ui/styles.js'
+import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { cmodPluginName } from './dependencies.js'
 import type { Router } from './router.js'
-import type { Failure, Toaster } from './toaster.js'
+import type { Failure } from './toaster.js'
+
+export const partMethods = {
+  list: 'cmod:parts',
+  draw: 'cmod:draw',
+  press: 'cmod:press',
+  shown: 'cmod:shown',
+  changed: 'cmod:partsChanged',
+} as const
+
+export type PagePlace = 'sidebar' | 'settings'
+
+export type WidgetDeclaration = { readonly id: string; readonly title: string; readonly areas: readonly Area[] }
+
+export type PageDeclaration = { readonly id: string; readonly title: string; readonly place: PagePlace }
+
+export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PageDeclaration[] }
+
+export type PartDraw =
+  | { readonly widget: string; readonly area: Area; readonly columns: number; readonly turn?: Turn }
+  | { readonly page: string; readonly params: unknown; readonly columns: number; readonly isFocused: boolean }
+
+export type PartPress = { readonly draw: number; readonly handler: number; readonly args: readonly unknown[] }
+
+export type DrawnPart = { readonly draw: number; readonly tree: unknown }
+
+export type PageRequest =
+  | { readonly open: string; readonly params?: unknown; readonly focus?: true }
+  | { readonly close: string }
+  | { readonly scroll: string; readonly to: ScrollTarget; readonly block?: ScrollOptions['block'] }
+  | { readonly settings: true; readonly tab?: SettingsTab }
+
+export type SettingsTab = 'changelog' | 'permissions'
+
+export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly requests?: readonly PageRequest[]; readonly isAsked?: true }
+
+export type ShownPages = { readonly open: readonly { readonly id: string; readonly params: unknown }[]; readonly shown: string | null; readonly isFocused: boolean }
+
 
 type PaneSize = Pick<PaneOpenArgs, 'columns' | 'rows'>
 
 const bullet = '⏺'
-const sizeKeys = ['columns', 'rows'] as const
 
-function paneSize<State extends object>(pane: Pane<State>, state: State): PaneSize {
+function paneSize<State extends object>(pane: PaneInit<State, never>, state: State): PaneSize {
   const size: { columns?: number; rows?: number } = {}
   for (const key of sizeKeys) {
     const wanted = pane[key]
@@ -82,29 +122,49 @@ function drawPieces(pieces: readonly DrawnPiece[], place: 'pane' | 'opensReply' 
   return column([opening, Box({ paddingLeft: 2, children: column(rest) })])
 }
 
+function merged(updates: readonly PartsUpdate[]): PartsUpdate {
+  const parts = updates.findLast((update) => update.parts !== undefined)?.parts
+  const requests = updates.flatMap((update) => update.requests ?? [])
+  const isRedrawn = updates.some((update) => update.redraw === true)
+  return { ...(parts === undefined ? {} : { parts }), ...(isRedrawn ? { redraw: true } : {}), ...(requests.length === 0 ? {} : { requests }) }
+}
+
 type MarkdownRender = {
   readonly Component: (props: object) => RenderElement
   readonly log: (failure: string) => void
 }
 
+type AddedPane<State extends object> = { readonly init: PaneInit<State, unknown>; params: unknown }
+
+type AddedPage<State extends object> = { readonly init: PageInit<State, unknown>; readonly place: PagePlace; params: unknown }
+
 export type UiOptions<State extends object> = {
   readonly name: string
   readonly claude: Claude
   readonly router: Router
-  readonly toaster: Toaster
   readonly report: (failure: Failure) => void
   readonly announce: (feature: string) => void
   readonly mod: () => Mod<State>
 }
 
 export type UiArea<State extends object> = {
-  readonly ui: Omit<Mod<State>['ui'], 'notice'>
+  readonly panes: Mod<State>['panes']
+  readonly sidebar: Mod<State>['sidebar']
+  readonly settings: Mod<State>['settings']
+  readonly widgets: Mod<State>['widgets']
+  readonly styles: Mod<State>['styles']
+  asked<Value>(run: () => Value | Promise<Value>): Promise<Value>
+  answerInput<Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>): Promise<Answer>
+  answer(method: string, input: unknown): Promise<{ readonly value: unknown }> | undefined
+  started(): void
   changed(): void
   restorePanes(): Promise<void>
 }
 
-export function createUi<State extends object>({ name, claude, router, toaster, report, announce, mod }: UiOptions<State>): UiArea<State> {
-  const panes = new Map<string, Pane<State>>()
+const keptDrawInputs = 200
+
+export function createUi<State extends object>({ name, claude, router, report, announce, mod }: UiOptions<State>): UiArea<State> {
+  const panes = new Map<string, AddedPane<State>>()
   const paneLogs = new Map<string, (failure: string) => void>()
   const openPanes = new Set<string>()
   const paneStates = new Map<string, { readonly isShown: boolean; readonly isFocused: boolean }>()
@@ -117,16 +177,75 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
   }
   const readPanes = () => void syncPanes().catch((error: unknown) => claude.ui.log(`${name} keeps its panes' shown and focused state from before: ${messageOf(error)}`, { to: 'debug' }))
   const requestedSizes = new Map<string, PaneSize>()
-  const renders = new Set<string>()
+  const styles = new Set<string>()
   const markdownRenders = new Map<string, MarkdownRender>()
   let read: MarkdownReader | undefined
   let isRouted = false
   let isResizeQueued = false
+  const widgets = new Map<string, WidgetInit<State>>()
+  const widgetAreas = new Map<string, Area>()
+  const pages = new Map<string, AddedPage<State>>()
+  let shownPages: ShownPages = { open: [], shown: null, isFocused: false }
+  const draws = new Map<number, { readonly id: string; readonly handlers: readonly Handler[] }>()
+  const latestDraws = new Map<string, Map<string, readonly number[]>>()
+  const failedDraws = new Set<string>()
+  let drawCount = 0
+  let beforeStart: PartsUpdate[] | undefined = []
+  let askedDepth = 0
+  let unheldRequests = 0
+  let collected: PartsUpdate[] | undefined
+  let queued: PartsUpdate[] | undefined
+
+  const partList = (): PartList => ({
+    widgets: [...widgets.values()].map(({ id, title, areas: listed }) => ({ id, title, areas: listed })),
+    pages: [...pages.values()].map(({ init: { id, title }, place }) => ({ id, title, place })),
+  })
+
+  const send = (update: PartsUpdate) => {
+    if (collected !== undefined) return void collected.push(update)
+    if (beforeStart !== undefined) return void beforeStart.push(update)
+    const isAsked = askedDepth > 0
+    if (queued !== undefined && !isAsked) return void queued.push(update)
+    const batch: PartsUpdate[] = [update]
+    if (!isAsked) queued = batch
+    const tell = () => {
+      if (queued === batch) queued = undefined
+      const input = { ...merged(batch), ...(isAsked ? { isAsked: true as const } : {}) }
+      return claude.cmod.call({ to: cmodPluginName, method: partMethods.changed, input }).then(
+        (answer) => {
+          if (isAsked && input.requests !== undefined && !(isObject(answer) && answer['isHeld'] === true)) unheldRequests += 1
+        },
+        (error: unknown) => claude.ui.log(`${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`, { to: 'debug' }),
+      )
+    }
+    return isAsked ? tell() : Promise.resolve().then(tell)
+  }
+
+  const asked = async <Value>(run: () => Value | Promise<Value>): Promise<Value> => {
+    askedDepth += 1
+    try {
+      return await run()
+    } finally {
+      askedDepth -= 1
+    }
+  }
+
+  const collect = async (run: () => unknown): Promise<PartsUpdate> => {
+    const outer = collected
+    const mine: PartsUpdate[] = []
+    collected = mine
+    try {
+      await run()
+    } finally {
+      collected = outer
+    }
+    return merged(mine)
+  }
 
   const logOnce = (what: string) => {
     let hasLogged = false
     return (failure: string) => {
-      if (!hasLogged) report({ id: `render:${what}`, message: `The ${what} render failed`, description: failure })
+      if (!hasLogged) report({ id: `draw:${what}`, message: `The ${what} failed`, description: failure })
       hasLogged = true
     }
   }
@@ -182,13 +301,13 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
     })
   }
 
-  const openAt = (pane: Pane<State>, size: PaneSize, focus?: true) => {
+  const openAt = (pane: PaneInit<State, never>, size: PaneSize, focus?: true) => {
     requestedSizes.set(pane.id, size)
     const { id, title, closeOnEscape, holdToasts } = pane
     return claude.ui.open({ id, title, ...size, ...(closeOnEscape === true ? { closeOnEscape } : {}), ...(holdToasts === true ? { holdToasts } : {}), ...(focus === true ? { focus } : {}) })
   }
 
-  const resize = async (pane: Pane<State>) => {
+  const resize = async (pane: PaneInit<State, never>) => {
     try {
       const size = paneSize(pane, mod().state)
       const requested = requestedSizes.get(pane.id)
@@ -199,42 +318,7 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
     }
   }
 
-  const route = () => {
-    if (isRouted) return
-    isRouted = true
-    router.add('ui.render', (e, next) => {
-      const pane = panes.get(e.requestId)
-      if (pane === undefined || e.component !== 'Pane') return next(e)
-      openPanes.add(pane.id)
-      paneStates.set(pane.id, { isShown: true, isFocused: e.props.isFocused })
-      readPanes()
-      const table = claude.ui.resolve(e)
-      try {
-        return drawWith(table, () => pane.render(mod(), e.props), markdownIn(table))
-      } catch (error) {
-        paneLogs.get(pane.id)?.(`threw: ${messageOf(error)}`)
-        return drawWith(table, () => Text({ color: 'error', children: `The ${pane.title} pane could not draw: ${messageOf(error)}` }))
-      }
-    })
-    router.add('ui.scroll', async (e, next) => {
-      const pane = panes.get(e.requestId)
-      const moved = await next(e)
-      if (pane?.onScroll === undefined || e.component !== 'Pane' || moved.deny !== undefined) return moved
-      await handle(pane, 'onScroll', () => pane.onScroll?.(mod(), e))
-      return moved
-    })
-    router.add('ui.close', async (e, next) => {
-      openPanes.delete(e.id)
-      paneStates.delete(e.id)
-      readPanes()
-      const closed = await next(e)
-      const pane = panes.get(e.id)
-      if (pane?.onClose !== undefined) await handle(pane, 'onClose', () => pane.onClose?.(mod(), e))
-      return closed
-    })
-  }
-
-  const handle = async (pane: Pane<State>, handler: string, run: () => unknown) => {
+  const handle = async (pane: PaneInit<State, never>, handler: string, run: () => unknown) => {
     try {
       await run()
     } catch (error) {
@@ -242,98 +326,304 @@ export function createUi<State extends object>({ name, claude, router, toaster, 
     }
   }
 
+  const routePanes = () => {
+    if (isRouted) return
+    isRouted = true
+    router.add('ui.render', (e, next) => {
+      const added = panes.get(e.requestId)
+      if (added === undefined || e.component !== 'Pane') return next(e)
+      const { init } = added
+      openPanes.add(init.id)
+      paneStates.set(init.id, { isShown: true, isFocused: e.props.isFocused })
+      readPanes()
+      const table = claude.ui.resolve(e)
+      try {
+        return drawWith(table, () => init.render(mod(), { ...e.props, params: added.params }), markdownIn(table))
+      } catch (error) {
+        paneLogs.get(init.id)?.(`threw: ${messageOf(error)}`)
+        return drawWith(table, () => Text({ color: 'error', children: `The ${init.title} pane could not draw: ${messageOf(error)}` }))
+      }
+    })
+    router.add('ui.scroll', async (e, next) => {
+      const init = panes.get(e.requestId)?.init
+      const moved = await next(e)
+      if (init?.onScroll === undefined || e.component !== 'Pane' || moved.deny !== undefined) return moved
+      await handle(init, 'onScroll', () => init.onScroll?.(mod(), e))
+      return moved
+    })
+    router.add('ui.close', async (e, next) => {
+      openPanes.delete(e.id)
+      paneStates.delete(e.id)
+      readPanes()
+      const closed = await next(e)
+      const init = panes.get(e.id)?.init
+      if (init?.onClose !== undefined) await handle(init, 'onClose', () => init.onClose?.(mod(), e))
+      return closed
+    })
+  }
+
+  const scrollIn = (id: string, target: ScrollTarget, options?: ScrollOptions) =>
+    claude.ui.scroll({ to: target, in: id, ...(options?.block === undefined ? {} : { block: options.block }) }).then(({ deny }) => {
+      if (deny !== undefined) throw new Error(`${name}: Claude Code did not scroll ${id}: ${deny}`)
+    })
+
+  const addPane = <Params>(init: PaneInit<State, Params>): Pane<Params> => {
+    checkPane(name, init)
+    if (panes.has(init.id)) throw new Error(`${name}: the pane "${init.id}" is already added. Give each pane its own id.`)
+    const added: AddedPane<State> = { init, params: undefined }
+    panes.set(init.id, added)
+    paneLogs.set(init.id, logOnce(`${init.title} pane`))
+    announce(`the ${init.title} pane`)
+    routePanes()
+    const sized = init as unknown as PaneInit<State, never>
+    const pane: Pane<Params> = {
+      id: init.id,
+      get isOpen() {
+        return openPanes.has(init.id)
+      },
+      get isShown() {
+        return paneStates.get(init.id)?.isShown ?? false
+      },
+      get isFocused() {
+        return paneStates.get(init.id)?.isFocused ?? false
+      },
+      get params() {
+        return added.params as Params | undefined
+      },
+      async open(...[options]: [OpenOptions<Params>?]) {
+        if (options !== undefined && 'params' in options) added.params = options.params
+        const { isPlaced } = await openAt(sized, paneSize(sized, mod().state), options?.focus)
+        if (isPlaced) openPanes.add(init.id)
+        await syncPanes()
+        claude.ui.invalidate('ui.render')
+      },
+      async close() {
+        await claude.ui.close({ id: init.id })
+        openPanes.delete(init.id)
+        paneStates.delete(init.id)
+        await syncPanes()
+      },
+      toggle: (options) => (openPanes.has(init.id) ? pane.close() : (pane.open as (options?: OpenOptions<Params>) => Promise<void>)(options as OpenOptions<Params>)),
+      scrollTo: (target, options) => scrollIn(init.id, target, options),
+      remove() {
+        if (panes.get(init.id) !== added) return
+        panes.delete(init.id)
+        paneLogs.delete(init.id)
+        if (openPanes.has(init.id)) void claude.ui.close({ id: init.id }).catch((error: unknown) => claude.ui.log(`${name}: the ${init.title} pane stayed open: ${messageOf(error)}`, { to: 'debug' }))
+        openPanes.delete(init.id)
+        paneStates.delete(init.id)
+      },
+    }
+    return pane
+  }
+
+  const pageEntry = (id: string) => shownPages.open.find((each) => each.id === id)
+
+  const addPage = <Params>(place: PagePlace, init: PageInit<State, Params>): Page<Params> => {
+    checkPart(name, 'page', init.id, init.title)
+    if (pages.has(init.id)) throw new Error(`${name}: the page "${init.id}" is already added. Give each page its own id.`)
+    const added: AddedPage<State> = { init, place, params: undefined }
+    pages.set(init.id, added)
+    announce(place === 'settings' ? `the ${init.title} page in Settings` : `the ${init.title} page in the Sidebar`)
+    void send({ parts: partList() })
+    const page: Page<Params> = {
+      id: init.id,
+      get isOpen() {
+        return place === 'settings' ? shownPages.shown === init.id : pageEntry(init.id) !== undefined
+      },
+      get isShown() {
+        return shownPages.shown === init.id
+      },
+      get isFocused() {
+        return shownPages.shown === init.id && shownPages.isFocused
+      },
+      get params() {
+        return (pageEntry(init.id)?.params ?? added.params) as Params | undefined
+      },
+      async open(...[options]: [OpenOptions<Params>?]) {
+        if (options !== undefined && 'params' in options) added.params = options.params
+        await send({ requests: [{ open: init.id, ...(added.params === undefined ? {} : { params: added.params }), ...(options?.focus === true ? { focus: true } : {}) }] })
+      },
+      toggle: (options) => (page.isOpen ? page.close() : (page.open as (options?: OpenOptions<Params>) => Promise<void>)(options as OpenOptions<Params>)),
+      close: async () => {
+        await send({ requests: [{ close: init.id }] })
+      },
+      scrollTo: async (target, options) => {
+        await send({ requests: [{ scroll: init.id, to: target, ...(options?.block === undefined ? {} : { block: options.block }) }] })
+      },
+      remove() {
+        if (pages.get(init.id) !== added) return
+        pages.delete(init.id)
+        forgetDraws(`page:${init.id}`)
+        void send({ parts: partList(), requests: [{ close: init.id }] })
+      },
+    }
+    return page
+  }
+
+  const addWidget = (init: WidgetInit<State>): Widget => {
+    checkPart(name, 'widget', init.id, init.title)
+    if (widgets.has(init.id)) throw new Error(`${name}: the widget "${init.id}" is already added. Give each widget its own id.`)
+    widgets.set(init.id, init)
+    announce(`the ${init.title} widget`)
+    void send({ parts: partList() })
+    return {
+      id: init.id,
+      get area() {
+        return widgetAreas.get(init.id)
+      },
+      remove() {
+        if (widgets.get(init.id) !== init) return
+        widgets.delete(init.id)
+        widgetAreas.delete(init.id)
+        forgetDraws(`widget:${init.id}`)
+        void send({ parts: partList() })
+      },
+    }
+  }
+
+  const addStyle = <K extends Kind>({ kind, render }: StyleInit<K, State>): Style => {
+    const markdown: Block | undefined = typeof kind === 'string' ? undefined : kind
+    const component = componentOf(kind)
+    if (markdown === undefined && component === undefined) throw new Error(`${name}: ${String(kind)} is not a kind styles.add draws, such as ToolCall or CodeBlock.`)
+    const feature = `the style of ${nameOf(kind)}`
+    if (styles.has(feature)) throw new Error(`${name}: ${feature} is already added. Add one style per kind.`)
+    styles.add(feature)
+    announce(feature)
+    const Component = (props: object) => render(mod(), props as never)
+    const stop = (subscription?: Subscription) => () => {
+      subscription?.remove()
+      if (markdown !== undefined) markdownRenders.delete(markdown.markdown)
+      styles.delete(feature)
+      claude.ui.invalidate('ui.render')
+    }
+    if (markdown !== undefined) {
+      markdownRenders.set(markdown.markdown, { Component, log: logOnce(`${nameOf(kind)} style`) })
+      routeMarkdown(markdown.createReader)
+      return { kind, remove: stop() }
+    }
+    const log = logOnce(`${nameOf(kind)} style`)
+    const drawing = router.add('ui.render', async (e, next) => {
+      if (e.component !== component) return next(e)
+      const table = claude.ui.resolve(e)
+      const drawn = await drawComponent(
+        table,
+        (Default) => Component({ ...e.props, Default }),
+        (given, isClaudesRow) => next({ ...e, props: pieceProps(e.props, given, isClaudesRow) } as typeof e),
+      )
+      if ('failure' in drawn) {
+        log(drawn.failure)
+        return next(e)
+      }
+      if (e.component !== 'AssistantMessage') return drawn.drawing
+      return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
+    })
+    return { kind, remove: stop(drawing) }
+  }
+
+  const forgetDraws = (key: string) => {
+    for (const kept of latestDraws.get(key)?.values() ?? []) for (const draw of kept) draws.delete(draw)
+    latestDraws.delete(key)
+  }
+
+  const drawPart = (key: string, title: string, input: PartDraw, render: () => RenderElement | undefined): DrawnPart | null => {
+    try {
+      const pressed: Handler[] = []
+      const drawn = render()
+      const tree = drawn === undefined ? null : elementData(drawn, pressed)
+      failedDraws.delete(key)
+      drawCount += 1
+      const inputs = latestDraws.get(key) ?? new Map<string, readonly number[]>()
+      latestDraws.set(key, inputs)
+      const drawnFor = JSON.stringify('turn' in input ? { ...input, turn: input.turn.prompt.id } : input)
+      const earlier = inputs.get(drawnFor) ?? []
+      const kept = [...earlier, drawCount].slice(-2)
+      for (const draw of earlier) if (!kept.includes(draw)) draws.delete(draw)
+      inputs.delete(drawnFor)
+      inputs.set(drawnFor, kept)
+      const [oldest] = inputs
+      if (inputs.size > keptDrawInputs && oldest !== undefined) {
+        for (const draw of oldest[1]) draws.delete(draw)
+        inputs.delete(oldest[0])
+      }
+      draws.set(drawCount, { id: key, handlers: pressed })
+      return { draw: drawCount, tree }
+    } catch (error) {
+      if (!failedDraws.has(key)) report({ id: key, message: `The ${title} could not draw`, error })
+      failedDraws.add(key)
+      return null
+    }
+  }
+
+  const draw = (input: PartDraw): DrawnPart | null => {
+    if ('page' in input) {
+      const added = pages.get(input.page)
+      if (added === undefined) return null
+      return drawPart(`page:${input.page}`, `${added.init.title} page`, input, () => added.init.render(mod(), { params: input.params, isFocused: input.isFocused, columns: input.columns }))
+    }
+    const widget = widgets.get(input.widget)
+    if (widget === undefined || !widget.areas.includes(input.area)) return null
+    widgetAreas.set(widget.id, input.area)
+    const context = (input.area === TurnEnd && input.turn !== undefined ? { area: input.area, columns: input.columns, turn: input.turn } : { area: input.area, columns: input.columns }) as WidgetContext
+    return drawPart(`widget:${widget.id}`, `${widget.title} widget`, input, () => widget.render(mod(), context))
+  }
+
+  const press = async ({ draw: drawn, handler, args }: PartPress): Promise<PartsUpdate> => {
+    const known = draws.get(drawn)
+    const run = known?.handlers[handler]
+    if (known === undefined || run === undefined) throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`)
+    return collect(async () => {
+      try {
+        await run(...args)
+      } catch (error) {
+        report({ id: known.id, message: 'Its button failed', error })
+      }
+    })
+  }
+
   return {
-    ui: {
-      pane(pane) {
-        if (panes.has(pane.id)) throw new Error(`${name}: the pane "${pane.id}" is already added. Give each pane its own id.`)
-        panes.set(pane.id, pane)
-        paneLogs.set(pane.id, logOnce(`${pane.title} pane`))
-        announce(`the ${pane.title} pane`)
-        route()
-        const handle: PaneHandle = {
-          get isOpen() {
-            return openPanes.has(pane.id)
-          },
-          get isShown() {
-            return paneStates.get(pane.id)?.isShown ?? false
-          },
-          get isFocused() {
-            return paneStates.get(pane.id)?.isFocused ?? false
-          },
-          async open(options) {
-            const { isPlaced } = await openAt(pane, paneSize(pane, mod().state), options?.focus)
-            if (isPlaced) openPanes.add(pane.id)
-            await syncPanes()
-          },
-          async close() {
-            await claude.ui.close({ id: pane.id })
-            openPanes.delete(pane.id)
-            paneStates.delete(pane.id)
-            await syncPanes()
-          },
-          toggle: (options) => (openPanes.has(pane.id) ? handle.close() : handle.open(options)),
-        }
-        return handle
+    panes: { add: addPane },
+    sidebar: { add: (init) => addPage('sidebar', init) },
+    settings: {
+      add: (init) => addPage('settings', init),
+      open: async () => {
+        await send({ requests: [{ settings: true }] })
       },
-      render<P extends Place>(place: P, Component: (props: PlaceProps<P>) => RenderElement): Disposable {
-        const target: Place = place
-        const markdown = typeof target === 'string' ? undefined : target
-        const component = componentOf(place)
-        if (markdown === undefined && component === undefined) throw new Error(`${name}: ${String(place)} is not a place render draws, such as ToolCall or CodeBlock.`)
-        const feature = `a render of ${nameOf(place)}`
-        if (renders.has(feature)) throw new Error(`${name}: ${feature} is already added. Render each place once.`)
-        renders.add(feature)
-        announce(feature)
-        if (markdown !== undefined) {
-          const markdownType = markdown.markdown
-          markdownRenders.set(markdownType, { Component: Component as unknown as MarkdownRender['Component'], log: logOnce(nameOf(place)) })
-          routeMarkdown(markdown.createReader)
-          return {
-            dispose() {
-              markdownRenders.delete(markdownType)
-              renders.delete(feature)
-              claude.ui.invalidate('ui.render')
-            },
-          }
-        }
-        const log = logOnce(nameOf(place))
-        const drawing = router.add('ui.render', async (e, next) => {
-          if (e.component !== component) return next(e)
-          const table = claude.ui.resolve(e)
-          const drawn = await drawComponent(
-            table,
-            (Default) => Component({ ...e.props, Default } as unknown as PlaceProps<P>),
-            (given, isClaudesRow) => next({ ...e, props: pieceProps(e.props, given, isClaudesRow) } as typeof e),
-          )
-          if ('failure' in drawn) {
-            log(drawn.failure)
-            return next(e)
-          }
-          if (e.component !== 'AssistantMessage') return drawn.drawing
-          return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? 'opensReply' : 'inReply'))
-        })
-        return {
-          dispose() {
-            drawing.dispose()
-            renders.delete(feature)
-            claude.ui.invalidate('ui.render')
-          },
-        }
-      },
-      toast: toaster.toast,
-      copy: toaster.copy,
-      ask: (question, options) => claude.ui.ask(question, options),
-      scroll: (args) => claude.ui.scroll(args),
+    },
+    widgets: { add: addWidget },
+    styles: { add: addStyle },
+    asked,
+    async answerInput(run, passOn) {
+      const before = unheldRequests
+      const answer = await asked(run)
+      if (unheldRequests > before) await passOn()
+      return answer
+    },
+    answer(method, input) {
+      if (method === partMethods.list) return Promise.resolve({ value: partList() })
+      if (method === partMethods.draw) return Promise.resolve({ value: draw(input as PartDraw) })
+      if (method === partMethods.press) return press(input as PartPress).then((value) => ({ value }))
+      if (method === partMethods.shown) {
+        shownPages = input as ShownPages
+        return Promise.resolve({ value: null })
+      }
+      return undefined
+    },
+    started() {
+      const held = merged(beforeStart ?? [])
+      beforeStart = undefined
+      void send({ ...held, parts: partList() })
     },
     changed() {
-      if (panes.size === 0 && renders.size === 0) return
+      if (widgets.size > 0 || pages.size > 0) void send({ redraw: true })
+      if (panes.size === 0 && styles.size === 0) return
       claude.ui.invalidate('ui.render')
       if (isResizeQueued) return
       isResizeQueued = true
       void Promise.resolve().then(() => {
         isResizeQueued = false
-        for (const pane of panes.values()) {
-          if (openPanes.has(pane.id)) void resize(pane)
+        for (const { init } of panes.values()) {
+          if (openPanes.has(init.id)) void resize(init)
         }
       })
     },

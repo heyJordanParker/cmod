@@ -4,7 +4,7 @@ import { isObject } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { addMarketplace, changePlugin, configurePlugin, listMarketplaces, listPlugins, optionValues, type InstalledPlugin } from '../claude.js'
 import { readJson, tilde } from '../files.js'
-import { declaredOptions, readPlugin, sourceOf, usesCmod } from '../plugin.js'
+import { readDeclared, readPlugin, sourceOf, usesCmod } from '../plugin.js'
 import { startProgress, type Progress } from '../progress.js'
 import { noteNextStep, setupInTerminal } from './setup.js'
 
@@ -60,13 +60,10 @@ export async function run(argv: string[]): Promise<number> {
 async function installByName(argument: string, choices: Choices, progress: Progress): Promise<number> {
   const installed = (await listPlugins()).find((plugin) => plugin.name === argument || plugin.id === argument)
   if (installed !== undefined) {
-    if (await usesCmod(installed.installPath, installed.name)) {
-      await installCmodPlugin(progress)
-      return installMod(installed, choices, progress)
-    }
+    if (await usesCmod(installed.installPath, installed.name)) return installMod(installed, choices, progress, await installCmodPlugin(progress))
     if (installed.scope !== 'session') return installPlugin(installed.id, choices, progress)
     await setOptions(installed, choices.options, progress)
-    progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it. Run /reload-plugins in a session that is running.`)
+    progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it.`)
     return 0
   }
   const at = argument.lastIndexOf('@')
@@ -86,22 +83,21 @@ async function installPlugin(id: string, choices: Choices, progress: Progress): 
     await setOptions(installed, choices.options, progress)
     return 0
   }
-  await installCmodPlugin(progress)
-  return installMod(installed, choices, progress)
+  return installMod(installed, choices, progress, await installCmodPlugin(progress))
 }
 
-export async function installMod(installed: InstalledPlugin, choices: Choices, progress: Progress): Promise<number> {
+export async function installMod(installed: InstalledPlugin, choices: Choices, progress: Progress, isCmodNew = false): Promise<number> {
   const plugin = await readPlugin(installed.installPath)
   await setOptions(installed, choices.options, progress)
   const code = await setupInTerminal(plugin, { yes: choices.yes }, progress)
-  if (code === 0) noteNextStep(plugin, progress)
+  if (code === 0) noteNextStep(plugin, progress, isCmodNew)
   return code
 }
 
 export async function setOptions(installed: InstalledPlugin, given: readonly string[], progress: Progress): Promise<void> {
   if (given.length === 0) return
   const { id, installPath } = installed
-  const declared = await declaredOptions(installPath)
+  const declared = await readDeclared(installPath)
   const values = optionValues(given, declared.type === 'declared' ? declared.userConfig : await manifestOptions(installPath), id)
   progress.step(`Setting the options of ${id}`)
   await configurePlugin(id, values)
@@ -113,18 +109,26 @@ export async function manifestOptions(root: string): Promise<Record<string, unkn
   return isObject(manifest) && isObject(manifest['userConfig']) ? manifest['userConfig'] : {}
 }
 
-export async function installCmodPlugin(progress: Progress): Promise<void> {
+export async function installCmodPlugin(progress: Progress): Promise<boolean> {
   const cmod = (await listPlugins()).find((plugin) => plugin.name === 'cmod')
-  if (cmod?.scope === 'session') return
-  const id = cmod?.id ?? 'cmod@cmod'
+  if (cmod?.scope === 'session') return false
+  if (cmod !== undefined) {
+    await changePlugin('install', cmod.id)
+    if (cmod.enabled) return false
+    progress.step('Turning the cmod plugin on')
+    await changePlugin('enable', cmod.id)
+    progress.succeed(`Turned ${cmod.id} on in Claude Code`)
+    return false
+  }
   progress.step('Installing the cmod plugin into Claude Code')
-  if (cmod === undefined && !(await listMarketplaces()).some((marketplace) => marketplace.name === 'cmod')) {
+  if (!(await listMarketplaces()).some((marketplace) => marketplace.name === 'cmod')) {
     await addMarketplace('heyJordanParker/cmod').catch((error: unknown) => {
       throw new Error(`${messageOf(error)}\nLink the cmod checkout first: cmod link <checkout>`)
     })
   }
-  await changePlugin('install', id)
-  progress.succeed(`Installed ${id} into Claude Code`)
+  await changePlugin('install', 'cmod@cmod')
+  progress.succeed('Installed cmod@cmod into Claude Code')
+  return true
 }
 
 async function modIn(manifestPath: string, chosen: string | undefined, source: string): Promise<string> {

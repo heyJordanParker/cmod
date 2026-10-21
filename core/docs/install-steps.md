@@ -10,7 +10,7 @@ A mod that changes the machine, such as by adding a shell alias or downloading a
     "install": "./setup/install.sh",
     "uninstall": "./setup/uninstall.sh",
     "program": "hello",
-    "keys": { "shift+tab": "/mode" }
+    "hotkeys": { "cycle": { "title": "Cycle the mode", "default": "shift+tab" } }
   }
 }
 ```
@@ -20,7 +20,7 @@ Each key is optional.
 - `install` is one shell command that sets the mod up.
 - `uninstall` is one shell command that undoes it.
 - `program` is the name of a program cmod downloads from the mod's GitHub release, and Claude Code then runs by its name. [Ship a program](#ship-a-program) explains it.
-- `keys` binds keys in Claude Code to the mod's slash commands. [Key bindings](#key-bindings) explains it.
+- `hotkeys` is the hotkeys `defineMod` declares, which `cmod check` writes here so cmod binds them at install without loading the mod. [Hotkeys](#hotkeys) explains it.
 
 cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 
@@ -29,16 +29,16 @@ cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 - Each names at least one script file inside the mod, and no script at the mod's root. cmod asks consent for the whole folder of each script, so put the scripts in a folder, such as `setup/`.
 - A symbolic link in a script folder points at a file.
 - `program` is a command name: letters, digits, `.`, `_`, and `-`, starting with a letter or digit.
-- `keys` binds at least one key, and each binds one of the mod's commands as `/<name>`.
+- Each hotkey has a title and a default combo, as `defineMod` takes them ([mod.md](mod.md#hotkeys)).
 - `.claude-plugin/plugin.json` has a `version`.
 
 ## Consent
 
-Before a step runs for the first time, cmod shows the person the commands, the keys, and the permissions, and asks to run them. cmod hashes the commands, the keys, the permissions, and every file in each script folder, and remembers the hash the person approved with each permission. A change to any of those asks again, and an added permission is the only one it asks about ([permissions.md](permissions.md)).
+Before a step runs for the first time, cmod shows the person the commands, the hotkeys, and the permissions, and asks to run them. cmod hashes the commands, the hotkeys, the permissions, and every file in each script folder, and remembers the hash the person approved with each permission. A change to any of those asks again, and an added permission is the only one it asks about ([permissions.md](permissions.md)).
 
-- In Claude Code, the mod opens the installer pane, `Install <mod>`, focused. It lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it` and `Bind shift+tab to /mode`, naming only what the mod has. `Accept` (a) runs the setup, and a loading toast above the prompt shows the install with a progress bar. `Not now` (n) and Escape decline.
-- In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.` That person is already in a terminal.
-- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, the keys, and the permissions, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
+- In Claude Code, the mod opens the installer pane, `Install <mod>`, focused. It lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it` and `Bind shift+tab to Cycle the mode`, naming only what the mod has. `Accept` (a) runs the setup, and a loading toast above the prompt shows the install with a progress bar. `Not now` (n) and Escape decline.
+- In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.` That person is already in a terminal, and no screen exists to draw a button on.
+- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, the hotkeys, and the permissions, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
 - `Not now` leaves the mod off with the toast `Not installed` and an `Install` button that asks again.
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
@@ -47,50 +47,57 @@ The mod starts only once its install step has run ([mod.md](mod.md)).
 
 Claude Code updates a plugin by itself only when its marketplace has automatic updates on, and they are off for every marketplace that is not Anthropic's. So the setup of a mod installed from a marketplace turns them on, through `"autoUpdate": true` on that marketplace's `extraKnownMarketplaces` entry in `settings.json`. The consent lists it as `Update <mod> automatically from the <marketplace> marketplace`, and a mod with nothing to consent to logs it. The setup never changes a choice the person made, in `settings.json` or with the toggle under `/plugin` Marketplaces, and leaves a linked mod alone.
 
-Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update whose scripts, keys, or permissions changed waits for consent again, so an update never runs a new install step unasked.
+Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update whose scripts, hotkeys, or permissions changed waits for consent again, so an update never runs a new install step unasked.
 
-In Claude Code, the mod sets itself up through the `cmod` in cmod's programs folder, or else the one PATH finds, and only through one that knows every step it has. A mod with `keys` waits for cmod 0.1.12 or later, because an older cmod skips the keys, and a mod with `permissions` waits for cmod 0.2.0 or later, because an older cmod grants none of them. While PATH finds an older one, the line above the prompt says `PATH finds cmod <version>, and <mod> needs cmod 0.1.12 or later. Run npm i -g @cmodjs/cli, or put ~/.local/bin ahead of the old cmod on PATH.` The mod sets up as soon as a new enough cmod answers, such as the one the cmod plugin installs into `~/.local/bin` at its first start.
+In Claude Code, the mod sets itself up through the `cmod` program the cmod plugin installed, never one elsewhere on PATH, and only once that program is at least the version of the `@cmodjs/core` the mod bundles. Until then its toast says `Waiting for cmod`. After a minute it says `<mod> needs cmod <version> or later, and this computer has cmod <version>, so cmod is updating itself.` and runs `cmod update cmod` once. The mod sets up as soon as a new enough cmod is installed. When the update leaves cmod older, the next wait shows `<mod> needs cmod <version> or later, and the newest cmod is <version>.` with a Retry button instead of updating again.
 
 ## Steps in Claude Code
 
 Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and the installer pane shows each one after the permissions and the options, once the mod has started:
 
-```ts
-import { process } from '../node_modules/@cmodjs/core/mod.js'
-import { defineStep } from '../node_modules/@cmodjs/core/installer.js'
+```tsx
+import { defineMod, type Step } from '../node_modules/@cmodjs/core/mod.js'
+import { Button, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { isSignedIn, openSignIn } from './github.js'
 
-const signIn = defineStep({
+const signIn: Step = {
   id: 'sign-in',
   title: 'Sign in to GitHub',
-  render: () => <Text>Run gh auth login in a terminal, then press Next.</Text>,
-  isDone: async () => (await process.run(['gh', 'auth', 'status'])).exitCode === 0,
-})
+  render: () => <Button label="Open the sign-in page" onPress={() => void openSignIn()} />,
+  isDone: () => isSignedIn(),
+}
 
 export const ciWatch = defineMod({ name: 'ci-watch', installer: [signIn], setup(mod) { … } })
 ```
 
 ```ts
-defineStep<State>(step: { id: string; title: string; render(mod, props): RenderElement; isDone(mod): boolean | Promise<boolean> }): Step<State>
+type Step<State> = {
+  readonly id: string
+  readonly title: string
+  render(mod: Mod<State>, props: PaneProps): RenderElement
+  isDone(mod: Mod<State>): boolean | Promise<boolean>
+}
 ```
 
-- `id` is 1 to 64 letters, digits, `_`, or `-`. `title` is the line above the step, with `(1 of 2)`. `defineStep` throws for either one missing.
-- `render` draws the step's body, the way a pane's `render` does ([ui.md](ui.md)).
+- `id` is 1 to 64 letters, digits, `_`, or `-`, unique among the steps. `title` is the line above the step, with `(1 of 2)`. `defineMod` throws for an id that is not one, a blank title, or two steps with one id.
+- `render` draws the step's body, the way a pane's `render` does ([ui.md](ui.md)). Give the step a `Button` that does the work or opens the place to do it, never a command to type.
 - `isDone` says whether the step is finished. A step that is done is skipped, so the pane opens only for what is left. `Next` checks `isDone`, and shows `Finish <title> first.` while it is false. The last step's button says `Finish`.
-- An `isDone` that throws or rejects counts as not done. At start cmod logs `<mod>: the <title> step's isDone failed: <error>`, and `Next` shows `The <title> step's isDone failed: <error>`.
-- `Not now` closes the pane and logs `<mod> needs one more step, starting with <title>. Run /mods <mod> to finish.` The mod keeps running. `/mods <mod>` shows `Needs setup: <title>` with a `Finish setup` button, which opens the pane on the first step left.
+- An `isDone` that throws or rejects counts as not done, and `Next` shows `The <title> step's isDone failed: <error>`.
+- `Not now` closes the pane, and the mod keeps running. A toast stays above the prompt, `Needs one more step` with `Starting with <title>.` under it, and its `Finish` button opens the pane on the first step left. Settings shows `Needs setup: <title>` with a `Finish setup` button too.
 
-## Key bindings
+## Hotkeys
 
-A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only from the person's `keybindings.json`. So cmod writes the mod's `keys` there, with consent, as the setup's last step:
+A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only from the person's `keybindings.json`. So cmod writes each hotkey there, with consent, as the setup's last step. A hotkey runs a hidden command of the mod, `<mod>--<hotkey>`, which the mod hears as `onPress` ([mod.md](mod.md#hotkeys)):
 
 ```json
-{ "bindings": [{ "context": "Chat", "bindings": { "shift+tab": "command:mode" } }] }
+{ "bindings": [{ "context": "Chat", "bindings": { "shift+tab": "command:modes--cycle" } }] }
 ```
 
-- cmod writes each key into the `Chat` bindings of `~/.claude/keybindings.json`, or of `$CLAUDE_CONFIG_DIR/keybindings.json` when that variable is set. When the file is a symbolic link, cmod writes the file it points to. Claude Code reads the change at once, with no restart.
-- A key the person already bound to something else stays theirs. cmod logs `~/.claude/keybindings.json binds <key> to "<action>", so it stays. To use /<name> on <key>, put "<key>": "command:<name>" in its Chat bindings.`
-- An upgrade that drops a key removes its binding. Removing the mod removes each binding it added that still runs its command, and a `Chat` block that leaves empty, and leaves a binding the person changed.
-- A key's command takes `immediate: true` and a `reply` that returns `undefined`, so it works while Claude works and adds no row to the conversation ([jobs.md](jobs.md#slashcommand)). A key bound to `shift+tab` replaces Claude Code's own mode switch, and Claude Code then drops its `shift+tab` hint.
+- cmod writes each combo into the `Chat` bindings of `~/.claude/keybindings.json`, or of `$CLAUDE_CONFIG_DIR/keybindings.json` when that variable is set. When the file is a symbolic link, cmod writes the file it points to. Claude Code reads the change at once, with no restart.
+- A combo the person already bound to something else stays theirs, and the hotkey has no combo. The person picks one in Settings, under the mod, Hotkeys.
+- The combo the person picks in Settings runs `cmod hotkey <mod> <hotkey> <combo>`. An update keeps the combo each hotkey has in `keybindings.json`, whether Settings or the person's own edit bound it ([commands.md](commands.md#cmod-hotkey)).
+- An upgrade that drops a hotkey removes its binding. Removing the mod removes every binding that runs one of its hotkeys, and a `Chat` block that leaves empty. A binding the person moved to another action stays.
+- A hotkey bound to `shift+tab` replaces Claude Code's own mode switch, and Claude Code then drops its `shift+tab` hint.
 
 ## How a step runs
 
@@ -118,7 +125,8 @@ The install step runs again on every new version of the mod and whenever its scr
 - When the first install of a mod fails or is stopped, cmod runs the uninstall step to undo it. So the uninstall step must work on a partial install.
 - When the install step of an upgrade fails or is stopped, cmod keeps the version it set up before.
 - The failure shows at once as an error toast with `Retry`, `Report`, and `Hide` ([ui.md](ui.md#toasts)).
-- When waiting can fix the failure, cmod also retries in the background after 2, 4, 8, 16, 32, 64, and 128 seconds, then every 128 seconds, and the toast says `Trying again in <n> s.` A try that works replaces the toast with `Installed`. Waiting can fix two failures: a linked checkout whose build or install step failed, which cmod tries again once the checkout changed, and a release download that got 404 or no answer, as when a release was published seconds ago. Any other failure waits for `Retry`.
+- When waiting can fix the failure, cmod also retries in the background after 2, 4, 8, 16, 32, 64, and 128 seconds, then every 128 seconds, and the toast says `Trying again in <n> s.` A try that works replaces the toast with `Installed`. Waiting can fix two failures: a linked checkout whose build or install step failed, and a release download that got 404 or no answer, as when a release was published seconds ago. Any other failure waits for `Retry`. A linked checkout's failed build runs again only once a file in its program's folder changes, so a retry with no change shows the same error without building.
+- A new version of a linked checkout whose install steps did not change keeps running on its last install while cmod builds the new version in the background, and other sessions wait for that one build. A failed build shows the build's own error.
 - Before each try, cmod reads the mod's install record, so a mod another session installed starts without running its install again.
 
 ## The uninstall step

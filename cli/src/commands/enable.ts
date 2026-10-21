@@ -8,9 +8,9 @@ export const help = `Usage: cmod enable <name>
 
 ${summary}
 
-Turns the plugin on through Claude Code, as /plugin does. A running session
-loads it after /reload-plugins. A mod keeps its setup while it is off, so
-turning it on runs nothing.`
+Turns the plugin on through Claude Code, as /plugin does, and every running
+session loads it. A mod keeps its setup while it is off, so turning it on runs
+nothing.`
 
 export function run(argv: string[]): Promise<number> {
   return switchPlugin('enable', argv, help)
@@ -28,6 +28,6 @@ export async function switchPlugin(action: 'enable' | 'disable', argv: string[],
   const word = action === 'enable' ? 'on' : 'off'
   progress.step(`Turning ${installed.id} ${word}`)
   await changePlugin(action, installed.id)
-  progress.succeed(`Turned ${installed.id} ${word} in Claude Code. A running session follows after /reload-plugins.`)
+  progress.succeed(`Turned ${installed.id} ${word} in Claude Code and every running session.`)
   return 0
 }

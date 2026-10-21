@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { defineMod, sessions } from '../../src/mod.js'
-import { consentPath, storeFolder } from '../../src/records.js'
+import { consentPath, coreVersion, storeFolder } from '../../src/records.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
@@ -37,7 +37,7 @@ test("a mod that listens to its own session before the cmod plugin hears Session
   expect(await call(conversationMethods.watchBefore, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.subscribe, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.watchBefore, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
-  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ deny: 'tracer reads your conversations without your grant. Turn it on in /mods tracer.' })
+  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ deny: 'tracer reads your conversations without your grant. Turn it on in Settings.' })
 })
 
 test('a relayed action from a mod without the permission is refused back to the asking session', async () => {
@@ -46,7 +46,7 @@ test('a relayed action from a mod without the permission is refused back to the 
   await tested.settle()
 
   expect(tested.calls.filter((call) => call.call === 'prompt.submit')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger needs the prompt permission for send. Turn it on in /mods pinger."}</cmod-relay>' }])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger needs the prompt permission for send. Turn it on in Settings."}</cmod-relay>' }])
 })
 
 test('a relayed CronCreate needs the prompt permission, the same as one in the mod’s own session', async () => {
@@ -56,7 +56,21 @@ test('a relayed CronCreate needs the prompt permission, the same as one in the m
   await tested.settle()
 
   expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger needs the prompt permission for callTool. Turn it on in /mods pinger."}</cmod-relay>' }])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger needs the prompt permission for callTool. Turn it on in Settings."}</cmod-relay>' }])
+})
+
+test('a relay a newer cmod in another session sends, with an action or a kind this cmod lacks, is refused back by name and runs nothing', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['prompt', 'tools', 'conversation'] }) } })
+  const relay = async (text: string) => claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
+  await relay('<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"summarize","input":null}</cmod-relay>')
+  await relay('<cmod-relay>{"kind":"pin","id":"other:2","from":"other","mod":"pinger"}</cmod-relay>')
+  await tested.settle()
+
+  expect(tested.calls.filter((call) => call.call === 'tool.call' || call.call === 'prompt.submit')).toEqual([])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([
+    { to: { sessionId: 'other' }, text: `<cmod-relay>{"kind":"answer","id":"other:1","deny":"Session test-session runs cmod ${coreVersion}, which has no \\"summarize\\" action."}</cmod-relay>` },
+    { to: { sessionId: 'other' }, text: `<cmod-relay>{"kind":"answer","id":"other:2","deny":"Session test-session runs cmod ${coreVersion}, which has no \\"pin\\" relay."}</cmod-relay>` },
+  ])
 })
 
 test('a relay, a Slack ping, a model, a coordinator, or a team mailbox entry never submits a delivery as the person', async () => {
@@ -145,7 +159,7 @@ test('the cmod plugin aborts the engine turn that is running, for a mod with the
   expect(await abort('guard')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-7' } as never)
-  expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in /mods reader.' })
+  expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in Settings.' })
   expect(await abort('guard')).toEqual({ value: null })
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
 })
@@ -431,7 +445,7 @@ test("a new session's first prompt waits for the project's guards to load, and a
     if (relay.kind === 'before') void Promise.resolve().then(() => router.dispatch('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: answer } as never, async () => ({}) as never))
     return { isDelivered: true }
   }
-  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {} })
+  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'new-session', source: 'startup' } as never, async () => ({}))
 
   const submitted = router.dispatch('prompt.submit', { text: 'First prompt', origin: { kind: 'composer' }, wait: false } as never, async () => ({}) as never)
@@ -451,7 +465,7 @@ test("a guard of a session that ended without saying so lets the prompt in quiet
   fake.fakes.fs.write = disk.write
   fake.fakes.process.spawn = () => printed('[]')
   fake.fakes.session.send = async () => ({ isDelivered: false, reason: 'no such session' }) as never
-  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message) => void reported.push(message) })
+  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message) => void reported.push(message), clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'new-session', source: 'startup' } as never, async () => ({}))
 
   const submitted = await router.dispatch('prompt.submit', { text: 'First prompt', origin: { kind: 'composer' }, wait: false } as never, async () => ({ passed: true }) as never)
@@ -461,6 +475,36 @@ test("a guard of a session that ended without saying so lets the prompt in quiet
   expect(JSON.parse(await disk.read('/store/data/cmod/before/crashed.json'))).toEqual([])
 })
 
+test('a failure to tell a mod about a change clears once cmod reaches that mod again', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
+  fake.fakes.process.spawn = () => printed('[]')
+  let isDown = true
+  fake.fakes.cmod.call = async () => {
+    if (isDown) throw new Error('history is installing')
+    return null
+  }
+  const shown: string[] = []
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (id) => void shown.push(id), clear: (id) => void shown.splice(shown.indexOf(id), 1) })
+  await router.dispatch('classic.SessionStart', { session_id: 'here', source: 'startup' } as never, async () => ({}))
+  await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller: 'history' })
+
+  const prompt = (uuid: string, text: string) => {
+    const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
+    return router.dispatch('session.append', appended as never, async () => appended as never)
+  }
+
+  await prompt('p1', 'First')
+  await fake.settle()
+  expect(shown).toEqual(['changed:history'])
+  isDown = false
+  await prompt('p2', 'Second')
+  await fake.settle()
+
+  expect(shown).toEqual([])
+})
+
 test("a goal updated from another session becomes that running session's goal", async () => {
   const disk = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
   const plugin = async (id: string) => {
@@ -468,7 +512,7 @@ test("a goal updated from another session becomes that running session's goal", 
     const router = createRouter()
     fake.fakes.fs = disk
     fake.fakes.process.spawn = () => printed('[]')
-    const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {} })
+    const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
     await router.dispatch('classic.SessionStart', { session_id: id, source: 'startup' } as never, async () => ({}))
     return { fake, router, served }
   }
@@ -497,7 +541,7 @@ test('another session hears when a before listener on it goes away, and when the
     if (text.includes('"kind":"watch"')) told.push(JSON.stringify(to))
     return { isDelivered: true }
   }
-  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {} })
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
   const watch = (subscriptions: readonly unknown[]) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'other', subscriptions }, caller: 'guard' })
 
@@ -522,7 +566,7 @@ test("two before listeners registered at once both stay registered", async () =>
     return disk.write(path, text)
   } }
   fake.fakes.process.spawn = () => printed('[]')
-  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {} })
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
   const watch = (target: string) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: target, subscriptions: [{ event: 'prompt' }] }, caller: 'guard' })
 
@@ -539,7 +583,7 @@ test("one compaction of a task moves its context once, and one of the session mo
   const router = createRouter()
   fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
   fake.fakes.process.spawn = () => printed('[]')
-  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {} })
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   const passed = async () => ({})
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, passed)
   await router.dispatch('agent.spawn', { description: 'Find the pane', subagentType: 'Explore', tool_use_id: 'toolu_1' } as never, async () => ({ agentId: 'task-1', model: 'claude-haiku' }))

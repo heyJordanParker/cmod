@@ -1,6 +1,6 @@
 # Jobs
 
-A job is a ready-made feature of a mod: a slash command, a tool, permission rules, a check, a prompt, a status line, or a background program. Add each in `setup` with `mod.use`.
+A job is a ready-made feature of a mod: a slash command, a tool, permission rules, a check, a prompt, a schedule, or a background program. Add each in `setup` with `mod.use`.
 
 ```ts
 mod.use<Handle>(job: Job<Handle, State>): Handle
@@ -10,7 +10,7 @@ type Job<Handle, State> = (context: JobContext<State>) => Handle
 
 Each job function, such as `slashCommand(options)`, returns a `Job`. `mod.use` runs the job and returns its handle. A job that has nothing to hand back returns `void`.
 
-A job's bad options throw at one of two times. `check`, `permissions`, `prompt`, and `schedule` check their options when the job function is called. `slashCommand`, `tool`, `statusLine`, and `program` check theirs when the job runs, at `mod.use`, so the error surfaces as `its setup function threw: …`.
+A job's bad options throw at one of two times. `check`, `permissions`, `prompt`, and `schedule` check their options when the job function is called. `slashCommand`, `tool`, and `program` check theirs when the job runs, at `mod.use`, so the error surfaces as `its setup function threw: …`.
 
 | Job | Import | Adds |
 | --- | --- | --- |
@@ -20,7 +20,6 @@ A job's bad options throw at one of two times. `check`, `permissions`, `prompt`,
 | `check` | `jobs/check.js` | A command that runs after matching calls, and reports a failure to Claude |
 | `prompt` | `jobs/prompt.js` | Text Claude reads: kept current with the mod's state, before matching prompts, or after matching calls |
 | `schedule` | `jobs/schedule.js` | A prompt Claude Code sends Claude on a cron schedule, kept current with the mod's state |
-| `statusLine` | `jobs/status-line.js` | A status line |
 | `program` | `jobs/program.js` | A background program the mod talks to over HTTP |
 
 Each job announces itself. The first time a version starts, Claude Mod Manager (cmod) logs what the mod added, such as `tasks added /tasks, the open_ticket tool and 2 permission rules.`
@@ -34,7 +33,6 @@ A job gives each function it calls a deadline. The whole function must answer wi
 | `slashCommand`'s `reply` | 30 s | The command shows `/<name> failed: /<name> passed the 30 s deadline of slashCommand`. |
 | `tool`'s `execute` | 30 s | The call is denied with `The <name> tool failed: the <name> tool passed the 30 s deadline of tool`. |
 | `prompt`'s `prompt` | 5 s | The prompt adds nothing, and the reason goes to Claude Code's debug log. |
-| `statusLine`'s `text` | 2 s | The status line keeps its last text, and the reason goes to Claude Code's debug log. |
 | `permissions`' `when` | 2 s | The rule matches, and its reason adds `Its when check failed: it passed the 2 s deadline of permissions`. |
 | `check`'s `run` | `timeoutMs`, 60 s by default, 10 minutes at most | The call's result says the command passed the deadline. |
 
@@ -51,21 +49,19 @@ slashCommand<State>(options: {
   readonly argumentHint?: string
   readonly immediate?: true
   readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => CommandReply | void | Promise<CommandReply | void>
-}): Job<Disposable, State>
+}): Job<SlashCommand, State>
 
 type CommandReply = string | { text?: string; context?: string } | undefined
+type SlashCommand = { readonly name: string; remove(): void }
 ```
 
 - `name` is the command without the slash: 1 to 64 letters, digits, `_`, or `-`. The person types `/<name>`. Another name throws `<mod>: "<name>" is not a slash command name.`
 - `description` is the line the typeahead and `/help` show.
 - `argumentHint` is drawn dim after the name, such as `[path]`.
 - `immediate: true` runs the command at once while Claude is still working. Without it, the command waits for the turn to end.
-- A command lasts for the session. Adding a command with a name the session already has replaces it, and Claude Code has no call that removes one, so a command whose source is gone answers that it no longer applies. `dispose()` on the handle stops the mod answering the command.
-- A key the mod binds in its `package.json` `"cmod": { "keys": { "shift+tab": "/mode" } }` runs the command ([install-steps.md](install-steps.md#key-bindings)). The command of a key takes `immediate: true`, so the key works while Claude works, and a `reply` that returns `undefined`, so a press adds no row to the conversation. It changes `mod.state`, and a pane or band that shows the state is how the person sees the press. cmod logs `<mod>: <key> runs /<name>, which waits for Claude's turn to end and adds a row to the conversation. Give /<name> immediate: true.` for a key whose command lacks it.
-
-```ts
-mod.use(slashCommand({ name: 'mode', description: 'Switch to the next mode', immediate: true, reply: (_input, mod) => void (mod.state.session.mode = next(mod.state.session.mode)) }))
-```
+- A command lasts for the session. Adding a command with a name the session already has replaces it, and Claude Code has no call that removes one, so a command whose source is gone answers that it no longer applies. `remove()` on the handle stops the mod answering the command.
+- A command's `reply` runs inside the person's own input, so a page or pane it opens shows at any width ([ui.md](ui.md#the-sidebar-and-its-pages)).
+- A key combo is a hotkey, not a command ([mod.md](mod.md#hotkeys)).
 - `reply` gets `args` and `positionals`. `args` is everything after the name as Claude Code passes it, and `''` for a bare `/<name>`. cmod hands it on unchanged. `positionals` is that text split into words the way a shell splits them, so extra spaces never reach it. `tested.type('/todo  milk')` drops the spaces after the name.
 - A `string` reply, or `text`, shows as the command's output. `context` is text Claude reads after the output, and the person never sees. `undefined` shows nothing.
 - A `reply` that throws shows `/<name> failed: <error>`.
@@ -103,10 +99,12 @@ tool<Schema, State>(options: {
   readonly description: string
   readonly inputSchema?: Schema
   readonly execute: (input: FromSchema<Schema>, mod: Mod<State>) => unknown
-}): Job<Disposable & { readonly name: string }, State>
+}): Job<Tool, State>
+
+type Tool = { readonly name: string; remove(): void }
 ```
 
-- `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name. `dispose()` on the handle stops the mod answering the tool.
+- `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name. `remove()` on the handle stops the mod answering the tool.
 - `description` tells Claude what the tool does.
 - `inputSchema` is a JSON Schema with `type: 'object'`. It types `execute`'s `input`, so write it inline. cmod checks each call's input against it, draft 2020-12, and denies an input that does not fit with the list of its errors. Its properties cannot be named `tool`, `tool_use_id`, `consent`, or `agentId`, which Claude Code keeps for itself.
 - `execute` returns the result Claude reads. A `string` and an array of content blocks go to Claude as they are. Any other value goes as JSON. `undefined` returns nothing.
@@ -321,35 +319,6 @@ export const loop = defineMod({
 })
 ```
 
-## statusLine
-
-```ts
-statusLine<State>(options: {
-  readonly text: (usage: Usage, mod: Mod<State>) => string | undefined | Promise<string | undefined>
-  readonly interval?: number
-}): Job<void, State>
-
-type Usage = { model: string; context: { tokens?: number; window: number; percent?: number }; cost?: { usd: number } }
-```
-
-- `text` returns the status line's text, or `undefined` to clear it.
-- cmod calls `text` when the mod starts, every `interval` milliseconds (10000 by default), and whenever Claude Code measures the session. It sends the text only when it changed.
-- A `text` that throws keeps the last text, and the error goes to Claude Code's debug log.
-- A mod has one status line. A second `statusLine` throws: join the texts in one.
-- An `interval` below 1 throws.
-
-```ts
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
-import { statusLine } from '../node_modules/@cmodjs/core/jobs/status-line.js'
-
-export const usage = defineMod({
-  name: 'usage',
-  setup(mod) {
-    mod.use(statusLine({ text: ({ model, context }) => `${model} ${context.percent ?? 0}%` }))
-  },
-})
-```
-
 ## program
 
 It needs `"run"` with the program's name. Without the grant the program stops at once and names the line to add ([permissions.md](permissions.md)).
@@ -403,29 +372,33 @@ A `Job` is a function. `mod.use` calls it with a `JobContext` and returns what i
 type JobContext<State> = {
   readonly mod: Mod<State>
   announce(feature: string): void
-  reserveName(type: string, name: string, taken: string): Disposable
+  reserveName(type: string, name: string, taken: string): Reservation
 }
+
+type Reservation = { remove(): void }
 ```
 
-- `mod` is the mod that uses the job. A job builds on `mod.every`, `mod.ui`, and the imports from `mod.js`, such as the methods of `sessions`, as `setup` does ([mod.md](mod.md)).
+- `mod` is the mod that uses the job. A job builds on `mod.every`, the `add` calls of `mod`, and the imports from `mod.js`, such as the methods of `sessions`, as `setup` does ([mod.md](mod.md)).
 - `announce` adds a phrase to the list cmod logs when the mod first starts.
-- `reserveName` throws `taken` when the mod already reserved that `type` and `name`, so a job refuses a duplicate. `dispose()` on what it returns frees the name again.
+- `reserveName` throws `taken` when the mod already reserved that `type` and `name`, so a job refuses a duplicate. `remove()` on what it returns frees the name again.
 
-A job that hands back a feature the mod turns off returns a `Disposable`, as `slashCommand` and `tool` do:
+A job that hands back a feature the mod turns off returns a handle with `remove()`, as `slashCommand` and `tool` do:
 
 ```ts
-import { defineMod, sessions, type Disposable, type Job } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, sessions, type Job } from '../node_modules/@cmodjs/core/mod.js'
 
-const editCounter = (tool: string): Job<Disposable & { readonly count: () => number }> => ({ mod, announce, reserveName }) => {
+type EditCounter = { count(): number; remove(): void }
+
+const editCounter = (tool: string): Job<EditCounter> => ({ mod, announce, reserveName }) => {
   const reserved = reserveName('editCounter', tool, `${mod.name}: edits of ${tool} are already counted.`)
   let edits = 0
   const listening = sessions.current.onToolCall({ name: tool }, () => void (edits += 1))
   announce(`a count of ${tool} calls`)
   return {
     count: () => edits,
-    dispose() {
-      listening.dispose()
-      reserved.dispose()
+    remove() {
+      listening.remove()
+      reserved.remove()
     },
   }
 }
@@ -434,7 +407,7 @@ export const counter = defineMod({
   name: 'counter',
   setup(mod) {
     const writes = mod.use(editCounter('Write'))
-    sessions.current.onTurnEnd(() => mod.ui.toast(`${writes.count()} files written so far`))
+    sessions.current.onTurnEnd(() => mod.toast(`${writes.count()} files written so far`))
   },
 })
 ```

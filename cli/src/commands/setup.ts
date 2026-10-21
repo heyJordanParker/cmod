@@ -3,14 +3,14 @@ import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, keyWords, permissionWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, hotkeyBindings, hotkeyWords, permissionWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
 import { ifMissing, listFiles, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
-import { bindKeys, isLinked, keybindingsPath, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
+import { bindKeys, isLinked, keybindingsPath, modBindings, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
 import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
@@ -24,9 +24,10 @@ the program its package.json "cmod.program" names, which Claude Code
 then runs by its name, or builds it from the checkout's cli/ when cmod link
 loaded the mod, and links it into ~/.local/bin for a terminal,
 runs the mod's install step from its package.json "cmod" key,
-saves its uninstall step, binds the keys its "cmod.keys" names in Claude
-Code's keybindings.json, and records the mod as set up. A key you already
-bound to something else stays yours, and the setup prints the line to add. An unchanged mod runs
+saves its uninstall step, binds the hotkeys its "cmod.hotkeys" declares in
+Claude Code's keybindings.json, and records the mod as set up. A hotkey you
+rebound keeps your combo, and a combo you already bound to something else
+stays yours, and the setup prints the line to add. An unchanged mod runs
 nothing. While a setup or teardown of the mod runs, another setup waits for it,
 then checks the mod again; a mod whose scripts changed meanwhile asks consent
 again. A setup whose process is gone is taken over at once. Ctrl+C, a closed
@@ -39,7 +40,7 @@ has finished, the setup records the mod, then exits.
 
 Options:
   --events            Print one event per line for a program to read:
-                        needs-consent <sha256>\\t<install>\\t<uninstall>\\t<keys>[\\t<permission>…]   exit 10
+                        needs-consent <sha256>\\t<install>\\t<uninstall>\\t<hotkeys>[\\t<permission>…]   exit 10
                         progress <done> <total> <label>
                         log <text>
                         done <name> <version>                          exit 0
@@ -174,7 +175,7 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
   const state = await checkSetup(plugin)
   if (state.isCurrent) return 0
   if (state.needsConsent && consent !== state.sha256) {
-    emit({ type: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', keys: keyWords(plugin.steps.keys), permissions: state.missing })
+    emit({ type: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', hotkeys: hotkeyWords(plugin.steps.hotkeys), permissions: state.missing })
     return 10
   }
   if (hold.signal !== undefined) return 1
@@ -202,6 +203,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   let hasUninstall = false
   let isRecorded = false
   let bound: Record<string, string> = {}
+  let before: Record<string, string> = {}
   try {
     if (hold.signal !== undefined) return 1
     if (install !== undefined) {
@@ -228,8 +230,9 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       if (existsSync(folder)) await rename(folder, replaced)
       await rename(staged, folder)
     }
-    await unbindKeys(previous?.keys ?? {})
-    const keys = await bindKeys(plugin.steps.keys ?? {})
+    before = await modBindings(plugin.name, previous?.keys ?? {})
+    await unbindKeys(before)
+    const keys = await bindKeys(keptBindings(hotkeyBindings(plugin.name, plugin.steps.hotkeys), before))
     bound = keys.bound
     for (const text of keys.kept) emit({ type: 'log', text })
     await writeRecord(writeAtomically, store, {
@@ -250,7 +253,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   } finally {
     if (!isRecorded) {
       await unbindKeys(bound)
-      await bindKeys(previous?.keys ?? {})
+      await bindKeys(before)
       if (program !== undefined) await restoreProgram(program, previous)
       if (previous === undefined) await rm(folder, { recursive: true, force: true })
     }
@@ -260,6 +263,14 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   if (!hasUninstall) await rm(folder, { recursive: true, force: true })
   if (previous?.program && previous.program !== program) await removeProgram(previous.program)
   return 0
+}
+
+function keptBindings(defaults: Readonly<Record<string, string>>, previous: Readonly<Record<string, string>>): Record<string, string> {
+  const commands = new Set(Object.values(defaults))
+  const rebound = Object.entries(previous).filter(([, command]) => commands.has(command))
+  const reboundCommands = new Set(rebound.map(([, command]) => command))
+  const reboundCombos = new Set(rebound.map(([combo]) => combo))
+  return Object.fromEntries([...rebound, ...Object.entries(defaults).filter(([combo, command]) => !reboundCommands.has(command) && !reboundCombos.has(combo))])
 }
 
 export async function stepEnvironment(root: string, name: string, version: string): Promise<Record<string, string | undefined>> {
@@ -291,7 +302,7 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
 
 async function askConsent(plugin: Plugin, missing: readonly string[], updates: string | undefined, cancel: AbortSignal): Promise<boolean | undefined> {
   const style = paint()
-  const { install, uninstall, program, keys } = plugin.steps
+  const { install, uninstall, program, hotkeys } = plugin.steps
   const lines = [
     '',
     `${style.bold(plugin.name)} ${plugin.version}`,
@@ -305,7 +316,7 @@ async function askConsent(plugin: Plugin, missing: readonly string[], updates: s
           `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
         ]),
     ...(program === undefined ? [] : [`  It installs the program ${style.cyan(program)}, which Claude runs by its name.`]),
-    ...(keys === undefined ? [] : [`  It binds keys in ${tilde(keybindingsPath())}:`, ...Object.entries(keys).map(([key, command]) => `    ${key.padEnd(10)} ${style.cyan(`/${command}`)}`)]),
+    ...(hotkeys === undefined ? [] : [`  It binds hotkeys in ${tilde(keybindingsPath())}:`, ...Object.values(hotkeys).map(({ title, default: combo }) => `    ${combo.padEnd(14)} ${style.cyan(title)}`)]),
     ...(missing.length === 0 ? [] : ['  It asks to:', ...missing.map((item) => `    ${style.cyan(permissionWords(item))}`)]),
     ...(updates === undefined ? [] : [`  It updates automatically from the ${style.cyan(updates)} marketplace, set in ${tilde(settingsPath())}.`]),
     '',
@@ -326,6 +337,7 @@ async function askConsent(plugin: Plugin, missing: readonly string[], updates: s
   }
 }
 
-export function noteNextStep(plugin: Plugin, progress: Progress): void {
-  progress.note(`Start Claude Code to use ${plugin.name}, or run /reload-plugins in a session that is running.`)
+export function noteNextStep(plugin: Plugin, progress: Progress, isCmodNew = false): void {
+  if (isCmodNew) progress.note(`Start Claude Code to use ${plugin.name}. In a session that is already open, run /reload-plugins once, so it loads the cmod plugin and ${plugin.name}.`)
+  else progress.note(`Start Claude Code to use ${plugin.name}. A session that is running starts it on its own.`)
 }

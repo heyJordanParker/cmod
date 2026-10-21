@@ -1,6 +1,6 @@
 # Permissions
 
-A mod declares what it does beyond drawing and listening: the hosts it connects to, the programs it runs, the files it changes outside its project, and whether it reads the conversation, adds text Claude reads, asks a model, starts tasks, uses Claude's tools, changes Claude Code's settings, or approves tool calls. The person sees each permission as one sentence when they install the mod, turns each one on or off in `/mods`, and cmod checks every call and every answer against what they granted.
+A mod declares what it does beyond drawing and listening: the hosts it connects to, the programs it runs, the files it changes outside its project, and whether it reads the conversation, adds text Claude reads, asks a model, starts tasks, uses Claude's tools, changes Claude Code's settings, or approves tool calls. The person sees each permission as one sentence when they install the mod, turns each one on or off in Settings, and cmod checks every call and every answer against what they granted.
 
 Permissions bind every mod built on `@cmodjs/core`, and the plugin directory reads them from `package.json`. They are a contract, not a sandbox: a Claude Code plugin can skip cmod and call Claude Code directly.
 
@@ -35,9 +35,9 @@ Anthropic's plugin directory does not list a mod that can approve Claude's tool 
 
 ## What the person sees
 
-The install opens the installer pane in Claude Code and lists every permission in `permissions`, with the install step, the program, and the keys. An update asks again only when it adds a permission, and lists only the new ones. Removing the mod revokes everything it was granted.
+The install opens the installer pane in Claude Code and lists every permission in `permissions`, with the install step, the program, and the hotkeys. An update asks again only when it adds a permission, and lists only the new ones. Removing the mod revokes everything it was granted.
 
-`/mods <mod>` lists the same permissions as toggles. A toggle runs `cmod permission <mod> <name> [value] on|off`, and the mod sees the change before its next call, with no reload.
+Settings lists the same permissions as toggles, under the mod, Permissions. A toggle runs `cmod permission <mod> <name> [value] on|off`, and the mod sees the change before its next call, with no reload.
 
 `cmod check` prints the sentences, so you read what the person will see:
 
@@ -76,7 +76,7 @@ if (mod.permissions.run.allows('gh')) mod.every(60_000, refreshRuns)
 The call rejects, and the error names the fix:
 
 - An undeclared call names the line to add: `ci-watch calls http.fetch(https://api.github.com/repos), which needs "permissions": { "network": ["api.github.com"] } in package.json "cmod".`
-- A declared call the person turned off names where to turn it on: `ci-watch calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in /mods ci-watch.`
+- A declared call the person turned off names where to turn it on: `ci-watch calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.` The error toast that shows it has a `Settings` button that opens the mod's Permissions.
 - A `program` job without its grant stops at once with the same line, with no restarts.
 
 ## When a before answer has no grant

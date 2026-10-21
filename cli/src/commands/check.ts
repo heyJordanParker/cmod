@@ -8,7 +8,7 @@ import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/me
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { addClaudeApi, listPlugins, testPlugin, validatePlugin } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
-import { declaredOptions, installPackages, readPlugin, writeUserConfig, type DeclaredOptions, type Plugin } from '../plugin.js'
+import { cmodFloor, installPackages, readDeclared, readPlugin, writeCmodFloor, writeHotkeys, writeUserConfig, type Declared, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
 import { startProgress } from '../progress.js'
@@ -25,7 +25,8 @@ ${summary}
 Runs every check this machine can run on the mod at path (default: the current
 folder): installs its packages, checks its layout and that each step runs a
 script, checks each download covers the machines its "os" and "cpu" list,
-writes the options defineMod declares into plugin.json userConfig,
+writes the options defineMod declares into plugin.json userConfig and its
+hotkeys into package.json "cmod.hotkeys",
 bundles its hooks module as cmod publish does, validates it with Claude
 Code, compiles it against Claude Code's API with tsconfig.json and, when it
 exists, tests/tsconfig.json,
@@ -48,7 +49,8 @@ const checks: Check[] = [
   { heading: 'Checking the machines', run: checkMachines },
   { heading: 'Reading the permissions', run: checkPermissions },
   { heading: 'Reading the metadata', run: checkMetadata },
-  { heading: 'Writing the options into plugin.json', run: checkOptions },
+  { heading: 'Writing the options and hotkeys', run: checkOptions },
+  { heading: 'Pinning the cmod plugin', run: checkCmodFloor },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
   { heading: 'Bundling the hooks', run: checkBundle },
@@ -215,19 +217,32 @@ async function checkMetadata(plugin: Plugin): Promise<Result> {
 }
 
 async function checkOptions(plugin: Plugin): Promise<Result> {
-  let declared: DeclaredOptions
+  let declared: Declared
   try {
-    declared = await declaredOptions(plugin.root)
+    declared = await readDeclared(plugin.root)
   } catch (error) {
     return { status: 'fail', text: messageOf(error), fix: 'Fix the error, then run cmod check again.' }
   }
-  if (declared.type === 'no-hooks') return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so no options to read' }
-  if (declared.type === 'no-core') return { status: 'skip', text: 'No @cmodjs/core in node_modules, so no options to read' }
+  if (declared.type === 'no-hooks') return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so no options or hotkeys to read' }
+  if (declared.type === 'no-core') return { status: 'skip', text: 'No @cmodjs/core in node_modules, so no options or hotkeys to read' }
   if (declared.type === 'old-core') return { status: 'skip', text: 'The @cmodjs/core in node_modules has no options. Raise it in package.json to read them' }
-  const keys = Object.keys(declared.userConfig)
-  const isWritten = await writeUserConfig(plugin.root, declared.userConfig)
-  if (keys.length === 0) return isWritten ? { status: 'pass', text: 'Removed userConfig from plugin.json, as defineMod declares no options' } : { status: 'skip', text: 'defineMod declares no options' }
-  return { status: 'pass', text: `${isWritten ? 'Wrote' : 'plugin.json userConfig holds'} the ${keys.length === 1 ? 'option' : `${keys.length} options`} defineMod declares${isWritten ? ' into plugin.json userConfig' : ''}: ${keys.join(', ')}` }
+  const options = Object.keys(declared.userConfig)
+  const hotkeys = Object.keys(declared.hotkeys)
+  const isOptionsWritten = await writeUserConfig(plugin.root, declared.userConfig)
+  const isHotkeysWritten = await writeHotkeys(plugin.root, declared.hotkeys)
+  const lines = [
+    ...(options.length === 0 ? (isOptionsWritten ? ['Removed userConfig from plugin.json, as defineMod declares no options'] : []) : [`${isOptionsWritten ? 'Wrote' : 'plugin.json userConfig holds'} the ${options.length === 1 ? 'option' : `${options.length} options`} defineMod declares${isOptionsWritten ? ' into plugin.json userConfig' : ''}: ${options.join(', ')}`]),
+    ...(hotkeys.length === 0 ? (isHotkeysWritten ? ['Removed "cmod.hotkeys" from package.json, as defineMod declares no hotkeys'] : []) : [`${isHotkeysWritten ? 'Wrote' : 'package.json "cmod.hotkeys" holds'} the ${hotkeys.length === 1 ? 'hotkey' : `${hotkeys.length} hotkeys`} defineMod declares${isHotkeysWritten ? ' into package.json "cmod.hotkeys"' : ''}: ${hotkeys.join(', ')}`]),
+  ]
+  if (lines.length === 0) return { status: 'skip', text: 'defineMod declares no options and no hotkeys' }
+  return { status: 'pass', text: lines.join('\n    ') }
+}
+
+async function checkCmodFloor(plugin: Plugin): Promise<Result> {
+  const floor = await cmodFloor(plugin)
+  if (floor === undefined) return { status: 'skip', text: plugin.name === 'cmod' ? 'The cmod plugin depends on no cmod' : 'No @cmodjs/core 4 or later in node_modules, so the mod keeps its own cmod range' }
+  const isWritten = await writeCmodFloor(plugin.root, floor)
+  return { status: 'pass', text: `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${floor}", the @cmodjs/core this mod bundles, so every newer cmod runs it` }
 }
 
 async function checkImports(plugin: Plugin): Promise<Result> {

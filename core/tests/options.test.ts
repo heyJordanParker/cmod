@@ -14,7 +14,7 @@ const ciWatch = defineMod({
     level: option.choice(['low', 'high'], { title: 'Level', description: 'How loud', default: 'low' }),
   },
   setup(mod) {
-    mod.ui.toast(`watching ${mod.options.branch} every ${mod.options.every} minutes as ${mod.options.githubToken.slice(0, 4)}`)
+    mod.toast(`watching ${mod.options.branch} every ${mod.options.every} minutes as ${mod.options.githubToken.slice(0, 4)}`)
   },
 })
 
@@ -38,7 +38,7 @@ test("a project's options.json beats the person's own value, and a secret in it 
   const path = '/test/project/.claude/cmods/ci-watch/options.json'
   expect(tested.shown.toasts).toEqual([
     { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets every to 0, and Check every takes 1 or more.` },
-    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets githubToken, a secret, and a project file is committed for everyone to read. Remove it, and set it in /config.` },
+    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets githubToken, a secret, and a project file is committed for everyone to read. Remove it. Set it in /config, where Claude Code keeps it in your keychain.` },
     { type: 'default', message: 'watching release every 10 minutes as ghp_' },
     { type: 'success', message: 'Installed' },
   ])

@@ -1,5 +1,5 @@
 import type { CommandRunResult } from 'claude-code'
-import type { Disposable, Job, Mod } from '../mod.js'
+import type { Job, Mod } from '../mod.js'
 import { parse } from '../vendor.js'
 import type { Deadline } from '../runtime/deadline.js'
 import { engineOf } from '../runtime/engine.js'
@@ -8,6 +8,8 @@ import { messageOf } from '../utils/text.js'
 import { withinDeadline } from './context.js'
 
 export type CommandReply = string | { text?: string; note?: string } | undefined
+
+export type SlashCommand = { readonly name: string; remove(): void }
 
 const deadline: Deadline = { ms: 30000, job: 'slashCommand' }
 
@@ -19,11 +21,11 @@ export function slashCommand<State extends object = Record<never, never>>(option
   readonly argumentHint?: string
   readonly immediate?: true
   readonly reply: (input: { args: string; positionals: string[] }, mod: Mod<State>) => CommandReply | void | Promise<CommandReply | void>
-}): Job<Disposable, State> {
+}): Job<SlashCommand, State> {
   const { name, description, argumentHint, immediate, reply } = options
   return (job) => {
     const { mod, announce, reserveName } = job
-    const { claude, router, report } = engineOf(mod)
+    const { claude, router, report, answerInput } = engineOf(mod)
     if (!commandName.test(name)) throw new Error(`${mod.name}: "${name}" is not a slash command name. Use 1 to 64 letters, digits, "_", or "-", without the slash.`)
     const reserved = reserveName('slashCommand', name, `${mod.name}: the slash command /${name} is already added. Give each slashCommand its own name.`)
 
@@ -41,15 +43,16 @@ export function slashCommand<State extends object = Record<never, never>>(option
     const answering = router.add('command.run', async (e, next) => {
       if (e.command !== registered) return next(e)
       try {
-        return answerOf(mod.name, await withinDeadline(mod, deadline, `/${name}`, () => reply({ args: e.args, positionals: splitWords(e.args) }, mod)))
+        return await answerInput(async () => answerOf(mod.name, await withinDeadline(mod, deadline, `/${name}`, () => reply({ args: e.args, positionals: splitWords(e.args) }, mod))), () => next(e))
       } catch (error) {
         return { text: `/${name} failed: ${oneLine(error)}` }
       }
     })
     return {
-      dispose() {
-        answering.dispose()
-        reserved.dispose()
+      name,
+      remove() {
+        answering.remove()
+        reserved.remove()
       },
     }
   }

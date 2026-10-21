@@ -1,7 +1,7 @@
 import type { ElementTable, RenderElement, RenderPropsOf, Timer } from 'claude-code'
 import type { Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
 import { Box, Button, drawWith, Link, Text } from '../ui/elements.js'
-import { coreVersion, isObject } from '../records.js'
+import { coreVersion, grantFix, installFix, isObject, secretFix } from '../records.js'
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 
@@ -54,7 +54,7 @@ const icons: Record<Exclude<ToastType, 'loading'>, { readonly glyph: string; rea
   error: { glyph: '✗', color: 'error' },
 }
 
-export function createToaster(claude: Claude, name: string, version: () => string | undefined): Toaster {
+export function createToaster(claude: Claude, name: string, version: () => string | undefined, openPermissions: () => unknown): Toaster {
   const entries = new Map<ToastId, Entry>()
   const hidden = new Map<string, string>()
   void claude.store.get(hiddenKey).then(
@@ -176,7 +176,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
       .then(run)
       .catch((error: unknown) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error }))
 
-  const fail = ({ id, message, error, description = error === undefined ? undefined : describe(error), retry }: Failure): ToastId => {
+  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry }: Failure): ToastId => {
     const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
     if (hidden.get(id) === hides) return id
     hidden.delete(id)
@@ -214,7 +214,13 @@ export function createToaster(claude: Claude, name: string, version: () => strin
         }
       }
     }
-    const actions = [...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
+    const text = `${message}\n${description ?? ''}`
+    const fixes = [
+      { sentence: grantFix, label: 'Settings', onClick: openPermissions },
+      { sentence: installFix, label: 'Plugins', onClick: () => claude.command.run({ command: 'plugin' }) },
+      { sentence: secretFix, label: 'Open /config', onClick: () => claude.command.run({ command: 'config' }) },
+    ].filter(({ sentence }) => text.includes(sentence))
+    const actions = [...fixes, ...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
     return put('error', message, { id, ...(description === undefined ? {} : { description }), duration: Infinity }, actions, hides)
   }
 

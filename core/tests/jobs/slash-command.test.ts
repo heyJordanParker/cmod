@@ -32,6 +32,26 @@ test('/tree a b reaches reply with the args and their words, and the string repl
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds /tree.')
 })
 
+test("a command that replies nothing and a hotkey answer Claude Code themselves, so it shows no warning row", async () => {
+  let presses = 0
+  const tested = testMod(
+    defineMod({
+      name: 'quiet',
+      hotkeys: { show: { title: 'Show it', default: 'alt+p' } },
+      setup(mod) {
+        mod.hotkeys.show.onPress(() => void (presses += 1))
+        mod.use(slashCommand({ name: 'open', description: 'Opens it', immediate: true, reply: () => undefined }))
+      },
+    }),
+  )
+
+  const reply = await tested.type('/open')
+  await tested.hotkey('show')
+
+  expect(reply).toEqual({})
+  expect(presses).toBe(1)
+})
+
 test("reply gets the mod's own typed state, so a command counts its runs without capturing the mod from setup", async () => {
   const tested = testMod(
     defineMod({

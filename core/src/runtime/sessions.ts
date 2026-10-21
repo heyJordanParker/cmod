@@ -1,5 +1,5 @@
 import type { Args, CommandRunResult, SessionCompactResult } from 'claude-code'
-import type { Disposable } from '../mod.js'
+import type { Subscription } from '../utils/subscription.js'
 import { ContextEnd, ContextStart, type Context } from '../session/context/context.js'
 import { Message, noFiles } from '../session/context/turn/message/message.js'
 import { modNote, Note } from '../session/context/turn/message/note.js'
@@ -16,11 +16,12 @@ import { beforeAnswerKeys, foldAnswers, foldBefore, methodOf, takenAnswer, type 
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import { messageOf } from '../utils/text.js'
+import { grantFix, permissionWords } from '../records.js'
 import { listenerOf, PassedTimeout, withinTime, type ListenOptions, type ListenTime } from './deadline.js'
 import { callFiles, type HomeFolders, type HookFields } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
 
-export type Subscription = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined; readonly onFailure?: 'refuse'; readonly scope?: Scope }
+export type Listened = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined; readonly onFailure?: 'refuse'; readonly scope?: Scope }
 
 export const everySession = '*'
 
@@ -33,7 +34,6 @@ export const conversationMethods = {
   tasks: 'cmod:tasks',
   goal: 'cmod:goal',
   updateGoal: 'cmod:updateGoal',
-  usage: 'cmod:usage',
   subscribe: 'cmod:subscribe',
   watchBefore: 'cmod:watchBefore',
   act: 'cmod:act',
@@ -69,7 +69,8 @@ export type SessionsClient = {
   answerBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean): Promise<unknown>
   failedBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, error: Error): { readonly refuse: string } | undefined
   raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
-  listen(method: string, args: readonly unknown[]): Disposable
+  listen(method: string, args: readonly unknown[]): Subscription
+  turn(data: TurnData): Turn
   /** An empty title keeps the title the session already has. */
   follow(current: Omit<SessionData, 'isRunning' | 'lastAt'>): void
 }
@@ -138,7 +139,7 @@ export function withoutPermissionCheck(name: string, hearer: string): string {
   return `${name}: ${hearer} hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.`
 }
 
-export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>, failed?: (input: unknown, error: Error) => HookFields | undefined) => Disposable
+export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>, failed?: (input: unknown, error: Error) => HookFields | undefined) => Subscription
 
 export function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
   const call = <Answer>(method: string, input: unknown) => claude.cmod.call({ to: cmodPluginName, method, input }) as Promise<Answer>
@@ -156,7 +157,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     queued.add(key)
     void Promise.resolve().then(async () => {
       queued.delete(key)
-      const heard = (from: Map<string, Set<Listening>>): Subscription[] =>
+      const heard = (from: Map<string, Set<Listening>>): Listened[] =>
         [...(from.get(key) ?? [])].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...(options.onFailure === 'refuse' ? { onFailure: 'refuse' as const, scope } : {}) }))
       const tracksTasks = [...(listening.get(key) ?? []), ...(deciding.get(key) ?? [])].some(({ scope }) => scope.task !== undefined || scope.isGoal === true)
       const subscriptions = [...heard(listening), ...(tracksTasks ? [{ event: TaskStart }] : [])]
@@ -182,7 +183,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     if (change.type === TaskStart) parents.get(session)?.set(change.task.id, change.task.parent)
   }
 
-  const add = (into: Map<string, Set<Listening>>, scope: Scope, event: SessionEvent, method: string, args: readonly unknown[], onChange: (key: string) => void): Disposable => {
+  const add = (into: Map<string, Set<Listening>>, scope: Scope, event: SessionEvent, method: string, args: readonly unknown[], onChange: (key: string) => void): Subscription => {
     const key = keyOf(scope)
     const entry: Listening = { scope, event, method, ...listenerOf(name, method, args) }
     const set = into.get(key) ?? new Set()
@@ -191,7 +192,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     if (scope.task !== undefined || scope.isGoal === true) void learnTasks(scope.session ?? current.id).catch((error: unknown) => report(`tasks:${key}`, 'Could not read the tasks it listens under', error))
     onChange(key)
     return {
-      dispose() {
+      remove() {
         for (const [at, held] of into) {
           if (!held.delete(entry)) continue
           if (held.size === 0) into.delete(at)
@@ -224,7 +225,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
         const payload = await payloadFor(session, latest)
         const answer = await invoke(entry.method, entry.options, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
         if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer) || isGranted(beforePermission(event))) return answer
-        throw new Error(`Its ${entry.method} answer changes nothing until ${beforePermission(event)} is turned on for ${name} in /mods.`)
+        throw new Error(`Its ${entry.method} answer changes nothing until you grant ${name} "${permissionWords(beforePermission(event))}". ${grantFix}`)
       })
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) }
@@ -534,7 +535,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     return { ...compacted, messages: [...compacted.messages, { role: 'user', text: modNote(name, note), toolUses: [] }] }
   }
 
-  const listen = (method: string, args: readonly unknown[], isEveryAgent = false): Disposable => {
+  const listen = (method: string, args: readonly unknown[], isEveryAgent = false): Subscription => {
     const heard = listenerOf(name, method, args)
     const entry = { ...heard, options: method === 'beforePermissionRequest' ? { ...heard.options, onFailure: 'refuse' } : heard.options, isEveryAgent } as ProcessListener
     const held = processListeners.get(method) ?? new Set()
@@ -543,7 +544,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       processListeners.set(method, held)
     }
     held.add(entry)
-    return { dispose: () => void held.delete(entry) }
+    return { remove: () => void held.delete(entry) }
   }
 
   const processMethods = (): ProcessOnMethods & ProcessBeforeMethods =>
@@ -552,7 +553,14 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     ) as ProcessOnMethods & ProcessBeforeMethods
 
   const here = sessionOf(() => current)
-  const currentSession = Object.assign(here, processMethods(), { goal: Object.assign(here.goal, { beforeSessionStart: (...args: unknown[]) => listen('beforeSessionStart', args, true) }) })
+  const currentSession = Object.assign(here, processMethods(), {
+    goal: Object.assign(here.goal, { beforeSessionStart: (...args: unknown[]) => listen('beforeSessionStart', args, true) }),
+    async scrollTo(message: Message, options?: { readonly block?: 'start' | 'center' | 'end' | 'nearest' }) {
+      const { deny } = await claude.ui.scroll({ to: { requestId: message.id }, ...(options?.block === undefined ? {} : { block: options.block }) })
+      if (deny !== undefined) throw new Error(`${name}: Claude Code did not scroll to the message: ${deny}`)
+    },
+    caption: (toolCall: Message & { readonly type: typeof ToolCall }, text: string | undefined) => claude.ui.notice(toolCall.callId, text),
+  })
   const every = eventMethods(() => ({}), false)
 
   const answerBefore = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean) => (mayDecide(session) ? combined(session, event, change, isInProject) : undefined)
@@ -596,6 +604,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     failedBefore,
     raise,
     listen,
+    turn: (data) => turnOf({ session: current.id }, data),
     follow(next) {
       const moved = next.id !== current.id && current.id !== ''
       const previous = current.id
@@ -618,9 +627,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
 export type ToolCheck = { readonly tool: string; readonly input: unknown; readonly tool_use_id?: string; readonly agentId?: string; readonly ceiling?: 'allow' | 'ask' | 'deny' }
 
 export type RouteOn = {
-  (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>, failed?: (e: ToolCheck, error: Error, next: (e: ToolCheck) => Promise<unknown>) => Promise<{ readonly decision: 'deny'; readonly reason: string } | undefined>): Disposable
-  (event: 'command.run', hook: (e: Args<'command.run'>, next: (e: Args<'command.run'>) => Promise<CommandRunResult>) => Promise<CommandRunResult>, failed?: (e: Args<'command.run'>, error: Error) => Promise<CommandRunResult | undefined>): Disposable
-  (event: 'session.compact', hook: (e: Args<'session.compact'>, next: (e: Args<'session.compact'>) => Promise<SessionCompactResult>) => Promise<SessionCompactResult>): Disposable
+  (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>, failed?: (e: ToolCheck, error: Error, next: (e: ToolCheck) => Promise<unknown>) => Promise<{ readonly decision: 'deny'; readonly reason: string } | undefined>): Subscription
+  (event: 'command.run', hook: (e: Args<'command.run'>, next: (e: Args<'command.run'>) => Promise<CommandRunResult>) => Promise<CommandRunResult>, failed?: (e: Args<'command.run'>, error: Error) => Promise<CommandRunResult | undefined>): Subscription
+  (event: 'session.compact', hook: (e: Args<'session.compact'>, next: (e: Args<'session.compact'>) => Promise<SessionCompactResult>) => Promise<SessionCompactResult>): Subscription
 }
 
 export const recordOf = (value: unknown): Readonly<Record<string, unknown>> => (typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {})

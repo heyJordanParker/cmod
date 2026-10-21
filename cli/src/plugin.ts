@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { isObject, readRecord, readSteps, storeFolder, type Steps } from '@cmodjs/core/src/records.js'
+import { isAtLeast, isObject, readRecord, readSteps, storeFolder, type Steps } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { applyEdits, modify, parse } from 'jsonc-parser'
 import { readJson, readText, writeAtomically } from './files.js'
@@ -55,13 +55,14 @@ export function sourceOf(text: string): { type: 'path' | 'github'; text: string 
 }
 
 export async function usesCmod(root: string, name: string): Promise<boolean> {
+  if (name === 'cmod') return false
   const steps = stepsIn(root, await readJson(`${root}/package.json`))
   return Object.keys(steps).length > 0 || (await readRecord(readText, storeFolder(process.env), name)) !== undefined
 }
 
-export type DeclaredOptions = { readonly type: 'declared'; readonly userConfig: Record<string, unknown> } | { readonly type: 'no-hooks' } | { readonly type: 'no-core' } | { readonly type: 'old-core' }
+export type Declared = { readonly type: 'declared'; readonly userConfig: Record<string, unknown>; readonly hotkeys: Record<string, unknown> } | { readonly type: 'no-hooks' } | { readonly type: 'no-core' } | { readonly type: 'old-core' }
 
-const readDeclared = `
+const declaredScript = `
 const root = process.env.CMOD_ROOT
 globalThis.h ??= () => ({})
 globalThis.Fragment ??= () => ({})
@@ -77,21 +78,32 @@ if (typeof module !== 'string') {
     const { userConfigOf } = await import(root + '/node_modules/@cmodjs/core/options.js')
     const { register } = await import(root + '/hooks/' + module)
     register(() => ({ catch: () => undefined }), {})
-    const options = core.registeredMod()?.options
-    console.log(JSON.stringify({ type: 'declared', userConfig: options === undefined ? {} : userConfigOf(options) }))
+    const mod = core.registeredMod()
+    console.log(JSON.stringify({ type: 'declared', userConfig: mod?.options === undefined ? {} : userConfigOf(mod.options), hotkeys: mod?.hotkeys ?? {} }))
   }
 }
 `
 
-export async function declaredOptions(root: string): Promise<DeclaredOptions> {
+export async function readDeclared(root: string): Promise<Declared> {
   if (!existsSync(join(root, 'node_modules/@cmodjs/core/register.js'))) return { type: 'no-core' }
-  const bun = bunArgv('-e', readDeclared)
+  const bun = bunArgv('-e', declaredScript)
   const { exitCode, stdout, stderr } = await capture(bun.argv, { cwd: root, env: { ...bun.env, CMOD_ROOT: root } })
   if (exitCode !== 0) {
     const reason = stderr.split('\n').find((line) => /^(error|TypeError|SyntaxError|ReferenceError)\b/.test(line.trim())) ?? `bun exited ${exitCode}`
-    throw new Error(`Loading hooks/ to read the options defineMod declares failed: ${reason.trim()}`)
+    throw new Error(`Loading hooks/ to read the options and hotkeys defineMod declares failed: ${reason.trim()}`)
   }
-  return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as DeclaredOptions
+  return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as Declared
+}
+
+export async function writeHotkeys(root: string, hotkeys: Record<string, unknown>): Promise<boolean> {
+  const path = `${root}/package.json`
+  const text = (await readText(path)) ?? '{}\n'
+  const current = parse(text) as Record<string, unknown> | undefined
+  const steps = isObject(current?.['cmod']) ? current['cmod'] : {}
+  if (JSON.stringify(steps['hotkeys'] ?? {}) === JSON.stringify(hotkeys)) return false
+  const next = applyEdits(text, modify(text, ['cmod', 'hotkeys'], Object.keys(hotkeys).length === 0 ? undefined : hotkeys, { formattingOptions: indentation(text) }))
+  await writeAtomically(path, next)
+  return true
 }
 
 export async function writeUserConfig(root: string, userConfig: Record<string, unknown>): Promise<boolean> {
@@ -100,6 +112,31 @@ export async function writeUserConfig(root: string, userConfig: Record<string, u
   const current = parse(text) as Record<string, unknown> | undefined
   if (JSON.stringify(current?.['userConfig'] ?? {}) === JSON.stringify(userConfig)) return false
   const next = applyEdits(text, modify(text, ['userConfig'], Object.keys(userConfig).length === 0 ? undefined : userConfig, { formattingOptions: indentation(text) }))
+  await writeAtomically(path, next)
+  return true
+}
+
+export async function cmodFloor({ name, root }: Pick<Plugin, 'name' | 'root'>): Promise<string | undefined> {
+  if (name === 'cmod') return undefined
+  const core = await readJson(`${root}/node_modules/@cmodjs/core/package.json`)
+  return isObject(core) && typeof core['version'] === 'string' && isAtLeast(core['version'], '4.0.0') ? `>=${core['version']}` : undefined
+}
+
+export function cmodRangeOf(manifest: unknown): string | undefined {
+  const dependencies = isObject(manifest) && Array.isArray(manifest['dependencies']) ? manifest['dependencies'] : []
+  const entry = dependencies.find((each: unknown) => each === 'cmod' || (isObject(each) && each['name'] === 'cmod'))
+  return isObject(entry) && typeof entry['version'] === 'string' ? entry['version'] : undefined
+}
+
+export async function writeCmodFloor(root: string, floor: string): Promise<boolean> {
+  const path = `${root}/.claude-plugin/plugin.json`
+  const text = (await readText(path)) ?? '{}\n'
+  const current = parse(text) as Record<string, unknown> | undefined
+  if (cmodRangeOf(current) === floor) return false
+  const dependencies = Array.isArray(current?.['dependencies']) ? (current['dependencies'] as unknown[]) : []
+  const index = dependencies.findIndex((each) => each === 'cmod' || (isObject(each) && each['name'] === 'cmod'))
+  const edit = isObject(dependencies[index]) ? modify(text, ['dependencies', index, 'version'], floor, { formattingOptions: indentation(text) }) : modify(text, ['dependencies', index === -1 ? dependencies.length : index], { name: 'cmod', version: floor }, { formattingOptions: indentation(text), isArrayInsertion: index === -1 })
+  const next = applyEdits(text, edit)
   await writeAtomically(path, next)
   return true
 }

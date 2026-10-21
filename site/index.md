@@ -92,7 +92,8 @@ A mod changes how Claude Code works: what happens to your prompts, what's on you
 
 <p class="feature__lead">One of your 14 terminal tabs is CI. A mod can put it next to the chat.</p>
 
-- See your CI, your branch, or every file Claude touched, in a pane beside the chat.
+- See your CI, your branch, or every file Claude touched, in the Sidebar beside the chat, one hotkey away.
+- Put widgets by the prompt, under each turn, or on the Sidebar's Dashboard, and arrange every mod's widgets yourself.
 - Add buttons for the things you do all day.
 - Replace a built-in screen you don't like. Claude Code's own `/diff` is a mod now.
 

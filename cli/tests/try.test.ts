@@ -81,8 +81,6 @@ test('try prints each step for a mod with no steps, and passes the arguments aft
     [
       'Installing packages for demo…',
       '✔ demo has no packages to install',
-      'Installing the cmod plugin into Claude Code…',
-      '✔ Installed cmod@cmod into Claude Code',
       'Installing demo…',
       '✔ demo 0.1.0 is ready',
       'claude -p hello',
@@ -149,7 +147,7 @@ test('cmod try runs several mods in a new home that it deletes after the session
   await writeFiles(join(home, 'notes'), notesMod(home))
   await writeFiles(join(home, 'modes'), {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'modes', cmod: { keys: { 'shift+tab': '/mode' } } }),
+    'package.json': JSON.stringify({ name: 'modes', cmod: { hotkeys: { cycle: { title: 'Cycle the mode', default: 'shift+tab' } } } }),
   })
   const sessionHome = () => readFile(join(home, 'session-home'), 'utf8').then((text) => text.trim())
 
@@ -161,7 +159,7 @@ test('cmod try runs several mods in a new home that it deletes after the session
   expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe('-p hello\n')
   expect(await readFile(join(home, 'session-records'), 'utf8')).toBe('modes.json\nnotes.json\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
-  expect(JSON.parse(await readFile(join(home, 'session-keys'), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:mode' } }] })
+  expect(JSON.parse(await readFile(join(home, 'session-keys'), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
   expect(await readFile(join(home, 'session-path'), 'utf8')).toBe(`${await sessionHome()}/.local/bin\n`)
   expect(existsSync(store)).toBe(false)
   expect(existsSync(join(home, '.claude/keybindings.json'))).toBe(false)

@@ -40,7 +40,7 @@ test('settings refuses a key the mod has no grant for and names the line to add,
   const refused = await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365,"model":"haiku"}')
 
   expect(refused.exitCode).toBe(1)
-  expect(refused.stderr).toContain('keeper has no grant to "Change model in your Claude Code settings". It needs "permissions": { "config": ["model"] } in package.json "cmod", turned on in /mods keeper.')
+  expect(refused.stderr).toContain('keeper has no grant to "Change model in your Claude Code settings". It needs "permissions": { "config": ["model"] } in package.json "cmod", turned on in Settings.')
   expect(existsSync(join(home, '.claude/settings.json'))).toBe(false)
 })
 
@@ -106,6 +106,6 @@ test('a grant for one key path refuses a value beside it and names the line to a
   const refused = await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","OTHER":"1"}}')
 
   expect(refused.exitCode).toBe(1)
-  expect(refused.stderr).toContain('keeper has no grant to "Change env.OTHER in your Claude Code settings". It needs "permissions": { "config": ["env.OTHER"] } in package.json "cmod", turned on in /mods keeper.')
+  expect(refused.stderr).toContain('keeper has no grant to "Change env.OTHER in your Claude Code settings". It needs "permissions": { "config": ["env.OTHER"] } in package.json "cmod", turned on in Settings.')
   expect(existsSync(join(home, '.claude/settings.json'))).toBe(false)
 })

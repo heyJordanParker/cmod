@@ -15,7 +15,7 @@ Updates the named plugin, or every plugin Claude Code has installed, through
 Claude Code, then runs the install step of each mod whose version or scripts
 changed. A linked plugin is skipped, because saving its files updates it. When
 Claude Code fails to update a plugin, cmod update names it, updates the rest,
-and exits 1. A running session loads the new version after /reload-plugins.
+and exits 1. Every running session loads the new version.
 
 Options:
   --yes  Approve changed install and uninstall commands without asking`
@@ -32,7 +32,7 @@ export async function run(argv: string[]): Promise<number> {
   const updated: string[] = []
   for (const { id, scope, installPath } of plugins) {
     if (scope === 'session') {
-      progress.skip(`${id} is linked from ${installPath}, so saving its files updates it. Run /reload-plugins in a session that is running.`)
+      progress.skip(`${id} is linked from ${installPath}, so saving its files updates it.`)
       continue
     }
     progress.step(`Updating ${id}`)
@@ -54,7 +54,7 @@ export async function run(argv: string[]): Promise<number> {
     if (plugin === undefined) throw new Error(`Claude Code updated ${id} but claude plugin list no longer shows it.`)
     if (await usesCmod(plugin.installPath, plugin.name)) mods.push(plugin)
   }
-  if (mods.length > 0) await installCmodPlugin(progress)
-  for (const plugin of mods) exitCode = Math.max(exitCode, await installMod(plugin, { yes: values.yes, options: [] }, progress))
+  const isCmodNew = mods.length > 0 && (await installCmodPlugin(progress))
+  for (const plugin of mods) exitCode = Math.max(exitCode, await installMod(plugin, { yes: values.yes, options: [] }, progress, isCmodNew))
   return exitCode
 }

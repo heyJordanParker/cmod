@@ -22,6 +22,7 @@ export type RoutedEvent =
   | 'prompt.context'
   | 'prompt.attachment'
   | 'command.run'
+  | 'command.describe'
   | 'session.measure'
   | 'skill.prompt'
   | 'ui.render'

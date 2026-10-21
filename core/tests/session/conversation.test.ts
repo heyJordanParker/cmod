@@ -125,6 +125,20 @@ test('a slash command reads as the command a person typed, and its local output 
   expect(textOf(typed('<local-command-stdout>Reviewed.</local-command-stdout>'))).toEqual([])
 })
 
+test('a slash command a plugin ran adds no prompt, so mods never hear it as one', () => {
+  const conversation = createConversation(emptyConversation('s1'))
+
+  expect(conversation.add(typed('<command-name>/reload-plugins</command-name>', { kind: 'plugin', name: 'cmod' })).filter((change) => change.type === Message)).toEqual([])
+})
+
+test('the row Claude Code writes when the person stops a turn adds no prompt', () => {
+  const conversation = createConversation(emptyConversation('s1'))
+
+  const stopped = [conversation.add(typed('[Request interrupted by user]')), conversation.add(typed('[Request interrupted by user for tool use]'))].flat()
+
+  expect(stopped.filter((change) => change.type === Message)).toEqual([])
+})
+
 test('a task opened by an Agent call keeps its own messages and ends at the call result', () => {
   const conversation = createConversation(emptyConversation('s1'))
   conversation.add(typed('Find the pane'))

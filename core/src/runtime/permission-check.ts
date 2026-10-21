@@ -1,4 +1,4 @@
-import type { Disposable } from '../mod.js'
+import type { Subscription } from '../utils/subscription.js'
 import type { HookFields } from './hooks.js'
 import { defined, processPayloadOf, recordOf, type HookOn, type RouteOn, type ToolCheck } from './sessions.js'
 
@@ -10,7 +10,7 @@ export type PermissionUse = {
   readonly current: () => { readonly id: string; readonly cwd: string }
 }
 
-export type PermissionRoutes = (method: string, use: PermissionUse) => Disposable
+export type PermissionRoutes = (method: string, use: PermissionUse) => Subscription
 
 type Verdict = { readonly decision: 'allow' | 'ask' | 'deny'; readonly reason?: string; readonly rule?: string }
 

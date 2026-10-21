@@ -41,6 +41,39 @@ function built(current: Drawing, value: unknown): unknown {
   return build(current, name, props)
 }
 
+const elementKey = '$cmodElement'
+
+const handlerKey = '$cmodHandler'
+
+export type Handler = (...args: unknown[]) => unknown
+
+export function elementData(value: unknown, handlers: Handler[]): unknown {
+  if (typeof value === 'function') return { [handlerKey]: handlers.push(value as Handler) - 1 }
+  if (Array.isArray(value)) return value.map((each: unknown) => elementData(each, handlers))
+  if (typeof value !== 'object' || value === null) return value
+  if (unbuilt in value) {
+    const { name, props } = (value as Unbuilt)[unbuilt]
+    return { [elementKey]: name, props: elementData(props, handlers) }
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
+  return Object.fromEntries(Object.entries(value).map(([key, each]) => [key, elementData(each, handlers)]))
+}
+
+export function elementOf(data: unknown, keyPrefix: string, press: (handler: number, args: readonly unknown[]) => void): unknown {
+  if (Array.isArray(data)) return data.map((each: unknown) => elementOf(each, keyPrefix, press))
+  if (typeof data !== 'object' || data === null) return data
+  const fields = data as Readonly<Record<string, unknown>>
+  if (typeof fields[handlerKey] === 'number') {
+    const handler = fields[handlerKey]
+    return (...args: unknown[]) => press(handler, JSON.parse(JSON.stringify(args)) as unknown[])
+  }
+  const name = fields[elementKey]
+  if (name === undefined) return Object.fromEntries(Object.entries(fields).map(([key, each]) => [key, elementOf(each, keyPrefix, press)]))
+  if (typeof name !== 'string' || !Object.hasOwn(constructors, name)) throw new Error(`a widget drew ${String(name)}, which is not an element of ui/elements.js.`)
+  const props = elementOf(fields['props'], keyPrefix, press) as Record<string, unknown>
+  return constructors[name as keyof typeof constructors]((typeof props['key'] === 'string' ? { ...props, key: `${keyPrefix}${props['key']}` } : props) as never)
+}
+
 export const Box = element('Box')
 export const Text = element('Text')
 export const Button = element('Button')
@@ -50,3 +83,5 @@ export const Markdown = element('Markdown')
 export const Input = element('Input')
 export const Select = element('Select')
 export const Image = element('Image')
+
+const constructors = { Box, Text, Button, Link, Code, Markdown, Input, Select, Image }
