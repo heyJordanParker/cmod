@@ -21,13 +21,21 @@ Claude Code installs the cmod plugin with the mod. To install the cmod plugin on
 /plugin install cmod --marketplace heyJordanParker/cmod
 ```
 
-Once a mod is installed, cmod fetches the cmod program and opens the mod's installer pane, and the mod runs its install step once you accept. The pane names each command the mod runs, each key it binds, and each permission it asks for, such as "connect to api.github.com" or "run gh on your computer". It then asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. The mod can reach nothing else through cmod. A progress bar shows each step. A notice tells you when the mod is ready.
+Once a mod is installed, cmod fetches the cmod program and opens the mod's installer pane, and the mod runs its install step once you accept. The pane names each command the mod runs, each hotkey it binds, and each permission it asks for, such as "connect to api.github.com" or "run gh on your computer". It then asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. The mod can reach nothing else through cmod. A progress bar shows each step. A notice tells you when the mod is ready.
 
-`/mods` lists every mod with the one-line description from its `plugin.json`, whether Claude Code has it turned off, its settings, its permissions, its keys, its own pages, and its changelog. When a mod installs or updates, a toast says what it adds or what changed, in the words its author wrote in its `CHANGELOG.md`. Turn a permission off there and the mod loses it before its next call. `Turn off` and `Turn on` run `cmod disable` and `cmod enable`, and `Remove` asks once, then runs `cmod remove <mod>`.
+The Sidebar is cmod's pane beside the conversation. `ctrl+q` shows or hides it. Its tabs are the Dashboard, each page a mod opened, and Settings, and `0`, `1` to `8`, and `9` switch between them. `meta+s` and `/mods` open Settings.
+
+Settings lists every mod with the one-line description from its `plugin.json`, whether Claude Code has it turned off, its own settings pages, its options, its permissions, its hotkeys, and its changelog. When a mod installs or updates, a toast says what it adds or what changed, in the words its author wrote in its `CHANGELOG.md`. Turn a permission off there and the mod loses it before its next call. Type a new combo for a hotkey, and every session uses it at once. `Turn off` and `Turn on` run `cmod disable` and `cmod enable`, and `Remove` asks once, then runs `cmod remove <mod>`.
+
+When a mod needs something only you can give, such as a permission you turned off, its message carries a button that takes you there.
+
+Mods add widgets, such as the branch or a CI status. Settings, under cmod, Widgets, arranges every mod's widgets in rows: above the prompt, below it, under the spinner while Claude works, under each turn that ends, and on the Sidebar's Dashboard. Hide any widget there, Claude Code's own hint and mode labels below the prompt included. Claude Code always shows its permission mode. Every running session follows the layout at once.
+
+Every running session also follows each `cmod` command that installs, updates, turns on or off, removes, links, or unlinks a mod: cmod runs `/reload-plugins` in each one for you. A permission you change applies at once, with no reload.
 
 A mod keeps itself up to date. Its setup turns on Claude Code's automatic updates for the marketplace it came from, unless you already chose, and the install question says so. Turn them off under `/plugin` Marketplaces. An update that changes what the mod runs asks you again before it runs.
 
-When you remove a mod with `/plugin uninstall`, cmod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. The mod keeps running in a session that is already open until you run `/reload-plugins` there.
+When you remove a mod with `/plugin uninstall`, cmod runs the mod's uninstall step at the next session start or prompt. If Claude Code quits before the uninstall step finishes, the next session runs it again. If the uninstall step fails, a notice names the saved step to fix and the command that runs it again, `cmod teardown <mod>`. Once the uninstall step has run, every open session stops running the mod.
 
 In a terminal, one command does the same, for a mod or any other Claude Code plugin:
 
@@ -44,15 +52,17 @@ The cmod plugin runs these programs, and sends no data anywhere:
 - **`setup/bootstrap.sh`**, the first time it runs. It runs the `cmod` launcher from the `@cmodjs/cli` package Claude Code installs with the plugin. The launcher downloads the `cmod` program for your machine from the GitHub release of this version at github.com/heyJordanParker/cmod, checks it against the release's `SHA256SUMS`, keeps it in `~/.local/share/cmod/bin/cmod/<version>/`, and links `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod` to it. It leaves a `~/.local/bin/cmod` it did not make in place. That download is its only network request.
 - **`setup/path.sh`**, at each session start. It writes one line to the file Claude Code reads into every Bash command's environment, `export PATH="~/.local/share/cmod/programs:$PATH"`, so Claude runs each program a mod installs by its name.
 - **`cmod teardown <mod> --events`**, when you remove a mod. At each session start and prompt, the plugin reads `enabledPlugins` from your Claude Code user settings. For each mod that left the list, it runs `cmod teardown`, which runs the uninstall step you approved when you installed the mod.
-- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in `/mods`, **`cmod option <mod> <key> <value>`**, when you save a setting there, and **`cmod enable`**, **`cmod disable`**, and **`cmod remove`** with a mod's name, when you turn it on or off or remove it there.
+- **`cmod permission <mod> <name> [value] on|off`**, when you turn a permission on or off in Settings, **`cmod option <mod> <key> <value>`**, when you save a setting there, **`cmod hotkey <mod> <hotkey> <combo>`**, when you give a hotkey a new combo there, and **`cmod enable`**, **`cmod disable`**, and **`cmod remove`** with a mod's name, when you turn it on or off or remove it there.
+- **`cmod hotkey cmod sidebar ctrl+q`** and **`cmod hotkey cmod settings meta+s`**, once, the first time the cmod plugin runs, to bind its own hotkeys.
 - **`cmod history index`**, in the background at each session start while a mod other than cmod holds the conversation permission. It reads your saved Claude Code conversations into an index on your machine, so a mod you granted "Read your Claude Code conversations" searches them at once. **`cmod history`** with a mod's question runs when that mod reads them, and **`cmod history follow`** runs while a mod listens to another running session.
 - **`cmod settings <mod> …`**, when a mod you granted "Change <setting> in your Claude Code settings" changes that setting.
+- **`/reload-plugins`**, in each running session, after a `cmod` command installs, updates, turns on or off, removes, links, or unlinks a mod. That command writes the time to `~/.local/share/cmod/plugins-changed`, and the cmod plugin of each session watches the file.
 
-A setting you change in `/mods` goes through `cmod option` to Claude Code's `/config`, the same place Claude Code keeps it when you change it there. The cmod plugin changes Claude Code's settings only for a mod that has your grant for each setting, keeps your own edits, and takes the mod's values out when you remove it.
+A setting you change in Settings goes through `cmod option` to Claude Code's `/config`, the same place Claude Code keeps it when you change it there. The cmod plugin changes Claude Code's settings only for a mod that has your grant for each setting, keeps your own edits, and takes the mod's values out when you remove it.
 
-It writes files in three places only: the `cmod` program in `~/.local/share/cmod/` with its links at `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod`, the conversation index `~/.local/share/cmod/history-3.sqlite`, the goals mods set in `~/.local/share/cmod/data/cmod/goals/`, the record of the settings each mod changed in `~/.local/share/cmod/settings/`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin.
+It writes files in three places only: the `cmod` program in `~/.local/share/cmod/` with its links at `~/.local/share/cmod/programs/cmod` and `~/.local/bin/cmod`, the conversation index `~/.local/share/cmod/history-8.sqlite`, the goals mods set in `~/.local/share/cmod/data/cmod/goals/`, the record of the settings each mod changed in `~/.local/share/cmod/settings/`, the widget layout in `~/.local/share/cmod/widgets.json`, and the list of mods it has seen, which it keeps in Claude Code's own storage for the plugin. `cmod setup` and `cmod hotkey` also write each mod's hotkeys into Claude Code's `~/.claude/keybindings.json`, and leave a combo you bound yourself in place.
 
-Every mod built with cmod, the cmod plugin included, adds one hook on each Claude Code event a mod can use, and only a mod that decides permissions hooks Claude Code's permission check. So the cmod plugin hooks tool calls, prompts, and what Claude Code draws, and no permission check. On a tool call, the cmod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, and it answers a call from one mod to another that names a mod you have not installed.
+Every mod built with cmod, the cmod plugin included, adds one hook on each Claude Code event a mod can use, and only a mod that decides permissions hooks Claude Code's permission check. So the cmod plugin hooks tool calls, prompts, and what Claude Code draws, and no permission check. On a tool call, the cmod plugin answers nothing of its own: it passes the event on unchanged. It never allows or denies a call, never rewrites a tool's input, and never changes a tool's output. It draws one line above the prompt while it downloads `cmod`, draws your mods' widgets where you placed them, and answers a call from one mod to another that names a mod you have not installed.
 
 ## Change a mod
 
@@ -94,31 +104,35 @@ cmod link
 
 ```text
 src/
-├── mod.tsx                     defineMod, and the mappings: the pane, the render, the listeners
+├── mod.tsx                     defineMod, its hotkeys, and setup: the page, the widget, the listeners
 ├── state.ts                    the starting state, grouped by how long it lasts
-├── panes/
-│   └── prompts.tsx             one definePane per file
+├── pages/
+│   └── prompts.tsx             one Sidebar page per file
+├── widgets/
+│   └── prompts.tsx             one widget per file
 └── components/
-    └── prompt-count.tsx        what the pane and the render draw with
+    └── prompt-count.tsx        what the page and the widget draw with
 ```
 
-`src/mod.tsx` attaches each part to Claude Code with one line:
+`src/mod.tsx` adds each part with one line, and the hotkey shows or hides the page:
 
 ```tsx
-import { AbovePrompt, defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
-import { Box } from '../node_modules/@cmodjs/core/ui/elements.js'
-import { PromptCount } from './components/prompt-count.js'
-import { promptsPane } from './panes/prompts.js'
+import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
+import { promptsPage } from './pages/prompts.js'
 import { initialState } from './state.js'
+import { promptsWidget } from './widgets/prompts.js'
 
 export const myMod = defineMod({
   name: 'my-mod',
   state: initialState,
+  hotkeys: {
+    toggle: { title: 'Show or hide the prompt count', default: 'alt+shift+p' },
+  },
 
   setup(mod) {
-    mod.ui.pane(promptsPane)
-    mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) =>
-      hasSurvey ? <Default /> : <Box flexDirection="column"><Default /><PromptCount count={mod.state.session.prompts} /></Box>)
+    const page = mod.sidebar.add(promptsPage)
+    mod.widgets.add(promptsWidget)
+    mod.hotkeys.toggle.onPress(() => page.toggle())
 
     sessions.current.onPrompt(() => {
       mod.state.session.prompts += 1
@@ -135,17 +149,28 @@ export type MyModState = { session: { prompts: number } }
 export const initialState: MyModState = { session: { prompts: 0 } }
 ```
 
-`src/panes/prompts.tsx` is the mod's pane:
+`src/pages/prompts.tsx` is the mod's Sidebar page:
 
 ```tsx
-export const promptsPane = definePane<MyModState>({
-  id: 'my-mod',
-  title: 'my-mod',
+export const promptsPage: PageInit<MyModState> = {
+  id: 'prompts',
+  title: 'Prompts',
   render: (mod) => <PromptCount count={mod.state.session.prompts} />,
-})
+}
 ```
 
-`src/components/prompt-count.tsx` is what the pane and the band above the prompt draw:
+`src/widgets/prompts.tsx` is the mod's widget. It first draws below the prompt, and the person can move it to the Dashboard:
+
+```tsx
+export const promptsWidget: WidgetInit<MyModState> = {
+  id: 'prompts',
+  title: 'Prompt count',
+  areas: [BelowPrompt, Dashboard],
+  render: (mod) => <PromptCount count={mod.state.session.prompts} />,
+}
+```
+
+`src/components/prompt-count.tsx` is what the page and the widget draw:
 
 ```tsx
 export function PromptCount({ count }: { readonly count: number }): RenderElement {
@@ -153,7 +178,7 @@ export function PromptCount({ count }: { readonly count: number }): RenderElemen
 }
 ```
 
-Start `claude`, and the mod counts every prompt. `cmod check` checks the layout, the imports, and the lint, validates the mod with Claude Code, compiles it against Claude Code's API, and runs its tests. A fresh clone has no `.claude-plugin/types/`, Claude Code's description of its API, so `cmod check` has Claude Code write it before compiling. `cmod publish` releases the mod on GitHub, and prints the link that lists it in Anthropic's plugin directory.
+Start `claude`, and the mod counts every prompt. `alt+shift+p` shows the count in the Sidebar. `cmod check` writes the hotkeys and options `defineMod` declares into the manifests, then checks the layout, the imports, and the lint, validates the mod with Claude Code, compiles it against Claude Code's API, and runs its tests. A fresh clone has no `.claude-plugin/types/`, Claude Code's description of its API, so `cmod check` has Claude Code write it before compiling. `cmod publish` releases the mod on GitHub, and prints the link that lists it in Anthropic's plugin directory.
 
 ## Docs
 
@@ -165,8 +190,8 @@ The mod author docs live in [core/docs/](core/docs/index.md) and ship inside `@c
 - [options.md](core/docs/options.md): options a person sets, typed in code, stored by Claude Code
 - [permissions.md](core/docs/permissions.md): the hosts, programs, and files a mod may reach, granted by the person
 - [session.md](core/docs/session.md): `sessions`, the conversation as contexts, turns, messages, a goal, and tasks, and every `on` and `before` method
-- [ui.md](core/docs/ui.md): panes, places, markdown places, elements, toasts, the clipboard, questions, and notices
-- [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, status lines, and programs
+- [ui.md](core/docs/ui.md): the Sidebar and its pages, Settings pages, panes, widgets, styles, markdown blocks, elements, the button rule, toasts, questions, and the conversation's rows
+- [jobs.md](core/docs/jobs.md): slash commands, tools, permission rules, checks, prompts, schedules, and programs
 - [dependencies.md](core/docs/dependencies.md): calling another mod
 - [install-steps.md](core/docs/install-steps.md): install and uninstall steps, and shipping a program
 - [testing.md](core/docs/testing.md): `testMod`

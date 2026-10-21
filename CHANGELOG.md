@@ -4,6 +4,123 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-21
+
+cmod 4.0 gives every mod one place on screen, the Sidebar, with Settings inside it, hotkeys the person can change, and widgets the person places around the prompt. Every part a mod adds is one `add` call that returns the part, and every message that asks the person to do something carries a button that does it. From 4.0 on, every newer cmod runs every mod built on an older `@cmodjs/core`, so a person can run mods built on different versions side by side.
+
+### Added
+- A mod names the oldest cmod it runs on, and runs with every newer cmod. `cmod check` writes the `cmod` dependency in `.claude-plugin/plugin.json` as `>=` the `@cmodjs/core` the mod bundles, and `cmod publish` refuses any other range. A mod still on `@cmodjs/core` 3 keeps its own range.
+- When a mod needs a newer cmod than Claude Code installed, or two mods' marketplaces hold different versions of cmod, cmod updates itself and reloads the mods. A mod Claude Code still turns off shows Claude Code's reason in an error toast.
+- `cmod list` says why Claude Code turned a mod off, and `cmod list --json` prints the list as JSON.
+- The Sidebar: one pane beside the conversation with a tab for the Dashboard, each page a mod opened, and Settings. `ctrl+q` shows or hides it, `0` to `9` switch tabs, and `×` closes a page.
+- `mod.sidebar.add({ id, title, render })` adds a page, and the returned `Page` opens, toggles, closes, and scrolls it. `open({ params })` shows the page for one thing, such as a run, and `render` reads it as `props.params`.
+- Settings, in the Sidebar, lists every mod with its own pages, options, permissions, hotkeys, and changelog, and turns a mod off or removes it. `meta+s` and `/mods` open it. `mod.settings.add(page)` adds a page to the mod's entry, and `mod.settings.open()` shows it.
+- Hotkeys: `defineMod({ hotkeys: { toggle: { title, default: 'alt+shift+p' } } })` declares one, and `mod.hotkeys.toggle.onPress(listener)` hears it. The install question lists each combo, the person changes it in Settings, and an update keeps their combo. A page a hotkey opens shows at any terminal width.
+- `cmod hotkey <mod> <hotkey> <combo>` binds a hotkey to a new combo.
+- Widgets: `mod.widgets.add({ id, title, areas, render })` adds one. `areas` lists where it may draw: `AbovePrompt`, `BelowPrompt`, `Working` under the spinner, `TurnEnd` under each turn that ends, and the Sidebar's `Dashboard`. The person arranges every mod's widgets in Settings, under cmod, Widgets.
+- A failure caused by a permission the person turned off has a `Settings` button that opens the mod's Permissions. A call to a mod that is not installed has a `Plugins` button, and a secret option has an `Open /config` button.
+- `tested.hotkey(name)` presses a hotkey, `tested.shown.page` and `tested.shown.pane` read and press what the mod shows, `tested.lines(area)` draws widgets, and `tested.api` calls the methods `setup` returned.
+
+### Changed
+- `setup` returns the mod's API, the methods other mods call, as a VS Code extension's `activate` does. `api` in `defineMod` is gone.
+- `mod.panes.add(pane)` adds a pane, and takes the plain object `definePane` took. The returned `Pane` takes `open({ params })` and has `params`, `scrollTo`, and `remove()`.
+- `mod.styles.add({ kind, render })` changes how Claude Code draws a kind of row or a markdown block, in place of `mod.ui.render(place, Component)`. `render` gets the mod first, then the props with `Default`. The `Spinner` and `TurnDuration` kinds are now `Working` and `TurnEnd`.
+- `mod.toast` and `mod.ask` replace `mod.ui.toast` and `mod.ui.ask`. `clipboard.write(text)`, imported from `mod.js`, replaces `mod.ui.copy`. `sessions.current.scrollTo(message)` and `sessions.current.caption(toolCall, text)` replace `mod.ui.scroll` and `mod.ui.notice`, and a page or pane scrolls with its own `scrollTo`.
+- Every `on` and `before` method, `fs.onChange`, `settings.beforeFileChange`, `commands.onRun`, and `commands.beforeRun` return a `Subscription`, whose `remove()` replaces `dispose()`. `slashCommand`, `tool`, and `reserveName` return handles with `remove()` too.
+- `mod.every` and `mod.after` return a `Timer` with `isRunning` and `stop()`.
+- `installer` takes plain step objects, `{ id, title, render, isDone }`, and `defineMod` checks them.
+- `fs.onChange` works from anywhere, not only `setup`, and for a path that does not exist yet. cmod checks the paths twice a second, and stops a call that watches more than 2000 files with an error toast.
+- A mod that loads while a session runs, after `/reload-plugins` or `/plugin install`, runs its `onSessionStart` listeners before the next prompt, with the source `resume`.
+- A mod reports its widgets every time it starts, so a widget it removed leaves the screen, and the widgets of a mod turned off leave at the reload that follows.
+- A setup that throws keeps its stack in the error toast's `Copy the error`.
+- `cmod link` says a new session loads the checkout, because Claude Code reads linked folders only when a session starts.
+- A linked mod whose install steps did not change keeps running while its new version builds in the background, and the other sessions wait for that one build. A failed build's toast shows the build's own error, and the build runs again only once a file in the program's folder changes, with or without git.
+- A `cmod` command that fails partway still tells running sessions to reload. A reload in a session you stopped with Escape waits for your next prompt instead of failing.
+- A slash command a mod or the cmod plugin runs, such as cmod's `/reload-plugins`, is no longer a `Prompt`. Hear it with `commands.onRun`.
+- `cmod install` that adds the cmod plugin says to run `/reload-plugins` once in a session that is already open, because that session has no cmod plugin yet to notice the install.
+- The conversation index is `history-8.sqlite`. cmod deletes `history-7.sqlite` and reads every conversation again.
+- `cmod new` writes a Sidebar page, a widget, and a hotkey that shows the page.
+
+### Removed
+- `mod.ui` is gone, with `PaneHandle`, `Disposable`, `definePane`, `defineStep`, `Place`, `PlaceProps`, `ui/define-pane.js`, and `ui/places.js`.
+- `mod.settings.page` is gone. Use `mod.settings.add`.
+- `"keys"` in `package.json` `"cmod"` is gone. Declare `hotkeys` in `defineMod`, and `cmod check` writes them into `package.json`.
+- `/dashboard` is gone. The Dashboard is the Sidebar's first tab.
+- The `statusLine` job, `jobs/status-line.js`, and `tested.shown.statuses` are gone. Add a widget.
+- The `AbovePrompt`, `PromptHint`, and `SessionMode` places are gone. Move a render there to a widget in `AbovePrompt` or `BelowPrompt`.
+- `tested.lines(paneId)`, `tested.press(paneId, key)`, `tested.input`, and `tested.select` are gone. Use `tested.shown.pane` or `tested.shown.page`.
+
+### Fixed
+- The row Claude Code writes when the person stops a turn, `[Request interrupted by user]`, is no longer a `Prompt`, so `onPrompt` listeners and prompt counts skip it.
+- A mod runs only the cmod program the cmod plugin installed, so an older `cmod` elsewhere on PATH no longer answers it, and cmod runs the Claude Code that started it, even when `claude` is not on PATH, or the `claude` on PATH once Claude Code's updater deleted that version.
+- An install question Claude Code holds back in a terminal narrower than 144 columns shows a toast with an `Answer` button that opens it.
+- `cmod install` of a mod says nothing about a cmod plugin that is already installed, and turns on one the person turned off.
+- A session running an older cmod refuses a request from a newer cmod in another session by name, instead of running it as a different request.
+
+### Update a mod from 3.x
+
+Raise `@cmodjs/core` to `^4.0.0` in `package.json`, then run `cmod check`, which writes the `cmod` dependency in `.claude-plugin/plugin.json` as `>=4.0.0`. A 3.x mod's `^3` range keeps Claude Code from updating cmod to 4.0 on a computer that has it, so release the 4.0 build of every mod you publish. Then change each call:
+
+```diff
+- api: { signatures: (input) => … },
+- setup(mod) { … },
++ setup(mod) {
++   …
++   return { signatures: (input) => … }
++ },
+
+- export const notesPane = definePane<NotesState>({ id: 'notes', title: 'Notes', render })
++ export const notesPage: PageInit<NotesState> = { id: 'notes', title: 'Notes', render }
+- const pane = mod.ui.pane(notesPane)
++ const page = mod.sidebar.add(notesPage)
+
+- mod.ui.render(AbovePrompt, ({ hasSurvey, Default }) => …)
++ mod.widgets.add({ id, title, areas: [AbovePrompt], render })
+- mod.ui.render(PromptHint, ({ Default }) => …)
+- mod.use(statusLine({ text: (usage) => … }))
++ mod.widgets.add({ id, title, areas: [BelowPrompt], render })
++ sessions.current.onUsageChange((usage) => void (mod.state.session.usage = usage))
+
+- mod.ui.render(TurnDuration, ({ Default }) => <Default />)
++ mod.styles.add({ kind: TurnEnd, render: (mod, { Default }) => <Default /> })
+
+- mod.ui.toast('Saved')
++ mod.toast('Saved')
+- await mod.ui.ask('Commit?')
++ await mod.ask('Commit?')
+- await mod.ui.copy(text)
++ await clipboard.write(text)
+- mod.ui.notice(callId, 'checked')
++ sessions.current.caption(toolCall, 'checked')
+- mod.settings.page(definePane({ … }))
++ mod.settings.add({ … })
+
+- const watching = sessions.current.onPrompt(listener)
+- watching.dispose()
++ watching.remove()
+- const timer = mod.every(1000, tick)
+- timer.dispose()
++ timer.stop()
+
+- "cmod": { "keys": { "alt+n": "/notes" } }
++ hotkeys: { toggle: { title: 'Show or hide the notes', default: 'alt+n' } },
++ mod.hotkeys.toggle.onPress(() => page.toggle())
+
+- const signIn = defineStep({ id, title, render, isDone })
++ const signIn: Step = { id, title, render, isDone }
+
+- expect(await tested.lines(AbovePrompt, band)).toContain(…)
++ expect(await tested.lines(AbovePrompt)).toContain(…)
+- expect(await tested.lines('notes')).toEqual([…])
++ expect(await tested.shown.page.lines()).toEqual([…])
+- await tested.press('notes', 'save')
++ await tested.shown.page.press('save')
+```
+
+A widget draws only its own row, so its `render` takes no `Default`, and nothing draws there while Claude Code shows a survey. A page shows in the Sidebar. Keep a pane with `mod.panes.add` only when it must show on its own. Delete `src/panes/` and the `"keys"` block once nothing uses them.
+
+Run `cmod check`. It writes the hotkeys into `package.json`. Fix the imports it names first, because a render whose import fails loses its types, and then the type check names every call left to change. Replace each message that asks the person to type a command with a `Button` that does it. When a person updates, cmod moves the key a 3.x mod bound, such as `alt+n` to `/notes`, onto the hotkey that declares that combo.
+
 ## [3.1.0] - 2026-10-18
 
 cmod 3.1 lets Anthropic's plugin directory list a mod that hears Claude Code's permission check and only refuses.
