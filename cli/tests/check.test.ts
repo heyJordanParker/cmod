@@ -320,6 +320,21 @@ test('cmod check runs only the tests under the folder bunfig.toml names as the t
   expect(result.stdout).not.toContain('runs on Node')
 })
 
+test('cmod check reads the imports of a script a Skill runs, whose first line is a shebang', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+    'skills/status/scripts/live-status.mjs': "#!/usr/bin/env node\nimport { readFileSync } from 'node:fs'\nconsole.log(readFileSync('a'))\n",
+  })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
+})
+
 test('cmod check skips only the root cli/ folder, so a src/cli/ file is still checked for imports a mod cannot use', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')

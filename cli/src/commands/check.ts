@@ -188,11 +188,15 @@ function parsed<Value>(file: string, read: () => Value): Value {
 }
 
 function codeOf(file: string, text: string): string {
-  return parsed(file, () => transpilerOf(file).transformSync(text))
+  return parsed(file, () => transpilerOf(file).transformSync(withoutShebang(text)))
 }
 
 function importsIn(file: string, text: string): string[] {
-  return parsed(file, () => transpilerOf(file).scanImports(text).map((each) => each.path))
+  return parsed(file, () => transpilerOf(file).scanImports(withoutShebang(text)).map((each) => each.path))
+}
+
+function withoutShebang(text: string): string {
+  return text.startsWith('#!') ? text.replace(/^#![^\n]*/, '') : text
 }
 
 async function checkMetadata(plugin: Plugin): Promise<Result> {

@@ -91,6 +91,23 @@ test('try prints each step for a mod with no steps, and passes the arguments aft
   )
 })
 
+test("cmod try places the mod's rules before the session starts, so the first turn has them, and takes them out after", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'house-style')
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering(cmodPluginListed, `readlink "$HOME/.claude/rules/house-style" > "${home}/session-rules"`),
+    'house-style/.claude-plugin/plugin.json': JSON.stringify({ name: 'house-style', version: '0.1.0' }),
+    'house-style/package.json': JSON.stringify({ name: 'house-style', cmod: { permissions: { prompt: true } } }),
+    'house-style/rules/tests.md': 'Write a test before each fix.\n',
+  })
+
+  const result = await cmod(home, 'try', '--home', '~', root, '--yes', '--', '-p', 'hello')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'session-rules'), 'utf8')).toBe(`${join(root, 'rules')}\n`)
+  expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
+})
+
 test('try --home ~ links each mod into your settings for the session and unlinks only what it linked', async () => {
   const home = await temporaryHome()
   const tried = join(home, 'demo')

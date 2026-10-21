@@ -1,8 +1,10 @@
+import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { changePlugin, listPlugins, type InstalledPlugin } from '../claude.js'
 import { usesCmod } from '../plugin.js'
 import { startProgress } from '../progress.js'
+import { modLock, storePath, takeLock } from '../store.js'
 import { installCmodPlugin, installMod } from './install.js'
 
 export const summary = 'Update any plugin through Claude Code, and rerun changed install steps.'
@@ -30,14 +32,15 @@ export async function run(argv: string[]): Promise<number> {
   const progress = startProgress()
   let exitCode = 0
   const updated: string[] = []
-  for (const { id, scope, installPath } of plugins) {
+  for (const { id, name: pluginName, scope, installPath } of plugins) {
     if (scope === 'session') {
       progress.skip(`${id} is linked from ${installPath}, so saving its files updates it.`)
       continue
     }
     progress.step(`Updating ${id}`)
     try {
-      await changePlugin('update', id)
+      const lock = existsSync(storePath()) ? await takeLock(modLock(pluginName)) : undefined
+      await changePlugin('update', id).finally(() => lock?.[Symbol.asyncDispose]())
       progress.succeed(`Updated ${id} through Claude Code`)
       updated.push(id)
     } catch (error) {

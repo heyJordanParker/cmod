@@ -504,6 +504,52 @@ test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the
   expect(told).toContainEqual({ open: [], shown: 'runs', isFocused: true })
 })
 
+test("picking another mod in Settings draws that mod's page without the last mod's params, and tells it the page it shows", async () => {
+  const record = (name: string) => JSON.stringify({ name, version: '0.2.0', root: `/plugins/${name}`, installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} })
+  const tested = testMod(cmodPlugin, {
+    state: { global: { installedPlugins: [], areHotkeysBound: true } },
+    files: {
+      [`${store}/records/ci-watch.json`]: record('ci-watch'),
+      [`${store}/records/deploys.json`]: record('deploys'),
+      '/plugins/ci-watch/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0' }),
+      '/plugins/deploys/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/deploys/.claude-plugin/plugin.json': JSON.stringify({ name: 'deploys', version: '0.2.0' }),
+    },
+  })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: {} })
+  tested.fakes.config.list = async () => []
+  const draws: unknown[] = []
+  const told: unknown[] = []
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method === 'cmod:draw') {
+      draws.push({ to: input.to, ...(input.input as object) })
+      return { draw: draws.length, tree: { $cmodElement: 'Text', props: { children: `${input.to} body` } } }
+    }
+    if (input.method === 'cmod:shown') told.push({ to: input.to, ...(input.input as object) })
+    return null
+  }
+  await tested.start()
+  const fire = (caller: string, input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller } as never)
+  await fire('ci-watch', { parts: { widgets: [], pages: [{ id: 'runs', title: 'Runs', place: 'settings' }] } })
+  await fire('deploys', { parts: { widgets: [], pages: [{ id: 'queue', title: 'Queue', place: 'settings' }] } })
+  await fire('ci-watch', { requests: [{ open: 'runs', params: { run: 7 } }] })
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+  draws.length = 0
+  told.length = 0
+
+  await tested.shown.pane.press('mod:deploys')
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect(draws).toContainEqual(expect.objectContaining({ to: 'deploys', page: 'queue', params: null }))
+  expect(told).toContainEqual(expect.objectContaining({ to: 'deploys', shown: 'queue' }))
+  expect(told).not.toContainEqual(expect.objectContaining({ to: 'deploys', shown: 'runs' }))
+})
+
 test("a mod's Settings page draws with the params it opened with, and closing it leaves the page", async () => {
   const { tested, declare, called } = testSettings()
   const draws: unknown[] = []
@@ -767,6 +813,18 @@ test('an update that leaves a mod off runs once, whichever session checks next, 
   await other.tested.settle()
 
   expect(other.ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update cmod', 'list --json', 'list --json', 'list --json', 'update cmod', 'list --json'])
+})
+
+test('the off toast leaves once the next check finds every mod on', async () => {
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const { tested, ticks } = pluginsListed([off, off, [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'file-tree@beta', version: '0.1.0' }]])
+  await tested.start()
+  await tested.settle()
+  await tested.fakes.fs.write?.(installedPlugins, '{"cmod@beta":[]}')
+  for (const run of ticks) run()
+  await tested.settle()
+
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
 
 test('a plugin check that fails, such as when cmod cannot run Claude Code, runs again at the next start', async () => {

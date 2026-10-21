@@ -64,9 +64,7 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
       }
     },
     forget(mod) {
-      const superseded = generationOf(mod)
-      generations.set(mod, superseded + 1)
-      for (const [key, { generation }] of drawn) if (key.startsWith(`${mod}\u0000`) && generation < superseded) drawn.delete(key)
+      generations.set(mod, generationOf(mod) + 1)
     },
   }
 }

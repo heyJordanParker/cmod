@@ -194,6 +194,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
   let askedDepth = 0
   let unheldRequests = 0
   let collected: PartsUpdate[] | undefined
+  let collecting = 0
   let queued: PartsUpdate[] | undefined
 
   const partList = (): PartList => ({
@@ -231,14 +232,15 @@ export function createUi<State extends object>({ name, claude, router, report, a
   }
 
   const collect = async (run: () => unknown): Promise<PartsUpdate> => {
-    const outer = collected
-    const mine: PartsUpdate[] = []
-    collected = mine
+    collecting += 1
+    collected ??= []
     try {
       await run()
     } finally {
-      collected = outer
+      collecting -= 1
     }
+    const mine = collected
+    collected = collecting === 0 ? undefined : []
     return merged(mine)
   }
 

@@ -10,6 +10,7 @@ import { installPackages, readPlugin, sourceOf, type Plugin } from '../plugin.js
 import { run as runCommand } from '../process.js'
 import { installProgram, readProgram, removeProgram } from '../program.js'
 import { startProgress } from '../progress.js'
+import { syncRules } from '../rules.js'
 import { addPluginFolder, configRoot, keepSettings, keptSettings, removePluginFolder } from '../settings.js'
 import { installCmodPlugin, setOptions } from './install.js'
 import { holdSignals, setupInTerminal } from './setup.js'
@@ -112,12 +113,14 @@ export async function run(argv: string[]): Promise<number> {
         const options = optionsFor(plugin.name, values.option ?? [], tried.length)
         if (options.length > 0) await setOptions(await findPlugin(plugin.root), options, progress)
       }
+      await syncRules(process.cwd())
       const exitCode = await startSession(forwarded)
       hold.signal = undefined
       return exitCode
     } finally {
       for (const folder of linked) await removePluginFolder(folder)
       for (const name of setUp.reverse()) await teardownInTerminal(name, progress)
+      await syncRules(process.cwd())
     }
   } finally {
     for (const { mod, program } of built) if (!setUp.includes(mod)) await removeProgram(program)

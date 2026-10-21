@@ -11,6 +11,8 @@ import { fakeFiles } from '../../src/testing/fake-files.js'
 import { elements, rowsOf } from '../../src/testing/fake-elements.js'
 import { Box, Button, elementData, elementOf, Text } from '../../src/ui/elements.js'
 
+declare const Bun: { sleep(ms: number): Promise<void> }
+
 const layoutFile = widgetsPath('/test/home/.local/share/cmod')
 
 const withWidgets = (name: string, ...widgets: WidgetInit[]) =>
@@ -277,6 +279,49 @@ test('a page keeps the handlers of its newest 200 params, so a page shown again 
   await expect(press(first)).rejects.toThrow('that button drew before the last redraw')
 })
 
+test('two presses whose handlers overlap leave the mod telling the cmod plugin about later redraws', async () => {
+  let finishSlow = () => {}
+  let finishFast = () => {}
+  const slow = new Promise<void>((resolve) => (finishSlow = resolve))
+  const fast = new Promise<void>((resolve) => (finishFast = resolve))
+  const tested = testMod(
+    defineMod({
+      name: 'pick',
+      state: { session: { count: 0 } },
+      setup(mod) {
+        mod.sidebar.add({ id: 'runs', title: 'Runs', render: (current) => Box({ children: [Text({ children: `count ${current.state.session.count}` }), Button({ key: 'slow', label: 'slow', onPress: () => slow }), Button({ key: 'fast', label: 'fast', onPress: () => fast })] }) })
+        return { bump: () => void (mod.state.session.count += 1) }
+      },
+    }),
+  )
+  const heard: unknown[] = []
+  const kit = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (call) => {
+    if (call.to === 'cmod' && call.method === partMethods.changed) heard.push(call.input)
+    return kit?.(call)
+  }
+  await tested.start()
+  await tested.settle()
+  const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'pick', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
+  const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true })).value
+
+  const pressSlow = call(partMethods.press, { draw, handler: 0, args: [] })
+  await Bun.sleep(5)
+  const pressFast = call(partMethods.press, { draw, handler: 1, args: [] })
+  await Bun.sleep(5)
+  finishSlow()
+  await pressSlow
+  await Bun.sleep(5)
+  finishFast()
+  await pressFast
+  await tested.settle()
+  heard.length = 0
+  await call('bump', null, 'other')
+  await tested.settle()
+
+  expect(heard).toContainEqual({ redraw: true })
+})
+
 test("a widget's button keeps working however many other drawings come after it", async () => {
   let pressed = 0
   const tested = testMod(
@@ -301,6 +346,20 @@ test("a widget's button keeps working however many other drawings come after it"
 
   expect(pressed).toBe(1)
   await expect(tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: first.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)).rejects.toThrow('that button drew before the last redraw')
+})
+
+test('a page keeps its last drawing on screen through two redraws that come before the next drawing lands', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/test/cmod' })
+  fake.fakes.cmod.call = async () => ({ draw: 1, tree: { $cmodElement: 'Text', props: { children: 'run 7' } } })
+  const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
+  await parts.fill('ci-watch', 'runs', { page: 'runs' }, 'The runs page')
+  fake.fakes.cmod.call = () => new Promise(() => undefined)
+
+  parts.forget('ci-watch')
+  void parts.fill('ci-watch', 'runs', { page: 'runs' }, 'The runs page')
+  parts.forget('ci-watch')
+
+  expect(parts.element('ci-watch', 'runs', 'ci-watch/runs:', 'The runs page', 'page')).toBeDefined()
 })
 
 test('a draw that was still running when its mod changed is dropped, and the next draw asks again', async () => {
