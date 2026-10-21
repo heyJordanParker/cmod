@@ -4,6 +4,19 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-10-21
+
+### Fixed
+- `cmod try` places a mod's rules before the session starts, so Claude has them from the first turn, also under `claude -p`, and takes them out when the session ends.
+- `cmod check` reads the imports of a script whose first line is a shebang, such as a Skill's `scripts/*.mjs`, instead of failing to parse it.
+- Two buttons pressed so that their handlers overlap no longer stop the mod's pages and widgets from redrawing for the rest of the session.
+- A page shown again with params it drew with before keeps working buttons, and a button the mod no longer knows makes the page draw again.
+- Picking another mod in Settings draws that mod's page without the last mod's params, and tells the mod which page it shows.
+- A Sidebar page keeps its last drawing on screen through several redraws in a row, instead of showing "Drawing…".
+- The "is off" toast leaves once Claude Code turns the mod back on.
+- An update whose new hotkey defaults to a combo you rebound keeps your combo.
+- Several mods that each need a newer cmod run one update at a time.
+
 ## [4.0.0] - 2026-10-21
 
 cmod 4.0 gives every mod one place on screen, the Sidebar, with Settings inside it, hotkeys the person can change, and widgets the person places around the prompt. Every part a mod adds is one `add` call that returns the part, and every message that asks the person to do something carries a button that does it. From 4.0 on, every newer cmod runs every mod built on an older `@cmodjs/core`, so a person can run mods built on different versions side by side.

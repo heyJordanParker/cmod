@@ -137,6 +137,7 @@ export const cmodPlugin = defineMod({
         }
         if (reason === '') await claude.store.delete(updatedFor)
         if (off.length > 0) report({ id: 'needs-cmod', message: `${off.map((row) => row.name).join(', ')} ${off.length === 1 ? 'is' : 'are'} off`, description: off.map((row) => row.state).join('\n'), retry: updateAgain })
+        else mod.toast.dismiss('needs-cmod')
         mod.state.global.pluginsCheckedAt = checked
       } finally {
         isCheckingPlugins = false

@@ -203,6 +203,13 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       ]
     }
 
+    const shownOf = () => {
+      const { selected, section } = mod.state.session
+      const view = mod.state.memory.views.find((each) => each.name === selected) ?? mod.state.memory.views[0]
+      const sections = view === undefined ? [] : sectionsOf(view)
+      return { view, section: sections.some(({ key }) => key === section) ? section : (sections[0]?.key ?? 'hotkeys') }
+    }
+
     const drawSection = (view: ModView, section: string, columns: number, isFocused: boolean): RenderElement => {
       if (section.startsWith(pageSection)) return pages.element(view.name, section.slice(pageSection.length), mod.state.session.pageParams, columns, isFocused) ?? Text({ dimColor: true, children: 'Drawing…' })
       if (section === 'widgets') return widgetsLayout(mod, widgets)
@@ -262,11 +269,10 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       draw(columns, isFocused) {
         if (!hasLoaded) void refresh()
         const { removing, views } = mod.state.memory
-        const { selected, section, notice } = mod.state.session
-        const view = views.find((each) => each.name === selected) ?? views[0]
+        const { notice } = mod.state.session
+        const { view, section: shownSection } = shownOf()
         if (view === undefined) return Text({ dimColor: true, children: notice ?? 'Reading your mods…' })
         const sections = sectionsOf(view)
-        const shownSection = sections.some(({ key }) => key === section) ? section : (sections[0]?.key ?? 'hotkeys')
         const list = Box({
           flexDirection: 'column',
           minWidth: 18,
@@ -340,8 +346,8 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         return Box({ gap: 2, children: [list, details] })
       },
       shownPage() {
-        const { selected, section } = mod.state.session
-        return selected !== null && section.startsWith(pageSection) ? { mod: selected, page: section.slice(pageSection.length) } : undefined
+        const { view, section } = shownOf()
+        return view !== undefined && section.startsWith(pageSection) ? { mod: view.name, page: section.slice(pageSection.length) } : undefined
       },
       closePage(name, page) {
         const view = mod.state.memory.views.find((each) => each.name === name)

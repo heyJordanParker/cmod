@@ -12,7 +12,7 @@
   },
   "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^4.0.0",
-    "@cmodjs/core": "^4.0.0"
+    "@cmodjs/cli": "^4.0.1",
+    "@cmodjs/core": "^4.0.1"
   }
 }

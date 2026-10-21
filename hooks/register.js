@@ -337,7 +337,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.0.0";
+var coreVersion = "4.0.1";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -8098,6 +8098,7 @@ function createUi({ name, claude, router, report, announce, mod }) {
   let askedDepth = 0;
   let unheldRequests = 0;
   let collected;
+  let collecting = 0;
   let queued;
   const partList = () => ({
     widgets: [...widgets.values()].map(({ id, title, areas: listed2 }) => ({ id, title, areas: listed2 })),
@@ -8134,14 +8135,15 @@ function createUi({ name, claude, router, report, announce, mod }) {
     }
   };
   const collect = async (run) => {
-    const outer = collected;
-    const mine = [];
-    collected = mine;
+    collecting += 1;
+    collected ??= [];
     try {
       await run();
     } finally {
-      collected = outer;
+      collecting -= 1;
     }
+    const mine = collected;
+    collected = collecting === 0 ? undefined : [];
     return merged2(mine);
   };
   const logOnce = (what) => {
@@ -8693,11 +8695,7 @@ function drawnParts({ claude, report, press }) {
       }
     },
     forget(mod) {
-      const superseded = generationOf(mod);
-      generations.set(mod, superseded + 1);
-      for (const [key, { generation }] of drawn)
-        if (key.startsWith(`${mod}\x00`) && generation < superseded)
-          drawn.delete(key);
+      generations.set(mod, generationOf(mod) + 1);
     }
   };
 }
@@ -10211,7 +10209,7 @@ function oneLine(error) {
   return messageOf(error).replace(/\s*\n\s*/g, " ");
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-cxK3oB/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/src/settings.ts
 var settingsMemory = { removing: null, views: [] };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -10356,6 +10354,12 @@ function settings2(mod) {
         ...view.changelog.length === 0 ? [] : [{ key: "changelog", label: "Changelog" }]
       ];
     };
+    const shownOf = () => {
+      const { selected, section } = mod.state.session;
+      const view = mod.state.memory.views.find((each) => each.name === selected) ?? mod.state.memory.views[0];
+      const sections = view === undefined ? [] : sectionsOf(view);
+      return { view, section: sections.some(({ key }) => key === section) ? section : sections[0]?.key ?? "hotkeys" };
+    };
     const drawSection = (view, section, columns, isFocused) => {
       if (section.startsWith(pageSection))
         return pages.element(view.name, section.slice(pageSection.length), mod.state.session.pageParams, columns, isFocused) ?? Text({ dimColor: true, children: "Drawing…" });
@@ -10414,12 +10418,11 @@ function settings2(mod) {
         if (!hasLoaded)
           refresh();
         const { removing, views } = mod.state.memory;
-        const { selected, section, notice } = mod.state.session;
-        const view = views.find((each) => each.name === selected) ?? views[0];
+        const { notice } = mod.state.session;
+        const { view, section: shownSection } = shownOf();
         if (view === undefined)
           return Text({ dimColor: true, children: notice ?? "Reading your mods…" });
         const sections = sectionsOf(view);
-        const shownSection = sections.some(({ key }) => key === section) ? section : sections[0]?.key ?? "hotkeys";
         const list = Box({
           flexDirection: "column",
           minWidth: 18,
@@ -10483,8 +10486,8 @@ function settings2(mod) {
         return Box({ gap: 2, children: [list, details] });
       },
       shownPage() {
-        const { selected, section } = mod.state.session;
-        return selected !== null && section.startsWith(pageSection) ? { mod: selected, page: section.slice(pageSection.length) } : undefined;
+        const { view, section } = shownOf();
+        return view !== undefined && section.startsWith(pageSection) ? { mod: view.name, page: section.slice(pageSection.length) } : undefined;
       },
       closePage(name, page) {
         const view = mod.state.memory.views.find((each) => each.name === name);
@@ -10512,7 +10515,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-cxK3oB/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -10647,7 +10650,7 @@ function sidebar(mod, settings3) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-cxK3oB/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -10762,6 +10765,8 @@ var cmodPlugin = defineMod({
         if (off.length > 0)
           report({ id: "needs-cmod", message: `${off.map((row) => row.name).join(", ")} ${off.length === 1 ? "is" : "are"} off`, description: off.map((row) => row.state).join(`
 `), retry: updateAgain });
+        else
+          mod.toast.dismiss("needs-cmod");
         mod.state.global.pluginsCheckedAt = checked;
       } finally {
         isCheckingPlugins = false;
@@ -10881,7 +10886,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-cxK3oB/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
