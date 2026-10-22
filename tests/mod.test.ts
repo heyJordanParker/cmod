@@ -123,7 +123,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds ctrl+q to Show or hide the Sidebar.\nBinds meta+s to Show or hide Settings.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -584,17 +584,17 @@ test('a start whose hotkey bind fails tries again at the next start', async () =
   await tested.start()
 
   expect(tested.state.global.areHotkeysBound).toBe(false)
-  expect(tested.shown.toasts.map(({ message }) => message)).toContain('Could not bind ctrl+q to Show or hide the Sidebar')
+  expect(tested.shown.toasts.map(({ message }) => message)).toContain('Could not bind meta+0 to Show or hide the Sidebar')
 })
 
-test('on its first start cmod binds its own hotkeys, ctrl+q for the Sidebar and meta+s for Settings, and never again', async () => {
+test('on its first start cmod binds its own hotkeys, meta+0 for the Sidebar and meta+m for Settings, and never again', async () => {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: [] } } })
   const ran: string[] = []
   tested.fakes.process.run = async (argv) => (ran.push(argv.join(' ')), { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
   await tested.start()
 
-  expect(ran).toEqual([`${cmodProgram} hotkey cmod sidebar ctrl+q`, `${cmodProgram} hotkey cmod settings meta+s`])
+  expect(ran).toEqual([`${cmodProgram} hotkey cmod sidebar meta+0`, `${cmodProgram} hotkey cmod settings meta+m`])
   expect(tested.state.global.areHotkeysBound).toBe(true)
   expect(tested.shown.commands).toEqual(expect.arrayContaining(['cmod--sidebar', 'cmod--settings', 'mods']))
 })

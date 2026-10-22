@@ -83,7 +83,7 @@ Progress(props: { value: number; width?: number })
 
 ## The Sidebar and its pages
 
-The Sidebar is one pane the cmod plugin draws beside the conversation for every mod. Its tabs are the Dashboard, the pages mods opened, and Settings. The person shows or hides it with `ctrl+q`, switches tabs with `0` for the Dashboard, `1` to `8` for the pages, and `9` for Settings, and closes a page with the `×` on its tab. They change both combos in Settings, under cmod, Hotkeys.
+The Sidebar is one pane the cmod plugin draws beside the conversation for every mod. Its tabs are the Dashboard, the pages mods opened, and Settings. The person shows or hides it with `meta+0`, switches tabs with `0` for the Dashboard, `1` to `8` for the pages, and `9` for Settings, and closes a page with the `×` on its tab. They change both combos in Settings, under cmod, Hotkeys.
 
 A page is a part of a mod that draws in the Sidebar. Put each page in its own file in `src/pages/`:
 
@@ -160,7 +160,7 @@ export const notes = defineMod({
 
 ### Settings pages
 
-`mod.settings.add(page)` adds a page to the mod's entry in Settings, beside the Options, Permissions, Hotkeys, and Changelog cmod draws for every mod. It takes the same `PageInit` and returns the same `Page`. `mod.settings.open()` shows Settings at the mod's entry. `/mods` and `meta+s` open Settings too.
+`mod.settings.add(page)` adds a page to the mod's entry in Settings, beside the Options, Permissions, Hotkeys, and Changelog cmod draws for every mod. It takes the same `PageInit` and returns the same `Page`. `mod.settings.open()` shows Settings at the mod's entry. `/mods` and `meta+m` open Settings too.
 
 ## Panes
 
