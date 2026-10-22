@@ -3,7 +3,7 @@ import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, hotkeyBindings, hotkeyWords, permissionWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, hotkeyBindings, hotkeyWords, marketplaceOf, permissionWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
@@ -165,7 +165,7 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   const approved = await approvals(plugin.name)
   const missing = (plugin.steps.permissions ?? []).filter((item) => !approved.includes(item))
   const needsConsent = !isCurrent && Object.keys(plugin.steps).length > 0 && !approved.includes(sha256)
-  return { sha256, isCurrent, needsConsent, missing, updates: await updatesToTurnOnFor(plugin.root, plugin.name) }
+  return { sha256, isCurrent, needsConsent, missing, updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
 }
 
 async function runSetup(plugin: Plugin, consent: string | undefined, emit: (event: RunnerEvent) => void): Promise<number> {

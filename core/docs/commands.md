@@ -125,7 +125,7 @@ It needs, and refuses to start without:
 
 ## Install mods
 
-`cmod install`, `cmod update`, `cmod remove`, `cmod enable`, `cmod disable`, `cmod link`, `cmod unlink`, and `cmod try` write the time to `plugins-changed` in the cmod store when they finish, also when they fail partway, such as an update that updated some mods. The cmod plugin of every running session watches that file and runs `/reload-plugins`, so each session runs the mods the person has now. A reload clears each mod's `memory` state. A machine where cmod set up no mod has no store, and these commands write nothing there. `cmod permission` needs no reload, because a mod sees its grants change before its next call.
+`cmod install`, `cmod update`, `cmod remove`, `cmod enable`, `cmod disable`, `cmod link`, `cmod unlink`, and `cmod try` write the time to `plugins-changed` in the cmod store when they finish, also when they fail partway, such as an update that updated some mods. The cmod plugin of every running session watches that file, Claude Code's `installed_plugins.json`, and the `enabledPlugins` of the user's `settings.json`, and runs `/reload-plugins` when any of them changes. So each session runs the plugins the person has now, whether a `cmod` command, `/plugin`, `claude plugin`, or Claude Code's automatic update changed them. A reload keeps the prompt cache: the next request reads the whole conversation from the cache and pays only for the plugins' new content. A reload clears each mod's `memory` state. A machine where cmod set up no mod has no store, and these commands write nothing there. `cmod permission` needs no reload, because a mod sees its grants change before its next call.
 
 ### cmod install
 

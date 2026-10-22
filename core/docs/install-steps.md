@@ -45,7 +45,7 @@ The mod starts only once its install step has run ([mod.md](mod.md)).
 
 ## Automatic updates
 
-Claude Code updates a plugin by itself only when its marketplace has automatic updates on, and they are off for every marketplace that is not Anthropic's. So the setup of a mod installed from a marketplace turns them on, through `"autoUpdate": true` on that marketplace's `extraKnownMarketplaces` entry in `settings.json`. The consent lists it as `Update <mod> automatically from the <marketplace> marketplace`, and a mod with nothing to consent to logs it. The setup never changes a choice the person made, in `settings.json` or with the toggle under `/plugin` Marketplaces, and leaves a linked mod alone.
+Claude Code updates a plugin by itself only when its marketplace has automatic updates on, and they are off for every marketplace that is not Anthropic's. So the setup of a mod installed from a marketplace turns them on, through `"autoUpdate": true` on that marketplace's `extraKnownMarketplaces` entry in `settings.json`. The consent lists it as `Update <mod> automatically from the <marketplace> marketplace`, and a mod with nothing to consent to logs it. The setup never changes a choice the person made, in `settings.json` or with the toggle under `/plugin` Marketplaces, and leaves a linked mod alone. The cmod plugin's own `cmod` marketplace gets the same entry whenever a `cmod` command installs the cmod plugin or `cmod update` updates it.
 
 Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update whose scripts, hotkeys, or permissions changed waits for consent again, so an update never runs a new install step unasked.
 

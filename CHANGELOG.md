@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-10-22
+
+### Fixed
+- Every running session loads a plugin change at once, whatever made it: a `cmod` command, `/plugin`, `claude plugin`, or Claude Code's automatic update. Before, only a `cmod` command reloaded the sessions. The reload keeps the prompt cache.
+- The cmod plugin now updates by itself. Claude Code updates a plugin only when its marketplace has automatic updates on, which is off for every marketplace that is not Anthropic's, so a cmod plugin stayed at the version first installed. Installing the cmod plugin, and `cmod update`, now turn on automatic updates for the `cmod` marketplace, unless you chose otherwise in `/plugin`, Marketplaces. A cmod plugin older than 4.0.2 still needs one `cmod update cmod`.
+
 ## [4.0.1] - 2026-10-21
 
 ### Fixed

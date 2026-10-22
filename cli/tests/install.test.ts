@@ -411,6 +411,39 @@ test('cmod update of a plugin whose new version adds steps installs the cmod plu
   )
 })
 
+test('installing the cmod plugin turns on its updates, unless the person chose', async () => {
+  const cmodMarket = { cmod: { source: { source: 'github', repo: 'heyJordanParker/cmod' }, installLocation: '/market/cmod' } }
+  const home = await marketplaceHome({ demo: modFiles('demo') })
+  await rm(join(home, 'installed/cmod@cmod'))
+  await writeFiles(home, { '.claude/plugins/known_marketplaces.json': JSON.stringify(cmodMarket) })
+
+  const result = await cmod(home, 'install', 'demo@market', '--yes')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('✔ cmod now updates automatically from the cmod marketplace. Turn it off in /plugin, Marketplaces.\n')
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8')).extraKnownMarketplaces).toEqual({ cmod: { source: { source: 'github', repo: 'heyJordanParker/cmod' }, autoUpdate: true } })
+
+  const chosen = await marketplaceHome({})
+  await writeFiles(chosen, { '.claude/plugins/known_marketplaces.json': JSON.stringify({ cmod: { ...cmodMarket.cmod, autoUpdate: false } }) })
+
+  const kept = await cmod(chosen, 'update', 'cmod')
+
+  expect(kept.exitCode).toBe(0)
+  expect(kept.stdout).not.toContain('updates automatically')
+  expect(existsSync(join(chosen, '.claude/settings.json'))).toBe(false)
+})
+
+test('cmod update cmod turns on the updates of the cmod marketplace', async () => {
+  const home = await marketplaceHome({})
+  await writeFiles(home, { '.claude/plugins/known_marketplaces.json': JSON.stringify({ cmod: { source: { source: 'github', repo: 'heyJordanParker/cmod' } } }) })
+
+  const result = await cmod(home, 'update', 'cmod')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('✔ cmod now updates automatically from the cmod marketplace.')
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8')).extraKnownMarketplaces.cmod.autoUpdate).toBe(true)
+})
+
 test('cmod update with no name skips linked plugins', async () => {
   const home = await marketplaceHome({ plain: plainFiles('plain') })
   const checkout = join(home, 'Developer/linked')

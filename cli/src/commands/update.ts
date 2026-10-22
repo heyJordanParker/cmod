@@ -5,7 +5,7 @@ import { changePlugin, listPlugins, type InstalledPlugin } from '../claude.js'
 import { usesCmod } from '../plugin.js'
 import { startProgress } from '../progress.js'
 import { modLock, storePath, takeLock } from '../store.js'
-import { installCmodPlugin, installMod } from './install.js'
+import { followUpdates, installCmodPlugin, installMod } from './install.js'
 
 export const summary = 'Update any plugin through Claude Code, and rerun changed install steps.'
 
@@ -49,6 +49,7 @@ export async function run(argv: string[]): Promise<number> {
     }
   }
   if (updated.length === 0) return exitCode
+  if (updated.includes('cmod@cmod')) await followUpdates(progress)
 
   const listed = await listPlugins()
   const mods: InstalledPlugin[] = []

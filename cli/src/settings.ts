@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { isObject, marketplaceOf, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
+import { isObject, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse, type FormattingOptions } from 'jsonc-parser'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
 import { storePath, takeLock } from './store.js'
@@ -29,9 +29,9 @@ export function knownMarketplacesPath(): string {
   return join(process.env['CLAUDE_CODE_PLUGIN_CACHE_DIR'] || join(configRoot(), 'plugins'), 'known_marketplaces.json')
 }
 
-export async function updatesToTurnOnFor(root: string, name: string): Promise<string | undefined> {
+export async function updatesToTurnOnFor(marketplace: string | undefined): Promise<string | undefined> {
   const known = await readConfig(knownMarketplacesPath())
-  return updatesToTurnOn(marketplaceOf(root, name), settingsObject((await readSettings()).text), configObject(known.text, known.path))
+  return updatesToTurnOn(marketplace, settingsObject((await readSettings()).text), configObject(known.text, known.path))
 }
 
 export async function turnOnUpdates(marketplace: string): Promise<void> {

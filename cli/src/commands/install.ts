@@ -6,6 +6,7 @@ import { addMarketplace, changePlugin, configurePlugin, listMarketplaces, listPl
 import { readJson, tilde } from '../files.js'
 import { readDeclared, readPlugin, sourceOf, usesCmod } from '../plugin.js'
 import { startProgress, type Progress } from '../progress.js'
+import { turnOnUpdates, updatesToTurnOnFor } from '../settings.js'
 import { noteNextStep, setupInTerminal } from './setup.js'
 
 export const summary = "Install any plugin through Claude Code, and run a mod's install step."
@@ -114,10 +115,12 @@ export async function installCmodPlugin(progress: Progress): Promise<boolean> {
   if (cmod?.scope === 'session') return false
   if (cmod !== undefined) {
     await changePlugin('install', cmod.id)
-    if (cmod.enabled) return false
-    progress.step('Turning the cmod plugin on')
-    await changePlugin('enable', cmod.id)
-    progress.succeed(`Turned ${cmod.id} on in Claude Code`)
+    if (!cmod.enabled) {
+      progress.step('Turning the cmod plugin on')
+      await changePlugin('enable', cmod.id)
+      progress.succeed(`Turned ${cmod.id} on in Claude Code`)
+    }
+    await followUpdates(progress)
     return false
   }
   progress.step('Installing the cmod plugin into Claude Code')
@@ -128,7 +131,15 @@ export async function installCmodPlugin(progress: Progress): Promise<boolean> {
   }
   await changePlugin('install', 'cmod@cmod')
   progress.succeed('Installed cmod@cmod into Claude Code')
+  await followUpdates(progress)
   return true
+}
+
+export async function followUpdates(progress: Progress): Promise<void> {
+  const marketplace = await updatesToTurnOnFor('cmod')
+  if (marketplace === undefined) return
+  await turnOnUpdates(marketplace)
+  progress.succeed(`cmod now updates automatically from the ${marketplace} marketplace. Turn it off in /plugin, Marketplaces.`)
 }
 
 async function modIn(manifestPath: string, chosen: string | undefined, source: string): Promise<string> {

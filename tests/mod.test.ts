@@ -164,9 +164,12 @@ test('a key set to false runs nothing', async () => {
 
 test('a tool call reads no settings and tears nothing down', async () => {
   const { tested, teardowns } = testRemovals(['cmod', 'four-step'], { 'cmod@fixtures': true })
+  await claudeCodeOf(tested).fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'pwd' }, tool_use_id: 'toolu_0' })
+  await settled()
+  const readsBefore = tested.calls.filter((call) => call.call === 'settings.read').length
   await claudeCodeOf(tested).fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'toolu_1' })
   await settled()
-  expect(tested.calls.filter((call) => call.call === 'settings.read')).toEqual([])
+  expect(tested.calls.filter((call) => call.call === 'settings.read')).toHaveLength(readsBefore)
   expect(teardowns).toEqual([])
 })
 
@@ -926,6 +929,32 @@ test('a change cmod marks in its store reloads the plugins once, and the mark th
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
+})
+
+test('a plugin Claude Code installs, updates, or turns on without cmod reloads the plugins, and other settings reload nothing', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.1.0' }] } }))
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.2.0' }] } }))
+  await tick()
+  await tick()
+  expect(reloads).toEqual(['reload-plugins'])
+
+  await tested.fakes.fs.write?.('/test/home/.claude/settings.json', JSON.stringify({ model: 'opus' }))
+  await tick()
+  await tick()
+  expect(reloads).toEqual(['reload-plugins'])
+
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
+  await tested.fakes.fs.write?.('/test/home/.claude/settings.json', JSON.stringify({ model: 'opus', enabledPlugins: { 'hello@market': true } }))
+  await tick()
+  await tick()
+  expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
 })
 
 test('a change cmod marks while a reload runs reloads once more after it', async () => {
