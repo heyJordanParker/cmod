@@ -43,8 +43,8 @@ export const cmodPlugin = defineMod({
   name: 'cmod',
   state: { global: cmodGlobal, session: cmodSession, memory: settingsMemory },
   hotkeys: {
-    sidebar: { title: 'Show or hide the Sidebar', default: 'ctrl+q' },
-    settings: { title: 'Show or hide Settings', default: 'meta+s' },
+    sidebar: { title: 'Show or hide the Sidebar', default: 'meta+0' },
+    settings: { title: 'Show or hide Settings', default: 'meta+m' },
   },
 
   async setup(mod) {

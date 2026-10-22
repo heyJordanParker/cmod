@@ -6,13 +6,13 @@
     "program": "cmod",
     "permissions": { "run": ["cmod"], "conversation": true, "prompt": true },
     "hotkeys": {
-      "sidebar": { "title": "Show or hide the Sidebar", "default": "ctrl+q" },
-      "settings": { "title": "Show or hide Settings", "default": "meta+s" }
+      "sidebar": { "title": "Show or hide the Sidebar", "default": "meta+0" },
+      "settings": { "title": "Show or hide Settings", "default": "meta+m" }
     }
   },
   "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^4.0.2",
-    "@cmodjs/core": "^4.0.2"
+    "@cmodjs/cli": "^4.0.3",
+    "@cmodjs/core": "^4.0.3"
   }
 }

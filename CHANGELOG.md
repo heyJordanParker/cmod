@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.0.3] - 2026-10-22
+
+### Changed
+- The Sidebar's hotkey is `meta+0`, as `⌘0` shows or hides the navigator in Xcode, and Settings' hotkey is `meta+m`, for `/mods`. `ctrl+q` quits most apps, and `meta+s` is a common tmux prefix. A machine that already bound `ctrl+q` and `meta+s` keeps them, and Settings, under cmod, Hotkeys, changes them.
+
 ## [4.0.2] - 2026-10-22
 
 ### Fixed
