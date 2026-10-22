@@ -81,11 +81,20 @@ export const cmodPlugin = defineMod({
 
     const store = await storeOf(mod)
     const changed = pluginsChangedPath(store)
-    let seenChange = await fs.read(changed).catch(ifMissing(''))
+    const configRoot = await configRootOf(mod)
+    const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`
+    const userSettings = configRoot === undefined ? undefined : `${configRoot}/settings.json`
+    const pluginsState = async () =>
+      JSON.stringify([
+        await fs.read(changed).catch(ifMissing('')),
+        pluginsFile === undefined ? '' : await fs.read(pluginsFile).catch(ifMissing('')),
+        (await settings.user.read())['enabledPlugins'] ?? null,
+      ])
+    let seenChange = await pluginsState()
     let isReloading = false
     let isWaitingForInput = false
     const reloadIfChanged = async () => {
-      const change = await fs.read(changed).catch(ifMissing(''))
+      const change = await pluginsState()
       if (change === seenChange || isReloading) return
       seenChange = change
       isReloading = true
@@ -109,8 +118,6 @@ export const cmodPlugin = defineMod({
       if (isWaitingForInput) mod.after(reloadDelayMs, reload)
     })
 
-    const configRoot = await configRootOf(mod)
-    const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`
     const isCmod = (id: string) => id.replace(/@[^@]*$/, '') === mod.name
     const updatedFor = 'cmod:cmod-updated-for'
     let isCheckingPlugins = false
@@ -152,9 +159,10 @@ export const cmodPlugin = defineMod({
     }
     checkPlugins()
 
-    fs.onChange({ path: [widgetsPath(store), changed, ...(pluginsFile === undefined ? [] : [pluginsFile])] }, async ({ path }) => {
-      if (path === pluginsFile) return checkPlugins()
-      return path === changed ? reloadIfChanged() : widgets.reload()
+    fs.onChange({ path: [widgetsPath(store), changed, ...(pluginsFile === undefined ? [] : [pluginsFile]), ...(userSettings === undefined ? [] : [userSettings])] }, async ({ path }) => {
+      if (path === widgetsPath(store)) return widgets.reload()
+      if (path === pluginsFile) checkPlugins()
+      return reloadIfChanged()
     })
 
     void readConsent(mod)

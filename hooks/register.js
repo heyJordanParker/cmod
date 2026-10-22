@@ -337,7 +337,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.0.1";
+var coreVersion = "4.0.2";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -10209,7 +10209,7 @@ function oneLine(error) {
   return messageOf(error).replace(/\s*\n\s*/g, " ");
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-VQ9LMK/release/src/settings.ts
 var settingsMemory = { removing: null, views: [] };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -10515,7 +10515,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-VQ9LMK/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -10650,7 +10650,7 @@ function sidebar(mod, settings3) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-VQ9LMK/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -10701,11 +10701,19 @@ var cmodPlugin = defineMod({
       bindHotkeys().catch((error) => report({ id: "hotkeys", message: "Could not bind the hotkeys", error }));
     const store = await storeOf(mod);
     const changed = pluginsChangedPath(store);
-    let seenChange = await fs.read(changed).catch(ifMissing(""));
+    const configRoot = await configRootOf(mod);
+    const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`;
+    const userSettings = configRoot === undefined ? undefined : `${configRoot}/settings.json`;
+    const pluginsState = async () => JSON.stringify([
+      await fs.read(changed).catch(ifMissing("")),
+      pluginsFile === undefined ? "" : await fs.read(pluginsFile).catch(ifMissing("")),
+      (await settings.user.read())["enabledPlugins"] ?? null
+    ]);
+    let seenChange = await pluginsState();
     let isReloading = false;
     let isWaitingForInput = false;
     const reloadIfChanged = async () => {
-      const change = await fs.read(changed).catch(ifMissing(""));
+      const change = await pluginsState();
       if (change === seenChange || isReloading)
         return;
       seenChange = change;
@@ -10732,8 +10740,6 @@ var cmodPlugin = defineMod({
       if (isWaitingForInput)
         mod.after(reloadDelayMs, reload);
     });
-    const configRoot = await configRootOf(mod);
-    const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`;
     const isCmod = (id) => id.replace(/@[^@]*$/, "") === mod.name;
     const updatedFor = "cmod:cmod-updated-for";
     let isCheckingPlugins = false;
@@ -10781,10 +10787,12 @@ var cmodPlugin = defineMod({
       checkPlugins();
     };
     checkPlugins();
-    fs.onChange({ path: [widgetsPath(store), changed, ...pluginsFile === undefined ? [] : [pluginsFile]] }, async ({ path }) => {
+    fs.onChange({ path: [widgetsPath(store), changed, ...pluginsFile === undefined ? [] : [pluginsFile], ...userSettings === undefined ? [] : [userSettings]] }, async ({ path }) => {
+      if (path === widgetsPath(store))
+        return widgets.reload();
       if (path === pluginsFile)
-        return checkPlugins();
-      return path === changed ? reloadIfChanged() : widgets.reload();
+        checkPlugins();
+      return reloadIfChanged();
     });
     readConsent(mod).then(async (consent) => Object.entries(consent).some(([name, granted]) => name !== mod.name && granted.includes("conversation")) ? runCmod(claude, ["history", "index"], await claude.session.id()) : undefined).catch((error) => mod.log(messageOf(error)));
     const tearDown = async (name) => {
@@ -10886,7 +10894,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-vgEGsU/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-VQ9LMK/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
