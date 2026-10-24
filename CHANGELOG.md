@@ -4,6 +4,77 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-10-24
+
+### Added
+- A mod hands work to another agent four ways: `startTask`, a fresh subagent; `fork`, a subagent that keeps this conversation; `clone`, a new background session with a copy of this conversation; and `startTask({ isBackground: true })`, a fresh background session that keeps running after this one ends. Each returns a `Task` in this session's goal, a background one with `isBackground` and an owner that is that session, and a fork's and a clone's owner names this session in `forkedFrom`. Each works on another running session too, and a background task ends at that session's first answer.
+- `place` on a widget: `side: 'right'` lands a new widget at the right of its row until you move it in Settings, and `size: 'fill'` lets it give up width when the row runs short, while every `fit` widget, the default, keeps its full width. A row stays one line, and no widget breaks a clock into "00:" and "03" or a button into one letter per line any more.
+- `{ note }` in four more answers, each read by Claude: `beforeToolCall`, after the tool's result; `beforeTurnEnd` and a task's `beforeTurnEnd`, which keeps Claude working with the note; `beforeProjectSetup`; and `beforeModelChange`, after the switch. A note needs the `prompt` permission.
+- `AttachedFile`, a file Claude Code attaches by itself: one you mention with `@`, one it puts back after a compaction, or a change to a file Claude read. `onAttachedFile` hears it, and `beforeAttachedFile` rewrites what Claude reads with `{ text }` or keeps it out with `{ refuse }`.
+- `Raster`, `Svg`, and `Client` in `ui/elements.js`. A style gets `surface`, `columns`, and `id`, and a pane gets `surface`, so a mod draws for the app that shows it.
+- `usage()` names the account's rate limits: `rateLimits: { type, percent, resetsAt? }[]`.
+- `beforeTaskStart` answers `{ prompt?, title?, owner?: { agentType?, model?, cwd? }, isAsync? }`, so a mod rewrites a task's prompt, picks its agent, model, and folder, and runs a subagent while Claude goes on.
+- A running task of `sessions.current` holds its `status`, its teammate `name`, and `spawnedBy`, the plugin that started it.
+- Claude gets two tools from the cmod plugin: `compact`, which compacts the conversation once Claude's answer ends and then prompts Claude to carry on, and `start_background_agent`, which starts a task in a new background session.
+- `cmod task start` starts a task in a new background Claude Code session, as `claude --bg` does, for the cmod plugin.
+- The test kit's `tested.startTask` starts a fork with `forkedFrom` and a background task with `isBackground`, and `tested.endTurn({ … }, { task })` ends a task owner's turn.
+- A fork Claude starts with its Agent tool reads as a task whose owner is `forkedFrom` the session, with no `agentType`, instead of an owner of the agent type `fork`. The conversation index rebuilds once for it.
+- `fakes.session.surfaces` in the test kit fakes which Claude apps show the session. `async () => []` tests a session such as `claude -p`. `fakes.session.usage` fakes its usage.
+- The test kit draws a mod's own markdown styles in its pages and widgets.
+- `program({ singleInstance: true })` runs one copy of a program on the computer however many sessions load the mod, such as a server that must be the only writer of its data. Every session's `ready()` resolves that copy's address, and when the session running it ends, another open session starts a new copy and `ready()` resolves the new address. `cmod program` runs the copy and elects the session that owns it.
+
+### Changed
+- `Tabs` no longer numbers its tabs, so a page's tabs never take the Sidebar's `0` to `9`. Give a tab `hotkey: 'o'` for a key of its own, drawn as `o: Open`.
+- A mod you link with `cmod link` loads into every running session without a restart. cmod lists the checkout in a marketplace it keeps in the checkout's parent folder, installs it from there, and turns off the installed copy until `cmod unlink`. A checkout an older cmod linked moves over at the next `cmod setup` or `cmod watch`. `cmod try` loads its mods with `--plugin-dir`.
+- A mod's install consent, its options, and its setup steps open as its `Install <mod>` tab in the Sidebar, instead of a pane of their own. Two mods that install at once each get a tab. The `×` on the tab is Not now, and Escape hides the Sidebar while the question waits in its tab and its toast. A step's `render` gets a page's props, `params`, `isFocused`, and `columns`.
+- A widget or toast change from cmod redraws only what cmod draws: the band above the prompt, the prompt hint, the mode labels, the spinner, the turn's duration line, and the Sidebar. It no longer redraws Claude Code's notices and every other row on screen, and a mod that lists a new widget redraws them once instead of twice.
+- The Sidebar's tabs sit on a raised bar with Settings at its right end, and the shown tab is a raised block in the accent color. Every tab keeps its width whether it shows or not, so switching tabs moves no other tab, and every page tab has its `×`. The tabs wrap on a narrow Sidebar. A key bar at the bottom of the Sidebar names the keys that work now.
+- An empty Dashboard has an `Arrange widgets` button that opens cmod's Widgets in Settings.
+- The rows and buttons of cmod's Widgets in Settings wrap on a narrow Sidebar.
+- Settings lists the mods in a Mods panel, the selected one highlighted, beside a panel for that mod, or above it on a narrow Sidebar. Each mod has a dot: dim when it runs, in the warning color when it needs setup, and hollow when it is off. Turn off and Remove are buttons beside the mod's version, Keep is the main button when you remove a mod, and the shown section is highlighted.
+- Every Sidebar tab draws in panels that fill the Sidebar's height: the Dashboard's widgets, a mod's page in a panel titled with the mod's name, and Settings. A mod's install consent, options, and setup steps put the main button first: Accept, Next, or Finish, then Not now.
+- The buttons of the Sidebar, Settings, and a mod's install page are filled blocks: the main one in the accent color, the others in the bar's gray.
+- `Panel` draws its title in its top border, as `╭─ Changed files ──╮`, and is never narrower than its title.
+- cmod's own `/reload-plugins` leaves no row in any session once it ends. A `/reload-plugins` you type still shows.
+- An error toast shows the time it last happened beside its buttons, and its Report details carry the exact time.
+- The slash command menu waits on no mod but cmod, which hides every mod's hotkey commands.
+- A mod whose state changes asks cmod to redraw its widgets and Sidebar pages only when one of them draws differently, so a session no longer redraws every widget area on each state change.
+- `fs.onChange` checks a path that does not exist every 2 seconds instead of every 500 ms.
+- A machine runs one `cmod watch` however many sessions are open, instead of one waiting process per session.
+- A Markdown element draws through every mod's markdown styles wherever it shows: in panes, pages, widgets, the Dashboard, Settings, and changelogs, as in Claude's replies.
+- A mod you linked with `cmod link` reloads in every session once, after its checkout has been quiet for 2 seconds and builds, instead of on every save. An agent's half-written file no longer prints a reload row or a "does not parse" error. A change that still doesn't build after 10 seconds shows its error in one toast, which goes once it builds. A checkout linked before 4.1.0 switches over by itself in the next session you start.
+- Each session checks only two files every 500 ms: cmod's `store-changed`, which every cmod writer updates, and Claude Code's `installed_plugins.json`. It hears a change to your user settings from Claude Code instead of reading the file.
+- cmod adds its PATH line to Claude's Bash environment once per session, instead of once more at every start, resume, clear, and compaction.
+- A loading toast spins for 10 seconds, then shows `…` and stops redrawing the prompt area.
+
+### Fixed
+- A mod that waits on its install question, was declined with Not now, or failed to install starts on its own within a second once another cmod installs it, such as `cmod install <mod> --yes` in a terminal, `cmod link`, or Accept in another session. Its `Install <mod>` tab and its toast close, and it shows Installed. Before, it kept asking for consent you had already given, or kept showing "Not installed" until your next prompt.
+- Not now and Accept on a mod's `Install <mod>` tab work on the first press after the mod reloads with its question open. The tab kept the drawing of the module that reloaded, so each press failed with "is installing" until something else drew the tab again.
+- A mod's install no longer stays stuck on "is installing." after its mod reloads, after a setup step fails, or after the mod fails to start once you saved its settings.
+- A press on a button drawn before a mod reloaded never runs a button of the reloaded mod.
+- Claude's call to a mod's tool right after the mod reloads waits for the mod to start, then answers. It failed with "registered the tool but no tool.call hook answered this call". A call while the mod installs says it is installing and when to try again.
+- A Sidebar page a mod opens with `params` draws. It stayed on "Drawing <page>…", because the cmod plugin sent its own copy of the params, which could not cross to the mod.
+- A mod's note after a compaction reaches Claude in the window that compaction opens, and its title, Skill reload, and first prompt apply at that compaction. Before, they waited for the next compaction. cmod's note about a mod's changed rules no longer shows as a prompt you typed.
+- Installing a plugin reloads each running session once. Claude Code writes your settings and then its plugin list, and cmod reloaded again for the second write although the first reload had already loaded it.
+- A widget or page that fails to draw shows one error toast, not a second "Claude Code stopped its cmod.call hook" toast for the same failure.
+- Pressing a button in the Sidebar while another mod is slow to answer an earlier press no longer fails with "Claude Code stopped its ui.press hook".
+- A mod that sets a Claude Code setting to the value it already has no longer rewrites `settings.json`, so the other running sessions don't reload their settings.
+- `claude -p` prints Claude's answer again when a plugin changes during the run. cmod no longer reloads a session no app shows.
+- A subagent's first prompt reaches `beforePrompt` listeners on its task, so a mod hears every subagent start.
+- A pane the person closes, with Escape or its ✕, reports `isOpen` and `isShown` false, so the next `toggle()` opens it. Before, after Escape hid the Sidebar, the first press of `meta+0` or `meta+m` did nothing and only a second press showed it.
+- Finish setup in Settings no longer fails after 10 seconds while the person fills in the step.
+- A linked mod's new version runs its install step again with its new program, after `cmod link` builds it.
+- A mod keeps hearing its session, and its `before` listeners keep answering, after the cmod plugin updates in a running session. Before, a cmod update in a session left every mod deaf to that session until the mod itself reloaded, so a `beforeContextEnd` listener never ran at the next compaction.
+- A Sidebar or Settings page whose mod fails to draw it shows the mod's error, instead of "Drawing…" forever.
+- A Sidebar page keeps its drawing, and where you scrolled it, while its mod reloads.
+- The test kit draws `Svg`, gives a markdown style the surface and width the cmod plugin gives it, and keeps a task's `beforePrompt` note to its subagent in `shown.notes`.
+- The test kit counts a Box's right padding in its width, and draws a Box's border and a child placed with `position: 'absolute'` and `top` over it, as Claude Code does, so `lines()` shows a `Panel` with its title in its border. `shown.pane.lines({ columns })` draws a pane at that width, as it already did for a page.
+- A `beforeModelChange` note reaches Claude only after the switch it answered, never after a later one.
+- Two subagents of one type started at once each get their own first prompt in `beforePrompt`.
+- A linked mod that does not build is named by its own name, not its checkout folder's.
+- Another mod's markdown drawing no longer flickers back to Claude Code's each time a mod's pages or widgets change.
+- A hotkey or slash command that opens a Sidebar page with `void page.open()`, closes one with `void page.close()`, or opens Settings with `void mod.settings.open()` does it at once at any width, as it does when the handler returns the promise. Before, the page showed a second late, and on a terminal narrower than 144 columns it never showed. The test kit's cmod plugin now holds a page request only while its own command or press runs, as the real one does, so a test catches a request that misses it.
+
 ## [4.0.3] - 2026-10-22
 
 ### Changed

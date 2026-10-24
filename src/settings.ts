@@ -1,11 +1,13 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
 import { consentPath, finishStepsMethod, hotkeyCommand, isObject, parseConsent, pendingStepsMethod, permissionWords, readRecord, readSteps, storeFolder } from '../node_modules/@cmodjs/core/records.js'
+import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
 import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
+import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Input, Markdown, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { changelogSections, unreleased, type ChangelogSection } from '../node_modules/@cmodjs/core/utils/changelog.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
@@ -51,6 +53,16 @@ export type ModView = {
 
 const pageSection = 'page:'
 
+const selectedColor = 'userMessageBackground'
+
+const statusColumns = 2
+
+const rowPadding = 2
+
+const panelColumns = 4
+
+const detailMinColumns = 40
+
 export async function storeOf(mod: object): Promise<string> {
   const { claude } = engineOf(mod)
   return storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
@@ -79,8 +91,8 @@ function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets
   }
   const layout = widgets.layout()
   const sections = areas.map((area) => {
-    const rows = layout.areas[area].map((row, index) => Box({ key: `row:${area}:${index}`, gap: 2, children: [...row.left.map((key) => chip(key, area)), Text({ dimColor: true, children: '│' }), ...row.right.map((key) => chip(key, area))] }))
-    const builtIns = area === BelowPrompt ? [Box({ gap: 2, children: builtInWidgets.map(({ key }) => chip(key, area)) })] : []
+    const rows = layout.areas[area].map((row, index) => Box({ key: `row:${area}:${index}`, columnGap: 2, flexWrap: 'wrap', children: [...row.left.map((key) => chip(key, area)), Text({ dimColor: true, children: '│' }), ...row.right.map((key) => chip(key, area))] }))
+    const builtIns = area === BelowPrompt ? [Box({ columnGap: 2, flexWrap: 'wrap', children: builtInWidgets.map(({ key }) => chip(key, area)) })] : []
     return Box({ flexDirection: 'column', children: [Text({ bold: true, children: areaTitles[area] }), ...builtIns, ...(rows.length === 0 ? [Text({ dimColor: true, children: 'No widgets' })] : rows)] })
   })
   const selected = current.state.session.widget
@@ -91,7 +103,8 @@ function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets
       ? [Text({ dimColor: true, children: 'Pick a widget to move it, hide it, or show it.' })]
       : [
           Box({
-            gap: 2,
+            columnGap: 2,
+            flexWrap: 'wrap',
             children: [
               ...(area === undefined ? [] : moves.map(({ move, hotkey, label }) => Button({ plain: true, key: `move:${move}`, hotkey, label, onPress: () => void widgets.change((now) => moved(now, widgetFor(selected, area), move)) }))),
               Button({ plain: true, key: 'hide', hotkey: 'x', label: layout.hidden.includes(selected) ? 'Show' : 'Hide', onPress: () => void widgets.change((now) => toggled(now, selected)) }),
@@ -242,7 +255,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             Box({
               flexDirection: 'column',
               children: [
-                Text({ children: [Text({ bold: true, children: hotkey.title }), Text({ dimColor: true, children: hotkey.combo === undefined ? '  no combo' : `  ${hotkey.combo}` })] }),
+                Text({ bold: true, children: hotkey.title }),
                 Input({ key: `hotkey:${hotkey.name}`, label: 'Combo', value: hotkey.combo ?? '', placeholder: 'ctrl+shift+k', submitLabel: 'bind', onSubmit: (combo: string) => bind(view.name, hotkey, combo) }),
               ],
             }),
@@ -273,77 +286,106 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         const { view, section: shownSection } = shownOf()
         if (view === undefined) return Text({ dimColor: true, children: notice ?? 'Reading your mods…' })
         const sections = sectionsOf(view)
-        const list = Box({
-          flexDirection: 'column',
-          minWidth: 18,
-          children: views.map((each) => {
-            const label = `${each === view ? '▸' : ' '} ${each.name}${each.isOn ? '' : ' (off)'}`
-            return each === view
-              ? Text({ bold: true, children: label })
-              : Button({
-                  plain: true,
-                  key: `mod:${each.name}`,
-                  label,
-                  onPress: () => {
-                    mod.state.session.selected = each.name
-                    mod.state.session.pageParams = null
-                    mod.state.memory.removing = null
-                    changed()
-                  },
-                })
+        const status = (each: ModView) => (!each.isOn ? Text({ dimColor: true, children: '○ ' }) : each.pendingSteps.length > 0 ? Text({ color: 'warning', children: '● ' }) : Text({ dimColor: true, children: '● ' }))
+        const rowLabel = (each: ModView) => `${each.name}${each.isOn ? '' : ' (off)'}`
+        const listColumns = Math.max(...views.map((each) => rowLabel(each).length)) + statusColumns + rowPadding + panelColumns
+        const isWide = columns - listColumns - 1 >= detailMinColumns
+        const mods = Panel({
+          title: 'Mods',
+          children: Box({
+            flexDirection: 'column',
+            children: views.map((each) =>
+              each === view
+                ? Box({ backgroundColor: selectedColor, paddingX: 1, children: Text({ wrap: 'truncate-end', children: [status(each), Text({ bold: true, children: rowLabel(each) })] }) })
+                : Box({
+                    paddingX: 1,
+                    children: Button({
+                      plain: true,
+                      dimColor: true,
+                      key: `mod:${each.name}`,
+                      onPress: () => {
+                        mod.state.session.selected = each.name
+                        mod.state.session.pageParams = null
+                        mod.state.memory.removing = null
+                        changed()
+                      },
+                      children: [status(each), rowLabel(each)],
+                    }),
+                  }),
+            ),
           }),
         })
         const actions =
-          view.name === mod.name
-            ? []
-            : removing === view.name
-              ? [
-                  Box({
-                    flexDirection: 'column',
-                    children: [
-                      Text({ color: 'warning', children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.` }),
-                      Box({ gap: 2, children: [Button({ key: 'keep', label: 'Keep', onPress: () => void (mod.state.memory.removing = null) }), Button({ key: 'remove-confirmed', label: 'Remove', onPress: () => remove(view.name) })] }),
-                    ],
-                  }),
-                ]
-              : [Box({ gap: 2, children: [Button({ key: 'turn', label: view.isOn ? 'Turn off' : 'Turn on', onPress: () => turn(view.name, !view.isOn) }), Button({ key: 'remove', label: 'Remove', onPress: () => void (mod.state.memory.removing = view.name) })] })]
-        const pending =
-          view.pendingSteps.length === 0
+          view.name === mod.name || removing === view.name
             ? []
             : [
                 Box({
                   gap: 2,
+                  flexShrink: 0,
+                  children: [filledButton({ key: 'turn', label: view.isOn ? 'Turn off' : 'Turn on', onPress: () => turn(view.name, !view.isOn) }), filledButton({ key: 'remove', label: 'Remove', onPress: () => void (mod.state.memory.removing = view.name) })],
+                }),
+              ]
+        const header = Box({
+          flexDirection: 'column',
+          children: [
+            Box({ justifyContent: 'space-between', columnGap: 2, flexWrap: 'wrap', children: [Text({ dimColor: true, children: view.version }), ...actions] }),
+            ...(view.description === undefined ? [] : [Text({ dimColor: true, wrap: 'wrap', children: view.description })]),
+          ],
+        })
+        const removal =
+          removing === view.name
+            ? [
+                Box({
+                  flexDirection: 'column',
                   children: [
-                    Text({ color: 'warning', children: `Needs setup: ${view.pendingSteps.join(', ')}` }),
-                    Button({ key: 'finish', label: 'Finish setup', onPress: () => act(async () => (await claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null }), undefined)) }),
+                    Text({ color: 'warning', wrap: 'wrap', children: `Remove ${view.name}? Its uninstall step runs, and Claude Code deletes it.` }),
+                    Box({ gap: 2, flexShrink: 0, children: [filledButton({ key: 'keep', variant: 'primary', label: 'Keep', onPress: () => void (mod.state.memory.removing = null) }), filledButton({ key: 'remove-confirmed', label: 'Remove', onPress: () => remove(view.name) })] }),
                   ],
                 }),
               ]
-        const row = Box({ gap: 3, children: sections.map(({ key, label }) => (key === shownSection ? Text({ bold: true, underline: true, children: label }) : Button({ plain: true, dimColor: true, key: `section:${key}`, label, onPress: () => {
-                mod.state.session.section = key
-                mod.state.session.pageParams = null
-                changed()
-              } }))) })
-        const details = Box({
-          flexDirection: 'column',
-          gap: 1,
-          children: [
-            Box({
-              flexDirection: 'column',
-              children: [
-                Text({ children: [Text({ bold: true, children: view.name }), Text({ dimColor: true, children: ` ${view.version}` })] }),
-                ...(view.description === undefined ? [] : [Text({ dimColor: true, children: view.description })]),
-                ...(view.isOn ? [] : [Text({ color: 'warning', children: 'Off: Claude Code does not load it.' })]),
-              ],
-            }),
-            ...actions,
-            ...pending,
-            row,
-            drawSection(view, shownSection, Math.max(columns - 22, 20), isFocused),
-            ...(notice === null ? [] : [Text({ dimColor: true, children: notice })]),
-          ],
+            : []
+        const finishSetup = () =>
+          act(async () => {
+            const opened: unknown = await claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null })
+            if (isObject(opened)) pages.update(view.name, opened)
+            return undefined
+          })
+        const attention = [
+          ...(view.isOn ? [] : [Text({ color: 'warning', wrap: 'wrap', children: 'Off: Claude Code does not load it.' })]),
+          ...(view.pendingSteps.length === 0 ? [] : [Box({ flexDirection: 'column', children: [Text({ color: 'warning', wrap: 'wrap', children: `Needs setup: ${view.pendingSteps.join(', ')}` }), filledButton({ key: 'finish', variant: 'primary', label: 'Finish setup', onPress: finishSetup })] })]),
+        ]
+        const row = Box({
+          flexWrap: 'wrap',
+          children: sections.map(({ key, label }) =>
+            key === shownSection
+              ? Text({ backgroundColor: selectedColor, bold: true, wrap: 'truncate-end', children: ` ${label} ` })
+              : Box({
+                  paddingX: 1,
+                  flexShrink: 0,
+                  children: Button({
+                    plain: true,
+                    dimColor: true,
+                    key: `section:${key}`,
+                    label,
+                    onPress: () => {
+                      mod.state.session.section = key
+                      mod.state.session.pageParams = null
+                      changed()
+                    },
+                  }),
+                }),
+          ),
         })
-        return Box({ gap: 2, children: [list, details] })
+        const detailColumns = (isWide ? columns - listColumns - 1 : columns) - panelColumns
+        const details = Panel({
+          title: view.name,
+          children: Box({
+            flexDirection: 'column',
+            gap: 1,
+            children: [header, ...removal, ...attention, row, drawSection(view, shownSection, detailColumns, isFocused), ...(notice === null ? [] : [Text({ dimColor: true, wrap: 'wrap', children: notice })])],
+          }),
+        })
+        return isWide ? Box({ flexGrow: 1, columnGap: 1, children: [Box({ width: listColumns, flexShrink: 0, children: mods }), details] }) : Box({ flexDirection: 'column', flexGrow: 1, gap: 1, children: [Box({ flexDirection: 'column', flexShrink: 0, children: mods }), details] })
       },
       shownPage() {
         const { view, section } = shownOf()

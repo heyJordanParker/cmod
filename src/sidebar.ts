@@ -1,7 +1,10 @@
 import type { RenderElement } from 'claude-code'
 import { Dashboard, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
+import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
+import { installPage } from '../node_modules/@cmodjs/core/runtime/installer.js'
 import type { PageRequest, SettingsTab } from '../node_modules/@cmodjs/core/runtime/ui.js'
+import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
 export type OpenPage = { readonly mod: string; readonly page: string; readonly params: unknown }
@@ -14,11 +17,31 @@ const settingsTab = 'settings'
 
 const pageHotkeys = 8
 
+const barColor = 'userMessageBackground'
+
+const shownColor = 'claude'
+
+const focusedKeys = [
+  ['↑↓', 'scroll'],
+  ['tab', 'move'],
+  ['esc', 'hide'],
+] as const
+
+const unfocusedKeys = [['ctrl+x tab', 'focus']] as const
+
+const panelColumns = 4
+
+type TabView = { readonly key: string; readonly label: string; readonly hotkey: string | undefined; readonly isShown: boolean; readonly onClose: (() => void) | undefined }
+
+const tabText = ({ label, hotkey }: Pick<TabView, 'label' | 'hotkey'>) => (hotkey === undefined ? label : `${hotkey}: ${label}`)
+
+const tabColumns = (each: TabView) => [...tabText(each)].length + 2 + (each.onClose === undefined ? 0 : 2)
+
 export const sidebarSession: SidebarState['session'] = { pages: [], shown: dashboardTab }
 
 export type SettingsView = {
   draw(columns: number, isFocused: boolean): RenderElement
-  show(mod: string, section?: SettingsTab | `page:${string}`, params?: unknown): Promise<void>
+  show(mod: string, section?: SettingsTab | 'widgets' | `page:${string}`, params?: unknown): Promise<void>
   shownPage(): Pick<OpenPage, 'mod' | 'page'> | undefined
   closePage(mod: string, page: string): boolean
 }
@@ -30,7 +53,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
   if (pages === undefined || widgets === undefined) throw new Error('cmod draws no Sidebar, because the cmod plugin started without its pages and widgets.')
   const told = new Set<string>()
 
-  const titleOf = (open: OpenPage) => pages.declared().find((each) => each.mod === open.mod)?.pages.find((page) => page.id === open.page)?.title ?? open.page
+  const titleOf = (open: OpenPage) => (open.page === installPage ? `Install ${open.mod}` : (pages.declared().find((each) => each.mod === open.mod)?.pages.find((page) => page.id === open.page)?.title ?? open.page))
 
   const tell = () => {
     const { pages: open, shown } = mod.state.session
@@ -67,38 +90,97 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     show(keyOf(next))
   }
 
-  const tab = (key: string, label: string, hotkey: string | undefined, isShown: boolean): RenderElement =>
-    isShown
-      ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: 'claude', children: hotkey }), ': ']), Text({ bold: true, underline: true, children: label })] })
-      : Button({ plain: true, dimColor: true, key: `tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: () => show(key) })
+  const tab = ({ key, label, hotkey, isShown, onClose }: TabView): RenderElement => {
+    const closes = onClose === undefined ? [] : [onClose]
+    return Box({
+      flexShrink: 0,
+      paddingX: 1,
+      columnGap: 1,
+      ...(isShown ? { backgroundColor: shownColor } : {}),
+      children: isShown
+        ? [Text({ color: 'inverseText', bold: true, children: tabText({ label, hotkey }) }), ...closes.map((close) => Button({ plain: true, key: `close:${key}`, onPress: close, children: Text({ color: 'inverseText', children: '×' }) }))]
+        : [
+            Button({ plain: true, dimColor: true, key: `tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: () => show(key) }),
+            ...closes.map((close) => Button({ plain: true, dimColor: true, key: `close:${key}`, label: '×', onPress: close })),
+          ],
+    })
+  }
+
+  const edge = (glyph: string, left: readonly TabView[], right: TabView, columns: number): RenderElement => {
+    const widths = left.map(tabColumns)
+    const rightColumns = tabColumns(right)
+    const leftColumns = widths.reduce((sum, width) => sum + width, 0)
+    if (leftColumns + rightColumns > columns) return Text({ color: barColor, children: glyph.repeat(columns) })
+    const shown = left.findIndex((each) => each.isShown)
+    const start = shown === -1 ? columns - rightColumns : widths.slice(0, shown).reduce((sum, width) => sum + width, 0)
+    const width = shown === -1 ? rightColumns : (widths[shown] ?? 0)
+    return Text({ children: [Text({ color: barColor, children: glyph.repeat(start) }), Text({ color: shownColor, children: glyph.repeat(width) }), Text({ color: barColor, children: glyph.repeat(columns - start - width) })] })
+  }
+
+  const arrangeWidgets = async () => {
+    show(settingsTab)
+    await view.show(mod.name, 'widgets')
+    tell()
+  }
+
+  const emptyDashboard = () =>
+    Box({
+      flexDirection: 'column',
+      gap: 1,
+      children: [
+        Box({ flexDirection: 'column', children: [Text({ children: 'Nothing is on the Dashboard yet.' }), Text({ dimColor: true, wrap: 'wrap', children: 'Place the widgets your mods add here, in Settings.' })] }),
+        filledButton({ key: 'arrange-widgets', variant: 'primary', label: 'Arrange widgets', onPress: () => void arrangeWidgets() }),
+      ],
+    })
 
   const body = (columns: number, isFocused: boolean): RenderElement => {
     const { pages: open, shown } = mod.state.session
     if (shown === settingsTab) return view.draw(columns, isFocused)
     const page = open.find((each) => keyOf(each) === shown)
     if (page === undefined) {
-      const rows = widgets.rows(Dashboard, columns)
-      return rows.length === 0 ? Text({ dimColor: true, children: 'No widget is on the Dashboard yet. Move one here in Settings, under cmod, Widgets.' }) : Box({ flexDirection: 'column', children: rows })
+      const rows = widgets.rows(Dashboard, columns - panelColumns)
+      return Panel({ title: 'Widgets', children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: 'column', children: rows }) })
     }
-    return pages.element(page.mod, page.page, page.params, columns, isFocused) ?? Text({ dimColor: true, children: `Drawing ${titleOf(page)}…` })
+    return Panel({ title: page.mod, children: pages.element(page.mod, page.page, page.params, columns - panelColumns, isFocused) ?? Text({ dimColor: true, children: `Drawing ${titleOf(page)}…` }) })
   }
 
   const pane: Pane = mod.panes.add({
     id: 'sidebar',
     title: 'Sidebar',
     closeOnEscape: true,
-    render(current, { bodyColumns, isFocused }) {
+    render(current, { bodyColumns, isFocused, placement, scroll }) {
       const { pages: open, shown } = current.state.session
       const isPageShown = open.some((each) => keyOf(each) === shown)
       const shownTab = shown === settingsTab || isPageShown ? shown : dashboardTab
-      const separator = Text({ dimColor: true, children: '│' })
-      const pageTabs = open.flatMap((each, index) => {
-        const key = keyOf(each)
-        const isShown = key === shownTab
-        return [tab(key, titleOf(each), index < pageHotkeys ? `${index + 1}` : undefined, isShown), ...(isShown ? [Button({ plain: true, dimColor: true, key: `close:${key}`, label: '×', onPress: () => void closePage(key) })] : [])]
+      const left: TabView[] = [
+        { key: dashboardTab, label: 'Dashboard', hotkey: '0', isShown: shownTab === dashboardTab, onClose: undefined },
+        ...open.map((each, index): TabView => {
+          const key = keyOf(each)
+          return { key, label: titleOf(each), hotkey: index < pageHotkeys ? `${index + 1}` : undefined, isShown: key === shownTab, onClose: () => void closePage(key) }
+        }),
+      ]
+      const right: TabView = { key: settingsTab, label: 'Settings', hotkey: '9', isShown: shownTab === settingsTab, onClose: undefined }
+      const tabBar = Box({
+        flexDirection: 'column',
+        children: [
+          edge('▄', left, right, bodyColumns),
+          Box({ backgroundColor: barColor, justifyContent: 'space-between', children: [Box({ flexWrap: 'wrap', flexShrink: 1, minWidth: 0, children: left.map(tab) }), tab(right)] }),
+          edge('▀', left, right, bodyColumns),
+        ],
       })
-      const row = Box({ gap: 2, children: [tab(dashboardTab, 'Dashboard', '0', shownTab === dashboardTab), separator, ...pageTabs, ...(pageTabs.length === 0 ? [] : [separator]), tab(settingsTab, 'Settings', '9', shownTab === settingsTab)] })
-      return Box({ flexDirection: 'column', gap: 1, children: [row, body(bodyColumns, isFocused)] })
+      const keyBar = Box({
+        backgroundColor: barColor,
+        paddingX: 1,
+        columnGap: 2,
+        flexWrap: 'wrap',
+        children: (isFocused ? focusedKeys : unfocusedKeys).map(([keys, does]) => Text({ wrap: 'truncate-end', children: [keys, Text({ dimColor: true, children: ` ${does}` })] })),
+      })
+      return Box({
+        flexDirection: 'column',
+        gap: 1,
+        ...(placement === 'dock' ? { minHeight: scroll.bodyRows } : {}),
+        children: [tabBar, Box({ flexDirection: 'column', flexGrow: 1, paddingX: 1, children: body(bodyColumns - 2, isFocused) }), keyBar],
+      })
     },
     onClose: () => tell(),
   })
