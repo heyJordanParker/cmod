@@ -13,7 +13,7 @@ bun install --cwd lint
 bun cli/src/main.ts link .
 ```
 
-`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the cmod plugin in every new Claude Code session. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link cmod before any mod, because `cmod link` of a mod first looks for the cmod plugin in Claude Code.
+`cmod link .` builds the cmod program into `~/.local/bin` and loads the checkout as the cmod plugin in every Claude Code session, the running ones too, from a marketplace it writes in the clone's parent folder. The clone's own `.claude-plugin/marketplace.json` stays the release marketplace. The first time, it asks consent to put the cmod program in `~/.local/bin`: answer `y`. Link cmod before any mod, because `cmod link` of a mod first looks for the cmod plugin in Claude Code.
 
 `cmod link .` refuses when `PATH` finds another `cmod` in a folder ahead of `~/.local/bin`, such as one `npm i -g @cmodjs/cli` installed: `PATH finds cmod at <path> ahead of ~/.local/bin, so the cmod program cmod installs would never run.` It also refuses a `~/.local/bin/cmod` that cmod did not make. Uninstall that `cmod`, such as with `npm uninstall -g @cmodjs/cli`, or put `~/.local/bin` before its folder in `PATH`, then run `bun cli/src/main.ts link .` again.
 

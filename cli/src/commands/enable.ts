@@ -20,9 +20,10 @@ export async function switchPlugin(action: 'enable' | 'disable', argv: string[],
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
   if (positionals.length !== 1) throw new Error(`cmod ${action} takes one name.\n\n${usage}`)
   const name = positionals[0] as string
-  const installed = (await listPlugins()).find((plugin) => plugin.name === name || plugin.id === name)
+  const matching = (await listPlugins()).filter((plugin) => plugin.name === name || plugin.id === name)
+  const installed = matching.find((plugin) => plugin.isLinked) ?? matching[0]
   if (installed === undefined) throw new Error(`No installed plugin is named ${name}. cmod list shows the installed plugins.`)
-  if (installed.scope === 'session') throw new Error(`${installed.id} is linked from ${installed.installPath}, so Claude Code loads it in every session. cmod unlink stops loading it.`)
+  if (installed.isLinked) throw new Error(`${installed.id} is linked from ${installed.installPath}, so Claude Code loads it in every session. cmod unlink stops loading it.`)
 
   const progress = startProgress()
   const word = action === 'enable' ? 'on' : 'off'

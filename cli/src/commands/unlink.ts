@@ -1,10 +1,10 @@
 import { parseArgs } from 'node:util'
 import { readRecord, storeFolder } from '@cmodjs/core/src/records.js'
+import { unlinkPlugin } from '../claude.js'
 import { readText, tilde } from '../files.js'
 import { readPlugin } from '../plugin.js'
 import { readProgram, removeProgram } from '../program.js'
 import { startProgress } from '../progress.js'
-import { removePluginFolder, settingsPath } from '../settings.js'
 import { holdSignals } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
 
@@ -14,10 +14,12 @@ export const help = `Usage: cmod unlink [path]
 
 ${summary}
 
-Stops loading the checkout at path (default: the current folder) in new Claude
-Code sessions. Removes the folder from CLAUDE_CODE_PLUGIN_DIRS in Claude Code's
-settings.json, runs the checkout's uninstall step, and removes the program
-cmod link built, with its links.`
+Stops loading the checkout at path (default: the current folder) in every
+Claude Code session. Uninstalls it through Claude Code and takes it out of the
+marketplace cmod keeps in its parent folder, removing that marketplace with the
+cmod plugin it lists once it lists no checkout. Turns the installed copy of the
+mod that cmod link turned off back on, runs the checkout's uninstall step, and
+removes the program cmod link built, with its links.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
@@ -25,8 +27,8 @@ export async function run(argv: string[]): Promise<number> {
   const plugin = await readPlugin(positionals[0] ?? '.')
   const progress = startProgress()
 
-  if (!(await removePluginFolder(plugin.root))) throw new Error(`${tilde(plugin.root)} is not linked in ${tilde(settingsPath())}.`)
-  progress.succeed(`Unlinked ${tilde(plugin.root)} from ${tilde(settingsPath())}`)
+  if (!(await unlinkPlugin(plugin))) throw new Error(`${tilde(plugin.root)} is not linked. cmod link links it.`)
+  progress.succeed(`Unlinked ${tilde(plugin.root)}`)
 
   const hold = holdSignals()
   try {

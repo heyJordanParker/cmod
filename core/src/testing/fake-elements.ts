@@ -17,7 +17,7 @@ function element(type: string) {
   }
 }
 
-export const elements = {
+export const elements: ElementTable = {
   Box: element('Box'),
   Text: element('Text'),
   Button: element('Button'),
@@ -27,7 +27,10 @@ export const elements = {
   Input: element('Input'),
   Select: element('Select'),
   Image: element('Image'),
-} as unknown as ElementTable
+  Svg: element('Svg'),
+  Raster: element('Raster'),
+  Client: element('Client'),
+}
 
 export function findElement(node: RenderNode, type: string, key: string): Drawn['props'] | undefined {
   if (typeof node === 'string') return undefined
@@ -41,11 +44,12 @@ export function findElement(node: RenderNode, type: string, key: string): Drawn[
 }
 
 export function rowsOf(node: RenderNode, width: number): string[] {
-  if (typeof node !== 'string' && insideOf(node).type === 'Box') return boxRows(insideOf(node), width)
-  const wrap = typeof node === 'string' ? undefined : insideOf(node).props['wrap']
+  const drawn = typeof node === 'string' ? undefined : insideOf(node)
+  if (drawn?.type === 'Box') return boxRows(drawn, width)
+  if (drawn?.type === 'Svg') return []
   return textOf(node)
     .split('\n')
-    .flatMap((line) => fitted(line, width, wrap))
+    .flatMap((line) => fitted(line, width, drawn?.props['wrap']))
 }
 
 export function textOf(node: RenderNode): string {
@@ -89,11 +93,50 @@ function boxRows({ props, children = [] }: Drawn, width: number): string[] {
   const size = (key: string) => (typeof props[key] === 'number' ? props[key] : undefined)
   const space = (side: string, axis: string) => (size(`padding${side}`) ?? size(`padding${axis}`) ?? size('padding') ?? 0) + (size(`margin${side}`) ?? size(`margin${axis}`) ?? size('margin') ?? 0)
   const left = space('Left', 'X')
+  const right = space('Right', 'X')
+  const border = typeof props['borderStyle'] === 'string' ? 1 : 0
   const direction = String(props['flexDirection'] ?? 'row')
-  const ordered = direction.endsWith('-reverse') ? [...children].reverse() : children
-  const inner = Math.min(width, size('width') ?? width) - left - space('Right', 'X')
+  const flowing = children.filter((child) => !isPlaced(child))
+  const ordered = direction.endsWith('-reverse') ? [...flowing].reverse() : flowing
+  const outer = Math.min(width, size('width') ?? width)
+  const inner = outer - left - right - border * 2
   const rows = direction.startsWith('column') ? stacked(ordered, inner, size('rowGap') ?? size('gap') ?? 0) : sideBySide(ordered, inner, size('columnGap') ?? size('gap') ?? 0, props['justifyContent'] === 'space-between')
-  return [...blankRows(space('Top', 'Y')), ...rows.map((row) => paddedTo(`${' '.repeat(left)}${row}`, size('minWidth') ?? 0)), ...blankRows(space('Bottom', 'Y'))]
+  const content = border === 1 && Number.isFinite(inner) ? inner : right === 0 && border === 0 ? 0 : Math.max(widthOf(rows), (size('minWidth') ?? 0) - left - right - border * 2)
+  const padded = [...blankRows(space('Top', 'Y')), ...rows.map((row) => `${' '.repeat(left)}${paddedTo(row, content)}${' '.repeat(right)}`), ...blankRows(space('Bottom', 'Y'))]
+  const framed = border === 0 ? padded : framedRows(padded, left + content + right, props['borderStyle'])
+  return placedOver(
+    framed.map((row) => paddedTo(row, size('minWidth') ?? 0)),
+    children.filter(isPlaced),
+    outer,
+  )
+}
+
+function isPlaced(node: RenderNode): node is RenderElement {
+  if (typeof node === 'string') return false
+  const { props } = insideOf(node)
+  return props['position'] === 'absolute' && typeof props['top'] === 'number'
+}
+
+function framedRows(rows: readonly string[], columns: number, style: unknown): string[] {
+  const [topLeft, topRight, bottomLeft, bottomRight] = style === 'round' ? ['╭', '╮', '╰', '╯'] : ['┌', '┐', '└', '┘']
+  return [`${topLeft}${'─'.repeat(columns)}${topRight}`, ...rows.map((row) => `│${paddedTo(row, columns)}│`), `${bottomLeft}${'─'.repeat(columns)}${bottomRight}`]
+}
+
+function placedOver(rows: readonly string[], placed: readonly RenderElement[], width: number): string[] {
+  const drawn = [...rows]
+  for (const node of placed) {
+    const { props } = insideOf(node)
+    const top = Number(props['top'])
+    const left = typeof props['left'] === 'number' ? props['left'] : 0
+    rowsOf(node, width - left).forEach((line, index) => {
+      const row = top + index
+      if (row < 0 || row >= drawn.length) return
+      const cells = [...paddedTo(drawn[row] ?? '', left)]
+      cells.splice(left, [...line].length, ...line)
+      drawn[row] = cells.join('')
+    })
+  }
+  return drawn
 }
 
 function stacked(children: readonly RenderNode[], width: number, gap: number): string[] {

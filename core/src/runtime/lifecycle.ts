@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Allowed, Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { consentPath, dataFolder, finishStepsMethod, grantFix, coreVersion, isAtLeast, marketplaceOf, parseConsent, pendingStepsMethod, parseEvent, permissionWords, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { consentPath, dataFolder, finishStepsMethod, grantFix, coreVersion, isAtLeast, isProgramNewer, marketplaceOf, parseConsent, pendingStepsMethod, parseEvent, permissionWords, programPath, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -15,8 +15,8 @@ import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBar
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
-import { checkedAnswer, checkingGrants, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
-import { cmodError, locatingPrograms, readLines, type Programs } from './programs.js'
+import { checkedAnswer, checkingGrants, checkRun, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
+import { cmodError, locatingPrograms, readLines, spawnCmod, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
 import { fitsOption } from '../options.js'
 import { createInstaller } from './installer.js'
@@ -31,9 +31,9 @@ import { createToaster, type Failure, type ShownToast, type Toaster } from './to
 import { toolCalls } from './tool-calls.js'
 import { createHotkeys } from './hotkeys.js'
 import { servePages, type Pages } from './pages.js'
-import { drawnParts } from './parts.js'
+import { drawnParts, type DrawnParts } from './parts.js'
 import { createWatches } from './watches.js'
-import { createUi, partMethods, type PartDraw, type PartsUpdate, type SettingsTab, type UiArea } from './ui.js'
+import { createUi, partMethods, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type SettingsTab, type ShownPages, type UiArea } from './ui.js'
 import { serveWidgets } from './widgets.js'
 import { Progress } from '../ui/components.js'
 import { Box, Text } from '../ui/elements.js'
@@ -73,6 +73,7 @@ type ModRuntime = {
   readonly refreshGrants: () => Promise<void>
   readonly permissionRoutes: () => PermissionRoutes | undefined
   readonly options: PluginOptions
+  readonly nextDraw: () => number
 }
 
 type ActiveMod<State extends object, Declared extends Options> = {
@@ -96,6 +97,10 @@ const recordId = 'cmod:record'
 const installRetrySeconds = [2, 4, 8, 16, 32, 64, 128] as const
 
 const cmodCheckMs = 1000
+
+const recordCheckMs = 1000
+
+const drawsPerMs = 1000
 
 const cmodWaitMs = 60_000
 
@@ -135,7 +140,8 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   })
   if (version === undefined || record?.scriptsSha256 !== scripts) return { ...plugin, isInstalled: false, shouldRecord: false }
   const isInstalled = record.version === version || record.root === root
-  return { ...plugin, isInstalled, shouldRecord: isInstalled && record.version !== version }
+  const programModifiedMs = record.program === null ? undefined : (await claude.fs.stat(programPath(store, record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
+  return { ...plugin, isInstalled, shouldRecord: isInstalled && (record.version !== version || isProgramNewer(record, programModifiedMs)) }
 }
 
 async function filesBelow(claude: Claude, folder: string): Promise<string[]> {
@@ -193,13 +199,20 @@ export function createLifecycle<State extends object, Declared extends Options =
   let raise: SessionsClient['raise'] | undefined
   let failure: unknown
   let pluginOptions = options
-  const installer = createInstaller(definition.name, () => claude(), {
-    show: (open) => {
-      if (phase !== 'active') runtime?.toaster.toast.dismiss(installId)
-      runtime?.toaster.toast.info('Installing', { id: askingId, description: 'Waiting for your answer', duration: Infinity, action: { label: 'Answer', onClick: open } })
+  let drawCount = 0
+  const nextDraw = () => (drawCount += 1)
+  const installer = createInstaller(
+    definition.name,
+    () => claude(),
+    {
+      show: (open) => {
+        if (phase !== 'active') runtime?.toaster.toast.dismiss(installId)
+        runtime?.toaster.toast.info('Installing', { id: askingId, description: 'Waiting for your answer', duration: Infinity, action: { label: 'Answer', onClick: open } })
+      },
+      hide: () => runtime?.toaster.toast.dismiss(askingId),
     },
-    hide: () => runtime?.toaster.toast.dismiss(askingId),
-  })
+    nextDraw,
+  )
   let shouldRecord = false
   let recording: Promise<void> | undefined
   let missedSessionStart: Frozen<Args<'classic.SessionStart'>> | undefined
@@ -221,6 +234,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}${fix === undefined ? '' : ` ${fix}`}`, { cause: error })
     const again = retry === undefined ? {} : { retry: () => ((failure = undefined), stopRetrying(), retry().catch(report)) }
     toastFailure({ id: installId, message: reason, ...(fix === undefined ? {} : { description: fix }), ...(error === undefined ? {} : { error }), ...again })
+    watchRecord()
   }
 
   let consented: string | undefined
@@ -332,27 +346,31 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   const runSteps = async (active: Mod<State>) => {
     const steps = asksPerson ? (definition.installer ?? []) : []
-    for (const [index, step] of steps.entries()) {
-      if (await isStepDone(active, step)) continue
-      const isAnswered = (await claude().session.surfaces()).length > 0 && (await installer.step(active, step, index + 1, steps.length))
-      if (!isAnswered) {
-        runtime?.toaster.toast.warning(steps.length - index === 1 ? 'Needs one more step' : `Needs ${steps.length - index} more steps`, {
-          id: 'cmod:steps',
-          description: `Starting with ${step.title}.`,
-          duration: Infinity,
-          action: { label: 'Finish', onClick: () => runSteps(active) },
-        })
-        break
+    try {
+      for (const [index, step] of steps.entries()) {
+        if (await isStepDone(active, step)) continue
+        const isAnswered = (await claude().session.surfaces()).length > 0 && (await installer.step(active, step, index + 1, steps.length))
+        if (!isAnswered) {
+          runtime?.toaster.toast.warning(steps.length - index === 1 ? 'Needs one more step' : `Needs ${steps.length - index} more steps`, {
+            id: 'cmod:steps',
+            description: `Starting with ${step.title}.`,
+            duration: Infinity,
+            action: { label: 'Finish', onClick: () => runSteps(active) },
+          })
+          break
+        }
       }
+    } finally {
+      await installer.close()
     }
-    await installer.close()
   }
 
   const activate = async (): Promise<void> => {
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, steps: plugin.steps, granted, refreshGrants, permissionRoutes, options: pluginOptions }).catch(async (error: unknown) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, steps: plugin.steps, granted, refreshGrants, permissionRoutes, options: pluginOptions, nextDraw }).catch(async (error: unknown) => {
       if (error instanceof MissingOptions && (await askOptions(error))) return undefined
+      await installer.close()
       fail(messageOf(error), error instanceof MissingOptions ? `Retry asks for ${error.keys.length === 1 ? 'it' : 'them'}.` : undefined, begin, error)
       throw error
     })
@@ -363,6 +381,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     raise = active.raise
     router = activeRouter
     phase = 'active'
+    stopWatchingRecord()
     runtime.claude.ui.invalidate('ui.render')
     void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error }))
     const missed = missedSessionStart
@@ -418,9 +437,14 @@ export function createLifecycle<State extends object, Declared extends Options =
       toastFailure({ id: 'cmod:updates', message: 'Could not read whether its marketplace updates automatically', error })
       return undefined
     })
-    const isAccepted = await installer.consent({ ...event, updates })
+    const installedElsewhere = new Promise<'installed'>((resolve) => (settleAsked = () => resolve('installed')))
+    watchRecord()
+    const answer = await Promise.race([installer.consent({ ...event, updates }), installedElsewhere]).finally(() => {
+      settleAsked = undefined
+    })
     await installer.close()
-    if (isAccepted) {
+    if (answer === 'installed') return startInstalled()
+    if (answer) {
       consented = event.sha256
       return install(consented)
     }
@@ -544,19 +568,44 @@ export function createLifecycle<State extends object, Declared extends Options =
   }
   let recordMs = 0
   let readStarted: ((claude: Claude) => Promise<Plugin>) | undefined
-  const recover = async (): Promise<boolean> => {
-    if (plugin === undefined || readStarted === undefined || (phase !== 'failed' && phase !== 'declined')) return false
+  const isNewlyInstalled = async (): Promise<boolean> => {
+    if (plugin === undefined || readStarted === undefined) return false
     const modifiedMs = await stampOf(recordPath(plugin.store, plugin.name))
     if (modifiedMs === recordMs) return false
     recordMs = modifiedMs
     const current = await readStarted(claude())
     if (!current.isInstalled) return false
     plugin = current
+    return true
+  }
+  const startInstalled = async () => {
     failure = undefined
     activation = undefined
     await refreshGrants()
     await finish()
+  }
+  let settleAsked: (() => void) | undefined
+  const recover = async (): Promise<boolean> => {
+    if ((settleAsked === undefined && phase !== 'failed' && phase !== 'declined') || !(await isNewlyInstalled())) return false
+    if (settleAsked === undefined) await startInstalled()
+    else settleAsked()
     return true
+  }
+  let recordCheck: Timer | undefined
+  let checking: Promise<void> | undefined
+  const watchRecord = () => {
+    recordCheck ??= claude().clock.every(recordCheckMs, () => {
+      checking ??= recover()
+        .then(() => undefined)
+        .catch((error: unknown) => claude().ui.log(`${definition.name} could not read whether another cmod installed it: ${messageOf(error)}`, { to: 'debug' }))
+        .finally(() => {
+          checking = undefined
+        })
+    })
+  }
+  const stopWatchingRecord = () => {
+    recordCheck?.cancel()
+    recordCheck = undefined
   }
 
   const refreshGrants = async () => {
@@ -639,6 +688,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       runtime = { claude: programs.claude, toaster: createToaster(claudeCalls, definition.name, () => plugin?.version, () => openSettings('permissions')) }
       readStarted = read
       try {
+        drawCount = (await claudeCalls.clock.now()) * drawsPerMs
         await programs.refresh()
         await begin().catch(report)
       } finally {
@@ -647,8 +697,13 @@ export function createLifecycle<State extends object, Declared extends Options =
     },
     async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>> {
       if (imports !== undefined) bind(imports)
-      if (event === 'ui.render' && installer.draws(e as Frozen<Args<'ui.render'>>)) return installer.draw(e as Frozen<Args<'ui.render'>>) as EventResult<N>
-      if (event === 'ui.close') installer.closed((e as Frozen<Args<'ui.close'>>).id)
+      const asked = e as Frozen<Args<'cmod.call'>> & { readonly caller?: string }
+      if (event === 'cmod.call' && asked.to === definition.name && asked.caller === cmodPluginName) {
+        if (asked.method === partMethods.shown) installer.hear(asked.input as ShownPages)
+        const answered = installer.answer(asked.method, asked.input)
+        if (answered !== undefined) return (await answered.catch((error: unknown) => ({ deny: `${definition.name}: ${messageOf(error)}` }))) as EventResult<N>
+        if (asked.method === partMethods.shown && phase !== 'active') return { value: null } as EventResult<N>
+      }
       if (event === 'classic.SessionStart') {
         missedSessionStart = undefined
         hasHeardSessionStart = true
@@ -659,9 +714,10 @@ export function createLifecycle<State extends object, Declared extends Options =
       }
       if (shouldRecord && event === 'classic.UserPromptSubmit') record()
       if (event === 'classic.UserPromptSubmit' || event === 'classic.SessionStart') await recover().catch((error: unknown) => claude().ui.log(`${definition.name} stays stopped: ${messageOf(error)}`, { to: 'debug' }))
-      const isCallToThisMod = event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name
+      const tool = (e as { readonly tool?: unknown }).tool
+      const isCallToThisMod = (event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) || (event === 'tool.call' && typeof tool === 'string' && tool.startsWith(`mcp__${definition.name}__`))
       if (event === 'cmod.call' && !isCallToThisMod) return next(e)
-      await (event === 'classic.SessionStart' || isCallToThisMod ? holdUntilStarted() : whenActive())
+      await (event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted() : whenActive())
       if (event === 'classic.SessionStart' && phase !== 'active') {
         missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
         return next(e)
@@ -673,7 +729,11 @@ export function createLifecycle<State extends object, Declared extends Options =
       const call = e as Frozen<Args<'cmod.call'>>
       if (event === 'cmod.call' && call.to === definition.name && mod !== undefined) {
         if (call.method === pendingStepsMethod) return { value: await pendingSteps(mod) } as EventResult<N>
-        if (call.method === finishStepsMethod) return (await runSteps(mod), { value: null }) as EventResult<N>
+        if (call.method === finishStepsMethod) {
+          const active = mod
+          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error: unknown) => void toastFailure({ id: 'cmod:steps', message: 'Could not finish the setup', error })), installer.shown()]))
+          return { value: opened } as EventResult<N>
+        }
       }
       if (event === 'classic.UserPromptSubmit' || event === 'classic.SessionStart') await refreshGrants().catch((error: unknown) => claude().ui.log(`${definition.name} keeps its grants from before: ${messageOf(error)}`, { to: 'debug' }))
       if (event === 'classic.UserPromptSubmit' && phase === 'active' && !hasHeardSessionStart) {
@@ -737,7 +797,13 @@ async function createMod<State extends object, Declared extends Options>(definit
   let parentAsked: Promise<string | undefined> | undefined
   let hasEarlierPrompts = true
   let agentType: string | undefined
-  const area = createUi<State>({ name: definition.name, claude, router, report, announce, mod: () => mod })
+  let parts: DrawnParts | undefined
+  const borrowed: BorrowedMarkdown = (styler, cached, input) => {
+    const name = `The markdown style of ${styler}`
+    void parts?.fill(styler, cached, input, name)?.then(() => claude.ui.invalidate('ui.render'))
+    return parts?.element(styler, cached, `${styler}/markdown:`, name, `markdown:${styler}`)
+  }
+  const area = createUi<State>({ name: definition.name, claude, router, report, announce, mod: () => mod, borrowed, nextDraw: runtime.nextDraw })
   const askParent = async (): Promise<string | undefined> => {
     if (definition.name === cmodPluginName) return undefined
     try {
@@ -1003,9 +1069,15 @@ async function createMod<State extends object, Declared extends Options>(definit
   const conversations = definition.name === cmodPluginName ? serveConversations({ claude, router, store: runtime.store, project: () => modState.root, report: (id, message, error) => report({ id, message, error }), clear: (id) => toaster.toast.dismiss(id) }) : undefined
   let pages: Pages | undefined
   const reportPart = (id: string, message: string, error: unknown) => report({ id, message, error })
-  const parts = drawnParts({ claude, report: reportPart, press: (to, input) => pages?.press(to, input) })
-  const widgets = conversations === undefined ? undefined : serveWidgets({ claude, router, store: runtime.store, report: reportPart, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts })
-  pages = widgets === undefined ? undefined : servePages({ claude, router, report: reportPart, widgets, parts })
+  const pressElsewhere = (to: string, input: PartPress) =>
+    void claude.cmod.call({ to, method: partMethods.press, input }).catch((error: unknown) => {
+      parts?.forget(to)
+      claude.ui.invalidate('ui.render')
+      reportPart(`press:${to}`, `${to} did not take the press`, error)
+    })
+  parts = drawnParts({ claude, report: reportPart, press: (to, input) => (pages === undefined ? pressElsewhere(to, input) : pages.press(to, input)) })
+  const widgets = conversations === undefined ? undefined : serveWidgets({ claude, router, store: runtime.store, report: reportPart, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn: area.markdownIn })
+  pages = widgets === undefined ? undefined : servePages({ claude, router, report: reportPart, widgets, parts, tellStylers: area.restyled })
   router.add('cmod.call', async (e, next) => {
     if (e.to !== definition.name) return next(e)
     const call = e as typeof e & { readonly caller?: string }
@@ -1018,12 +1090,12 @@ async function createMod<State extends object, Declared extends Options>(definit
     const ask = beforeAskOf(call)
     if (ask !== undefined) return { value: (await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject)) ?? null }
     if (e.method === partMethods.changed && call.caller !== undefined && pages !== undefined) {
-      return { value: { isHeld: pages.update(call.caller, e.input as PartsUpdate) } }
+      return { value: { isHeld: pages.update(call.caller, e.input as PartsUpdate), stylers: pages.stylers() } }
     }
-    if (call.caller === cmodPluginName) {
+    if (call.caller !== undefined) {
       const turn = e.method === partMethods.draw ? (e.input as { readonly turn?: TurnData }).turn : undefined
-      const answered = area.answer(e.method, turn === undefined ? e.input : { ...(e.input as PartDraw), turn: client.turn(turn) })
-      if (answered !== undefined) return answered
+      const answered = area.answer(e.method, turn === undefined ? e.input : { ...(e.input as PartDraw), turn: client.turn(turn) }, call.caller)
+      if (answered !== undefined) return answered.catch((error: unknown) => ({ deny: `${definition.name}: ${messageOf(error)}` }))
     }
     const served = await conversations?.answer(call)
     return served ?? answerCall(definition.name, api, e)
@@ -1033,7 +1105,20 @@ async function createMod<State extends object, Declared extends Options>(definit
     return ask === undefined ? { deny: `${definition.name}: ${error.message}` } : { value: client.failedBefore(ask.session, ask.event, ask.change, ask.isInProject, error) ?? null }
   })
   const agents = toolCalls(claude, router)
-  keepEngine(mod, { claude: checked, router, toolCalls: agents, report, hasPermissionCheck: () => runtime.permissionRoutes() !== undefined, answerInput: area.answerInput, ...(widgets === undefined ? {} : { widgets }), ...(pages === undefined ? {} : { pages }) })
+  keepEngine(mod, {
+    claude: checked,
+    router,
+    toolCalls: agents,
+    report,
+    hasPermissionCheck: () => runtime.permissionRoutes() !== undefined,
+    answerInput: area.answerInput,
+    spawnCmod: async (args, program) => {
+      await checkRun(grants, 'process.spawn', program.argv)
+      return spawnCmod(claude, args, session, program.env)
+    },
+    ...(widgets === undefined ? {} : { widgets }),
+    ...(pages === undefined ? {} : { pages }),
+  })
   const names = new Set<string>()
   const reserveName = (type: string, name: string, taken: string): Reservation => {
     const key = `${type}:${name}`

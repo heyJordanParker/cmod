@@ -2,6 +2,7 @@ import type { Job } from '../mod.js'
 import { PermissionRefused, programAddresses } from '../runtime/grants.js'
 import { engineOf } from '../runtime/engine.js'
 import { messageOf } from '../utils/text.js'
+import { basename } from '../vendor.js'
 
 export type Program = {
   readonly state: 'stopped' | 'starting' | 'running' | 'backoff' | 'fatal'
@@ -12,12 +13,14 @@ type Address = Awaited<ReturnType<Program['ready']>>
 
 const backoffSeconds = [1, 2, 4, 8, 16] as const
 
-export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program> {
-  const { command, environment } = options
-  return ({ mod, announce }) => {
-    const { claude, report } = engineOf(mod)
+export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean }): Job<Program> {
+  const { command, environment, singleInstance = false } = options
+  return ({ mod, announce, reserveName }) => {
+    const { claude, report, spawnCmod } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
+    if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
+    const request = { argv: command, ...(environment === undefined ? {} : { env: environment }) }
     let state: Program['state'] = 'stopped'
     let address: Address | undefined
     let failure: Error | undefined
@@ -25,7 +28,15 @@ export function program(options: { readonly command: readonly string[]; readonly
     const waiting: { resolve: (address: Address) => void; reject: (error: Error) => void }[] = []
     const ownAddresses = programAddresses(mod)
 
+    const spawn = async () => (singleInstance ? spawnCmod(['program', mod.name, '--', ...command], request) : claude.process.spawn(request))
+
+    const forget = () => {
+      if (address !== undefined) ownAddresses.delete(freeAddressOf(address))
+      address = undefined
+    }
+
     const stop = (reason: string) => {
+      forget()
       state = 'fatal'
       failure = new Error(`${mod.name}: the ${executable} program stopped: ${reason}`)
       const retry = () => {
@@ -37,37 +48,42 @@ export function program(options: { readonly command: readonly string[]; readonly
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
     }
 
+    const show = (next: Address) => {
+      forget()
+      address = next
+      state = 'running'
+      exits = 0
+      ownAddresses.add(freeAddressOf(next))
+      for (const waiter of waiting.splice(0)) waiter.resolve(next)
+    }
+
     const start = async () => {
       state = 'starting'
-      let stdout = ''
+      let pending = ''
       let lastError = ''
       try {
-        for await (const piece of claude.process.spawn({ argv: command, ...(environment === undefined ? {} : { env: environment }) })) {
+        for await (const piece of await spawn()) {
           if (piece.stream === 'stderr') {
             lastError = piece.text.trim().split('\n').at(-1) ?? lastError
             continue
           }
-          if (state !== 'starting') continue
-          stdout += piece.text
-          const end = stdout.indexOf('\n')
-          if (end < 0) continue
-          const first = stdout.slice(0, end).trim()
-          address = addressOf(first)
-          if (address === undefined) {
-            stop(`its first line is "${first}". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.`)
-            return
+          if (address !== undefined && !singleInstance) continue
+          const lines = `${pending}${piece.text}`.split('\n')
+          pending = lines.pop() ?? ''
+          for (const line of singleInstance ? lines : lines.slice(0, 1)) {
+            const next = addressOf(line.trim())
+            if (next === undefined) {
+              stop(`its first line is "${line.trim()}". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.`)
+              return
+            }
+            show(next)
           }
-          state = 'running'
-          exits = 0
-          ownAddresses.add(address.socketPath ?? new URL(address.url).host)
-          for (const waiter of waiting.splice(0)) waiter.resolve(address)
         }
       } catch (error) {
         if (error instanceof PermissionRefused) return stop(messageOf(error))
         lastError = messageOf(error)
       }
-      if (address !== undefined) ownAddresses.delete(address.socketPath ?? new URL(address.url).host)
-      address = undefined
+      forget()
       exits += 1
       const wait = backoffSeconds[exits - 1]
       if (wait === undefined) {
@@ -103,4 +119,8 @@ function addressOf(line: string): Address | undefined {
   const unix = /^unix:(\/.+)$/.exec(line)
   if (unix?.[1] !== undefined) return { url: 'http://localhost', socketPath: unix[1] }
   return undefined
+}
+
+function freeAddressOf(address: Address): string {
+  return address.socketPath ?? new URL(address.url).host
 }

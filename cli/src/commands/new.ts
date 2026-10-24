@@ -209,7 +209,7 @@ The ${name} mod counts the prompts of this session and shows the count in the Si
 - \`src/components/\` holds the components pages, panes, widgets, and styles draw with.
 - \`cmod check\` writes the hotkeys \`defineMod\` declares into \`package.json\` \`"cmod.hotkeys"\`, which cmod binds at install.
 - \`rules/\` holds rules in Claude Code's rule format. cmod links the folder into Claude Code's rules folder while the mod is on and has the \`prompt\` permission.
-- \`cmod link\` loads this checkout in every new Claude Code session. \`cmod unlink\` stops it.
+- \`cmod link\` loads this checkout in every Claude Code session, the running ones too. \`cmod unlink\` stops it.
 - \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release in a temporary folder without pushing, and leaves this checkout as it was.
 `
   }

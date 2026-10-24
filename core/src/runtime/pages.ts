@@ -1,7 +1,9 @@
 import type { RenderElement } from 'claude-code'
 import { isObject } from '../records.js'
+import { Text } from '../ui/elements.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { cmodPluginName } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
 import { partMethods, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
@@ -15,6 +17,7 @@ export type PageApply = (mod: string, requests: readonly PageRequest[]) => Promi
 
 export type Pages = {
   declared(): readonly ModPages[]
+  stylers(): readonly string[]
   element(mod: string, page: string, params: unknown, columns: number, isFocused: boolean): RenderElement | undefined
   press(mod: string, press: PartPress): void
   update(mod: string, update: PartsUpdate): boolean
@@ -27,8 +30,23 @@ export function pagesOf(input: unknown): PageDeclaration[] {
   return listed.filter(isObject).flatMap((each) => (typeof each['id'] === 'string' && typeof each['title'] === 'string' && (each['place'] === 'sidebar' || each['place'] === 'settings') ? [{ id: each['id'], title: each['title'], place: each['place'] }] : []))
 }
 
-export function servePages({ claude, router, report, widgets, parts }: { readonly claude: Claude; readonly router: Router; readonly report: (id: string, message: string, error: unknown) => void; readonly widgets: Pick<Widgets, 'update'>; readonly parts: DrawnParts }): Pages {
+export function servePages({
+  claude,
+  router,
+  report,
+  widgets,
+  parts,
+  tellStylers,
+}: {
+  readonly claude: Claude
+  readonly router: Router
+  readonly report: (id: string, message: string, error: unknown) => void
+  readonly widgets: Pick<Widgets, 'update'>
+  readonly parts: DrawnParts
+  readonly tellStylers: (stylers: readonly string[]) => void
+}): Pages {
   const declared = new Map<string, readonly PageDeclaration[]>()
+  const stylers = new Set<string>()
   const asking = new Map<string, Promise<void>>()
   const pressing = new Set<Promise<void>>()
   let waiting: { readonly mod: string; readonly requests: readonly PageRequest[] }[] = []
@@ -44,16 +62,18 @@ export function servePages({ claude, router, report, widgets, parts }: { readonl
     for (const { mod, requests } of taken) await run(mod, requests)
   }
 
-  const settle = async () => {
-    while (pressing.size > 0) await Promise.allSettled(pressing)
+  const settle = async (earlier: ReadonlySet<Promise<void>>) => {
+    const own = () => [...pressing].filter((pending) => !earlier.has(pending))
+    for (let pending = own(); pending.length > 0; pending = own()) await Promise.allSettled(pending)
     await takeWaiting()
   }
 
   const wrapped = async <Answer>(next: () => Promise<Answer>): Promise<Answer> => {
     inputDepth += 1
+    const earlier = new Set(pressing)
     try {
       const answer = await next()
-      await settle()
+      await settle(earlier)
       return answer
     } finally {
       inputDepth -= 1
@@ -77,9 +97,22 @@ export function servePages({ claude, router, report, widgets, parts }: { readonl
     return pending
   }
 
+  const restyle = (mod: string, isStyler: boolean) => {
+    if (!isStyler && !stylers.delete(mod)) return
+    if (isStyler) stylers.add(mod)
+    parts.forget(mod)
+    const listed = [...stylers]
+    tellStylers(listed)
+    for (const told of declared.keys()) {
+      if (told !== cmodPluginName) void claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error: unknown) => claude.ui.log(`cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`, { to: 'debug' }))
+    }
+  }
+
   const update = (mod: string, { parts: listing, redraw, requests, isAsked }: PartsUpdate) => {
     if (listing !== undefined) declared.set(mod, pagesOf(listing))
-    if (listing !== undefined || redraw === true) widgets.update(mod, { ...(listing === undefined ? {} : { parts: listing }), ...(redraw === undefined ? {} : { redraw }) })
+    if (listing !== undefined) restyle(mod, isObject(listing) && listing['stylesMarkdown'] === true)
+    const isRedrawn = redraw === true || requests?.some((request) => 'open' in request) === true
+    if (listing !== undefined || isRedrawn) widgets.update(mod, { ...(listing === undefined ? {} : { parts: listing }), ...(isRedrawn ? { redraw: true } : {}) })
     if (requests === undefined || requests.length === 0) return false
     if (isAsked !== true) return (void run(mod, requests), false)
     waiting.push({ mod, requests })
@@ -106,19 +139,23 @@ export function servePages({ claude, router, report, widgets, parts }: { readonl
 
   const cacheKey = (page: string, params: unknown, columns: number, isFocused: boolean) => `${page}\u0000${JSON.stringify(params ?? null)}\u0000${columns}\u0000${isFocused}`
 
+  const plain = <Data,>(data: Data): Data => JSON.parse(JSON.stringify(data)) as Data
+
   return {
     declared: () => [...declared].map(([mod, pages]) => ({ mod, pages })),
+    stylers: () => [...stylers],
     element(mod, page, params, columns, isFocused) {
       if (!declared.has(mod)) void ask(mod)
       const cached = cacheKey(page, params, columns, isFocused)
       const name = `The ${page} page of ${mod}`
-      void parts.fill(mod, cached, { page, params: params ?? null, columns, isFocused }, name)?.then(() => claude.ui.invalidate('ui.render'))
-      return parts.element(mod, cached, `${mod}/${page}:`, name, `page:${mod}/${page}`)
+      void parts.fill(mod, cached, { page, params: plain(params ?? null), columns, isFocused }, name)?.then(() => claude.ui.invalidate('ui.render'))
+      const failure = parts.failure(mod, cached)
+      return parts.element(mod, cached, `${mod}/${page}:`, name, `page:${mod}/${page}`) ?? (failure === undefined ? undefined : Text({ color: 'error', children: `${name} could not draw: ${failure}` }))
     },
     press,
     update,
     tell(mod, shown) {
-      void claude.cmod.call({ to: mod, method: partMethods.shown, input: shown }).catch((error: unknown) => claude.ui.log(`cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`, { to: 'debug' }))
+      void claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error: unknown) => claude.ui.log(`cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`, { to: 'debug' }))
     },
     apply(listener) {
       applyTo = listener

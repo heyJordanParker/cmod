@@ -20,7 +20,7 @@ export type Fakes = {
   config: { list?: Claude['config']['list'] }
   command: { list?: Claude['command']['list']; run?: Claude['command']['run'] }
   ui: { ask?: Claude['ui']['ask']; open?: Claude['ui']['open']; scroll?: Claude['ui']['scroll']; copy?: Claude['ui']['copy']; focus?: Claude['ui']['focus'] }
-  session: { messages?: Claude['session']['messages']; append?: Claude['session']['append']; send?: Claude['session']['send'] }
+  session: { messages?: Claude['session']['messages']; append?: Claude['session']['append']; send?: Claude['session']['send']; surfaces?: Claude['session']['surfaces']; usage?: Claude['session']['usage'] }
   prompt: { submit?: Claude['prompt']['submit'] }
   model: { complete?: Claude['model']['complete'] }
   agent: { list?: Claude['agent']['list']; spawn?: Claude['agent']['spawn'] }
@@ -49,6 +49,7 @@ export type FakeClaude = {
   readonly shown: Shown
   readonly store: Map<string, unknown>
   settle(): Promise<void>
+  placePane(id: string): void
 }
 
 export function calledAnswer(caller: string, answer: EventResult<'cmod.call'>): unknown {
@@ -78,6 +79,16 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   const rejected = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Promise<Result>) | undefined) => {
     const run = faked(call, answer)
     return async (...args: Args): Promise<Result> => run(...args)
+  }
+
+  const cmodCall = rejected('cmod.call', () => fakes.cmod.call ?? cmodTakesParts)
+
+  const clonedAsClaudeCodeDoes = <Args,>(args: Args): Args => {
+    try {
+      return structuredClone(args)
+    } catch (error) {
+      throw new Error(`interface.call: arguments are not plain data: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   const cmodTakesParts: Claude['cmod']['call'] = async (input) => {
@@ -118,7 +129,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         lines.push(text)
       },
       notice: () => undefined,
-      invalidate: () => undefined,
+      invalidate: (event) => void calls.push({ call: 'ui.invalidate', args: [event] }),
       ask: rejected('ui.ask', () => fakes.ui.ask),
       open: async (pane) => {
         calls.push({ call: 'ui.open', args: [pane] })
@@ -188,8 +199,8 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       root: async () => plugin.root,
       cwd: async () => plugin.root,
       model: async () => 'test-model',
-      usage: async () => ({ startedAt: Date.parse('2026-01-01T00:00:00.000Z'), context: { window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
-      surfaces: async () => ['terminal'],
+      usage: () => fakes.session.usage?.() ?? Promise.resolve({ startedAt: Date.parse('2026-01-01T00:00:00.000Z'), context: { window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
+      surfaces: () => fakes.session.surfaces?.() ?? Promise.resolve(['terminal']),
       messages: rejected('session.messages', () => fakes.session.messages as ((args?: unknown) => Promise<unknown>) | undefined) as Claude['session']['messages'],
       append: rejected('session.append', () => fakes.session.append ?? appendNote),
       send: rejected('session.send', () => fakes.session.send ?? (async () => ({ isDelivered: true as const }))),
@@ -217,7 +228,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       dataHome: async () => undefined,
       configHome: async () => undefined,
     },
-    cmod: { call: rejected('cmod.call', () => fakes.cmod.call ?? cmodTakesParts) },
+    cmod: { call: async (args) => cmodCall(clonedAsClaudeCodeDoes(args)) },
   }
 
   const settle = async () => {
@@ -228,7 +239,11 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     } while (calls.length !== seen)
   }
 
-  return { claude, calls, fakes, shown, store, settle }
+  const placePane = (id: string) => {
+    if (unplacedPanes.delete(id)) shown.openPanes.add(id)
+  }
+
+  return { claude, calls, fakes, shown, store, settle, placePane }
 }
 
 declare function setTimeout(fn: () => void, ms: number): unknown

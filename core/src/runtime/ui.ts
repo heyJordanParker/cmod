@@ -1,11 +1,11 @@
-import type { ElementTable, MarkdownProps, PaneOpenArgs, RenderElement } from 'claude-code'
+import type { Args, ElementTable, Frozen, MarkdownProps, PaneOpenArgs, RenderElement } from 'claude-code'
 import type { Mod, Turn } from '../mod.js'
 import { isObject } from '../records.js'
 import { TurnEnd, type Area, type Widget, type WidgetContext, type WidgetInit } from '../ui/areas.js'
-import { Box, drawWith, elementData, Text, type Handler } from '../ui/elements.js'
-import type { Block, MarkdownReader } from '../ui/markdown.js'
+import { Box, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
+import type { Block, MarkdownPiece, MarkdownReader } from '../ui/markdown.js'
 import { checkPane, checkPart, sizeKeys, type OpenOptions, type Page, type PageInit, type Pane, type PaneInit, type ScrollOptions, type ScrollTarget } from '../ui/panes.js'
-import { componentOf, nameOf, type Kind, type Style, type StyleInit } from '../ui/styles.js'
+import { componentOf, nameOf, type Kind, type Style, type StyledAt, type StyleInit } from '../ui/styles.js'
 import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -19,19 +19,33 @@ export const partMethods = {
   press: 'cmod:press',
   shown: 'cmod:shown',
   changed: 'cmod:partsChanged',
+  stylers: 'cmod:markdownStylers',
 } as const
 
 export type PagePlace = 'sidebar' | 'settings'
 
-export type WidgetDeclaration = { readonly id: string; readonly title: string; readonly areas: readonly Area[] }
+export type WidgetDeclaration = { readonly id: string; readonly title: string; readonly areas: readonly Area[]; readonly place?: NonNullable<WidgetInit['place']> }
 
 export type PageDeclaration = { readonly id: string; readonly title: string; readonly place: PagePlace }
 
-export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PageDeclaration[] }
+export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PageDeclaration[]; readonly stylesMarkdown?: true }
 
 export type PartDraw =
   | { readonly widget: string; readonly area: Area; readonly columns: number; readonly turn?: Turn }
   | { readonly page: string; readonly params: unknown; readonly columns: number; readonly isFocused: boolean }
+  | ({ readonly markdown: string } & StyledAt)
+
+export type BorrowedMarkdown = (mod: string, cached: string, input: { readonly markdown: string } & StyledAt) => RenderElement | undefined
+
+const unmeasuredColumns = 80
+
+export function viewportColumns(e: Frozen<Args<'ui.render'>>): number {
+  return e.viewport?.columns ?? unmeasuredColumns
+}
+
+export function styledAt(e: Frozen<Args<'ui.render'>>, columns = viewportColumns(e)): StyledAt {
+  return { surface: e.surface, columns }
+}
 
 export type PartPress = { readonly draw: number; readonly handler: number; readonly args: readonly unknown[] }
 
@@ -81,6 +95,8 @@ function threw(error: unknown): string {
 
 type DrawnPiece = { readonly drawing: RenderElement; readonly isClaudesRow: boolean }
 
+type SentDrawing = { readonly draws: readonly number[]; readonly tree: string; readonly render: () => RenderElement | undefined }
+
 async function drawComponent<Given extends object>(
   table: ElementTable,
   draw: (Default: (props: Given & { readonly children?: unknown }) => RenderElement) => RenderElement,
@@ -122,7 +138,7 @@ function drawPieces(pieces: readonly DrawnPiece[], place: 'pane' | 'opensReply' 
   return column([opening, Box({ paddingLeft: 2, children: column(rest) })])
 }
 
-function merged(updates: readonly PartsUpdate[]): PartsUpdate {
+export function merged(updates: readonly PartsUpdate[]): PartsUpdate {
   const parts = updates.findLast((update) => update.parts !== undefined)?.parts
   const requests = updates.flatMap((update) => update.requests ?? [])
   const isRedrawn = updates.some((update) => update.redraw === true)
@@ -145,6 +161,8 @@ export type UiOptions<State extends object> = {
   readonly report: (failure: Failure) => void
   readonly announce: (feature: string) => void
   readonly mod: () => Mod<State>
+  readonly borrowed: BorrowedMarkdown
+  readonly nextDraw: () => number
 }
 
 export type UiArea<State extends object> = {
@@ -155,7 +173,9 @@ export type UiArea<State extends object> = {
   readonly styles: Mod<State>['styles']
   asked<Value>(run: () => Value | Promise<Value>): Promise<Value>
   answerInput<Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>): Promise<Answer>
-  answer(method: string, input: unknown): Promise<{ readonly value: unknown }> | undefined
+  answer(method: string, input: unknown, caller: string): Promise<{ readonly value: unknown }> | undefined
+  markdownIn(table: ElementTable, at: StyledAt): ((props: MarkdownProps) => RenderElement) | undefined
+  restyled(stylers: readonly string[]): void
   started(): void
   changed(): void
   restorePanes(): Promise<void>
@@ -163,23 +183,28 @@ export type UiArea<State extends object> = {
 
 const keptDrawInputs = 200
 
-export function createUi<State extends object>({ name, claude, router, report, announce, mod }: UiOptions<State>): UiArea<State> {
+export function createUi<State extends object>({ name, claude, router, report, announce, mod, borrowed, nextDraw }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, AddedPane<State>>()
   const paneLogs = new Map<string, (failure: string) => void>()
   const openPanes = new Set<string>()
   const paneStates = new Map<string, { readonly isShown: boolean; readonly isFocused: boolean }>()
   const syncPanes = async () => {
-    for (const open of await claude.ui.panes()) {
-      if (!panes.has(open.id)) continue
-      if (open.isPlaced) openPanes.add(open.id)
-      paneStates.set(open.id, { isShown: open.isShown, isFocused: open.isFocused })
+    const listed = new Map((await claude.ui.panes()).map((open) => [open.id, open]))
+    for (const id of panes.keys()) {
+      const open = listed.get(id)
+      if (open?.isPlaced === true) openPanes.add(id)
+      else openPanes.delete(id)
+      if (open === undefined) paneStates.delete(id)
+      else paneStates.set(id, { isShown: open.isShown, isFocused: open.isFocused })
     }
   }
-  const readPanes = () => void syncPanes().catch((error: unknown) => claude.ui.log(`${name} keeps its panes' shown and focused state from before: ${messageOf(error)}`, { to: 'debug' }))
+  const readPanes = () => syncPanes().catch((error: unknown) => claude.ui.log(`${name} keeps its panes' open, shown, and focused state from before: ${messageOf(error)}`, { to: 'debug' }))
   const requestedSizes = new Map<string, PaneSize>()
   const styles = new Set<string>()
   const markdownRenders = new Map<string, MarkdownRender>()
   let read: MarkdownReader | undefined
+  let stylers: readonly string[] = []
+  let stylersSeen = 0
   let isRouted = false
   let isResizeQueued = false
   const widgets = new Map<string, WidgetInit<State>>()
@@ -187,20 +212,55 @@ export function createUi<State extends object>({ name, claude, router, report, a
   const pages = new Map<string, AddedPage<State>>()
   let shownPages: ShownPages = { open: [], shown: null, isFocused: false }
   const draws = new Map<number, { readonly id: string; readonly handlers: readonly Handler[] }>()
-  const latestDraws = new Map<string, Map<string, readonly number[]>>()
+  const latestDraws = new Map<string, Map<string, SentDrawing>>()
   const failedDraws = new Set<string>()
-  let drawCount = 0
   let beforeStart: PartsUpdate[] | undefined = []
   let askedDepth = 0
+  const askedCalls = new Set<Promise<void>>()
   let unheldRequests = 0
   let collected: PartsUpdate[] | undefined
   let collecting = 0
   let queued: PartsUpdate[] | undefined
 
   const partList = (): PartList => ({
-    widgets: [...widgets.values()].map(({ id, title, areas: listed }) => ({ id, title, areas: listed })),
+    widgets: [...widgets.values()].map(({ id, title, areas: listed, place }) => ({ id, title, areas: listed, ...(place === undefined ? {} : { place }) })),
     pages: [...pages.values()].map(({ init: { id, title }, place }) => ({ id, title, place })),
+    ...(markdownRenders.size > 0 ? { stylesMarkdown: true } : {}),
   })
+
+  const hear = (listed: unknown, isRestyled: boolean) => {
+    if (!Array.isArray(listed)) return
+    const heard = listed.filter((styler): styler is string => typeof styler === 'string' && styler !== name)
+    if (!isRestyled && heard.join('\0') === stylers.join('\0')) return
+    stylers = heard
+    stylersSeen += 1
+    claude.ui.invalidate('ui.render')
+  }
+
+  const treeOf = (render: () => RenderElement | undefined, handlers: Handler[]) => {
+    const drawn = render()
+    return drawn === undefined ? null : elementData(drawn, handlers)
+  }
+
+  const isAnyDrawingChanged = () => {
+    for (const [key, inputs] of latestDraws) {
+      if (key === 'markdown') continue
+      for (const sent of inputs.values()) {
+        const handlers: Handler[] = []
+        try {
+          if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree) return true
+        } catch (error) {
+          claude.ui.log(`${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`, { to: 'debug' })
+          return true
+        }
+        const latest = sent.draws.at(-1)
+        if (latest !== undefined && draws.has(latest)) draws.set(latest, { id: key, handlers })
+      }
+    }
+    return false
+  }
+
+  const withNeededRedraw = ({ redraw, ...update }: PartsUpdate): PartsUpdate => (redraw === true && isAnyDrawingChanged() ? { ...update, redraw } : update)
 
   const send = (update: PartsUpdate) => {
     if (collected !== undefined) return void collected.push(update)
@@ -209,23 +269,31 @@ export function createUi<State extends object>({ name, claude, router, report, a
     if (queued !== undefined && !isAsked) return void queued.push(update)
     const batch: PartsUpdate[] = [update]
     if (!isAsked) queued = batch
-    const tell = () => {
+    const tell = async () => {
       if (queued === batch) queued = undefined
-      const input = { ...merged(batch), ...(isAsked ? { isAsked: true as const } : {}) }
+      const needed = withNeededRedraw(merged(batch))
+      if (Object.keys(needed).length === 0) return
+      const input = { ...needed, ...(isAsked ? { isAsked: true as const } : {}) }
       return claude.cmod.call({ to: cmodPluginName, method: partMethods.changed, input }).then(
         (answer) => {
           if (isAsked && input.requests !== undefined && !(isObject(answer) && answer['isHeld'] === true)) unheldRequests += 1
+          if (isObject(answer) && name !== cmodPluginName) hear(answer['stylers'], false)
         },
         (error: unknown) => claude.ui.log(`${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`, { to: 'debug' }),
       )
     }
-    return isAsked ? tell() : Promise.resolve().then(tell)
+    if (!isAsked) return Promise.resolve().then(tell)
+    const told = tell().finally(() => askedCalls.delete(told))
+    askedCalls.add(told)
+    return told
   }
 
   const asked = async <Value>(run: () => Value | Promise<Value>): Promise<Value> => {
     askedDepth += 1
     try {
-      return await run()
+      const value = await run()
+      while (askedCalls.size > 0) await Promise.allSettled(askedCalls)
+      return value
     } finally {
       askedDepth -= 1
     }
@@ -241,7 +309,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     }
     const mine = collected
     collected = collecting === 0 ? undefined : []
-    return merged(mine)
+    return withNeededRedraw(merged(mine))
   }
 
   const logOnce = (what: string) => {
@@ -254,25 +322,46 @@ export function createUi<State extends object>({ name, claude, router, report, a
 
   const renderOf = (type: string) => markdownRenders.get(type)
 
-  const markdownIn = (table: ElementTable) => {
+  const drawnBlock = (piece: MarkdownPiece<MarkdownRender>, at: StyledAt, drawClaudes: (text: string) => RenderElement, table?: ElementTable): RenderElement => {
+    if ('text' in piece) return drawClaudes(piece.text)
+    const { render, props: block } = piece
+    const draw = () => render.Component({ ...block, ...at, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) })
+    try {
+      return table === undefined ? draw() : drawWith(table, draw)
+    } catch (error) {
+      render.log(threw(error))
+      return drawClaudes(block.source)
+    }
+  }
+
+  const othersFrom =
+    (table: ElementTable, at: StyledAt, from: number) =>
+    (props: MarkdownProps): RenderElement => {
+      for (const [index, styler] of stylers.entries()) {
+        if (index < from) continue
+        const cached = `${stylersSeen}\u0000${at.surface}\u0000${at.columns}\u0000${props.text}`
+        const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }), othersFrom(table, at, index + 1))
+        if (drawn !== undefined) return drawn
+      }
+      return table.Markdown(props)
+    }
+
+  const markdownIn = (table: ElementTable, at: StyledAt) => {
     const reader = read
-    if (reader === undefined) return undefined
+    const others = othersFrom(table, at, 0)
+    if (reader === undefined) return stylers.length === 0 ? undefined : others
     return (props: MarkdownProps) => {
       const pieces = reader(props.text, renderOf)
-      if (pieces.every((piece) => 'text' in piece)) return table.Markdown(props)
-      const drawClaudes = (text: string) => table.Markdown({ ...props, text })
-      const drawings = pieces.map((piece) => {
-        if ('text' in piece) return drawClaudes(piece.text)
-        const { render, props: block } = piece
-        try {
-          return drawWith(table, () => render.Component({ ...block, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) }))
-        } catch (error) {
-          render.log(threw(error))
-          return drawClaudes(block.source)
-        }
-      })
+      if (pieces.every((piece) => 'text' in piece)) return others(props)
+      const drawings = pieces.map((piece) => drawnBlock(piece, at, (text) => others({ ...props, text }), table))
       return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })), 'pane')
     }
+  }
+
+  const markdownDrawing = (text: string, at: StyledAt): RenderElement => {
+    const pieces = read === undefined ? [] : read(text, renderOf)
+    if (pieces.every((piece) => 'text' in piece)) return Markdown({ text })
+    return drawPieces(pieces.map((piece) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source })), isClaudesRow: false })), 'pane')
   }
 
   const routeMarkdown = (createReader: () => MarkdownReader) => {
@@ -291,7 +380,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
           const { render, props: block } = piece
           const component = await drawComponent<{ readonly source?: string }>(
             table,
-            (Default) => render.Component({ ...block, Default }),
+            (Default) => render.Component({ ...block, ...styledAt(e), id: e.requestId, Default }),
             ({ source = block.source }, isClaudesRow) => drawClaudes(source, index === 0 && isClaudesRow),
           )
           if (!('failure' in component)) return component
@@ -337,10 +426,10 @@ export function createUi<State extends object>({ name, claude, router, report, a
       const { init } = added
       openPanes.add(init.id)
       paneStates.set(init.id, { isShown: true, isFocused: e.props.isFocused })
-      readPanes()
+      void readPanes()
       const table = claude.ui.resolve(e)
       try {
-        return drawWith(table, () => init.render(mod(), { ...e.props, params: added.params }), markdownIn(table))
+        return drawWith(table, () => init.render(mod(), { ...e.props, surface: e.surface, params: added.params }), markdownIn(table, styledAt(e, e.props.bodyColumns)))
       } catch (error) {
         paneLogs.get(init.id)?.(`threw: ${messageOf(error)}`)
         return drawWith(table, () => Text({ color: 'error', children: `The ${init.title} pane could not draw: ${messageOf(error)}` }))
@@ -356,8 +445,8 @@ export function createUi<State extends object>({ name, claude, router, report, a
     router.add('ui.close', async (e, next) => {
       openPanes.delete(e.id)
       paneStates.delete(e.id)
-      readPanes()
       const closed = await next(e)
+      await readPanes()
       const init = panes.get(e.id)?.init
       if (init?.onClose !== undefined) await handle(init, 'onClose', () => init.onClose?.(mod(), e))
       return closed
@@ -495,13 +584,14 @@ export function createUi<State extends object>({ name, claude, router, report, a
     const Component = (props: object) => render(mod(), props as never)
     const stop = (subscription?: Subscription) => () => {
       subscription?.remove()
-      if (markdown !== undefined) markdownRenders.delete(markdown.markdown)
+      if (markdown !== undefined && markdownRenders.delete(markdown.markdown)) void send({ parts: partList() })
       styles.delete(feature)
       claude.ui.invalidate('ui.render')
     }
     if (markdown !== undefined) {
       markdownRenders.set(markdown.markdown, { Component, log: logOnce(`${nameOf(kind)} style`) })
       routeMarkdown(markdown.createReader)
+      void send({ parts: partList() })
       return { kind, remove: stop() }
     }
     const log = logOnce(`${nameOf(kind)} style`)
@@ -510,7 +600,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
       const table = claude.ui.resolve(e)
       const drawn = await drawComponent(
         table,
-        (Default) => Component({ ...e.props, Default }),
+        (Default) => Component({ ...e.props, ...styledAt(e), id: e.requestId, Default }),
         (given, isClaudesRow) => next({ ...e, props: pieceProps(e.props, given, isClaudesRow) } as typeof e),
       )
       if ('failure' in drawn) {
@@ -524,43 +614,43 @@ export function createUi<State extends object>({ name, claude, router, report, a
   }
 
   const forgetDraws = (key: string) => {
-    for (const kept of latestDraws.get(key)?.values() ?? []) for (const draw of kept) draws.delete(draw)
+    for (const kept of latestDraws.get(key)?.values() ?? []) for (const draw of kept.draws) draws.delete(draw)
     latestDraws.delete(key)
   }
 
   const drawPart = (key: string, title: string, input: PartDraw, render: () => RenderElement | undefined): DrawnPart | null => {
     try {
       const pressed: Handler[] = []
-      const drawn = render()
-      const tree = drawn === undefined ? null : elementData(drawn, pressed)
+      const tree = treeOf(render, pressed)
       failedDraws.delete(key)
-      drawCount += 1
-      const inputs = latestDraws.get(key) ?? new Map<string, readonly number[]>()
+      const number = nextDraw()
+      const inputs = latestDraws.get(key) ?? new Map<string, SentDrawing>()
       latestDraws.set(key, inputs)
       const drawnFor = JSON.stringify('turn' in input ? { ...input, turn: input.turn.prompt.id } : input)
-      const earlier = inputs.get(drawnFor) ?? []
-      const kept = [...earlier, drawCount].slice(-2)
+      const earlier = inputs.get(drawnFor)?.draws ?? []
+      const kept = [...earlier, number].slice(-2)
       for (const draw of earlier) if (!kept.includes(draw)) draws.delete(draw)
       inputs.delete(drawnFor)
-      inputs.set(drawnFor, kept)
+      inputs.set(drawnFor, { draws: kept, tree: JSON.stringify(tree), render })
       const [oldest] = inputs
       if (inputs.size > keptDrawInputs && oldest !== undefined) {
-        for (const draw of oldest[1]) draws.delete(draw)
+        for (const draw of oldest[1].draws) draws.delete(draw)
         inputs.delete(oldest[0])
       }
-      draws.set(drawCount, { id: key, handlers: pressed })
-      return { draw: drawCount, tree }
+      draws.set(number, { id: key, handlers: pressed })
+      return { draw: number, tree }
     } catch (error) {
       if (!failedDraws.has(key)) report({ id: key, message: `The ${title} could not draw`, error })
       failedDraws.add(key)
-      return null
+      throw error
     }
   }
 
   const draw = (input: PartDraw): DrawnPart | null => {
+    if ('markdown' in input) return drawPart('markdown', 'markdown style', input, () => markdownDrawing(input.markdown, { surface: input.surface, columns: input.columns }))
     if ('page' in input) {
       const added = pages.get(input.page)
-      if (added === undefined) return null
+      if (added === undefined) throw new Error(`${name} has no ${input.page} page.`)
       return drawPart(`page:${input.page}`, `${added.init.title} page`, input, () => added.init.render(mod(), { params: input.params, isFocused: input.isFocused, columns: input.columns }))
     }
     const widget = widgets.get(input.widget)
@@ -570,17 +660,21 @@ export function createUi<State extends object>({ name, claude, router, report, a
     return drawPart(`widget:${widget.id}`, `${widget.title} widget`, input, () => widget.render(mod(), context))
   }
 
-  const press = async ({ draw: drawn, handler, args }: PartPress): Promise<PartsUpdate> => {
+  const press = async ({ draw: drawn, handler, args }: PartPress, caller: string): Promise<PartsUpdate | null> => {
     const known = draws.get(drawn)
     const run = known?.handlers[handler]
     if (known === undefined || run === undefined) throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`)
-    return collect(async () => {
+    if (caller !== cmodPluginName && known.id !== 'markdown') throw new Error(`${name}: ${caller} pressed a button only the cmod plugin draws.`)
+    const pressed = async () => {
       try {
         await run(...args)
       } catch (error) {
         report({ id: known.id, message: 'Its button failed', error })
       }
-    })
+    }
+    if (caller === cmodPluginName) return collect(pressed)
+    await pressed()
+    return null
   }
 
   return {
@@ -601,16 +695,24 @@ export function createUi<State extends object>({ name, claude, router, report, a
       if (unheldRequests > before) await passOn()
       return answer
     },
-    answer(method, input) {
+    answer(method, input, caller) {
+      const isMarkdown = method === partMethods.draw && isObject(input) && typeof input['markdown'] === 'string'
+      if (caller !== cmodPluginName && !isMarkdown && method !== partMethods.press) return undefined
       if (method === partMethods.list) return Promise.resolve({ value: partList() })
-      if (method === partMethods.draw) return Promise.resolve({ value: draw(input as PartDraw) })
-      if (method === partMethods.press) return press(input as PartPress).then((value) => ({ value }))
+      if (method === partMethods.draw) return Promise.resolve().then(() => ({ value: draw(input as PartDraw) }))
+      if (method === partMethods.press) return press(input as PartPress, caller).then((value) => ({ value }))
       if (method === partMethods.shown) {
         shownPages = input as ShownPages
         return Promise.resolve({ value: null })
       }
+      if (method === partMethods.stylers) {
+        hear(input, true)
+        return Promise.resolve({ value: null })
+      }
       return undefined
     },
+    markdownIn,
+    restyled: (stylers) => hear(stylers, true),
     started() {
       const held = merged(beforeStart ?? [])
       beforeStart = undefined

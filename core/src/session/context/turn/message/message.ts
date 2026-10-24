@@ -1,5 +1,6 @@
 import { isObject } from '../../../../records.js'
 import { Task } from '../../../goal/task.js'
+import { AttachedFile, attachedPathOf, attachmentTypeOf } from './attached-file.js'
 import { InstructionFile, isRulePath } from './instruction-file.js'
 import { modNote, modNoteBlock, modNotesIn, Note } from './note.js'
 import { Notice } from './notice.js'
@@ -12,7 +13,7 @@ import { ToolResult } from './tool-result.js'
 
 export const Message = 'message'
 
-export type MessageType = typeof Prompt | typeof Note | typeof Reply | typeof ToolCall | typeof ToolResult | typeof Skill | typeof InstructionFile | typeof Notice
+export type MessageType = typeof Prompt | typeof Note | typeof Reply | typeof ToolCall | typeof ToolResult | typeof Skill | typeof InstructionFile | typeof AttachedFile | typeof Notice
 
 export type MessageOf<Type extends MessageType> = {
   readonly id: string
@@ -24,7 +25,7 @@ export type MessageOf<Type extends MessageType> = {
   readonly task?: string
 }
 
-export type Message = Prompt | Note | Reply | ToolCall | ToolResult | Skill | InstructionFile | Notice
+export type Message = Prompt | Note | Reply | ToolCall | ToolResult | Skill | InstructionFile | AttachedFile | Notice
 
 export type Placed = 'session' | 'context' | 'turn' | 'task'
 
@@ -44,7 +45,7 @@ export type Row = {
   readonly model?: string
 }
 
-export const messageTypes: readonly MessageType[] = [Prompt, Note, Reply, ToolCall, ToolResult, Skill, InstructionFile, Notice]
+export const messageTypes: readonly MessageType[] = [Prompt, Note, Reply, ToolCall, ToolResult, Skill, InstructionFile, AttachedFile, Notice]
 
 export const skillPrefix = 'Base directory for this skill:'
 
@@ -63,8 +64,9 @@ export function rowOfLine(row: Readonly<Record<string, unknown>>): Row | undefin
   if (typeof uuid !== 'string' || typeof timestamp !== 'string' || typeof type !== 'string' || !rowTypes.includes(type)) return undefined
   const message = isObject(row['message']) ? row['message'] : {}
   const attachment = isObject(row['attachment']) ? row['attachment'] : {}
-  const content = type === 'attachment' ? attachment['content'] : type === 'system' ? row['content'] : message['content']
   const name = type === 'attachment' ? attachment['type'] : row['subtype']
+  const content = type === 'attachment' ? attachedContentOf(attachment) : type === 'system' ? row['content'] : message['content']
+  const path = attachment['path'] ?? attachment['filename']
   return {
     id: uuid,
     at: timestamp,
@@ -75,15 +77,21 @@ export function rowOfLine(row: Readonly<Record<string, unknown>>): Row | undefin
     content: blocksOf(content),
     ...(row['origin'] === undefined ? {} : { origin: row['origin'] }),
     ...(typeof row['cwd'] === 'string' ? { cwd: row['cwd'] } : {}),
-    ...(typeof attachment['path'] === 'string' ? { path: attachment['path'] } : {}),
+    ...(typeof path === 'string' ? { path } : {}),
     ...(typeof message['model'] === 'string' ? { model: message['model'] } : {}),
   }
+}
+
+function attachedContentOf(attachment: Readonly<Record<string, unknown>>): unknown {
+  if (attachment['type'] === 'edited_text_file') return attachment['snippet']
+  const file = isObject(attachment['content']) ? attachment['content']['file'] : undefined
+  return attachment['type'] === 'file' && isObject(file) ? file['content'] : attachment['content']
 }
 
 export function rowOfAppend(append: { readonly uuid: string; readonly door: string; readonly origin: unknown; readonly message: { readonly type: Row['type']; readonly name?: string; readonly isMeta?: true; readonly content: readonly unknown[] } }, at: string, cwd: string): Row {
   const { message, origin } = append
   const text = textOf(message.content)
-  const path = message.type === 'attachment' ? instructionPathOf(text) || undefined : undefined
+  const path = message.type === 'attachment' ? (attachmentTypeOf(message.name) !== undefined ? attachedPathOf(text) : instructionPathOf(text)) || undefined : undefined
   const model = isObject(origin) && origin['kind'] === 'model' && typeof origin['model'] === 'string' ? origin['model'] : undefined
   return {
     id: append.uuid,
@@ -113,7 +121,11 @@ function unplacedOf(row: Row, isInTask: boolean): Unplaced[] {
   const notesFrom = (each: readonly { readonly mod: string; readonly text: string }[]): Unplaced[] => each.map((note) => ({ ...base, type: Note, text: note.text, from: { type: Mod, name: note.mod } }))
   if (row.type === 'system') return row.name === 'turn_duration' || row.name === 'compact_boundary' || text === '' ? [] : [{ ...base, type: Notice, text }]
   if (row.type === 'attachment' && row.name === 'hook_additional_context') return notesFrom(row.content.flatMap((entry) => modNotesIn(typeof entry === 'string' ? entry : textOf([entry]))))
-  if (row.type === 'attachment') return row.name === 'nested_memory' ? [{ ...base, type: InstructionFile, path: row.path ?? '', text, isRule: isRulePath(row.path ?? '') }] : []
+  if (row.type === 'attachment' && row.name === 'nested_memory') return [{ ...base, type: InstructionFile, path: row.path ?? '', text, isRule: isRulePath(row.path ?? '') }]
+  if (row.type === 'attachment') {
+    const attachmentType = attachmentTypeOf(row.name)
+    return attachmentType === undefined ? [] : [{ ...base, type: AttachedFile, path: row.path ?? '', attachmentType, text }]
+  }
   if (isModNotesRow(row)) return notesFrom(modNotesIn(text))
   if (row.type === 'assistant') {
     return row.content.filter(isObject).flatMap((block): Unplaced[] => {
@@ -212,6 +224,7 @@ export function searchText(message: Unplaced): string {
   if (message.type === ToolCall) return [message.name, ...stringsIn(message.input).map((value) => value.slice(0, toolValueChars))].join('\n')
   if (message.type === ToolResult) return ''
   if (message.type === InstructionFile) return `${message.path}\n${message.text}`
+  if (message.type === AttachedFile) return message.path
   return message.text
 }
 

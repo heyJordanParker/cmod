@@ -1,3 +1,4 @@
+import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import type { Claude } from './claude.js'
 import type { Pages } from './pages.js'
 import type { Router } from './router.js'
@@ -12,6 +13,7 @@ export type Engine = {
   readonly report: (failure: Failure) => void
   readonly hasPermissionCheck: () => boolean
   readonly answerInput: <Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>) => Promise<Answer>
+  readonly spawnCmod: (args: readonly string[], program: ProcessSpawnRequest) => Promise<HookStream<ProcessSpawnChunk, ProcessSpawnResult>>
   readonly widgets?: Widgets
   readonly pages?: Pages
 }

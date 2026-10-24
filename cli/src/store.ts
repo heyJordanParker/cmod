@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { consentPath, parseConsent, pluginsChangedPath, recordPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { consentPath, linksPath, parseConsent, parseLinks, pluginsChangedPath, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
 import { readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
 import { interruptProgress } from './progress.js'
@@ -16,7 +16,14 @@ export function storePath(...parts: string[]): string {
 
 export async function markPluginsChanged(): Promise<void> {
   const store = storeFolder(process.env)
-  if (existsSync(store)) await writeAtomically(pluginsChangedPath(store), `${Date.now()} ${process.pid}\n`)
+  if (!existsSync(store)) return
+  await writeAtomically(pluginsChangedPath(store), `${Date.now()} ${process.pid}\n`)
+  await markStoreChanged()
+}
+
+export async function markStoreChanged(): Promise<void> {
+  const store = storeFolder(process.env)
+  if (existsSync(store)) await writeAtomically(storeChangedPath(store), '')
 }
 
 export async function recordNames(): Promise<string[]> {
@@ -82,7 +89,7 @@ async function placeLock(path: string, started: string): Promise<boolean> {
   )
 }
 
-async function isHolding(processId: number, started: string | undefined): Promise<boolean> {
+export async function isHolding(processId: number, started: string | undefined): Promise<boolean> {
   if (started === undefined || processId === process.pid || !isRunning(processId)) return false
   if (started === '') return true
   const current = await startTime(processId)
@@ -98,9 +105,9 @@ function isRunning(processId: number): boolean {
   }
 }
 
-async function startTime(processId: number): Promise<string> {
+export async function startTime(processId: number): Promise<string> {
   if (!existsSync('/bin/ps')) return ''
-  const { stdout } = await capture(['/bin/ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } })
+  const { stdout } = await capture(['/bin/ps', '-o', 'lstart=', '-p', String(processId)], { cwd: '/', env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } })
   return stdout.trim()
 }
 
@@ -143,4 +150,28 @@ async function changeConsent(change: (consent: Record<string, string[]>) => bool
 async function readConsent(): Promise<Record<string, string[]>> {
   const path = consentPath(storeFolder(process.env))
   return parseConsent(await readJson(path), path)
+}
+
+export type LinksChange = { marketplaces: Record<string, string>; turnedOff: Record<string, string[]> }
+
+export async function readLinks(): Promise<Links> {
+  const path = linksPath(storeFolder(process.env))
+  return parseLinks(await readJson(path), path)
+}
+
+export async function changeLinks<Result>(change: (links: LinksChange) => Promise<Result>): Promise<Result> {
+  const lock = await takeLock(storePath('links.json.lock'))
+  try {
+    const links = structuredClone(await readLinks()) as LinksChange
+    const before = JSON.stringify(links)
+    try {
+      return await change(links)
+    } finally {
+      const path = linksPath(storeFolder(process.env))
+      const isEmpty = Object.keys(links.marketplaces).length === 0 && Object.keys(links.turnedOff).length === 0
+      if (JSON.stringify(links) !== before) await (isEmpty ? rm(path, { force: true }) : writeAtomically(path, `${JSON.stringify(links, null, 2)}\n`))
+    }
+  } finally {
+    await lock[Symbol.asyncDispose]()
+  }
 }

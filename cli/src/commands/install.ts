@@ -62,7 +62,7 @@ async function installByName(argument: string, choices: Choices, progress: Progr
   const installed = (await listPlugins()).find((plugin) => plugin.name === argument || plugin.id === argument)
   if (installed !== undefined) {
     if (await usesCmod(installed.installPath, installed.name)) return installMod(installed, choices, progress, await installCmodPlugin(progress))
-    if (installed.scope !== 'session') return installPlugin(installed.id, choices, progress)
+    if (!installed.isLinked) return installPlugin(installed.id, choices, progress)
     await setOptions(installed, choices.options, progress)
     progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it.`)
     return 0
@@ -95,13 +95,13 @@ export async function installMod(installed: InstalledPlugin, choices: Choices, p
   return code
 }
 
-export async function setOptions(installed: InstalledPlugin, given: readonly string[], progress: Progress): Promise<void> {
+export async function setOptions(installed: Pick<InstalledPlugin, 'id' | 'installPath'>, given: readonly string[], progress: Progress, pluginDirs: readonly string[] = []): Promise<void> {
   if (given.length === 0) return
   const { id, installPath } = installed
   const declared = await readDeclared(installPath)
   const values = optionValues(given, declared.type === 'declared' ? declared.userConfig : await manifestOptions(installPath), id)
   progress.step(`Setting the options of ${id}`)
-  await configurePlugin(id, values)
+  await configurePlugin(id, values, pluginDirs)
   progress.succeed(`Set ${Object.keys(values).join(', ')} for ${id}`)
 }
 
@@ -111,8 +111,9 @@ export async function manifestOptions(root: string): Promise<Record<string, unkn
 }
 
 export async function installCmodPlugin(progress: Progress): Promise<boolean> {
-  const cmod = (await listPlugins()).find((plugin) => plugin.name === 'cmod')
-  if (cmod?.scope === 'session') return false
+  const cmods = (await listPlugins()).filter((plugin) => plugin.name === 'cmod')
+  if (cmods.some((plugin) => plugin.isLinked)) return false
+  const [cmod] = cmods
   if (cmod !== undefined) {
     await changePlugin('install', cmod.id)
     if (!cmod.enabled) {

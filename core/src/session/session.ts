@@ -2,6 +2,7 @@ import type { Subscription } from '../utils/subscription.js'
 import type { Matcher } from '../utils/matcher.js'
 import type { Sender } from './context/turn/message/sender.js'
 import type { Context, ContextEnd, ContextStart } from './context/context.js'
+import type { AttachedFile } from './context/turn/message/attached-file.js'
 import type { InstructionFile } from './context/turn/message/instruction-file.js'
 import type { Message, MessageType } from './context/turn/message/message.js'
 import type { Note } from './context/turn/message/note.js'
@@ -31,6 +32,7 @@ export type SessionPayload = {
   readonly toolResult: ToolResult
   readonly skill: Skill
   readonly instructionFile: InstructionFile
+  readonly attachedFile: AttachedFile
   readonly notice: Notice
   readonly contextStart: Context
   readonly contextEnd: Context
@@ -49,12 +51,13 @@ export type BeforeAnswer = {
   readonly note: { readonly text: string }
   readonly skill: { readonly text: string }
   readonly instructionFile: { readonly text: string } | Refusal
+  readonly attachedFile: { readonly text: string } | Refusal
   readonly reply: { readonly text: string }
-  readonly toolCall: { readonly input: Readonly<Record<string, unknown>> } | { readonly result: string } | Refusal
+  readonly toolCall: { readonly input?: Readonly<Record<string, unknown>>; readonly note?: string } | { readonly result: string; readonly note?: string } | Refusal
   readonly toolResult: { readonly output?: unknown; readonly isError?: true; readonly note?: string }
   readonly notice: { readonly text: string }
-  readonly taskStart: { readonly owner: { readonly model: string } } | Refusal
-  readonly turnEnd: Refusal
+  readonly taskStart: { readonly prompt?: string; readonly title?: string; readonly owner?: { readonly agentType?: string; readonly model?: string; readonly cwd?: string }; readonly isAsync?: boolean } | Refusal
+  readonly turnEnd: { readonly note: string } | Refusal
   readonly contextEnd: Refusal
 }
 
@@ -63,8 +66,11 @@ export type BeforeEvent = keyof BeforeAnswer
 export type Usage = {
   readonly model: string
   readonly contextWindow: { readonly tokenCount?: number; readonly size?: number; readonly percent?: number }
+  readonly rateLimits?: readonly RateLimit[]
   readonly cost?: { readonly usd: number }
 }
+
+export type RateLimit = { readonly type: string; readonly percent: number; readonly resetsAt?: string }
 
 export type Surface = 'terminal' | 'desktop' | 'mobile' | 'vscode'
 
@@ -77,6 +83,7 @@ export const sessionEvents = {
   ToolResult: 'toolResult',
   Skill: 'skill',
   InstructionFile: 'instructionFile',
+  AttachedFile: 'attachedFile',
   Notice: 'notice',
   ContextStart: 'contextStart',
   ContextEnd: 'contextEnd',
@@ -88,7 +95,7 @@ export const sessionEvents = {
   UsageChange: 'usageChange',
 } as const satisfies Readonly<Record<string, SessionEvent>>
 
-export const beforeEvents = ['Prompt', 'Note', 'Skill', 'InstructionFile', 'Reply', 'ToolCall', 'ToolResult', 'Notice', 'TaskStart', 'TurnEnd', 'ContextEnd'] as const satisfies readonly (keyof typeof sessionEvents)[]
+export const beforeEvents = ['Prompt', 'Note', 'Skill', 'InstructionFile', 'AttachedFile', 'Reply', 'ToolCall', 'ToolResult', 'Notice', 'TaskStart', 'TurnEnd', 'ContextEnd'] as const satisfies readonly (keyof typeof sessionEvents)[]
 
 export type EventName = keyof typeof sessionEvents
 
@@ -138,6 +145,7 @@ export type TaskStartArgs = {
   readonly title: string
   readonly name?: string
   readonly cwd?: string
+  readonly isBackground?: boolean
 }
 
 export type ToolCallArgs = {
@@ -164,12 +172,14 @@ export type Session = RecordPart & {
   messages(options?: { readonly after?: string; readonly last?: number }): Promise<Message[]>
   send(message: SessionSend): Promise<void>
   startTask(task: TaskStartArgs): Promise<Task>
+  fork(task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task>
+  clone(task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task>
   callTool(call: ToolCallArgs): Promise<ToolResult>
   usage(): Promise<Usage>
   surfaces(): Promise<Surface[]>
 }
 
-export type TaskOwner = Omit<Session, 'startTask' | 'callTool'>
+export type TaskOwner = Omit<Session, 'startTask' | 'callTool' | 'fork' | 'clone'>
 
 type ProcessEvent = { readonly on: string; readonly before?: string }
 
@@ -305,9 +315,9 @@ export type ProcessPayload = {
 export type ProcessAsked = Omit<ProcessPayload, 'SessionStart'> & { readonly SessionStart: SessionStartAsked }
 
 export type ProcessAnswer = {
-  readonly ProjectSetup: Record<never, never>
+  readonly ProjectSetup: { readonly note: string }
   readonly SessionStart: { readonly note?: string; readonly title?: string; readonly reloadSkills?: true; readonly firstPrompt?: string }
-  readonly ModelChange: { readonly ask: string } | Refusal
+  readonly ModelChange: { readonly ask: string } | { readonly note: string } | Refusal
   readonly WorktreeCreate: { readonly result: string }
   readonly Elicitation: Refusal
   readonly ElicitationResponse: Refusal

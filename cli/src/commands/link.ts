@@ -1,26 +1,28 @@
 import { parseArgs } from 'node:util'
+import { linkPlugin } from '../claude.js'
 import { tilde } from '../files.js'
 import { installPackages, readPlugin } from '../plugin.js'
 import { installProgram, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
-import { addPluginFolder, settingsPath } from '../settings.js'
-import { findPlugin } from '../claude.js'
 import { installCmodPlugin, setOptions } from './install.js'
 import { setupInTerminal } from './setup.js'
 
-export const summary = 'Load a checkout in every new Claude Code session.'
+export const summary = 'Load a checkout in every Claude Code session.'
 
 export const help = `Usage: cmod link [path] [--yes]
 
 ${summary}
 
-Loads the checkout at path (default: the current folder) in every new Claude
-Code session, in place of the installed mod. Installs the cmod plugin when
-Claude Code lacks it, unless the checkout is cmod itself. Then installs the
-checkout's packages, builds the program cli/ declares and links it into cmod's
-programs folder and ~/.local/bin, writes
-the folder into CLAUDE_CODE_PLUGIN_DIRS in the env block of Claude Code's
-settings.json, and runs the checkout's install step.
+Loads the checkout at path (default: the current folder) in every Claude Code
+session, the running ones too, in place of the installed mod. Installs the
+cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then
+installs the checkout's packages, builds the program cli/ declares and links it
+into cmod's programs folder and ~/.local/bin, and lists the checkout in the
+marketplace cmod keeps in the checkout's parent folder, at
+.claude-plugin/marketplace.json beside the cmod plugin. It installs the
+checkout from that marketplace through Claude Code, turns off the installed
+copy of the mod, and runs the checkout's install step. cmod watch reloads
+every session once a change builds.
 
 Options:
   --yes                 Approve the mod's install and uninstall commands without asking
@@ -40,11 +42,12 @@ export async function run(argv: string[]): Promise<number> {
   const program = await readProgram(plugin)
   if (program !== undefined) await installProgram(program, plugin.version, progress)
 
-  const added = await addPluginFolder(plugin.root)
-  progress.succeed(`${added ? 'Linked' : 'Already linked'} ${tilde(plugin.root)} in ${tilde(settingsPath())}`)
-  if (values.option !== undefined) await setOptions(await findPlugin(plugin.root), values.option, progress)
+  progress.step(`Linking ${tilde(plugin.root)}`)
+  const id = await linkPlugin(plugin)
+  progress.succeed(`Linked ${tilde(plugin.root)} as ${id}`)
+  if (values.option !== undefined) await setOptions({ id, installPath: plugin.root }, values.option, progress)
 
   const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
-  if (code === 0) progress.note(`Start a new Claude Code session to use ${plugin.name}. Claude Code reads linked folders only when a session starts, and then reloads the mod each time you save it.`)
+  if (code === 0) progress.note(`Every Claude Code session loads ${plugin.name} from ${tilde(plugin.root)}, and reloads it once a change you save builds.`)
   return code
 }

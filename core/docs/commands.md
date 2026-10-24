@@ -25,10 +25,19 @@ Creates a mod in `./<name>`: a `defineMod` with one listener, a Sidebar page, a 
 cmod link [path] [--yes] [--option key=value]...
 ```
 
-Loads the checkout at `path` (default: the current folder) in every new Claude Code session, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, writes the folder into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`, and runs the checkout's install step. Claude Code reads that list only when a session starts, so a session that is already running loads the checkout once the person starts a new one. From then on, Claude Code reloads the checkout in each session when a file in it is saved.
+Loads the checkout at `path` (default: the current folder) in every Claude Code session, the running ones too, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, and runs the checkout's install step.
+
+It loads the checkout through a marketplace cmod keeps in the checkout's parent folder:
+
+1. It lists the checkout in `<parent>/.claude-plugin/marketplace.json`, named `<parent folder>-linked`, beside the cmod plugin from the `release` branch of `heyJordanParker/cmod`, so the mod's `cmod` dependency resolves in that marketplace. Every checkout linked from one folder shares its marketplace. The checkout's own `.claude-plugin/marketplace.json`, the one `cmod publish` writes, stays as it was.
+2. It adds that file to the parent's `.git/info/exclude` when the parent is inside a git repository.
+3. It adds the marketplace to Claude Code and installs `<mod>@<parent folder>-linked` from it, which loads the checkout's own files in every session at the next reload.
+4. It turns off the installed copy of the mod from any other marketplace, and records it in `links.json` in the cmod store, so `cmod unlink` turns that copy back on.
+
+It refuses a parent folder whose `.claude-plugin/marketplace.json` cmod did not write. `cmod watch` reloads every session once a change builds.
 
 - `--yes` approves the mod's install and uninstall commands without asking.
-- `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option, under the id `claude plugin list` shows for the linked checkout, such as `my-mod@inline`. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
+- `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option, under the linked id, such as `my-mod@Developer-linked`. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
 
 ### cmod unlink
 
@@ -36,7 +45,7 @@ Loads the checkout at `path` (default: the current folder) in every new Claude C
 cmod unlink [path]
 ```
 
-Stops loading the checkout at `path` (default: the current folder) in new Claude Code sessions. Removes the folder from `CLAUDE_CODE_PLUGIN_DIRS` in Claude Code's `settings.json`, runs the checkout's uninstall step, and removes the program `cmod link` built, with its links.
+Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace from Claude Code, and deletes its file and its line in `.git/info/exclude`. Then it turns back on the copy of the mod `cmod link` turned off, runs the checkout's uninstall step, and removes the program `cmod link` built, with its links.
 
 ### cmod check
 
@@ -72,7 +81,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 cmod try <owner/repo | path>... [--yes] [--option key=value]... [--home <folder>] [-- claude arguments]
 ```
 
-Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then links every mod into the home's `settings.json`, as `cmod link` does, starts one Claude Code session, and unlinks each folder it linked when the session ends. With `--home ~`, a session you start meanwhile loads the tried mods too.
+Starts one throwaway Claude Code session with mods set up, for trying a mod by hand or testing it with an agent. Installs each mod's packages, installs the cmod plugin when Claude Code lacks it, and runs each mod's install step after asking consent. Then starts one Claude Code session that loads every mod with `--plugin-dir`.
 
 - `--option key=value` sets one option of the mod. With several mods, write `--option <mod>.key=value`.
 - The session runs with a new home folder, so it sees only the mods named here and changes none of your Claude Code settings, mods, key bindings, or history. The folder is deleted when the session ends.
@@ -80,7 +89,7 @@ Starts one throwaway Claude Code session with mods set up, for trying a mod by h
   - On macOS, Claude Code reads your login from the keychain, which `cmod try` links into the new home as `~/Library/Keychains`. Deleting the home removes only the link.
   - Elsewhere, `CLAUDE_SECURESTORAGE_CONFIG_DIR` points Claude Code at the folder that holds your login, so it reads and refreshes that login where it is.
   - `ANTHROPIC_CONFIG_DIR` points at your `~/.config/anthropic` login profiles, and `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` pass through.
-- The session keeps how Claude Code reaches the model and what it must never do, so a try is as safe as your own session. From your `settings.json` it keeps `env` (a proxy or `ANTHROPIC_BASE_URL`, without `cmod link`'s `CLAUDE_CODE_PLUGIN_DIRS`), the credential helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`), the login pins (`forceLoginMethod`, `forceLoginOrgUUID`, `forceLoginGatewayUrl`, `gatewayInternalNetworks`), `sandbox`, and `permissions.deny`. From `~/.claude.json` it keeps your account and the API keys you approved. A `~/` in a helper still means your own home. Hooks, plugins, allow rules, the model, and every other preference stay behind. Managed settings apply as always.
+- The session keeps how Claude Code reaches the model and what it must never do, so a try is as safe as your own session. From your `settings.json` it keeps `env` (a proxy or `ANTHROPIC_BASE_URL`), the credential helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`), the login pins (`forceLoginMethod`, `forceLoginOrgUUID`, `forceLoginGatewayUrl`, `gatewayInternalNetworks`), `sandbox`, and `permissions.deny`. From `~/.claude.json` it keeps your account and the API keys you approved. A `~/` in a helper still means your own home. Hooks, plugins, allow rules, the model, and every other preference stay behind. Managed settings apply as always.
 - `--home <folder>` runs in that folder and keeps it, so the next `cmod try --home <folder>` starts from it. `--home ~` runs in your own home, with your settings and mods.
 - A checkout's program is built from its `cli/` the way `cmod link` builds it, with your own home and environment, so the build finds your toolchains and caches. A GitHub mod's program downloads from the GitHub release of the mod's version, so it fails until `cmod publish` has released that version.
 - When the session ends, even when its terminal closes, it runs each mod's uninstall step and deletes its record, data folder, approval, key bindings, and program, so the mod stays uninstalled. A checkout already set up from the same folder keeps its setup.
@@ -125,7 +134,7 @@ It needs, and refuses to start without:
 
 ## Install mods
 
-`cmod install`, `cmod update`, `cmod remove`, `cmod enable`, `cmod disable`, `cmod link`, `cmod unlink`, and `cmod try` write the time to `plugins-changed` in the cmod store when they finish, also when they fail partway, such as an update that updated some mods. The cmod plugin of every running session watches that file, Claude Code's `installed_plugins.json`, and the `enabledPlugins` of the user's `settings.json`, and runs `/reload-plugins` when any of them changes. So each session runs the plugins the person has now, whether a `cmod` command, `/plugin`, `claude plugin`, or Claude Code's automatic update changed them. A reload keeps the prompt cache: the next request reads the whole conversation from the cache and pays only for the plugins' new content. A reload clears each mod's `memory` state. A machine where cmod set up no mod has no store, and these commands write nothing there. `cmod permission` needs no reload, because a mod sees its grants change before its next call.
+`cmod install`, `cmod update`, `cmod remove`, `cmod enable`, `cmod disable`, `cmod link`, `cmod unlink`, and `cmod try` write the time to `plugins-changed` in the cmod store, then write `store-changed` beside it, when they finish, also when they fail partway, such as an update that updated some mods. The cmod plugin of every running session watches `store-changed` and Claude Code's `installed_plugins.json`, reads the `enabledPlugins` of the user's `settings.json` each time Claude Code reports that file changed and at each prompt, and runs `/reload-plugins` when `plugins-changed`, `installed_plugins.json`, or `enabledPlugins` changed. So each session runs the plugins the person has now, whether a `cmod` command, `/plugin`, `claude plugin`, or Claude Code's automatic update changed them. A reload keeps the prompt cache: the next request reads the whole conversation from the cache and pays only for the plugins' new content. A reload clears each mod's `memory` state. A machine where cmod set up no mod has no store, and these commands write nothing there. `cmod permission` needs no reload, because a mod sees its grants change before its next call.
 
 ### cmod install
 
@@ -218,6 +227,16 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 
 ## Run in an install script
 
+### cmod watch
+
+```text
+cmod watch
+```
+
+Reloads every running session once a checkout `cmod link` linked builds after a change. It watches each linked folder, outside `node_modules` and `.git`. Once a folder has had no change for 2 seconds, it bundles the mod's hooks module as `cmod publish` does. A bundle that builds marks `plugins-changed`, so every session runs `/reload-plugins` once. A bundle that still fails 10 seconds after the last change shows `<mod> does not build` with the error as one toast in every session, and the toast goes once the mod builds. So an agent's half-written file reloads nothing and shows nothing. The cmod plugin starts one only in a session that an app shows, once a mod is linked, at the session's start or later, so a machine with no linked mod runs none. The first holds `watch.lock` in the cmod store, watches, and touches its file there every 5 seconds. Another one exits at once while it runs, and the cmod plugin of each such session starts one again once that file is 15 seconds old, so a machine runs one watcher however many sessions it has open.
+
+A cmod before 4.1.0 linked a checkout by writing it into `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of Claude Code's `settings.json`. `cmod watch` at its start, and `cmod setup`, link each folder still in that list as `cmod link` does now and take it out of the list. A folder that fails to link stays in the list, and its error prints on stderr.
+
 ### cmod download
 
 ```text
@@ -236,7 +255,7 @@ cmod runs these itself. A person runs them to see a step's whole log, to finish 
 cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
 ```
 
-Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the hotkeys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them.
+Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, grants the permissions its `cmod.permissions` lists, and records the mod as set up. A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the consent question says so. The consent covers the scripts, the program, the hotkeys, and the permissions together, and an update asks again only for what changed. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them. Before all of that, it links each folder a cmod before 4.1.0 left in `CLAUDE_CODE_PLUGIN_DIRS`, as [`cmod watch`](#cmod-watch) does.
 
 ### cmod teardown
 
@@ -244,7 +263,7 @@ Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out.
 cmod teardown <plugin-name> [--events]
 ```
 
-Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, and its data folder, takes out each Claude Code setting it changed that still has the value it set, and forgets the scripts and the permissions the person approved for it. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
+Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, its data folder, and `instances/<plugin-name>/`, where its `singleInstance` programs keep their addresses, takes out each Claude Code setting it changed that still has the value it set, and forgets the scripts and the permissions the person approved for it. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
 
 ### cmod permission
 
@@ -277,6 +296,22 @@ cmod rules [--project <folder>] [--json]
 ```
 
 Links the `rules/` folder of each mod that is on and has the `prompt` permission into Claude Code's rules folder, and removes the link of each that is off, lacks the permission, or is removed ([mod.md](mod.md#rules)). A mod the person installed links at `<config>/rules/<mod>`, and one turned on only for `--project`, the current folder when it is left out, links at `<project>/.claude/rules/<mod>`. It prints the rules it linked. With `--json` it prints `{ linked, placed, removed, watched }`, where `placed` and `removed` name the mods whose link this run made or took away, and `watched` lists the files and folders whose change can change the next run. `cmod install`, `update`, `remove`, `enable`, `disable`, `permission`, `setup`, `teardown`, `link`, and `unlink` run it after they succeed. The cmod plugin runs it when a session starts and before a prompt, each time only when a `watched` path changed since its last run.
+
+### cmod task
+
+```text
+cmod task start <prompt> --title <title> [--clone] [--agent <type>] [--model <model>] [--cwd <folder>] [--json]
+```
+
+Starts a task in a new background Claude Code session, for a mod's `startTask` with `isBackground` and its `clone` ([session.md](session.md#act-on-a-session)). The task belongs to the session Claude Code names in `CLAUDE_CODE_SESSION_ID`, which the cmod plugin sets when it runs the command. It runs `claude --bg` on the prompt in `--cwd`, the current folder when it is left out, and with `--clone` runs `claude --resume <session> --fork-session --bg`, so the new session starts on a copy of the conversation. `--agent` and `--model` pick the agent definition and the model of a fresh session. It finds the new session's id from the 8 characters `claude --bg` prints, through `claude agents --json --all`, and passes the starting session and the task in the new session's `--settings` env, so its cmod plugin tells the starting session at its first stop that the task answered. It saves the task in cmod's data folder, so `cmod history tasks` of the starting session lists it, with the status `claude agents` gives it. It prints the task, as one line of JSON with `--json`.
+
+### cmod program
+
+```text
+cmod program <mod> -- <command…>
+```
+
+Runs one copy of a mod's program for the whole computer, for a `program` job with `singleInstance` ([jobs.md](jobs.md#program)), which every session of the mod runs it for. The first one takes `instances/<mod>/<program>.json.lock` in the cmod store, runs the command without `CLAUDE_CODE_SESSION_ID`, because the copy serves every session, writes its first line on standard output, its address, with the copy's process to `instances/<mod>/<program>.json`, and prints it. Every other one prints the address in that file, then each new one as it changes, and tries the lock again whenever that folder changes and every 5 seconds, so it takes over once the holder exits. A lock whose process is gone counts as free. The holder stops its copy and gives up the lock on SIGTERM, SIGINT, or SIGHUP, and when the session that started it exits, which it checks every 5 seconds. When the copy exits on its own, the holder exits with the copy's exit code, and the copy's standard error passes through. A new holder that finds a copy an earlier holder left running sends it SIGTERM, then SIGKILL after 5 seconds, and starts its own copy only once that one is gone, so two copies never run at once.
 
 ### cmod option
 

@@ -5,13 +5,13 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { readRecord, storeFolder, type InstallRecord } from '@cmodjs/core/src/records.js'
 import { home, readText, tilde } from '../files.js'
-import { findPlugin, startSession } from '../claude.js'
+import { startSession } from '../claude.js'
 import { installPackages, readPlugin, sourceOf, type Plugin } from '../plugin.js'
 import { run as runCommand } from '../process.js'
 import { installProgram, readProgram, removeProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { syncRules } from '../rules.js'
-import { addPluginFolder, configRoot, keepSettings, keptSettings, removePluginFolder } from '../settings.js'
+import { configRoot, keepSettings, keptSettings } from '../settings.js'
 import { installCmodPlugin, setOptions } from './install.js'
 import { holdSignals, setupInTerminal } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
@@ -33,10 +33,8 @@ keeps it for the next try, and --home ~ runs in your own home.
 
 Installs the cmod plugin into Claude Code when it lacks it and runs each mod's
 install step after asking consent for its install and uninstall commands and
-its key bindings, then links every mod into the home's settings.json, as cmod
-link does, and starts one Claude Code session. When the session ends it unlinks
-each folder it linked. With --home ~, a session you start meanwhile loads the
-tried mods too. A checkout's program is built from its cli/ with your own
+its key bindings, then starts one Claude Code session that loads every mod
+with --plugin-dir. A checkout's program is built from its cli/ with your own
 home and environment, as cmod link builds it, and a GitHub mod's program comes
 from its release. When the session ends, even when
 its terminal closes, runs each mod's uninstall step and deletes its record, data
@@ -102,23 +100,21 @@ export async function run(argv: string[]): Promise<number> {
       tried.push({ plugin, record })
     }
     if (hold.signal === undefined) await installCmodPlugin(progress)
-    const linked: string[] = []
+    const pluginDirs = tried.map(({ plugin }) => plugin.root)
     try {
       for (const { plugin, record } of tried) {
         const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
         if (code !== 0) return code
         if (record === undefined) setUp.push(plugin.name)
         if (hold.signal !== undefined) return code
-        if (await addPluginFolder(plugin.root)) linked.push(plugin.root)
         const options = optionsFor(plugin.name, values.option ?? [], tried.length)
-        if (options.length > 0) await setOptions(await findPlugin(plugin.root), options, progress)
+        if (options.length > 0) await setOptions({ id: `${plugin.name}@inline`, installPath: plugin.root }, options, progress, pluginDirs)
       }
-      await syncRules(process.cwd())
-      const exitCode = await startSession(forwarded)
+      await syncRules(process.cwd(), pluginDirs)
+      const exitCode = await startSession(forwarded, pluginDirs)
       hold.signal = undefined
       return exitCode
     } finally {
-      for (const folder of linked) await removePluginFolder(folder)
       for (const name of setUp.reverse()) await teardownInTerminal(name, progress)
       await syncRules(process.cwd())
     }

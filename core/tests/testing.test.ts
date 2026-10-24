@@ -304,6 +304,24 @@ test('shown.pane refuses when no pane shows', async () => {
   expect(tested.state.global.notes).toEqual(['Buy milk', 'Call the plumber about the sink'])
 })
 
+test("a person's close draws the pane once more before Claude Code removes it, as Claude Code 2.1.309 does", async () => {
+  const drawnWhileShown: boolean[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      setup(mod) {
+        void mod.panes.add({ id: 'diagram', title: 'Diagram', render: () => (drawnWhileShown.push(tested.shown.openPanes.has('diagram')), Text({ children: 'Login flow' })) }).open()
+      },
+    }),
+  )
+  await tested.start()
+
+  await tested.fire('ui.close', { id: 'diagram', origin: { kind: 'person' } } as never)
+
+  expect(drawnWhileShown).toEqual([true])
+  expect(tested.shown.openPanes).toEqual(new Set())
+})
+
 test('tested.lines draws a style with Default', async () => {
   const tested = testMod(
     defineMod({

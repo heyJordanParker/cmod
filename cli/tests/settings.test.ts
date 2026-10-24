@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { cmod, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 async function setUpKeeper(home: string, config: readonly string[] = ['cleanupPeriodDays', 'mcpServers', 'statusLine']): Promise<{ project: string }> {
   const root = join(home, 'keeper')
@@ -31,6 +31,21 @@ test('settings writes each key into the named settings file, keeps the rest of t
   expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe('{\n    "model": "opus",\n    "cleanupPeriodDays": 365\n}\n')
   expect(await read(join(project, '.claude/settings.json'))).toEqual({ statusLine: { type: 'command', command: 'keeper-line' } })
   expect(await read(join(project, '.mcp.json'))).toEqual({ mcpServers: { keeper: { command: 'keeper-mcp' } } })
+})
+
+test('settings with the value a file already holds writes neither the file nor the record, so no session reloads its settings', async () => {
+  const home = await temporaryHome()
+  await setUpKeeper(home)
+  await writeFiles(home, { '.claude/settings.json': '{\n    "model": "opus"\n}\n' })
+  await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365}')
+  const settingsFile = join(home, '.claude/settings.json')
+  const recordFile = join(home, '.local/share/cmod/settings/keeper.json')
+  const writtenAt = async () => [(await Bun.file(settingsFile).stat()).mtimeMs, (await Bun.file(recordFile).stat()).mtimeMs]
+  const before = await writtenAt()
+  await Bun.sleep(20)
+
+  expect((await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365}')).exitCode).toBe(0)
+  expect(await writtenAt()).toEqual(before)
 })
 
 test('settings refuses a key the mod has no grant for and names the line to add, changing nothing', async () => {

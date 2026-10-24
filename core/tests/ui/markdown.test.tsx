@@ -1,9 +1,10 @@
 import { expect, spyOn, test } from 'bun:test'
 import type { Args, Frozen, RenderElement } from 'claude-code'
-import { defineMod, Reply, type ModDefinition, type StyleProps } from '../../src/mod.js'
+import { BelowPrompt, defineMod, Reply, type ModDefinition, type StyleProps } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
+import { partMethods } from '../../src/runtime/ui.js'
 import { testMod } from '../../src/testing.js'
-import { fakeClaude } from '../../src/testing/fake-claude.js'
+import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
 import { textOf } from '../../src/testing/fake-elements.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
 import { Box, Markdown, Text } from '../../src/ui/elements.js'
@@ -30,7 +31,7 @@ function MermaidBlock({ lang, value, Default }: StyleProps<typeof CodeBlock>): R
 const everyBlock = defineMod({
   name: 'blocks',
   setup(mod) {
-    for (const [name, place] of Object.entries(markdownPlaces)) mod.styles.add({ kind: place, render: (_mod, { Default, ...block }) => <Text>{`${name} ${JSON.stringify(block)}`}</Text> })
+    for (const [name, place] of Object.entries(markdownPlaces)) mod.styles.add({ kind: place, render: (_mod, { Default, surface, columns, id, ...block }) => <Text>{`${name} ${JSON.stringify(block)}`}</Text> })
   },
 })
 
@@ -396,6 +397,79 @@ test("a reply drawn by two mods keeps every block under the bullet's text", asyn
 
   expect(diagramsAbove).toEqual(['⏺ REQUEST FLOW', '', '  diagram: graph LR', '  The flowchart shows a request.'])
   expect(headingsAbove).toEqual(diagramsAbove)
+})
+
+test("a pane of one mod draws another mod's markdown style once that mod draws it, and Claude Code's markdown while it does", async () => {
+  const diagrams = await started(defineMod({ name: 'diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await diagrams.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+
+  expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).not.toContain('diagram: graph TD')
+  await fake.settle()
+  expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toContain('diagram: graph TD')
+})
+
+test("another mod's markdown drawing stays while this mod's own parts change and the stylers stay the same", async () => {
+  const diagrams = await started(defineMod({ name: 'diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  let draws = 0
+  fake.fakes.cmod.call = async (call) => {
+    if (call.to === 'cmod') return { isHeld: false, stylers: ['diagrams'] }
+    if (call.method === partMethods.draw) draws += 1
+    return calledAnswer('notes', await diagrams.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  }
+  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('ui.render', pane, drawsLikeClaude)
+  await fake.settle()
+
+  notes.mod?.sidebar.add({ id: 'later', title: 'Later', render: () => Markdown({ text: 'Later.' }) })
+  await fake.settle()
+
+  expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toContain('diagram: graph TD')
+  expect(draws).toBe(1)
+})
+
+test("a mod's markdown style draws in its own Sidebar page and widget under test, as the cmod plugin draws them", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      setup(mod) {
+        mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) })
+        mod.widgets.add({ id: 'last', title: 'Last diagram', areas: [BelowPrompt], render: () => Markdown({ text: '```mermaid\ngraph LR\n```' }) })
+        void mod.sidebar.add({ id: 'all', title: 'Diagrams', render: () => Markdown({ text: '```mermaid\ngraph TD\n```' }) }).open()
+      },
+    }),
+  )
+
+  expect(await tested.shown.page.lines()).toEqual(['diagram: graph TD'])
+  expect(await tested.lines(BelowPrompt)).toEqual(['diagram: graph LR'])
+})
+
+test("a mod's markdown style under test draws at the terminal and at the width of each page and widget, as the cmod plugin asks it", async () => {
+  const diagram = '```mermaid\ngraph TD\n```'
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      setup(mod) {
+        mod.styles.add({ kind: CodeBlock, render: (_mod, { surface, columns }) => <Text>{`${surface} ${columns}`}</Text> })
+        mod.widgets.add({ id: 'last', title: 'Last diagram', areas: [BelowPrompt], render: () => Markdown({ text: diagram }) })
+        void mod.sidebar.add({ id: 'all', title: 'Diagrams', render: () => Markdown({ text: diagram }) }).open()
+      },
+    }),
+  )
+
+  expect(await tested.shown.page.lines({ columns: 60 })).toEqual(['terminal 60'])
+  expect(await tested.shown.page.lines({ columns: 40 })).toEqual(['terminal 40'])
+  expect(await tested.lines(BelowPrompt, { columns: 100 })).toEqual(['terminal 100'])
 })
 
 test("a reply Claude's text opens keeps a mod's later block under the bullet's text", async () => {

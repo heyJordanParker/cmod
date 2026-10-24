@@ -17,16 +17,16 @@ function written(chunks: readonly ProcessSpawnChunk[], exits: boolean, closed: (
   return Object.assign(read(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 }
 
-function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>) {
+function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>, singleInstance = false, permissions = ['run:preview-server']) {
   let handle: Program | undefined
   const tested = testMod(
     defineMod({
       name: 'preview',
       setup(mod) {
-        handle = mod.use(program({ command: ['preview-server', '--port', '0'] }))
+        handle = mod.use(program({ command: ['preview-server', '--port', '0'], singleInstance }))
       },
     }),
-    { permissions: ['run:preview-server'] },
+    { permissions },
   )
   tested.fakes.process.spawn = spawn
   const ready = async (): Promise<Program> => {
@@ -184,4 +184,66 @@ test("a mod fetches its own program's address with no network grant, and any oth
 
   expect((await http.fetch(`${url}/history`, socketPath === undefined ? {} : { socketPath })).status).toBe(200)
   await expect(http.fetch(`${url}/history`, { socketPath: '/tmp/modes-1.sock' })).rejects.toThrow('"network": ["/tmp/modes-1.sock"]')
+})
+
+test("a singleInstance program runs as the store's cmod program preview -- preview-server --port 0 under the run:preview-server grant", async () => {
+  const spawned: (readonly string[])[] = []
+  const { ready } = preview((request) => {
+    spawned.push(request.argv)
+    return written([{ stream: 'stdout', text: 'unix:/tmp/x.sock\n' }], false)
+  }, true)
+
+  expect(await (await ready()).ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/x.sock' })
+  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'preview', '--', 'preview-server', '--port', '0']])
+})
+
+test('a singleInstance program with only the run:cmod grant stops at once and names run:preview-server', async () => {
+  const { tested, ready } = preview(() => written([{ stream: 'stdout', text: 'unix:/tmp/x.sock\n' }], false), true, ['run:cmod'])
+  const started = await ready()
+  await tested.settle()
+
+  expect(started.state).toBe('fatal')
+  await expect(started.ready()).rejects.toThrow('preview calls process.spawn(preview-server --port 0), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod".')
+})
+
+test("a singleInstance program's next address line moves ready() to it, and the old address needs the network grant again", async () => {
+  let moveCopy = () => undefined as void
+  const { tested, ready } = preview(() => {
+    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+      yield { stream: 'stdout', text: 'unix:/tmp/first.sock\n' }
+      await new Promise<void>((resolve) => {
+        moveCopy = resolve
+      })
+      yield { stream: 'stdout', text: 'unix:/tmp/second.sock\n' }
+      return await new Promise<ProcessSpawnResult>(() => undefined)
+    }
+    return Object.assign(read(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  }, true)
+  tested.fakes.http.fetch = async () => ({ status: 200, headers: {}, body: '{}' }) as never
+  const started = await ready()
+  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/first.sock' })
+  expect((await http.fetch('http://localhost/status', { socketPath: '/tmp/first.sock' })).status).toBe(200)
+
+  moveCopy()
+  await tested.settle()
+
+  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/second.sock' })
+  expect((await http.fetch('http://localhost/status', { socketPath: '/tmp/second.sock' })).status).toBe(200)
+  await expect(http.fetch('http://localhost/status', { socketPath: '/tmp/first.sock' })).rejects.toThrow('"network": ["/tmp/first.sock"]')
+})
+
+test('two singleInstance programs with one executable in a mod throw at mod.use', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'preview',
+      setup(mod) {
+        mod.use(program({ command: ['preview-server', '--port', '0'], singleInstance: true }))
+        mod.use(program({ command: ['preview-server', '--port', '1'], singleInstance: true }))
+      },
+    }),
+    { permissions: ['run:preview-server'] },
+  )
+  tested.fakes.process.spawn = () => written([{ stream: 'stdout', text: 'unix:/tmp/x.sock\n' }], false)
+
+  await expect(tested.start()).rejects.toThrow('preview: the single instance of preview-server is already added. Give each singleInstance program its own executable.')
 })

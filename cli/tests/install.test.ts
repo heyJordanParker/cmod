@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { readFile, rename, rm } from 'node:fs/promises'
+import { readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
 import { claudeAnswering, cmod, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const claudeCodeLine = 'Plugin is already installed (scope: user) — marked as manually installed — it loads in place from the cache'
 
@@ -245,6 +245,15 @@ test('cmod remove of a name Claude Code does not hold and cmod never set up poin
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toBe('cmod remove: ghost is neither installed nor set up. cmod list shows every plugin.\n')
+})
+
+test('a cmod command that changes the set of mods writes plugins-changed, then the store-changed stamp every session polls', async () => {
+  const home = await marketplaceHome({ demo: modFiles('demo') })
+  expect((await cmod(home, 'install', 'demo@market', '--yes')).exitCode).toBe(0)
+
+  const [marked, stamped] = await Promise.all(['plugins-changed', 'store-changed'].map(async (name) => (await stat(join(storeOf(home), name))).mtimeMs))
+
+  expect(stamped).toBeGreaterThanOrEqual(marked ?? Infinity)
 })
 
 test('cmod disable and cmod enable turn a mod off and on through Claude Code, and keep its setup', async () => {

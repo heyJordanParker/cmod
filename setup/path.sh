@@ -4,5 +4,5 @@
 # when a system command has the same name.
 set -eu
 [ -n "${CLAUDE_ENV_FILE:-}" ] || exit 0
-programs="${XDG_DATA_HOME:-$HOME/.local/share}/cmod/programs"
-printf 'export PATH="%s:$PATH"\n' "$programs" >> "$CLAUDE_ENV_FILE"
+line="export PATH=\"${XDG_DATA_HOME:-$HOME/.local/share}/cmod/programs:\$PATH\""
+grep -qxF "$line" "$CLAUDE_ENV_FILE" 2>/dev/null || printf '%s\n' "$line" >> "$CLAUDE_ENV_FILE"

@@ -4,7 +4,7 @@ import { defineMod } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
-import { Box, Image, Text } from '../../src/ui/elements.js'
+import { Box, Image, Svg, Text } from '../../src/ui/elements.js'
 
 function Count({ count }: { readonly count: number }): RenderElement {
   return <Text bold>Count: {count}</Text>
@@ -50,6 +50,30 @@ test('an element built outside a render draws once a render places it', async ()
   )
 
   expect(await tested.shown.pane.lines()).toEqual(['Count: 7', 'built at setup'])
+})
+
+test('a pane that draws Svg draws under test, with nothing of the Svg in the terminal', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'charts',
+      async setup(mod) {
+        await mod.panes
+          .add({
+            id: 'chart',
+            title: 'Chart',
+            render: () => (
+              <Box flexDirection="column">
+                <Text>p95 latency</Text>
+                <Svg source="<svg/>" alt="p95 latency" />
+              </Box>
+            ),
+          })
+          .open()
+      },
+    }),
+  )
+
+  expect(await tested.shown.pane.lines()).toEqual(['p95 latency'])
 })
 
 test('Image draws', async () => {

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { dataFolder, isObject, pluginName, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, isObject, pluginName, programPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
 import type { Plugin } from './plugin.js'
@@ -165,7 +165,7 @@ export async function installProgram(program: Program, version: string, progress
 
 async function storeBuild(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<string> {
   const built = (await buildProgram(program, [machine], progress, environment))[0] as string
-  const target = storePath('bin', program.name, version, program.name)
+  const target = programPath(storeFolder(process.env), program.name, version)
   await mkdir(dirname(target), { recursive: true })
   await copyFile(built, `${target}.${process.pid}.tmp`)
   await chmod(`${target}.${process.pid}.tmp`, 0o755)
@@ -174,7 +174,7 @@ async function storeBuild(program: Program, version: string, progress: Progress,
 }
 
 export async function fetchProgram(plugin: Plugin, name: string, emit: (event: RunnerEvent) => void): Promise<void> {
-  const target = storePath('bin', name, plugin.version, name)
+  const target = programPath(storeFolder(process.env), name, plugin.version)
   const checkout = existsSync(target) || !(await isLinked(plugin.root)) ? undefined : await readProgram(plugin)
   if (checkout?.name === name) await buildUnlessFailed(checkout, () => storeBuild(checkout, plugin.version, reporting(emit), process.env))
   if (!existsSync(target)) {
@@ -252,7 +252,7 @@ export async function removeData(name: string): Promise<void> {
 }
 
 export async function restoreProgram(name: string, record: InstallRecord | undefined): Promise<void> {
-  if (record?.program === name) await linkProgram(name, storePath('bin', name, record.version, name))
+  if (record?.program === name) await linkProgram(name, programPath(storeFolder(process.env), name, record.version))
   else await removeProgram(name)
 }
 

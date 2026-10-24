@@ -1,6 +1,7 @@
-import type { Args, Frozen } from 'claude-code'
+import type { Args, EventResult, Frozen } from 'claude-code'
 import type { Subscription } from '../utils/subscription.js'
 import { ContextEnd } from '../session/context/context.js'
+import { AttachedFile, attachedPathOf, attachmentTypeOf } from '../session/context/turn/message/attached-file.js'
 import { InstructionFile, isRulePath } from '../session/context/turn/message/instruction-file.js'
 import { instructionPathOf, Message, messagesOf, noFiles, rowOfAppend, withTexts, type Unplaced } from '../session/context/turn/message/message.js'
 import { Note, untagged } from '../session/context/turn/message/note.js'
@@ -12,7 +13,7 @@ import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
-import type { ContextData, ConversationState, RunningTask, SessionChange, TaskData } from '../session/conversation.js'
+import { ownerOfSpawn, type ContextData, type ConversationState, type RunningTask, type SessionChange, type TaskData } from '../session/conversation.js'
 import { Task, TaskStart } from '../session/goal/task.js'
 import { sessionEvents, type BeforeEvent, type SessionEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
@@ -34,7 +35,9 @@ export type Answers = {
   readonly refuse: string
   readonly input: Readonly<Record<string, unknown>>
   readonly result: string
-  readonly owner: { readonly model: string }
+  readonly prompt: string
+  readonly owner: { readonly agentType?: string; readonly model?: string; readonly cwd?: string }
+  readonly isAsync: boolean
 }
 
 export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly fold: () => Decide }
@@ -48,7 +51,10 @@ const withNote = (below: unknown, note: string | undefined): ClassicFields => {
   return note === undefined ? fields : { ...fields, additionalContext: [...((fields['additionalContext'] as readonly string[] | undefined) ?? []), note] }
 }
 
-const relayTag = /^(?:<cross-session-message[^>]*>\s*)?<cmod-relay>([\s\S]*)<\/cmod-relay>(?:\s*<\/cross-session-message>[\s\S]*)?$/
+const withContext = (ran: EventResult<'tool.call'>, note: string | undefined): EventResult<'tool.call'> =>
+  note === undefined || ran.deny !== undefined ? ran : { ...ran, context: [...(ran.context ?? []), note] }
+
+const relayTag =/^(?:<cross-session-message[^>]*>\s*)?<cmod-relay>([\s\S]*)<\/cmod-relay>(?:\s*<\/cross-session-message>[\s\S]*)?$/
 
 export function relayOf(e: Frozen<Args<'session.receive'>>): string | undefined {
   const isFromCmod = e.origin.kind === 'peer' && !('teammate' in e.origin) && e.origin.plugin === cmodPluginName
@@ -66,7 +72,14 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
   }
   const titles = new Map<string, string>()
-  const spawned = new Map<string, string>()
+  const spawned = new Map<string, { readonly prompt: string; readonly agentType: string }>()
+  const startedBy = new Map<string, string>()
+  const startingSpawn = (agentId: string, agentType: string) => {
+    const known = startedBy.get(agentId)
+    if (known !== undefined) return known
+    const waiting = [...spawned].filter(([call, spawn]) => spawn.agentType === agentType && ![...startedBy.values()].includes(call))
+    return waiting.length === 1 ? waiting[0]?.[0] : undefined
+  }
   const agentFolders = new Map<string, string>()
   const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: (e: never) => Promise<unknown>) => {
     if (!(await wants(ToolResult))) return next(e as never)
@@ -121,10 +134,15 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return answer.text === undefined ? next(e) : { text: answer.text }
     }),
     router.add('prompt.attachment', async (e, next) => {
-      if (!(await wants(InstructionFile)) || e.type !== 'nested_memory') return next(e)
+      const attachmentType = attachmentTypeOf(e.type)
+      const event = e.type === 'nested_memory' ? InstructionFile : attachmentType === undefined ? undefined : AttachedFile
+      if (event === undefined || !(await wants(event))) return next(e)
       const where = await place()
-      const path = instructionPathOf(e.text)
-      const answer = await asked(InstructionFile, message(where, { id: '', at: now(), type: InstructionFile, path, text: e.text, isRule: isRulePath(path) }, e.agentId))
+      const found: Unplaced =
+        attachmentType === undefined
+          ? { id: '', at: now(), type: InstructionFile, path: instructionPathOf(e.text), text: e.text, isRule: isRulePath(instructionPathOf(e.text)) }
+          : { id: '', at: now(), type: AttachedFile, path: attachedPathOf(e.text), attachmentType, text: e.text }
+      const answer = await asked(event, message(where, found, e.agentId))
       if (answer.refuse !== undefined) return { text: null }
       return answer.text === undefined ? next(e) : { text: answer.text }
     }),
@@ -151,34 +169,51 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const cwd = (e.agentId === undefined ? undefined : agentFolders.get(e.agentId)) ?? (await claude.session.cwd())
       const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd, files: noFiles }, e.agentId))
       if (answer.refuse !== undefined) return { deny: answer.refuse }
-      if (answer.result !== undefined) return { result: answer.result }
-      if (answer.input === undefined) return next(e)
+      if (answer.result !== undefined) return withContext({ result: answer.result }, answer.note)
+      if (answer.input === undefined) return withContext(await next(e), answer.note)
       const reserved = Object.fromEntries(Object.entries(e).filter(([key]) => !(key in input)))
-      return next({ ...reserved, ...answer.input } as Frozen<Args<'tool.call'>>)
+      return withContext(await next({ ...reserved, ...answer.input } as Frozen<Args<'tool.call'>>), answer.note)
     }),
     router.add('agent.spawn', async (e, next) => {
-      spawned.set(e.tool_use_id, e.prompt)
+      spawned.set(e.tool_use_id, { prompt: e.prompt, agentType: e.subagentType })
       const start = async (args: typeof e) => {
         const started = await next(args)
+        if (started.agentId === undefined) spawned.delete(e.tool_use_id)
+        else if (spawned.has(e.tool_use_id)) startedBy.set(started.agentId, e.tool_use_id)
         const folder = args.isTeammate === true ? undefined : (args.cwd ?? (args.parentAgentId === undefined ? undefined : agentFolders.get(args.parentAgentId)))
         if (started.agentId !== undefined && folder !== undefined) agentFolders.set(started.agentId, resolve(await claude.session.cwd(), folder))
         return started
       }
       if (!(await wants(TaskStart))) return start(e)
       const where = await place()
-      const task: TaskData = { id: '', title: e.description, agentType: e.subagentType, model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
+      const task: TaskData = { id: '', title: e.description, ...ownerOfSpawn(e.subagentType, where.session), model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
       const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } })
       if (answer.refuse !== undefined) {
         spawned.delete(e.tool_use_id)
         return { deny: answer.refuse }
       }
-      return start(answer.owner === undefined ? e : { ...e, model: answer.owner.model })
+      if (e.workflow !== undefined) return start(e)
+      const isFork = task.forkedFrom !== undefined
+      const { agentType, model, cwd } = (isFork ? undefined : answer.owner) ?? {}
+      const isAsync = isFork ? undefined : answer.isAsync
+      const answered = {
+        ...e,
+        ...(answer.prompt === undefined ? {} : { prompt: answer.prompt }),
+        ...(answer.title === undefined ? {} : { description: answer.title }),
+        ...(agentType === undefined ? {} : { subagentType: agentType }),
+        ...(model === undefined ? {} : { model }),
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(isAsync === undefined ? {} : { background: isAsync }),
+      }
+      spawned.set(e.tool_use_id, { prompt: answered.prompt, agentType: answered.subagentType })
+      return start(answered)
     }),
     router.add('classic.SubagentStart', async (e, next) => {
       const where = await place()
-      const openedBy = where.tasks[e.agent_id]?.openedBy
-      const prompt = openedBy === undefined ? undefined : spawned.get(openedBy)
+      const openedBy = where.tasks[e.agent_id]?.openedBy ?? startingSpawn(e.agent_id, e.agent_type)
+      const prompt = openedBy === undefined ? undefined : spawned.get(openedBy)?.prompt
       if (openedBy !== undefined) spawned.delete(openedBy)
+      startedBy.delete(e.agent_id)
       if (!(await wants(Prompt))) return next(e)
       const open = where.taskTurns[e.agent_id]?.prompt
       const text = open?.text ?? prompt
@@ -196,7 +231,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (turn === undefined) return stopped(await next(e))
       const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } })
       const below = await next(e)
-      return stopped(answer.refuse === undefined ? below : { ...below, block: answer.refuse })
+      return stopped(answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse })
     }),
     router.add('classic.Stop', async (e, next) => {
       if (!(await wants(TurnEnd))) return next(e)
@@ -204,7 +239,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (where.turn === undefined) return next(e)
       const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...where.turn, closedAt: now() } })
       const below = await next(e)
-      return answer.refuse === undefined ? below : { ...below, block: answer.refuse }
+      return answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse }
     }),
     router.add('session.compact', async (e, next) => {
       if (!(await wants(ContextEnd)) || e.trigger === 'precompute') return next(e)
@@ -226,7 +261,10 @@ export function withAnswer(change: SessionChange, answer: Partial<Answers>): Ses
   if (change.type === Message && answer.output !== undefined && change.message.type === ToolResult) return { ...change, message: { ...change.message, output: answer.output } }
   if (change.type === Message && answer.text !== undefined) return { ...change, message: { ...change.message, text: answer.text } as Message }
   if (change.type === Message && answer.input !== undefined && change.message.type === ToolCall) return { ...change, message: { ...change.message, input: answer.input } }
-  if (change.type === TaskStart && answer.owner !== undefined) return { ...change, task: { ...change.task, model: answer.owner.model } }
+  if (change.type === TaskStart) {
+    const { agentType, model } = answer.owner ?? {}
+    return { ...change, task: { ...change.task, ...(answer.title === undefined ? {} : { title: answer.title }), ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }) } }
+  }
   return change
 }
 
@@ -237,12 +275,13 @@ export const beforeAnswerKeys: Readonly<Record<BeforeEvent, readonly (keyof Answ
   note: ['text'],
   skill: ['text'],
   instructionFile: ['text', 'refuse'],
+  attachedFile: ['text', 'refuse'],
   reply: ['text'],
-  toolCall: ['input', 'result', 'refuse'],
+  toolCall: ['input', 'result', 'refuse', 'note'],
   toolResult: ['output', 'isError', 'note'],
   notice: ['text'],
-  taskStart: ['owner', 'refuse'],
-  turnEnd: ['refuse'],
+  taskStart: ['prompt', 'title', 'owner', 'isAsync', 'refuse'],
+  turnEnd: ['refuse', 'note'],
   contextEnd: ['refuse'],
 }
 

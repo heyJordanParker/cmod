@@ -35,9 +35,13 @@ export async function readLines(stream: HookStream<ProcessSpawnChunk, ProcessSpa
   return { code: piece.value.code, lastError }
 }
 
+export function spawnCmod(claude: Claude, args: readonly string[], session: string, env: Readonly<Record<string, string>> = {}): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
+  return claude.process.spawn({ argv: ['cmod', ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } })
+}
+
 export async function runCmod(claude: Claude, args: readonly string[], session: string): Promise<string> {
   const lines: string[] = []
-  const { code, lastError } = await readLines(claude.process.spawn({ argv: ['cmod', ...args], env: { CLAUDE_CODE_SESSION_ID: session } }), (line) => void lines.push(line))
+  const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line))
   if (code !== 0) throw new Error(cmodError(lastError, args[0]) || `cmod ${args.slice(0, 2).join(' ')} ${formatExit(code, '')}.`)
   return lines.join('\n')
 }

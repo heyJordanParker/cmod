@@ -1,12 +1,12 @@
 import { Database } from 'bun:sqlite'
-import { afterEach, expect, test } from 'bun:test'
-import { existsSync } from 'node:fs'
-import { appendFile, rm } from 'node:fs/promises'
+import { afterAll, expect, test } from 'bun:test'
+import { existsSync, readdirSync } from 'node:fs'
+import { appendFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { openHistory, searchQuery } from '../src/history.js'
 import { cmod, cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const at = (second: number, day = 11) => `2026-10-${String(day).padStart(2, '0')}T10:00:${String(second).padStart(2, '0')}.000Z`
 
@@ -85,7 +85,7 @@ test('readers of a session longer than several write batches, running at once, e
   )
   const [first, second, task, turns] = results.map((result) => JSON.parse(result.stdout) as { id: string }[])
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
-  const db = new Database(join(home, '.local/share/cmod/history-8.sqlite'), { readonly: true })
+  const db = new Database(join(home, '.local/share/cmod/history-10.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
@@ -319,6 +319,14 @@ test("a subagent whose meta.json is empty still reads, as a task opened at its f
   expect(await json(home, 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: '', agentType: 'general-purpose', openedBy: '', openedAt: at(2) }])
 })
 
+test("a fork Claude's Agent tool started reads as a task forked from its session, with no agent type", async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await writeFiles(home, { [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: JSON.stringify({ agentType: 'fork', isFork: true, description: 'Find the pane', toolUseId: 'toolu_1' }) })
+
+  expect(await json(home, 'tasks', 's1', '--project', project)).toEqual([{ id: 'a7', title: 'Find the pane', forkedFrom: 's1', openedBy: 'toolu_1', openedAt: at(1), closedAt: at(5) }])
+})
+
 test('two reads started together on a new transcript save each message once', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
@@ -368,15 +376,26 @@ test('sessions leaves out a session no one prompted, and lists one whose first p
   expect(await json(home, 'sessions', '--project', project)).toEqual([late])
 })
 
-test('an index made by an older cmod is deleted, and the index is history-8.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-10.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite']
+  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite']
   await writeFiles(home, Object.fromEntries(older.map((name) => [`.local/share/cmod/${name}`, 'an older index\n'])))
 
   await json(home, 'sessions', '--project', project)
 
-  expect([...older, 'history-8.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([false, false, false, false, false, false, false, true])
+  expect([...older, 'history-10.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
+})
+
+test('the README names the conversation index cmod writes', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await json(home, 'sessions', '--project', project)
+  const written = readdirSync(join(home, '.local/share/cmod')).filter((name) => /^history.*\.sqlite$/.test(name))
+
+  const readme = await readFile(join(import.meta.dir, '..', '..', 'README.md'), 'utf8')
+
+  expect([...new Set(readme.match(/history[-\d]*\.sqlite/g))]).toEqual(written)
 })
 
 test("a task's compaction gives its owner a new context, and contexts --task lists both", async () => {

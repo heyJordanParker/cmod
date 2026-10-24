@@ -1,6 +1,6 @@
 import type { Nodes, RootContent } from 'mdast'
 import { fromMarkdown, gfm, gfmFromMarkdown, toString } from '../vendor-markdown.js'
-import type { StyleProps } from './styles.js'
+import type { KindProps } from './styles.js'
 
 type BlockText = { readonly text: string; readonly source: string }
 
@@ -163,7 +163,7 @@ function plainText(node: Nodes): string {
   return node.children.map(plainText).join(node.type === 'tableRow' ? '\t' : '\n')
 }
 
-export function markdownBlocks<K extends Block>(text: string, kind: K): Omit<StyleProps<K>, 'Default'>[] {
+export function markdownBlocks<K extends Block>(text: string, kind: K): KindProps<K>[] {
   const blocks = parsed(text, 0).filter((block) => block.type === kind.markdown)
-  return blocks.map((block) => block.props) as unknown as Omit<StyleProps<K>, 'Default'>[]
+  return blocks.map((block) => block.props) as unknown as KindProps<K>[]
 }

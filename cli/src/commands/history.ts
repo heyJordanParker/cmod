@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { Message, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
+import { AttachedFile } from '@cmodjs/core/src/session/context/turn/message/attached-file.js'
 import { InstructionFile } from '@cmodjs/core/src/session/context/turn/message/instruction-file.js'
 import { Note } from '@cmodjs/core/src/session/context/turn/message/note.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
@@ -8,7 +9,10 @@ import { Reply } from '@cmodjs/core/src/session/context/turn/message/reply.js'
 import { Skill } from '@cmodjs/core/src/session/context/turn/message/skill.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
-import type { SessionChange, SessionData } from '@cmodjs/core/src/session/conversation.js'
+import type { SessionChange, SessionData, TaskData } from '@cmodjs/core/src/session/conversation.js'
+import type { TaskStatus } from '@cmodjs/core/src/session/goal/task.js'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
+import { backgroundAgents } from '../claude.js'
 import { followSessions, foldersIn, listSessions, openHistory, readContexts, readFolders, readGoal, readMessages, readState, readTasks, readTurns, readUsage, searchMessages, type RecordScope, type Scope } from '../history.js'
 import { storePath, takeLock } from '../store.js'
 
@@ -146,8 +150,8 @@ export async function run(argv: string[]): Promise<number> {
       return 0
     }
     if (command === 'tasks') {
-      const tasks = readTasks(db, { session: sessionOf(), project, ...task, ...(values.nested ? { isNested: true } : {}) })
-      print(tasks, () => tasks.map((task) => `${localTime(task.openedAt)}  ${task.closedAt === undefined ? 'open  ' : localTime(task.closedAt)}  ${task.id}  ${task.agentType}  ${task.title}\n`).join(''))
+      const tasks = await withBackgroundStatus(readTasks(db, { session: sessionOf(), project, ...task, ...(values.nested ? { isNested: true } : {}) }))
+      print(tasks, () => tasks.map(taskLine).join(''))
       return 0
     }
     if (command === 'goal') {
@@ -196,6 +200,26 @@ function sessionLine(session: SessionData): string {
   return `${localTime(session.lastAt, true)}  ${session.id}  ${session.title}${forked}${running}\n`
 }
 
+function taskLine(task: TaskData): string {
+  const owner = [task.agentType, task.isBackground === true ? 'background' : undefined, task.forkedFrom === undefined ? undefined : `forked from ${task.forkedFrom}`].filter((part) => part !== undefined).join(', ')
+  return `${localTime(task.openedAt)}  ${task.closedAt === undefined ? 'open  ' : localTime(task.closedAt)}  ${task.id}  ${owner}  ${task.title}\n`
+}
+
+const taskStatuses: ReadonlySet<string> = new Set(['pending', 'running', 'waiting', 'idle', 'completed', 'failed', 'killed'] satisfies TaskStatus[])
+
+async function withBackgroundStatus(tasks: readonly TaskData[]): Promise<TaskData[]> {
+  if (!tasks.some((task) => task.isBackground === true)) return [...tasks]
+  const agents = await backgroundAgents().catch((error: unknown) => {
+    process.stderr.write(`cmod history: the background tasks show no status, because ${messageOf(error)}\n`)
+    return []
+  })
+  const statuses = new Map(agents.filter((agent) => taskStatuses.has(agent.status)).map((agent) => [agent.sessionId, agent.status as TaskStatus]))
+  return tasks.map((task) => {
+    const status = task.isBackground === true ? statuses.get(task.id) : undefined
+    return status === undefined ? task : { ...task, status }
+  })
+}
+
 function localTime(at: string, withDate = false): string {
   const time = new Date(at)
   const pad = (value: number) => String(value).padStart(2, '0')
@@ -225,6 +249,7 @@ function labelOf(message: SessionMessage): string {
 function lineText(message: SessionMessage): string {
   if (message.type === ToolCall) return `${message.name}  ${JSON.stringify(message.input)}`
   if (message.type === InstructionFile) return message.path
+  if (message.type === AttachedFile) return `${message.attachmentType}  ${message.path}`
   if (message.type === ToolResult) return typeof message.output === 'string' ? message.output : JSON.stringify(message.output)
   return message.text
 }

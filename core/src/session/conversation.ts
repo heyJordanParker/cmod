@@ -6,7 +6,7 @@ import { ToolCall } from './context/turn/message/tool-call.js'
 import { ToolResult } from './context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart, type Turn } from './context/turn/turn.js'
 import { GoalChange } from './goal/goal.js'
-import { Task, TaskEnd, TaskStart } from './goal/task.js'
+import { Task, TaskEnd, TaskStart, type TaskStatus } from './goal/task.js'
 import type { UsageChange, Usage } from './session.js'
 
 export type SessionData = {
@@ -28,7 +28,23 @@ export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt'
 
 export type TurnEnding = Pick<Turn, 'answer' | 'reason' | 'failure'>
 
-export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt'> & { readonly agentType: string; readonly model?: string; readonly parent?: string }
+export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt' | 'status' | 'name' | 'spawnedBy' | 'isBackground'> & { readonly agentType?: string; readonly model?: string; readonly parent?: string; readonly forkedFrom?: string }
+
+export const forkAgentType = 'fork'
+
+export function ownerOfSpawn(agentType: string | undefined, session: string): Pick<TaskData, 'agentType' | 'forkedFrom'> {
+  return agentType === forkAgentType ? { forkedFrom: session } : { agentType: agentType ?? 'general-purpose' }
+}
+
+type Agent = { readonly id: string; readonly status: TaskStatus; readonly name?: string; readonly spawnedBy?: string }
+
+export function tasksWithAgents(tasks: readonly TaskData[], agents: readonly Agent[]): TaskData[] {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]))
+  return tasks.map((task) => {
+    const agent = byId.get(task.id)
+    return agent === undefined ? task : { ...task, status: agent.status, ...(agent.name === undefined ? {} : { name: agent.name }), ...(agent.spawnedBy === undefined ? {} : { spawnedBy: agent.spawnedBy }) }
+  })
+}
 
 export type RunningTask = TaskData & { readonly context: number; readonly contextOpenedAt?: string }
 
@@ -60,6 +76,7 @@ type OpenCall = Pick<ToolCall, 'name' | 'input' | 'cwd'>
 export type Conversation = {
   add(row: Row, task?: string): SessionChange[]
   startTask(task: TaskData): SessionChange[]
+  endTask(task: TaskData, at: string): SessionChange[]
   startContext(at: string): SessionChange[]
   endTurn(at: string, ending: TurnEnding, task?: string): SessionChange[]
   changeGoal(text: string): SessionChange[]
@@ -117,7 +134,7 @@ export function createConversation(start: ConversationState): Conversation {
     return [{ type: TurnEnd, turn: ended }]
   }
 
-  const endTask = (call: string, at: string, only?: string): SessionChange[] => {
+  const endCall = (call: string, at: string, only?: string): SessionChange[] => {
     const opened = [...tasks.values()].filter((each) => each.openedBy === call && (only === undefined || each.id === only))
     if (opened.length === 0) {
       if (agentCalls.has(call)) endedCalls.set(call, at)
@@ -168,10 +185,10 @@ export function createConversation(start: ConversationState): Conversation {
         } as Message
         changes.push({ type: Message, message: placed })
         if (placed.type === ToolCall && agentTools.includes(placed.name)) agentCalls.add(placed.callId)
-        if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch)) changes.push(...endTask(placed.callId, row.at))
+        if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch)) changes.push(...endCall(placed.callId, row.at))
         if (placed.type === Note && placed.from.type === Task) {
           const call = tagOf(textOf(row.content), 'tool-use-id')
-          if (call !== undefined && agentCalls.has(call)) changes.push(...endTask(call, row.at, tagOf(textOf(row.content), 'task-id')))
+          if (call !== undefined && agentCalls.has(call)) changes.push(...endCall(call, row.at, tagOf(textOf(row.content), 'task-id')))
         }
       }
       return changes
@@ -183,8 +200,15 @@ export function createConversation(start: ConversationState): Conversation {
       agentCalls.add(data.openedBy)
       const changes: SessionChange[] = [{ type: TaskStart, task: started }]
       const endedAt = endedCalls.get(data.openedBy)
-      if (endedAt !== undefined) changes.push(...endTask(data.openedBy, endedAt, data.id))
+      if (endedAt !== undefined) changes.push(...endCall(data.openedBy, endedAt, data.id))
       return changes
+    },
+    endTask(data, at) {
+      const open = tasks.get(data.id) ?? { ...data, context }
+      if (open.closedAt !== undefined) return []
+      const ended = { ...open, closedAt: at }
+      tasks.set(data.id, ended)
+      return [...endTaskTurn(data.id, at), { type: TaskEnd, task: ended }]
     },
     startContext,
     endTurn: (at, ending, task) => (task === undefined ? endTurn(at, ending) : endTaskTurn(task, at, ending)),

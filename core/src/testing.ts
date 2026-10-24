@@ -4,8 +4,10 @@ import type {
   CmodDependencies,
   CommandPresentation,
   CommandRunResult,
+  ElementTable,
   EventResult,
   Frozen,
+  MarkdownProps,
   PaneOpenArgs,
   PluginOptions,
   PressedLink,
@@ -23,7 +25,7 @@ import type { Options, OptionValues } from './options.js'
 import { hotkeyCommand, readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
-import { closingContext, foldBefore, installBefore, withAnswer, type Answers } from './runtime/before.js'
+import { closingContext, foldBefore, installBefore, withAnswer, type Answers, type Decide } from './runtime/before.js'
 import { permissionRoutes } from './runtime/permission-check.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
@@ -45,19 +47,19 @@ import { TaskStart } from './session/goal/task.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
 import { elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
-import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft } from './testing/fake-sessions.js'
+import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft, type StartedTask } from './testing/fake-sessions.js'
 import { listed, messageOf } from './utils/text.js'
-import { componentOf, type Row, type StyleProps } from './ui/styles.js'
+import { componentOf, type KindProps, type Row, type StyledAt } from './ui/styles.js'
 import { areas, TurnEnd as TurnEndArea, type Area } from './ui/areas.js'
 import { drawWith, elementOf } from './ui/elements.js'
 import { drawnParts } from './runtime/parts.js'
 import { serveWidgets, type Widgets } from './runtime/widgets.js'
 import { engineOf } from './runtime/engine.js'
-import { pagesOf } from './runtime/pages.js'
+import { pagesOf, servePages } from './runtime/pages.js'
 import { partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
-export type { FakeSession, MessageDraft } from './testing/fake-sessions.js'
+export type { FakeSession, MessageDraft, StartedTask } from './testing/fake-sessions.js'
 export type { RoutedEvent } from './runtime/hooks.js'
 export type { ShownToast } from './runtime/toaster.js'
 
@@ -116,12 +118,12 @@ export type TestedMod<State extends object> = {
   fire<N extends FiredEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
   settle(): Promise<void>
   add(message: MessageDraft, options?: { readonly task?: string }): Promise<Message[]>
-  endTurn(ending?: Pick<Turn, 'answer' | 'failure'>): Promise<void>
+  endTurn(ending?: Pick<Turn, 'answer' | 'failure'>, options?: { readonly task?: string }): Promise<void>
   compact(): Promise<void>
   startSession(start: { readonly source: 'startup' | 'resume' | 'clear' | 'fork'; readonly id?: string }): Promise<void>
-  startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): Promise<string>
+  startTask(task: StartedTask): Promise<string>
   lines(area: Area, props?: { readonly columns?: number }): Promise<string[]>
-  lines<K extends Row>(kind: K, props: Omit<StyleProps<K>, 'Default'>, requestId?: string): Promise<string[]>
+  lines<K extends Row>(kind: K, props: KindProps<K>, requestId?: string): Promise<string[]>
   type(line: string): Promise<CommandReply>
   hotkey(name: string): Promise<void>
   callTool(name: string, input: Record<string, unknown>): Promise<EventResult<'tool.call'>>
@@ -159,9 +161,11 @@ export function testMod<State extends object, Declared extends Options = Options
   fake.claude.session.cwd = async () => cwd
   const conversations = fakeSessions({
     callTool: (args: Parameters<Claude["tool"]["call"]>[0]) => fake.claude.tool.call(args),
+    listAgents: () => fake.fakes.agent.list?.() ?? Promise.resolve([]),
     project: () => projectRoot,
     cwd: () => cwd,
     given: options.sessions ?? [],
+    decide: (event, change) => decide(event, change),
     push: (mod, session, change) => {
       if (mod !== name) return
       const pushed = { to: mod, method: conversationMethods.changed, input: { session, change }, caller: cmodPluginName } as unknown as Frozen<Args<'cmod.call'>>
@@ -191,33 +195,61 @@ export function testMod<State extends object, Declared extends Options = Options
     await tellShown()
   }
   let widgets: Promise<Widgets> | undefined
+  let stylesMarkdown = false
+  const ownMarkdown = new Map<string, DrawnPart | null>()
+  const missedMarkdown = new Map<string, { readonly markdown: string } & StyledAt>()
   const updated = async ({ parts, redraw, requests }: PartsUpdate) => {
-    if (parts !== undefined) declaredPages = pagesOf(parts)
+    if (parts !== undefined) {
+      declaredPages = pagesOf(parts)
+      stylesMarkdown = parts.stylesMarkdown === true
+      ownMarkdown.clear()
+    }
     if (parts !== undefined || redraw !== undefined) (await widgetsOf()).update(name, { ...(parts === undefined ? {} : { parts }), ...(redraw === undefined ? {} : { redraw }) })
     if (requests !== undefined && requests.length > 0) await applyRequests(requests)
   }
   const pressPart = (input: PartPress) => callMod(partMethods.press, input).then((update) => updated((update ?? {}) as PartsUpdate))
+  const markdownIn = (table: ElementTable, at: StyledAt) => (props: MarkdownProps): RenderElement => {
+    const drawnAt = `${at.surface}\u0000${at.columns}\u0000${props.text}`
+    const drawn = stylesMarkdown ? ownMarkdown.get(drawnAt) : null
+    if (drawn === undefined) missedMarkdown.set(drawnAt, { markdown: props.text, ...at })
+    if (drawn === undefined || drawn === null || drawn.tree === null) return table.Markdown(props)
+    const { draw, tree } = drawn
+    return drawWith(table, () => elementOf(tree, '', (handler, args) => void pressPart({ draw, handler, args }))) as RenderElement
+  }
+  const withOwnMarkdown = async <Drawn>(draw: () => Promise<Drawn>): Promise<Drawn> => {
+    const first = await draw()
+    if (missedMarkdown.size === 0) return first
+    for (const [drawnAt, input] of missedMarkdown) ownMarkdown.set(drawnAt, (await callMod(partMethods.draw, input)) as DrawnPart | null)
+    missedMarkdown.clear()
+    return draw()
+  }
+  const cmodClaude: Claude = { ...fake.claude, cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) } }
+  const reportPart = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
+  const parts = drawnParts({ claude: cmodClaude, report: reportPart, press: (_mod: string, input: PartPress) => void pressPart(input).catch((error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' })) })
   const servedWidgets = async (): Promise<Widgets> => {
     const own = name === cmodPluginName && lifecycle.mod !== undefined ? engineOf(lifecycle.mod).widgets : undefined
     if (own !== undefined) return own
-    const claude: Claude = { ...fake.claude, cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) } }
-    const report = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
-    const press = (_mod: string, input: PartPress) => void pressPart(input).catch((error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' }))
     return serveWidgets({
-      claude,
+      claude: cmodClaude,
       router: cmodPlugin,
       store: storeFolder({ HOME: await fake.claude.env.home(), XDG_DATA_HOME: await fake.claude.env.dataHome() }),
-      report,
+      report: reportPart,
       turnClosedBy: () => conversations.lastTurn(),
-      parts: drawnParts({ claude, report, press }),
+      parts,
+      markdownIn,
     })
   }
   const widgetsOf = () => (widgets ??= servedWidgets())
+  const cmodBeneath = createRouter()
+  const pages = servePages({ claude: cmodClaude, router: cmodBeneath, report: reportPart, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined })
+  pages.apply((_mod, requests) => applyRequests(requests))
   const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations)
   fake.fakes.cmod.call = async (call) => {
     if (call.to !== cmodPluginName || call.method !== partMethods.changed) return dependencies(call)
-    await updated(call.input as PartsUpdate)
-    return { isHeld: (call.input as PartsUpdate).isAsked === true }
+    const { requests, isAsked, ...listing } = call.input as PartsUpdate
+    const isHeld = isAsked === true && requests !== undefined && pages.update(name, { requests, isAsked })
+    await updated(isAsked === true ? listing : (call.input as PartsUpdate))
+    return { isHeld }
   }
   const appendRow = fake.claude.session.append
   fake.claude.session.append = async (args) => {
@@ -274,39 +306,61 @@ export function testMod<State extends object, Declared extends Options = Options
     const asked = { to: name, method: conversationMethods.before, input: { session: sessionId, event, change }, caller: cmodPluginName } as unknown as Frozen<Args<'cmod.call'>>
     return calledAnswer(cmodPluginName, await lifecycle.route('cmod.call', asked, async () => ({ deny: notInstalled(name) })))
   }
+  const decide: Decide = (event, change) => foldBefore(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' }))
   installBefore({
     claude: fake.claude,
     router: cmodPlugin,
     hooks: {
       place: async () => conversations.place(),
       wants: async (event) => conversations.wants(name, event),
-      fold: () => (event, change) => foldBefore(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })),
+      fold: () => decide,
     },
   })
 
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {
     await start()
     if (event === 'ui.render') {
+      const { component, requestId } = input as Args<'ui.render'>
+      if (component === 'Pane') fake.placePane(requestId)
       await widgetsOf()
       await fake.settle()
     }
-    return cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (below ?? claudeCodeAnswer(event, e)) as EventResult<N>))
+    return cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (await claudeCodeRuns(event, e, below)) as EventResult<N>))
+  }
+
+  const claudeCodeRuns = async (event: RoutedEvent, e: unknown, below: unknown): Promise<unknown> => {
+    if (event === 'session.compact' && (e as Args<'session.compact'>).trigger !== 'precompute') {
+      const started = await fire('SessionStart', { source: 'compact' })
+      fake.shown.notes.push(...(started.additionalContext ?? []).map(untagged))
+    }
+    if (below !== undefined) return below
+    const answer = claudeCodeAnswer(event, e)
+    if (event === 'ui.close') {
+      const { id, origin } = e as Args<'ui.close'>
+      if (origin.kind === 'person' && fake.shown.openPanes.has(id)) await drawPane(id)
+      fake.shown.openPanes.delete(id)
+    }
+    if (event === 'agent.spawn') {
+      const started = await route('classic.SubagentStart', { hook_event_name: 'SubagentStart', agent_id: (answer as { agentId: string }).agentId, agent_type: (e as Args<'agent.spawn'>).subagentType }, undefined)
+      fake.shown.notes.push(...(started.additionalContext ?? []).map(untagged))
+    }
+    return answer
   }
 
   const runCommand = async (command: string, args: string): Promise<CommandRunResult> => {
     await start()
     const reached: Set<string> = new Set()
     const ownRun = async (): Promise<CommandRunResult> => (reached.add(command), {})
-    const answer = await cmodPlugin.dispatch('command.run', { command, args, origin: { kind: 'composer' }, presentation }, (passed) => lifecycle.route('command.run', passed, ownRun))
+    const answer = await cmodPlugin.dispatch('command.run', { command, args, origin: { kind: 'composer' }, presentation }, (passed) => lifecycle.route('command.run', passed, (e) => cmodBeneath.dispatch('command.run', e, ownRun)))
     if (reached.has(command) && answer.text === undefined) throw new Error(!fake.shown.commands.includes(command) ? `${name} has no slash command /${command}. Add it in setup with mod.use(slashCommand({ name: '${command}', … })).` : `${name}: /${command} reached Claude Code's own run of the command, so Claude Code shows "${name} registered /${command} but no command.run hook answered it". Answer it without calling next(e).`)
     return answer
   }
 
-  const drawPane = async (paneId: string) => {
+  const drawPane = async (paneId: string, asked?: number) => {
     await start()
     if (!fake.shown.openPanes.has(paneId)) throw new Error(`The pane "${paneId}" of ${name} closed, and a user sees a pane only while it is open.`)
     const opened = fake.calls.findLast((call) => call.call === 'ui.open' && (call.args[0] as PaneOpenArgs).id === paneId)?.args[0] as PaneOpenArgs | undefined
-    const columns = opened?.columns ?? defaultColumns
+    const columns = asked ?? opened?.columns ?? defaultColumns
     const isFocused = (await fake.claude.ui.panes()).some((open) => open.id === paneId && open.isFocused)
     const props: RenderPropsOf['Pane'] = { title: opened?.title ?? paneId, isFocused, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: defaultRows }, view: {} }
     const drawing = await route('ui.render', { surface: 'terminal', component: 'Pane', requestId: paneId, props }, elements.Box({}))
@@ -320,7 +374,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const drawn = (await callMod(partMethods.draw, { page: pageId, params: page.params, columns, isFocused: page.isFocused })) as DrawnPart | null
     await fake.settle()
     const tree = drawn?.tree ?? null
-    const drawing = tree === null || drawn === null ? elements.Box({}) : (drawWith(elements, () => elementOf(tree, '', (handler, args) => void pressPart({ draw: drawn.draw, handler, args }))) as RenderElement)
+    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(elements, () => elementOf(tree, '', (handler, args) => void pressPart({ draw: drawn.draw, handler, args })), markdownIn(elements, { surface: 'terminal', columns })) as RenderElement)
     return { drawing, columns }
   }
 
@@ -339,7 +393,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const draw = async (columns?: number) => {
       await start()
       const { id } = shownNow(isPane)
-      return { id, ...(isPane ? await drawPane(id) : await drawPage(id, columns)) }
+      return { id, ...(isPane ? await drawPane(id, columns) : await drawPage(id, columns)) }
     }
     const drawnElement = async (type: 'Button' | 'Input' | 'Select' | 'Markdown', key: string) => {
       const { id, drawing } = await draw()
@@ -368,7 +422,7 @@ export function testMod<State extends object, Declared extends Options = Options
           else await (props['onLinkPress'] as (link: PressedLink, e: Frozen<UiPressArgument>) => unknown)(e.link, e)
           return { element: e.element }
         }
-        if (isPane) await lifecycle.route('ui.press', pressed, run)
+        if (isPane) await lifecycle.route('ui.press', pressed, (e) => cmodBeneath.dispatch('ui.press', e, run))
         else await run(pressed)
         await fake.settle()
       },
@@ -397,7 +451,7 @@ export function testMod<State extends object, Declared extends Options = Options
     await fake.settle()
     const turn = area === TurnEndArea ? conversations.lastTurn() : undefined
     if (area === TurnEndArea && turn?.closedAt === undefined) throw new Error(`${name} has no ended turn, so TurnEnd draws nothing. End one with tested.add({ type: Prompt, text: '…' }), then tested.endTurn().`)
-    return { drawing: elements.Box({ flexDirection: 'column', children: [...(await served.draw(area, elements, columns, turn))] }), columns }
+    return { drawing: elements.Box({ flexDirection: 'column', children: [...(await withOwnMarkdown(() => served.draw(area, elements, { surface: 'terminal', columns }, turn)))] }), columns }
   }
 
   const drawSlot = async (component: RenderComponent, props: object, requestId = `${component}_${(slotDraws += 1)}`) => {
@@ -500,9 +554,9 @@ export function testMod<State extends object, Declared extends Options = Options
       await start()
       return settled(conversations.add(message, added?.task))
     },
-    endTurn: async (ending) => {
+    endTurn: async (ending, options) => {
       await start()
-      await settled(conversations.endTurn(ending === undefined ? undefined : { ...ending, ...(ending.failure === undefined ? {} : { reason: 'error' as const }) }))
+      await settled(conversations.endTurn(ending === undefined ? undefined : { ...ending, ...(ending.failure === undefined ? {} : { reason: 'error' as const }) }, options?.task))
     },
     compact: async () => {
       await start()
@@ -616,6 +670,10 @@ function claudeCodeAnswer(event: RoutedEvent, e: unknown): unknown {
   if (event === 'agent.spawn') {
     const { model, parentModel } = e as Args<'agent.spawn'>
     return { agentId: 'agent-1', model: model ?? parentModel }
+  }
+  if (event === 'session.append') {
+    const { message, uuid } = e as Args<'session.append'>
+    return { message, uuid }
   }
   if (event !== 'prompt.submit') return {}
   const { text, context, origin } = e as Args<'prompt.submit'>

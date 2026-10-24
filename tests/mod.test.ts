@@ -35,10 +35,11 @@ async function changeSettings(tested: ReturnType<typeof testMod>) {
   await write('/test/home/.claude/settings.json', '{}')
 }
 
-async function prompt(tested: ReturnType<typeof testMod>, text: string) {
-  await claudeCodeOf(tested).fire('prompt.submit', { text, origin: { kind: 'composer' } } as never, { turnId: `turn-${text}` } as never)
+async function prompt(tested: ReturnType<typeof testMod>, text: string): Promise<readonly string[]> {
+  const answered = (await claudeCodeOf(tested).fire('prompt.submit', { text, origin: { kind: 'composer' } } as never)) as { readonly context?: readonly string[] }
   const appended = { uuid: `prompt-${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+  return answered.context ?? []
 }
 
 type Synced = { linked: { mod: string; folder: string; rules: { name: string; isGlobal: boolean; text: string }[] }[]; placed: string[]; removed: string[]; watched: string[] }
@@ -62,7 +63,7 @@ const cmodNote = (text: string) => `<cmod_mod>\n${text}\n</cmod_mod>`
 
 const appendedNotes = (tested: ReturnType<typeof testMod>) => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
-test("a mod's global rules linked after Claude Code started reach Claude as one note, and a later unlink says they no longer apply", async () => {
+test("a mod's global rules linked after Claude Code started reach Claude as one note the person never sees, and a later unlink says they no longer apply", async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const rules = [
     { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' },
@@ -81,10 +82,11 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   expect(rulesRuns.runs).toBe(1)
 
   await changeSettings(tested)
-  await prompt(tested, 'again')
+  const noted = await prompt(tested, 'again')
   await settled()
 
-  expect(appendedNotes(tested)).toEqual([cmodNote("The house-style mod's rules no longer apply.")])
+  expect(noted).toEqual([cmodNote("The house-style mod's rules no longer apply.")])
+  expect(appendedNotes(tested)).toEqual([])
   expect(rulesRuns.runs).toBe(2)
 })
 
@@ -114,16 +116,17 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
   const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
   await settled()
   await changeSettings(tested)
-  await prompt(tested, 'hello')
+  const noted = await prompt(tested, 'hello')
   await settled()
 
   expect(started.additionalContext).toEqual([cmodNote('The house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.')])
-  expect(appendedNotes(tested)).toEqual([cmodNote('These rules of the house-style mod no longer apply:\n\nUse the old API.')])
+  expect(noted).toEqual([cmodNote('These rules of the house-style mod no longer apply:\n\nUse the old API.')])
+  expect(appendedNotes(tested)).toEqual([])
 })
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the compact tool, the start_background_agent tool, the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.\nStart tasks that work beside Claude.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -296,14 +299,14 @@ test("Settings lists each set-up mod with its Settings pages, options, permissio
   expect(tested.shown.pane.id).toBe('sidebar')
   expect(page).toContain('0: Dashboard')
   expect(page).toContain('Settings')
-  expect(page).toContain('ci-watch 0.2.0')
+  expect(page).toContain('0.2.0  Turn off  Remove')
   expect(page).toContain('Tells you when CI fails on your branch')
   expect(page).not.toContain('Off:')
   expect(page).toContain('last run passed')
   expect(options).toContain('Branch')
   expect(permissions).toContain('[x] Connect to api.github.com')
   expect(permissions).toContain('[ ] Ask a model, which uses your plan')
-  expect(hotkeys).toContain('Show the runs  ctrl+l')
+  expect(hotkeys).toContain('│ Show the runs                          │\n                  │ Combo ctrl+l                           │')
 })
 
 const changelog = '# Changelog\n\n## [Unreleased]\n\n- Watches merge queues.\n\n## [0.2.0] - 2026-10-13\n\n### Added\n- CI failures on your branch.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
@@ -400,7 +403,7 @@ test('Remove asks first, and Remove again runs cmod remove', async () => {
   await tested.shown.pane.press('remove-confirmed')
   await tested.settle()
 
-  expect(asked.replace(/\s+/g, ' ')).toContain('Remove ci-watch? Its uninstall step runs, and Claude Code deletes it.')
+  expect(asked.replace(/[\s│]+/g, ' ')).toContain('Remove ci-watch? Its uninstall step runs, and Claude Code deletes it.')
   expect(kept).not.toContain('Remove ci-watch?')
   expect(ran).toEqual([`${cmodProgram} remove ci-watch`])
   expect((await shown()).replace(/\s+/g, ' ')).toContain('Removed ci-watch.')
@@ -470,8 +473,96 @@ test("a Sidebar page keeps its last drawing while its mod draws the next one aft
   finish()
   await tested.settle()
 
-  expect(whileDrawing).toContain('runs body 1')
-  expect(await tested.shown.pane.lines()).toContain('runs body 2')
+  expect(whileDrawing.join('\n')).toContain('runs body 1')
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('runs body 2')
+})
+
+test("a Sidebar page whose mod fails to draw it shows the mod's error in place of the drawing placeholder", async () => {
+  const tested = testMod(cmodPlugin, {
+    state: bound,
+    files: {
+      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+    },
+  })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method === 'cmod:draw') throw new Error('item 3 has no title')
+    return null
+  }
+  await tested.start()
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
+  await changed({ requests: [{ open: 'items' }] })
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  const lines = (await tested.shown.pane.lines()).join('\n')
+
+  expect(lines).toContain('The items page of inbox could not draw: item 3 has no title')
+  expect(lines).not.toContain('Drawing')
+})
+
+test('a Sidebar page opened with params draws, because the cmod plugin sends a plain copy of them across plugins', async () => {
+  const tested = testMod(cmodPlugin, {
+    state: bound,
+    files: {
+      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+    },
+  })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  const drawnWith: unknown[] = []
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method !== 'cmod:draw') return null
+    drawnWith.push((input.input as { params: unknown }).params)
+    return { draw: 1, tree: { $cmodElement: 'Text', props: { children: 'src/a.ts' } } }
+  }
+  await tested.start()
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  await changed({ parts: { widgets: [], pages: [{ id: 'file', title: 'File', place: 'sidebar' }] } })
+  await changed({ requests: [{ open: 'file', params: { project: '/work/app', path: 'src/a.ts' } }] })
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('src/a.ts')
+  expect(drawnWith).toContainEqual({ project: '/work/app', path: 'src/a.ts' })
+})
+
+test('a Sidebar page keeps its last drawing, and so its place, when its mod fails to draw it during a reload', async () => {
+  const tested = testMod(cmodPlugin, {
+    state: bound,
+    files: {
+      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+    },
+  })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  let isReloading = false
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method !== 'cmod:draw') return null
+    if (isReloading) throw new Error('inbox is not installed. Install it in Plugins.')
+    return { draw: 1, tree: { $cmodElement: 'Text', props: { children: 'item 7 of 9' } } }
+  }
+  await tested.start()
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
+  await changed({ requests: [{ open: 'items' }] })
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  isReloading = true
+  await changed({ redraw: true })
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('item 7 of 9')
 })
 
 test('a page request of a kind this cmod does not know, from a mod on a newer @cmodjs/core, opens nothing', async () => {
@@ -502,7 +593,7 @@ test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the
   const page = await shown()
 
   expect(page).not.toContain('1: Runs')
-  expect(page).toContain('ci-watch 0.2.0')
+  expect(page).toContain('0.2.0  Turn off  Remove')
   expect(page).toContain('last run passed')
   expect(told).toContainEqual({ open: [], shown: 'runs', isFocused: true })
 })
@@ -610,10 +701,164 @@ test('the Sidebar hotkey shows the Dashboard, and the Settings hotkey switches t
   const settings = (await tested.shown.pane.lines()).join('\n')
   await tested.hotkey('settings')
 
-  expect(dashboard).toContain('No widget is on the Dashboard yet.')
-  expect(settings).toContain('▸ cmod')
+  expect(dashboard).toContain('Nothing is on the Dashboard yet.')
+  expect(settings).toContain('● cmod')
   expect(settings).toContain('Show or hide the Sidebar')
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
+})
+
+test('after the person hides the Sidebar with Escape, one press of the Sidebar hotkey shows it again', async () => {
+  const tested = testMod(cmodPlugin, { state: bound, files: { '/test/plugins/cmod/package.json': JSON.stringify({ cmod: { hotkeys: cmodPlugin.hotkeys } }) } })
+  await tested.hotkey('sidebar')
+  await tested.fire('ui.close', { id: 'sidebar', origin: { kind: 'person' } } as never)
+  await tested.settle()
+
+  await tested.hotkey('sidebar')
+
+  expect(tested.shown.openPanes.has('sidebar')).toBe(true)
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('Nothing is on the Dashboard yet.')
+})
+
+test("an empty Dashboard says what goes there, and Arrange widgets opens cmod's Widgets in Settings", async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+
+  await tested.hotkey('sidebar')
+  const empty = await tested.shown.pane.lines()
+  await tested.shown.pane.press('arrange-widgets')
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect(empty).toEqual([
+    '▄'.repeat(80),
+    ` 0: Dashboard${' '.repeat(55)}9: Settings`,
+    '▀'.repeat(80),
+    '',
+    ` ╭─ Widgets ${'─'.repeat(66)}╮`,
+    ` │ Nothing is on the Dashboard yet.${' '.repeat(43)}│`,
+    ` │ Place the widgets your mods add here, in Settings.${' '.repeat(25)}│`,
+    ` │${' '.repeat(76)}│`,
+    ` │ Arrange widgets${' '.repeat(60)}│`,
+    ` ╰${'─'.repeat(76)}╯`,
+    '',
+    ' ↑↓ scroll  tab move  esc hide',
+  ])
+  expect(tested.state.session.shown).toBe('settings')
+  expect(tested.state.session.selected).toBe('cmod')
+  expect(tested.state.session.section).toBe('widgets')
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('Above the prompt')
+})
+
+test("a mod's install page is a Sidebar tab named for the mod, drawn by the mod, and its × closes it", async () => {
+  const { tested, called, shown } = testSettings()
+  await tested.start()
+
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'cmod:install', focus: true }] }, caller: 'ci-watch' } as never)
+  await tested.settle()
+  await shown()
+  await tested.settle()
+  const lines = await tested.shown.pane.lines()
+  await tested.shown.pane.press('close:ci-watch/cmod:install')
+  await tested.settle()
+
+  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install ci-watch ×${' '.repeat(32)}9: Settings`, '▀'.repeat(80), '', ` ╭─ ci-watch ${'─'.repeat(65)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide'])
+  expect(called).toContain('ci-watch cmod:draw')
+  expect(tested.shown.openPanes.has('sidebar')).toBe(false)
+})
+
+test('two mods that install at once each get an install tab, and the later one shows', async () => {
+  const { tested, shown } = testSettings()
+  await tested.start()
+  const install = (caller: string) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'cmod:install', focus: true }] }, caller } as never)
+
+  await install('ci-watch')
+  await install('notes')
+  await tested.settle()
+  await shown()
+  await tested.settle()
+
+  expect((await tested.shown.pane.lines())[1]).toBe(` 0: Dashboard  1: Install ci-watch ×  2: Install notes ×${' '.repeat(12)}9: Settings`)
+  expect(tested.state.session.shown).toBe('notes/cmod:install')
+})
+
+test('Finish setup in Settings opens the install page the mod answers with', async () => {
+  const { tested, shown } = testSettings()
+  const answer = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (input) => (input.method === 'cmod:finishSteps' ? { requests: [{ open: 'cmod:install', focus: true }] } : answer?.(input))
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  await tested.shown.pane.press('finish')
+  await tested.settle()
+  await shown()
+  await tested.settle()
+
+  expect(tested.state.session.shown).toBe('ci-watch/cmod:install')
+  expect(await shown()).toContain('1: Install ci-watch')
+})
+
+test('Settings draws a Mods panel with a status mark beside each mod, and a panel for the selected mod with its version and actions, then what it needs and its sections', async () => {
+  const { tested } = testSettings()
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect(await tested.shown.pane.lines()).toEqual([
+    '▄'.repeat(80),
+    ` 0: Dashboard${' '.repeat(55)}9: Settings`,
+    '▀'.repeat(80),
+    '',
+    ' ╭─ Mods ───────╮ ╭─ ci-watch ─────────────────────────────╮',
+    ' │  ● cmod      │ │ 0.2.0  Turn off  Remove                │',
+    ' │  ● ci-watch  │ │ Tells you when CI fails on your branch │',
+    ' ╰──────────────╯ │                                        │',
+    '                  │ Needs setup: Sign in to GitHub         │',
+    '                  │ Finish setup                           │',
+    '                  │                                        │',
+    '                  │  Options  Permissions  Hotkeys         │',
+    '                  │                                        │',
+    '                  │ Branch                                 │',
+    '                  │ Value main                             │',
+    '                  ╰────────────────────────────────────────╯',
+    '',
+    ' ↑↓ scroll  tab move  esc hide',
+  ])
+})
+
+test('Settings stacks the Mods panel above the mod panel when the Sidebar is too narrow for both side by side', async () => {
+  const { tested } = testSettings()
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+  await tested.shown.pane.lines({ columns: 45 })
+  await tested.settle()
+
+  expect((await tested.shown.pane.lines({ columns: 45 })).slice(4, 13)).toEqual([
+    ' ╭─ Mods ──────────────────────────────────╮',
+    ' │  ● cmod                                 │',
+    ' │  ● ci-watch                             │',
+    ' ╰─────────────────────────────────────────╯',
+    '',
+    ' ╭─ ci-watch ──────────────────────────────╮',
+    ' │ 0.2.0                  Turn off  Remove │',
+    ' │ Tells you when CI fails on your branch  │',
+    ' │                                         │',
+  ])
+})
+
+test('every Sidebar tab keeps its width whether it shows or not, so switching tabs moves no other tab', async () => {
+  const { tested, declare } = testSettings()
+  await tested.start()
+  await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }])
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'ci-watch' } as never)
+  await tested.settle()
+
+  const pageShown = (await tested.shown.pane.lines())[1]
+  await tested.shown.pane.press('tab:dashboard')
+  const dashboardShown = (await tested.shown.pane.lines())[1]
+
+  expect(pageShown).toBe(` 0: Dashboard  1: Runs ×${' '.repeat(44)}9: Settings`)
+  expect(dashboardShown).toBe(pageShown)
 })
 
 test('cmod.call denies a call no mod takes with the install command', async () => {
@@ -636,8 +881,10 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
   const spawned: string[][] = []
   const sessions: (string | undefined)[] = []
   tested.fakes.process.spawn = (request) => {
-    spawned.push([...request.argv])
-    sessions.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
+    if (request.argv[1] !== 'watch') {
+      spawned.push([...request.argv])
+      sessions.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
+    }
     const { code, stdout = '', stderr = '' } = answers[request.argv.slice(1, 3).join(' ')] ?? { code: 0 }
     const chunks: ProcessSpawnChunk[] = [...(stdout === '' ? [] : [{ stream: 'stdout' as const, text: stdout }]), ...(stderr === '' ? [] : [{ stream: 'stderr' as const, text: stderr }])]
     async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -648,6 +895,50 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
   }
   return { tested, spawned, sessions }
 }
+
+const linkedFiles = {
+  [`${store}/links.json`]: JSON.stringify({ marketplaces: { 'work-linked': '/work' }, turnedOff: { notes: [] } }),
+  '/test/home/.claude/plugins/known_marketplaces.json': JSON.stringify({ 'work-linked': { source: { source: 'directory', path: '/work' }, installLocation: '/work' } }),
+}
+
+test('a session started with a linked mod starts cmod watch only while no watcher touched its lock file in the last 15 seconds', async () => {
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files: linkedFiles })
+  const watches: string[] = []
+  tested.fakes.process.spawn = (request) => {
+    if (request.argv[1] === 'watch') watches.push('watch')
+    const chunks: ProcessSpawnChunk[] = []
+    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+      yield* chunks
+      return { code: 0, signal: null }
+    }
+    return Object.assign(read(), { result: Promise.resolve({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  }
+  let now = 100_000
+  let touchedAt = 95_000
+  tested.fakes.clock.now = async () => now
+  const ticks: (() => void)[] = []
+  tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
+  tested.fakes.fs.list = async (path) => (path === `${store}/watch.lock` ? [{ name: '4242', kind: 'file' }] : []) as never
+  const stat = tested.fakes.fs.stat
+  tested.fakes.fs.stat = async (path) => (path === `${store}/watch.lock/4242` ? { kind: 'file', size: 0, mtimeMs: touchedAt, isLink: false } : (stat?.(path) ?? Promise.reject(new Error('no fs.stat'))))
+  const tick = async () => {
+    for (const run of ticks) run()
+    await tested.settle()
+  }
+
+  await tested.start()
+  await tested.settle()
+  expect(watches).toEqual([])
+
+  now = 120_000
+  await tick()
+  expect(watches).toEqual(['watch'])
+
+  touchedAt = 119_000
+  now = 130_000
+  await tick()
+  expect(watches).toEqual(['watch'])
+})
 
 const askCmod = (tested: ReturnType<typeof cmodAnswering>['tested'], caller: string, method: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method, input, caller } as never)
 
@@ -747,6 +1038,38 @@ test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 cal
   for (const method of methods) expect(await refusal(method)).not.toContain('has no method')
 })
 
+test("Claude's start_background_agent tool starts its task in a new background session through cmod task start", async () => {
+  const started = { id: 'bg-1', title: 'Upgrade', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }
+  const { tested, spawned, sessions } = cmodAnswering({ 'task start': { code: 0, stdout: `${JSON.stringify(started)}\n` } })
+  await tested.start()
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.settle()
+
+  const answer = await tested.callTool('start_background_agent', { task: 'Upgrade every dependency.', title: 'Upgrade', model: 'sonnet' })
+
+  expect(answer).toEqual({ result: 'Started a background agent in session bg-1. It answers there, not in this conversation.' })
+  expect(spawned.filter((argv) => argv[1] === 'task')).toEqual([[cmodProgram, 'task', 'start', '--title', 'Upgrade', '--model', 'sonnet', '--cwd', '/work/app', '--json', '--', 'Upgrade every dependency.']])
+  expect(sessions[spawned.findIndex((argv) => argv[1] === 'task')]).toBe('test-session')
+})
+
+test("Claude's compact tool compacts the conversation once Claude's answer ends, keeping what it named, and then prompts Claude to carry on", async () => {
+  const { tested } = cmodAnswering({})
+  const ran: { command: string; args?: string }[] = []
+  tested.fakes.command.run = async (run) => (ran.push(run), {})
+  await tested.start()
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await prompt(tested, 'Build the parser')
+
+  expect(await tested.callTool('compact', { keep: 'the parser plan' })).toEqual({ result: 'The conversation compacts once this answer ends, and a prompt then lets you carry on. End your answer now.' })
+  expect(ran).toEqual([])
+
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  for (let waited = 0; tested.shown.prompts.length === 0 && waited < 50; waited += 1) await Bun.sleep(1)
+
+  expect(ran).toEqual([{ command: 'compact', args: 'the parser plan' }])
+  expect(tested.shown.prompts).toEqual(['The conversation was compacted. Carry on with the work from before the compaction.'])
+})
+
 const installedPlugins = '/test/home/.claude/plugins/installed_plugins.json'
 
 function pluginsListed(lists: readonly (readonly { name: string; version: string; state?: string; unsatisfied?: string[] }[])[], global: Partial<CmodPluginState['global']> = {}) {
@@ -756,7 +1079,7 @@ function pluginsListed(lists: readonly (readonly { name: string; version: string
   const ran: string[] = []
   const answers = [...lists]
   tested.fakes.process.spawn = (request) => {
-    ran.push(request.argv.slice(1).join(' '))
+    if (request.argv[1] !== 'watch') ran.push(request.argv.slice(1).join(' '))
     const rows = request.argv[1] === 'list' ? (answers.length > 1 ? answers.shift() : answers[0]) : undefined
     const stdout = rows === undefined ? '' : `${JSON.stringify(rows.map((row) => ({ state: 'ready', unsatisfied: [], ...row })))}\n`
     async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -846,6 +1169,56 @@ test('a plugin check that fails, such as when cmod cannot run Claude Code, runs 
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error').map((toast) => toast.message)).toEqual(['Could not update cmod for the mods that need a newer one'])
 })
 
+test('only a session with a linked mod, shown in an app, starts cmod watch', async () => {
+  const startsWatch = async (files: Record<string, string>, surfaces: readonly ('terminal' | 'desktop' | 'mobile' | 'vscode')[]) => {
+    const { tested } = cmodAnswering({}, files)
+    const started: string[][] = []
+    const spawn = tested.fakes.process.spawn
+    tested.fakes.process.spawn = (request) => (started.push([...request.argv]), spawn!(request))
+    tested.fakes.session.surfaces = async () => [...surfaces]
+    await tested.start()
+    await tested.settle()
+    return started.some((argv) => argv.join(' ') === `${cmodProgram} watch`)
+  }
+  const removed = { ...linkedFiles, '/test/home/.claude/plugins/known_marketplaces.json': '{}' }
+
+  expect(await startsWatch(linkedFiles, ['terminal'])).toBe(true)
+  expect(await startsWatch({}, ['terminal'])).toBe(false)
+  expect(await startsWatch(removed, ['terminal'])).toBe(false)
+  expect(await startsWatch(linkedFiles, [])).toBe(false)
+})
+
+test('a running session starts cmod watch once a mod is linked', async () => {
+  const { tested } = cmodAnswering({}, {})
+  const started: string[] = []
+  const spawn = tested.fakes.process.spawn
+  tested.fakes.process.spawn = (request) => (started.push(request.argv.join(' ')), spawn!(request))
+  const { tick } = watchedStore(tested)
+  await tested.start()
+  await tested.settle()
+  expect(started).not.toContain(`${cmodProgram} watch`)
+
+  for (const [path, text] of Object.entries(linkedFiles)) await writeStoreFile(tested, path, text)
+  await tick()
+
+  expect(started).toContain(`${cmodProgram} watch`)
+})
+
+test('a linked mod that does not build shows its error in one toast, and the toast goes once it builds', async () => {
+  const { tested } = cmodAnswering({}, {})
+  const { tick } = watchedStore(tested)
+  await tested.start()
+  await tested.settle()
+
+  await writeStoreFile(tested, `${store}/build-failures.json`, JSON.stringify({ demo: 'Bundling hooks/register.ts failed: Expected ")"' }))
+  await tick()
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toContainEqual({ type: 'error', message: 'demo does not build', description: 'Bundling hooks/register.ts failed: Expected ")"' })
+
+  await writeStoreFile(tested, `${store}/build-failures.json`, '{}')
+  await tick()
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')).toEqual([])
+})
+
 test('the cmod plugin reads the plugin list only after Claude Code changes its installed plugins, and updates nothing when every mod has the cmod it needs', async () => {
   const { tested, ran } = pluginsListed([[{ name: 'cmod@cmod', version: '4.0.0' }, { name: 'notes@cmod', version: '0.1.0' }]])
   await tested.start()
@@ -903,13 +1276,78 @@ function watchedStore(tested: ReturnType<typeof testMod>) {
   tested.fakes.clock.after = (_ms, fire) => (timers.push(fire), { cancel: () => undefined })
   tested.fakes.clock.every = (_ms, fire) => (polls.push(fire), { cancel: () => undefined })
   const tick = async () => {
-    for (const poll of polls) poll()
-    await settled()
-    for (const fire of timers.splice(0)) fire()
+    for (const round of [1, 2, 3, 4]) {
+      for (const poll of polls) poll()
+      await settled()
+      if (round === 4) for (const fire of timers.splice(0)) fire()
+    }
     await settled()
   }
   return { tick }
 }
+
+async function writeStoreFile(tested: ReturnType<typeof testMod>, path: string, text: string) {
+  await tested.fakes.fs.write?.(path, text)
+  await tested.fakes.fs.write?.(`${store}/store-changed`, '')
+}
+
+test('the cmod plugin polls only the store-changed stamp and installed_plugins.json', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tested.fakes.fs.write?.(installedPlugins, '{}')
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+  const before = tested.calls.length
+
+  await tick()
+
+  const polled = new Set(tested.calls.slice(before).filter(({ call }) => call === 'fs.stat').map(({ args }) => args[0]))
+  expect([...polled].toSorted()).toEqual([installedPlugins, `${store}/store-changed`])
+})
+
+test('a store file cmod changes without the store-changed stamp is not read', async () => {
+  const { tested } = cmodAnswering({}, {})
+  const { tick } = watchedStore(tested)
+  await tested.start()
+  await tested.settle()
+
+  await tested.fakes.fs.write?.(`${store}/build-failures.json`, JSON.stringify({ demo: 'Bundling hooks/register.ts failed: Expected ")"' }))
+  await tick()
+
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')).toEqual([])
+})
+
+test("a plugin turned on in this session's own /plugin, which raises no ConfigChange here, reloads at the next prompt", async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
+  await prompt(tested, 'hello')
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
+})
+
+test('a user settings change Claude Code reports turns a plugin on, and reloads once Claude Code has loaded it', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
+})
 
 test('a change cmod marks in its store reloads the plugins once, and the mark the session started with reloads nothing', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
@@ -924,11 +1362,57 @@ test('a change cmod marks in its store reloads the plugins once, and the mark th
   await tick()
   expect(reloads).toEqual([])
 
-  await tested.fakes.fs.write?.(changed, '2 200\n')
-  await tested.fakes.fs.write?.(changed, '3 300\n')
+  await writeStoreFile(tested, changed, '2 200\n')
+  await writeStoreFile(tested, changed, '3 300\n')
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
+})
+
+const reloadEcho = '<command-name>/reload-plugins</command-name>\n<command-message>reload-plugins</command-message>\n<command-args></command-args>'
+const reloadOutput = '<local-command-stdout>Reloaded: 5 plugins</local-command-stdout>'
+const hiddenReload = [{ type: 'text', text: '<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>' }]
+
+const appendedRow = async (tested: ReturnType<typeof testMod>, uuid: string, origin: object, type: 'user' | 'system', text: string) => {
+  const row = { uuid, door: 'command', origin, message: { type, ...(type === 'system' ? { name: 'local_command' } : {}), role: 'user', content: [{ type: 'text', text }] } }
+  const kept = await claudeCodeOf(tested).fire('session.append', row as never)
+  return kept.message?.content
+}
+
+test("cmod's own /reload-plugins leaves no row in the conversation, and a person's own still shows", async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(await appendedRow(tested, 'echo-1', { kind: 'plugin', name: 'cmod' }, 'user', reloadEcho)).toEqual(hiddenReload)
+  expect(await appendedRow(tested, 'output-1', { kind: 'engine' }, 'system', reloadOutput)).toEqual(hiddenReload)
+  expect(await appendedRow(tested, 'echo-2', { kind: 'composer' }, 'user', reloadEcho)).toEqual([{ type: 'text', text: reloadEcho }])
+  expect(await appendedRow(tested, 'output-2', { kind: 'engine' }, 'system', reloadOutput)).toEqual([{ type: 'text', text: reloadOutput }])
+})
+
+test("cmod's own /reload-plugins hides its output row even when Claude Code restarted the cmod plugin before the echo row reached it", async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(await appendedRow(tested, 'output-1', { kind: 'engine' }, 'system', reloadOutput)).toEqual(hiddenReload)
+  expect(await appendedRow(tested, 'echo-4', { kind: 'composer' }, 'user', '<command-name>/model</command-name>')).toEqual([{ type: 'text', text: '<command-name>/model</command-name>' }])
 })
 
 test('a plugin Claude Code installs, updates, or turns on without cmod reloads the plugins, and other settings reload nothing', async () => {
@@ -945,16 +1429,50 @@ test('a plugin Claude Code installs, updates, or turns on without cmod reloads t
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
 
-  await tested.fakes.fs.write?.('/test/home/.claude/settings.json', JSON.stringify({ model: 'opus' }))
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   await tick()
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
 
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
-  await tested.fakes.fs.write?.('/test/home/.claude/settings.json', JSON.stringify({ model: 'opus', enabledPlugins: { 'hello@market': true } }))
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   await tick()
   await tick()
   expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
+})
+
+test('a session no app shows, such as claude -p, never reloads, so its answer stays the run\'s result', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  tested.fakes.session.surfaces = async () => []
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '2 200\n')
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual([])
+})
+
+test('a plugin install that writes the user settings, then installed_plugins.json before the reload runs, reloads once', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
+  await tick()
+  await tested.fakes.fs.write?.(installedPlugins, '{"version":2,"plugins":{"hello@market":[]}}')
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
 })
 
 test('a change cmod marks while a reload runs reloads once more after it', async () => {
@@ -965,7 +1483,7 @@ test('a change cmod marks while a reload runs reloads once more after it', async
   tested.fakes.command.run = async ({ command }) => {
     reloads.push(command)
     if (reloads.length === 1) {
-      await tested.fakes.fs.write?.(changed, '2 200\n')
+      await writeStoreFile(tested, changed, '2 200\n')
       await new Promise<void>((resolve) => (finish = resolve))
     }
     return {}
@@ -974,7 +1492,7 @@ test('a change cmod marks while a reload runs reloads once more after it', async
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
 
-  await tested.fakes.fs.write?.(changed, '1 100\n')
+  await writeStoreFile(tested, changed, '1 100\n')
   await tick()
   await tick()
   finish()
@@ -1005,7 +1523,7 @@ test('a reload the session refuses waits for the next prompt, and a second refus
     await tick()
   }
 
-  await tested.fakes.fs.write?.(changed, '1 100\n')
+  await writeStoreFile(tested, changed, '1 100\n')
   await tick()
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
@@ -1016,7 +1534,7 @@ test('a reload the session refuses waits for the next prompt, and a second refus
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 
   refusals = 2
-  await tested.fakes.fs.write?.(changed, '2 200\n')
+  await writeStoreFile(tested, changed, '2 200\n')
   await tick()
   await goOn('Keep going')
   expect(tested.shown.toasts.filter((toast) => toast.message === 'Could not reload the mods')).toHaveLength(1)
@@ -1034,7 +1552,22 @@ test("the Sidebar's Dashboard shows the widgets the person moved onto it", async
   await tested.shown.pane.lines()
   await tested.settle()
 
-  expect(await tested.shown.pane.lines()).toEqual(['0: Dashboard  │  9: Settings', '', 'main, 80 columns'])
+  expect(await tested.shown.pane.lines()).toEqual(['▄'.repeat(80), ` 0: Dashboard${' '.repeat(55)}9: Settings`, '▀'.repeat(80), '', ` ╭─ Widgets ${'─'.repeat(66)}╮`, ` │ main, 74 columns${' '.repeat(59)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide'])
+})
+
+test('a widget layout another session saves redraws here once the store-changed stamp moves', async () => {
+  const onDashboard = { areas: { abovePrompt: [], belowPrompt: [], working: [], turnEnd: [], dashboard: [{ left: ['git/branch'], right: [] }] }, hidden: [] }
+  const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/widgets.json`]: JSON.stringify(onDashboard) }, dependencies: { git: gitWidgets } })
+  const { tick } = watchedStore(tested)
+  await tested.hotkey('sidebar')
+  await tested.shown.pane.lines()
+  await tested.settle()
+  expect((await tested.shown.pane.lines()).join('\n')).toContain('main, 74 columns')
+
+  await writeStoreFile(tested, `${store}/widgets.json`, JSON.stringify({ ...onDashboard, areas: { ...onDashboard.areas, belowPrompt: [{ left: ['git/branch'], right: [] }], dashboard: [] } }))
+  await tick()
+
+  expect((await tested.shown.pane.lines()).join('\n')).not.toContain('main, 74 columns')
 })
 
 test('the Widgets section of cmod in Settings moves the picked widget, and hides it', async () => {

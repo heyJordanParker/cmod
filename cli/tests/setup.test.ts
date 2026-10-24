@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -6,9 +6,9 @@ import { stripVTControlCharacters } from 'node:util'
 import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, listFiles, readText } from '../src/files.js'
-import { cmod, cmodInTerminal, cmodOnPath, cmodWith, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, cmodOnPath, cmodWith, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const fourStepInstall = `#!/bin/sh
 echo "progress 1 4 Checking Homebrew"
@@ -629,7 +629,7 @@ test("a linked checkout's failed setup says it retries once the checkout changes
   const home = await temporaryHome()
   const root = await createMod(home)
   await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nexit 3\n' })
-  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: root } }) })
+  await writeLinked(home, root)
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
@@ -1673,7 +1673,7 @@ test('a linked mod whose version moved past its last release builds its program 
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0', repository: `${server.url.origin}/owner/hello-mod` }),
     'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
   })
-  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: root } }) })
+  await writeLinked(home, root)
 
   const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
 
@@ -1693,12 +1693,29 @@ test('a linked mod whose version moved past its last release builds its program 
   expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello from the checkout\n')
 })
 
+test('a program rebuilt after the install step ran makes setup run the install step again with it', async () => {
+  const home = await temporaryHome()
+  using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
+  const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
+  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nhello >> "$CMOD_DATA/runs"\n' })
+  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  const program = join(home, '.local/share/cmod/bin/hello/0.2.0/hello')
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho "hello from the rebuild"\n' })
+  await chmod(program, 0o755)
+
+  const result = await cmod(home, 'setup', root, '--events')
+
+  expect(result.stdout).toEndWith('done hello-mod 0.2.0\n')
+  expect((await readFile(join(home, '.local/share/cmod/data/hello-mod/runs'), 'utf8')).split('\n').at(-2)).toBe('hello from the rebuild')
+  expect((await cmod(home, 'setup', root, '--events')).stdout).toBe('done hello-mod 0.2.0\n')
+})
+
 test("a linked mod's failed build runs again only once a file in its program folder changes", async () => {
   const home = await temporaryHome()
   const root = await createProgramMod(home, 'http://127.0.0.1:9/owner/hello-mod')
   const build = 'echo built >> ../builds; echo "error: expected ;" >&2; exit 1'
   await writeFiles(root, { 'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }) })
-  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: root } }) })
+  await writeLinked(home, root)
   const failure = `failed 1\tBuilding hello with "${build}" exited 1: error: expected ;. Fix the build in ~/hello-mod/cli, then save a file there or run the command again.\nretries changed\n`
 
   expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)

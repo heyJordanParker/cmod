@@ -324,7 +324,7 @@ export const loop = defineMod({
 It needs `"run"` with the program's name. Without the grant the program stops at once and names the line to add ([permissions.md](permissions.md)).
 
 ```ts
-program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string> }): Job<Program>
+program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean }): Job<Program>
 
 type Program = {
   readonly state: 'stopped' | 'starting' | 'running' | 'backoff' | 'fatal'
@@ -338,6 +338,7 @@ type Program = {
 - The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `http.fetch`, which reaches that address with no `network` permission while the program runs.
 - In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()`.
 - When the program exits, cmod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and cmod logs `<mod>: the <program> program stopped: <reason>`.
+- `singleInstance: true` runs one copy on the computer, however many sessions load the mod, such as a server that is the only writer of its data. Each session runs it through [`cmod program`](commands.md#cmod-program): the first session starts the copy, and every session's `ready()` resolves that copy's address and reaches it with no `network` permission. When the session running the copy ends, another open session starts a new copy, and from then on `ready()` resolves the new address in every session, so ask `ready()` before each use rather than keeping its answer. A copy a killed session left running is stopped before the new one starts. Two `singleInstance` programs with the same program name in one mod throw at `mod.use`.
 - A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` is not on `PATH`, so `command` names it by its full path, `${mod.dataFolder}/bin/<program>`.
 
 ```ts

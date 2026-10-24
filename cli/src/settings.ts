@@ -2,12 +2,14 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { isObject, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
+import { isObject, linkedMarketplacesOf, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse, type FormattingOptions } from 'jsonc-parser'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
-import { storePath, takeLock } from './store.js'
+import { readLinks, storePath, takeLock } from './store.js'
 
-const pluginFolders = 'CLAUDE_CODE_PLUGIN_DIRS'
+const pluginFoldersVariable = 'CLAUDE_CODE_PLUGIN_DIRS'
+
+const pluginFolderWatch = 'CLAUDE_CODE_PLUGIN_DIR_WATCH'
 
 const chat = 'Chat'
 
@@ -65,8 +67,6 @@ export async function keptSettings(): Promise<KeptSettings> {
     const value = own[key]
     if (value !== undefined) settings[key] = typeof value === 'string' ? expand(value) : value
   }
-  const env = settings['env']
-  if (isObject(env)) settings['env'] = Object.fromEntries(Object.entries(env).filter(([name]) => name !== pluginFolders))
   const permissions = own['permissions']
   if (isObject(permissions) && Array.isArray(permissions['deny'])) settings['permissions'] = { deny: permissions['deny'] }
   const { path, text } = await readConfig(statePath())
@@ -105,6 +105,7 @@ export async function changeSettings(mod: string, changes: readonly SettingChang
   await withSettingsLock(async () => {
     const recordFile = storePath('settings', `${mod}.json`)
     const set = await readModSettings(recordFile)
+    const recorded = JSON.stringify(set)
     for (const file of new Set(changes.map((change) => change.file))) {
       const { path, text } = await readConfig(file)
       const current = configObject(text, path)
@@ -120,8 +121,9 @@ export async function changeSettings(mod: string, changes: readonly SettingChang
       }
       if (isObject(ours) && Object.keys(ours).length > 0) set[path] = ours
       else delete set[path]
-      await writeAtomically(path, next)
+      if (next !== text) await writeAtomically(path, next)
     }
+    if (JSON.stringify(set) === recorded) return
     if (Object.keys(set).length > 0) await writeAtomically(recordFile, `${JSON.stringify(set, null, 2)}\n`)
     else await rm(recordFile, { force: true })
   })
@@ -254,30 +256,51 @@ function chatBlocks(text: string, path: string): KeyBlock[] {
   return blocks.flatMap((block: unknown, index) => (isObject(block) && block['context'] === chat && isObject(block['bindings']) ? [{ index, bindings: block['bindings'] }] : []))
 }
 
+export type LinkedEntry = { readonly name: string; readonly source: string; readonly description: string }
+
+export type LinkedPlugin = { readonly id: string; readonly folder: string }
+
+export function linkedMarketplaceFile(folder: string): string {
+  return join(folder, '.claude-plugin', 'marketplace.json')
+}
+
+export async function linkedEntries(folder: string): Promise<LinkedEntry[]> {
+  const manifest = await readJson(linkedMarketplaceFile(folder))
+  const plugins: unknown[] = isObject(manifest) && Array.isArray(manifest['plugins']) ? manifest['plugins'] : []
+  return plugins.filter((plugin): plugin is LinkedEntry => isObject(plugin) && typeof plugin['name'] === 'string' && typeof plugin['source'] === 'string')
+}
+
+export async function linkedPlugins(): Promise<LinkedPlugin[]> {
+  const known = await readConfig(knownMarketplacesPath())
+  const linked: LinkedPlugin[] = []
+  for (const [name, folder] of linkedMarketplacesOf(configObject(known.text, known.path), await readLinks())) {
+    for (const entry of await linkedEntries(folder)) linked.push({ id: `${entry.name}@${name}`, folder: join(folder, entry.source) })
+  }
+  return linked
+}
+
 export async function linkedFolders(): Promise<string[]> {
-  const { text } = await readSettings()
-  return entriesOf(text).map(expand)
+  return (await linkedPlugins()).map((plugin) => plugin.folder)
 }
 
 export async function isLinked(folder: string): Promise<boolean> {
   return (await linkedFolders()).some((entry) => sameFolder(entry, folder))
 }
 
-export async function addPluginFolder(folder: string): Promise<boolean> {
-  const { path, text } = await readSettings()
-  const entries = entriesOf(text)
-  if (entries.some((entry) => sameFolder(expand(entry), folder))) return false
-  await writeEntries(path, text, [...entries, tilde(folder)])
-  return true
+export async function pluginFolders(): Promise<string[]> {
+  const { text } = await readSettings()
+  return entriesOf(text).map(expand)
 }
 
-export async function removePluginFolder(folder: string): Promise<boolean> {
+export async function removePluginFolder(folder: string): Promise<void> {
   const { path, text } = await readSettings()
   const entries = entriesOf(text)
   const kept = entries.filter((entry) => !sameFolder(expand(entry), folder))
-  if (kept.length === entries.length) return false
-  await writeEntries(path, text, kept)
-  return true
+  if (kept.length === entries.length) return
+  const formattingOptions = indentation(text)
+  const at = ['env', pluginFoldersVariable]
+  const next = kept.length > 0 ? applyEdits(text, modify(text, at, kept.join(':'), { formattingOptions })) : withoutValue(withoutValue(text, ['env', pluginFolderWatch], formattingOptions), at, formattingOptions)
+  await writeAtomically(path, next)
 }
 
 export async function excludeRules(file: string, pattern: string): Promise<boolean> {
@@ -322,8 +345,8 @@ async function readConfig(link: string): Promise<{ path: string; text: string }>
 
 function entriesOf(text: string): string[] {
   const env = settingsObject(text)['env']
-  const value = isObject(env) ? env[pluginFolders] : undefined
-  return typeof value === 'string' ? value.split(':').filter((entry) => entry !== '') : []
+  const value = isObject(env) ? env[pluginFoldersVariable] : undefined
+  return typeof value === 'string' ? value.split(':').filter((folder) => folder !== '') : []
 }
 
 function settingsObject(text: string): Record<string, unknown> {
@@ -334,13 +357,6 @@ function configObject(text: string, path: string): Record<string, unknown> {
   const value: unknown = text.trim() === '' ? {} : parse(text)
   if (!isObject(value)) throw new Error(`${path} is not a JSON object. Fix it, then run the command again.`)
   return value
-}
-
-async function writeEntries(path: string, text: string, entries: string[]): Promise<void> {
-  const base = text.trim() === '' ? '{}\n' : text
-  const formattingOptions = indentation(base)
-  const at = ['env', pluginFolders]
-  await writeAtomically(path, entries.length > 0 ? applyEdits(base, modify(base, at, entries.join(':'), { formattingOptions })) : withoutValue(base, at, formattingOptions))
 }
 
 export function indentation(text: string): { insertSpaces: boolean; tabSize: number; eol: string } {

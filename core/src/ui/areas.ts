@@ -17,6 +17,7 @@ export type WidgetInit<State extends object = Record<never, never>> = {
   readonly id: string
   readonly title: string
   readonly areas: readonly [Area, ...Area[]]
+  readonly place?: { readonly side?: 'left' | 'right'; readonly size?: 'fit' | 'fill' }
   render(mod: Mod<State>, context: WidgetContext): RenderElement | undefined
 }
 

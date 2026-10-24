@@ -1,25 +1,29 @@
-import { expect, test } from 'bun:test'
+import { beforeEach, expect, setSystemTime, test } from 'bun:test'
 import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
-import { installerPaneOf } from '../../src/runtime/installer.js'
+import { installPage } from '../../src/runtime/installer.js'
 import { permissions } from '../../src/jobs/permissions.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
 import { servePages } from '../../src/runtime/pages.js'
 import { drawnParts } from '../../src/runtime/parts.js'
 import { createRouter } from '../../src/runtime/router.js'
-import { partMethods } from '../../src/runtime/ui.js'
+import { partMethods, type DrawnPart, type PartsUpdate } from '../../src/runtime/ui.js'
 import { defineMod, model, sessions, type CwdChange, type Mod } from '../../src/mod.js'
 import { option } from '../../src/options.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
+import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { permissionRoutes } from '../../src/runtime/permission-check.js'
 import { coreVersion, scriptsSha256 } from '../../src/records.js'
 import type { ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
-import { findElement, rowsOf, textOf } from '../../src/testing/fake-elements.js'
+import { elements, findElement, rowsOf, textOf } from '../../src/testing/fake-elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
-import { Text } from '../../src/ui/elements.js'
+import { Button, drawWith, elementOf, Text } from '../../src/ui/elements.js'
+import { messageOf } from '../../src/utils/text.js'
 
 const root = '/plugins/safe-delete'
+
+beforeEach(() => void setSystemTime(new Date(2026, 9, 23, 9, 5)))
 const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false, steps: {}, granted: [] }
 
 const given = (plugin: Plugin) => async () => plugin
@@ -118,18 +122,93 @@ function trackedMod() {
 
 const abovePrompt = { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: {}, viewport: { columns: 100, rows: 30 } }
 
-const installerOpen = { id: 'installer-safe-delete', title: 'Install safe-delete', focus: true, holdToasts: true, closeOnEscape: true }
 const prompt = { type: 'Text', children: ['>'] } as unknown as RenderElement
-const installerPaneFor = (name = 'safe-delete') => ({ surface: 'terminal', component: 'Pane', requestId: installerPaneOf(name), props: { title: 'Install', isFocused: true, bodyColumns: 80, placement: 'dock' } })
+
+const installerOpen = { requests: [{ open: installPage, focus: true }] }
+
+function installRequests(fake: ReturnType<typeof fakeClaude>): unknown[] {
+  const sent = fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method?: string }).method === partMethods.changed ? [(input as { input: Record<string, unknown> }).input] : []))
+  return sent.filter((input) => input['parts'] === undefined)
+}
+
+function askedByCmod(lifecycle: Pick<Lifecycle<object>, 'route'>, name: string, method: string, input: unknown): Promise<unknown> {
+  return fire(lifecycle, 'cmod.call', { to: name, method, input, caller: 'cmod' }, { deny: `${name} has no method ${method}.` }).then((answer) => calledAnswer('cmod', answer))
+}
+
+async function installerDrawing(lifecycle: Pick<Lifecycle<object>, 'route'>, name = 'safe-delete', columns = 60): Promise<{ readonly drawing: RenderElement; readonly pressed: () => Promise<unknown> }> {
+  const drawn = (await askedByCmod(lifecycle, name, partMethods.draw, { page: installPage, params: null, columns, isFocused: true })) as DrawnPart
+  let pending: Promise<unknown> = Promise.resolve()
+  const drawing = drawWith(elements, () => elementOf(drawn.tree, '', (handler, args) => void (pending = askedByCmod(lifecycle, name, partMethods.press, { draw: drawn.draw, handler, args })))) as RenderElement
+  return { drawing, pressed: () => pending }
+}
 
 async function installerText(lifecycle: Pick<Lifecycle<object>, 'route'>, name?: string): Promise<string> {
-  return textOf(await fire(lifecycle, 'ui.render', installerPaneFor(name), prompt))
+  return textOf((await installerDrawing(lifecycle, name)).drawing)
 }
 
 async function pressInInstaller(lifecycle: Pick<Lifecycle<object>, 'route'>, key: string, name?: string): Promise<void> {
-  const button = findElement(await fire(lifecycle, 'ui.render', installerPaneFor(name), prompt), 'Button', key)
+  const { drawing, pressed } = await installerDrawing(lifecycle, name)
+  const button = findElement(drawing, 'Button', key)
   if (button === undefined) throw new Error(`The installer draws no button ${key}.`)
-  await (button['onPress'] as () => unknown)()
+  ;(button['onPress'] as () => unknown)()
+  await pressed()
+}
+
+async function submitInInstaller(lifecycle: Pick<Lifecycle<object>, 'route'>, key: string, value: string, name?: string): Promise<void> {
+  const { drawing, pressed } = await installerDrawing(lifecycle, name)
+  const field = findElement(drawing, 'Input', key)
+  if (field === undefined) throw new Error(`The installer draws no field ${key}.`)
+  ;(field['onSubmit'] as (value: string) => unknown)(value)
+  await pressed()
+}
+
+function repeatingTimers(fake: ReturnType<typeof fakeClaude>) {
+  const timers: { fire: () => void; isRunning: boolean }[] = []
+  fake.fakes.clock.every = (_ms, fire) => {
+    const timer = { fire, isRunning: true }
+    timers.push(timer)
+    return { cancel: () => void (timer.isRunning = false) }
+  }
+  const running = () => timers.filter((timer) => timer.isRunning)
+  return {
+    running,
+    fire: () => {
+      for (const timer of running()) timer.fire()
+    },
+  }
+}
+
+function cmodSidebar(name: string) {
+  const cmod = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const refusals: string[] = []
+  let loaded: Lifecycle<object> | undefined
+  cmod.fakes.cmod.call = async (call) => {
+    if (loaded === undefined || call.to !== name) throw new Error(`${call.to} is not loaded.`)
+    return askedByCmod(loaded, name, call.method, call.input)
+  }
+  const parts = drawnParts({ claude: cmod.claude, report: () => undefined, press: (mod, input) => pages.press(mod, input) })
+  const pages = servePages({ claude: cmod.claude, router: createRouter(), report: (_id, message, error) => void refusals.push(`${message}: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined })
+  const shown = async (page: string) => {
+    pages.element(name, page, null, 60, true)
+    await cmod.settle()
+    return drawWith(elements, () => pages.element(name, page, null, 60, true) ?? Text({ children: 'Drawing…' }))
+  }
+  return {
+    refusals,
+    shown,
+    async load(lifecycle: Lifecycle<object>, fake: ReturnType<typeof fakeClaude>, plugin: Plugin) {
+      loaded = lifecycle
+      fake.fakes.cmod.call = async (call) => (call.method === partMethods.changed ? { isHeld: pages.update(name, call.input as PartsUpdate), stylers: [] } : null)
+      await lifecycle.start(fake.claude, given(plugin))
+      await fake.settle()
+    },
+    async press(page: string, label: string) {
+      const button = findElement(await shown(page), 'Button', label)
+      if (button === undefined) throw new Error(`The ${page} page shows no button ${label}.`)
+      ;(button['onPress'] as () => unknown)()
+      await cmod.settle()
+    },
+  }
 }
 
 test('a mod with a pending install registers nothing until done, then runs setup from a timer of its own, so no hook it lands in cuts its calls short', async () => {
@@ -208,6 +287,44 @@ test('a call to a mod that is still starting waits for it, then answers', async 
   expect(await answer).toEqual({ value: ['a.ts'] })
 })
 
+test("Claude's call to a mod's own tool that comes before the mod's session.start, as right after a reload, waits for the start, then answers", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      setup(mod) {
+        engineOf(mod).router.add('tool.call', (e, next) => (e.tool === 'mcp__safe-delete__restore' ? { result: 'restored' } : next(e)))
+      },
+    }),
+  )
+  const unanswered = async () => ({ result: 'safe-delete registered the tool restore but no tool.call hook answered this call' }) as never
+
+  const answer = lifecycle.route('tool.call', { tool: 'mcp__safe-delete__restore', tool_use_id: 't1' } as never, unanswered)
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+
+  expect(await answer).toEqual({ result: 'restored' } as never)
+})
+
+test("a transcript row that comes before the mod's session.start, as during the cmod plugin's own restart, waits for the start, then reaches the mod's route", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      setup(mod) {
+        engineOf(mod).router.add('session.append', (e, next) => next({ ...e, message: { ...e.message, content: [{ type: 'text', text: 'rewritten' }] } }))
+      },
+    }),
+  )
+  const row = { uuid: 'r1', door: 'command', origin: { kind: 'engine' }, message: { type: 'system', role: 'user', content: [{ type: 'text', text: 'Reloaded' }] } }
+
+  const appended = lifecycle.route('session.append', row as never, async (e) => e as never)
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+
+  expect(((await appended) as { readonly message: { readonly content: unknown } }).message.content).toEqual([{ type: 'text', text: 'rewritten' }])
+})
+
 test("a call that comes before the mod's session.start waits for the start, then answers", async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   installCmod(fake)
@@ -239,19 +356,18 @@ test('while the installer waits for the answer, its toast stays still, so no red
   const fake = fakeClaude({ name: 'safe-delete', root })
   installCmod(fake)
   fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
-  const spinners: { isRunning: boolean }[] = []
-  fake.fakes.clock.every = () => {
-    const spinner = { isRunning: true }
-    spinners.push(spinner)
-    return { cancel: () => void (spinner.isRunning = false) }
-  }
+  const timers = repeatingTimers(fake)
   const lifecycle = createLifecycle(trackedMod().definition)
+  const redraws = () => fake.calls.filter(({ call }) => call === 'ui.invalidate').length
 
   void lifecycle.start(fake.claude, given(pending))
   await fake.settle()
+  const shownRedraws = redraws()
+  timers.fire()
+  await fake.settle()
 
   expect(lifecycle.toasts).toEqual([{ type: 'info', message: 'Installing', description: 'Waiting for your answer' }])
-  expect(spinners.filter((spinner) => spinner.isRunning)).toEqual([])
+  expect(redraws()).toBe(shownRedraws)
 })
 
 test("a question Claude Code holds back in a narrow terminal opens from its toast's Answer button, and the toast leaves once answered", async () => {
@@ -259,7 +375,6 @@ test("a question Claude Code holds back in a narrow terminal opens from its toas
   installCmod(fake)
   fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
   const lifecycle = createLifecycle(trackedMod().definition)
-  const opened = () => fake.calls.filter((call) => call.call === 'ui.open').map((call) => call.args[0])
 
   void lifecycle.start(fake.claude, given(pending))
   await fake.settle()
@@ -268,7 +383,7 @@ test("a question Claude Code holds back in a narrow terminal opens from its toas
   await (answer['onPress'] as () => unknown)()
   await fake.settle()
 
-  expect(opened()).toEqual([installerOpen, installerOpen])
+  expect(installRequests(fake)).toEqual([installerOpen, { ...installerOpen, isAsked: true }])
   await pressInInstaller(lifecycle, 'not-now')
   await fake.settle()
   expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Answer')).toBeUndefined()
@@ -288,8 +403,8 @@ test('needs-consent opens the installer focused, and Accept runs the setup again
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(fake.calls.find((call) => call.call === 'ui.open')?.args).toEqual([{ id: 'installer-safe-delete', title: 'Install safe-delete', focus: true, holdToasts: true, closeOnEscape: true }])
-  expect(await installerText(lifecycle)).toContain('safe-delete wants to:')
+  expect(installRequests(fake)).toEqual([installerOpen])
+  expect(await installerText(lifecycle)).toContain('safe-delete wants to change your computer:')
   expect(await installerText(lifecycle)).toContain('Run ./setup/install.sh now, and ./setup/uninstall.sh when you remove it')
   expect(await installerText(lifecycle)).toContain('Bind shift+tab to /mode')
   await pressInInstaller(lifecycle, 'accept')
@@ -312,7 +427,7 @@ test('a mod that only binds keys asks about the keys alone', async () => {
   await fake.settle()
 
   const shown = await installerText(lifecycle)
-  expect(shown).toContain('Change your computer:')
+  expect(shown).toContain('safe-delete wants to change your computer:')
   expect(shown).toContain('Bind shift+tab to /mode and alt+m to /mode')
   expect(shown).not.toContain('Run ')
 })
@@ -349,7 +464,7 @@ test('a mod that asks for permissions names each one in the words the person rea
   expect(shown).toContain('and change your computer:')
 })
 
-test('each hotkey of a mod is a command that runs at once and hides from the slash command list', async () => {
+test('each hotkey of a mod is a command that runs at once', async () => {
   const fake = fakeClaude({ name: 'modes', root })
   const definition = defineMod({ name: 'modes', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined })
 
@@ -358,8 +473,18 @@ test('each hotkey of a mod is a command that runs at once and hides from the sla
   await fake.settle()
 
   expect(fake.shown.commands).toEqual(['modes--cycle'])
-  expect(await fire(lifecycle, 'command.describe', { command: 'modes--cycle' }, { description: 'Switch mode', isHidden: false })).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await fire(lifecycle, 'command.describe', { command: 'review' }, { description: 'Review', isHidden: false })).toEqual({ description: 'Review', isHidden: false })
+})
+
+test("the cmod plugin hides every mod's hotkey command from the slash command list, and no other command", async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
+  await fake.settle()
+  const described = (command: string, plugin: string) => fire(lifecycle, 'command.describe', { command, provider: { plugin, tier: 'plugin' } }, { description: 'Switch mode', isHidden: false })
+
+  expect(await described('modes--cycle', 'modes')).toEqual({ description: 'Switch mode', isHidden: true })
+  expect(await described('review', 'modes')).toEqual({ description: 'Switch mode', isHidden: false })
+  expect(await described('notes--cycle', 'modes')).toEqual({ description: 'Switch mode', isHidden: false })
 })
 
 test('Not now declines the install with one notice naming cmod install, and setup never runs', async () => {
@@ -467,8 +592,8 @@ test('Retry on a failure with a description shows its progress in the descriptio
   second.exit(0)
   await fake.settle()
 
-  expect(failed.slice(2)).toEqual(['                Trying again in 2 s.', '                Retry  Report  Hide'])
-  expect(trying.slice(2)).toEqual(['                Trying again: Installing', '                Retry  Report  Hide'])
+  expect(failed.slice(2)).toEqual(['                Trying again in 2 s.', '                Retry  Report  Hide  09:05'])
+  expect(trying.slice(2)).toEqual(['                Trying again: Installing', '                Retry  Report  Hide  09:05'])
   expect(trying[1]?.slice(1)).toBe(failed[1]?.slice(1))
 })
 
@@ -559,11 +684,37 @@ test('a command whose page request the cmod plugin held answers without passing 
   expect(answer).toEqual({})
 })
 
+test("a press whose handler drops page.open's promise ends only once the cmod plugin heard the page request, so a cmod plugin earlier in the chain opens the page in the person's frame", async () => {
+  const fake = fakeClaude({ name: 'ci-watch', root })
+  const heard: unknown[] = []
+  let answer: () => void = () => undefined
+  fake.fakes.cmod.call = async (call) => {
+    const update = call.input as PartsUpdate
+    if (update.isAsked !== true) return null
+    heard.push(update)
+    return new Promise((resolve) => (answer = () => resolve({ isHeld: true })))
+  }
+  let page: ReturnType<Mod['sidebar']['add']> | undefined
+  const lifecycle = createLifecycle(defineMod({ name: 'ci-watch', setup: (mod) => void (page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })) }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await fake.settle()
+  let isPressed = false
+
+  const pressed = lifecycle.route('ui.press', { plugin: 'ci-watch', element: 'runs', component: 'Pane', requestId: 'runs', surface: 'terminal' } as never, async (e) => (void page?.open(), { element: e.element })).then(() => (isPressed = true))
+  await fake.settle()
+
+  expect(heard).toEqual([{ requests: [{ open: 'runs' }], isAsked: true }])
+  expect(isPressed).toBe(false)
+  answer()
+  await pressed
+  expect(isPressed).toBe(true)
+})
+
 test('the cmod plugin opens a page a mod before it in the chain asked for, and ends the command there', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const router = createRouter()
   const opened: unknown[] = []
-  const pages = servePages({ claude: fake.claude, router, report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }) })
+  const pages = servePages({ claude: fake.claude, router, report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   pages.apply(async (mod, requests) => void opened.push({ mod, requests }))
 
   const isHeld = pages.update('ci-watch', { requests: [{ open: 'runs' }], isAsked: true })
@@ -576,6 +727,47 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   expect(answer).toEqual({})
 })
 
+test("a press waits for the mod it pressed, never for a slower mod an earlier press is still waiting on, because Claude Code's clock runs through that wait", async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  let answerInbox: (value: unknown) => void = () => undefined
+  fake.fakes.cmod.call = async (call) => (call.to === 'inbox' ? new Promise((resolve) => (answerInbox = resolve)) : null)
+  const router = createRouter()
+  const pages = servePages({ claude: fake.claude, router, report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const pressIn = (mod: string) => router.dispatch('ui.press', { requestId: 'sidebar', key: 'k' } as never, async () => (pages.press(mod, { handler: 1 } as never), { element: null } as never))
+  const first = pressIn('inbox')
+  let isSecondDone = false
+
+  await pressIn('notes').then(() => (isSecondDone = true))
+  answerInbox(null)
+  await first
+
+  expect(isSecondDone).toBe(true)
+})
+
+test('a mod that adds or drops a markdown style makes the cmod plugin tell every mod which mods style markdown', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const told: unknown[] = []
+  fake.fakes.cmod.call = async (call) => (told.push({ to: call.to, method: call.method, input: call.input }), null)
+  const ownStylers: unknown[] = []
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: (stylers) => void ownStylers.push(stylers) })
+  pages.update('notes', { parts: { widgets: [], pages: [] } })
+  pages.update('cmod', { parts: { widgets: [], pages: [] } })
+
+  pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.update('diagrams', { parts: { widgets: [], pages: [] } })
+  pages.update('notes', { parts: { widgets: [], pages: [] } })
+
+  expect(pages.stylers()).toEqual([])
+  expect(ownStylers).toEqual([['diagrams'], ['diagrams'], []])
+  expect(told.filter((call) => (call as { to: string }).to === 'notes')).toEqual([
+    { to: 'notes', method: partMethods.stylers, input: ['diagrams'] },
+    { to: 'notes', method: partMethods.stylers, input: ['diagrams'] },
+    { to: 'notes', method: partMethods.stylers, input: [] },
+  ])
+  expect(told.filter((call) => (call as { to: string }).to === 'cmod')).toEqual([])
+})
+
 test('a press the mod refuses makes the page draw again, so its next buttons work', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const asked: string[] = []
@@ -585,7 +777,7 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
     return call.method === partMethods.draw ? { draw: asked.length, tree: { $cmodElement: 'Button', props: { key: 'go', label: 'Go', onPress: { $cmodHandler: 0 } } } } : null
   }
   const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts })
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts, tellStylers: () => undefined })
   const draw = async () => {
     pages.element('ci-watch', 'runs', { run: 7 }, 80, false)
     await fake.settle()
@@ -598,6 +790,65 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
   await draw()
 
   expect(asked.filter((method) => method === partMethods.draw || method === partMethods.press)).toEqual([partMethods.draw, partMethods.press, partMethods.draw])
+})
+
+test('after a mod restarts with its install question open, Not now on the shown install tab declines on the first press', async () => {
+  const cmod = cmodSidebar('safe-delete')
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
+  await cmod.load(createLifecycle(trackedMod().definition), fake, pending)
+  await cmod.shown(installPage)
+  const restarted = createLifecycle(trackedMod().definition)
+
+  await cmod.load(restarted, fake, pending)
+  await cmod.press(installPage, 'Not now')
+  await fake.settle()
+
+  expect(cmod.refusals).toEqual([])
+  expect(restarted.toasts).toEqual([{ type: 'default', message: 'Not installed', description: 'Install it whenever you like.' }])
+})
+
+test("after a mod restarts, a press on its Sidebar page runs the restarted module's handler", async () => {
+  const cmod = cmodSidebar('safe-delete')
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const ranIn: string[] = []
+  const withRuns = (module: string) => defineMod({ name: 'safe-delete', setup: (mod) => void mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Button({ key: 'rerun', label: 'Run again', onPress: () => void ranIn.push(module) }) }) })
+  const installed = { ...pending, isInstalled: true }
+  await cmod.load(createLifecycle(withRuns('first')), fake, installed)
+  await cmod.shown('runs')
+
+  await cmod.load(createLifecycle(withRuns('restarted')), fake, installed)
+  await cmod.press('runs', 'Run again')
+
+  expect(cmod.refusals).toEqual([])
+  expect(ranIn).toEqual(['restarted'])
+})
+
+test("a restarted module refuses a press on a draw number an earlier module of the mod drew, instead of running another drawing's button", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const ranIn: string[] = []
+  const withPages = (module: string) =>
+    defineMod({
+      name: 'safe-delete',
+      setup(mod) {
+        for (const id of ['runs', 'logs']) void mod.sidebar.add({ id, title: id, render: () => Button({ key: id, label: id, onPress: () => void ranIn.push(`${module} ${id}`) }) })
+      },
+    })
+  const draw = async (lifecycle: Lifecycle<object>, page: string) => (await askedByCmod(lifecycle, 'safe-delete', partMethods.draw, { page, params: null, columns: 60, isFocused: true })) as DrawnPart
+  const installed = given({ ...pending, isInstalled: true })
+  const first = createLifecycle(withPages('first'))
+  await first.start(fake.claude, installed)
+  const stale = await draw(first, 'runs')
+  setSystemTime(new Date(2026, 9, 23, 9, 6))
+  const restarted = createLifecycle(withPages('restarted'))
+  await restarted.start(fake.claude, installed)
+  await draw(restarted, 'logs')
+
+  const pressed = askedByCmod(restarted, 'safe-delete', partMethods.press, { draw: stale.draw, handler: 0, args: [] })
+
+  await expect(pressed).rejects.toThrow('safe-delete: that button drew before the last redraw. Press the one it shows now.')
+  expect(ranIn).toEqual([])
 })
 
 test('a page opened in setup reaches the cmod plugin with the first list of parts', async () => {
@@ -765,6 +1016,65 @@ test('a mod whose install was declined starts on the next prompt once cmod insta
   expect(runs).toEqual(['setup'])
 })
 
+test('a mod waiting on its install question starts with no answer once another cmod writes its install record, and closes the question', async () => {
+  const installed = { isInstalled: false }
+  const { fake, disk, runs, lifecycle } = stoppedSession('needs-consent abc123\t./setup/install.sh\t', 10)
+  const timers = repeatingTimers(fake)
+  await lifecycle.start(fake.claude, installedNow(installed))
+  await fake.settle()
+  expect(lifecycle.toasts).toEqual([{ type: 'info', message: 'Installing', description: 'Waiting for your answer' }])
+
+  installed.isInstalled = true
+  await disk.write(recordFile, '{}')
+  timers.fire()
+  await fake.settle()
+
+  expect(lifecycle.phase).toBe('active')
+  expect(runs).toEqual(['setup'])
+  expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installPage }] }])
+  expect(lifecycle.toasts.map(({ message }) => message)).toEqual(['Installed'])
+  expect(timers.running()).toEqual([])
+})
+
+test('a mod whose install failed starts with no prompt once another cmod writes its install record', async () => {
+  const installed = { isInstalled: false }
+  const { fake, disk, runs, lifecycle } = stoppedSession('failed 1\tdisk full', 1)
+  const timers = repeatingTimers(fake)
+  await lifecycle.start(fake.claude, installedNow(installed))
+  await fake.settle()
+  expect(lifecycle.phase).toBe('failed')
+
+  installed.isInstalled = true
+  await disk.write(recordFile, '{}')
+  timers.fire()
+  await fake.settle()
+
+  expect(lifecycle.phase).toBe('active')
+  expect(runs).toEqual(['setup'])
+  expect(timers.running()).toEqual([])
+})
+
+test('a mod whose install was declined starts with no prompt once another cmod writes its install record', async () => {
+  const installed = { isInstalled: false }
+  const { fake, disk, runs, lifecycle } = stoppedSession('needs-consent abc123\t./setup/install.sh\t', 10)
+  const timers = repeatingTimers(fake)
+  await lifecycle.start(fake.claude, installedNow(installed))
+  await fake.settle()
+  await pressInInstaller(lifecycle, 'not-now')
+  await fake.settle()
+  expect(lifecycle.phase).toBe('declined')
+
+  installed.isInstalled = true
+  await disk.write(recordFile, '{}')
+  timers.fire()
+  await fake.settle()
+
+  expect(lifecycle.phase).toBe('active')
+  expect(runs).toEqual(['setup'])
+  expect(lifecycle.toasts.map(({ message }) => message)).toEqual(['Installed'])
+  expect(timers.running()).toEqual([])
+})
+
 test('a mod whose first start failed after its install starts again once cmod install rewrites its record', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   const disk = fakeFiles({})
@@ -834,7 +1144,7 @@ test('an install error longer than the band wraps its message across the band, w
     '                /home/me/.local/bin',
     '                first on PATH, then',
     '                restart Claude Code.',
-    '                Retry  Report  Hide',
+    '                Retry  Report  Hide  09:05',
   ])
 })
 
@@ -905,7 +1215,7 @@ test('a failure that waiting cannot fix, such as a failed install step of a rele
   expect(timers).toEqual([])
 })
 
-test('a retry after the person accepted carries that consent, so it never asks again, and the consent pane closes on Accept', async () => {
+test('a retry after the person accepted carries that consent, so it never asks again, and the install page closes on Accept', async () => {
   const broken = 'failed 1\tThe install step of safe-delete exited 1.'
   const { fake, setupsRun, fire } = retryingFake([['needs-consent abc123\t./setup/install.sh\t'], [broken, 'retries changed'], ['done safe-delete 0.2.0']])
   const lifecycle = createLifecycle(trackedMod().definition)
@@ -917,7 +1227,7 @@ test('a retry after the person accepted carries that consent, so it never asks a
   await fire(2000)
 
   expect(setupsRun.map((argv) => argv.slice(-2))).toEqual([[pending.root, '--events'], ['--consent', 'abc123'], ['--consent', 'abc123']])
-  expect(fake.calls.filter((call) => call.call === 'ui.close').map((call) => call.args[0])).toEqual([{ id: 'installer-safe-delete' }])
+  expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installPage }] }])
   expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
 
@@ -1185,16 +1495,44 @@ test('a missing text option saved in the installer through cmod option starts th
 
   void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
   await fake.settle()
-  const field = findElement(await fire(lifecycle, 'ui.render', installerPaneFor('ci-watch'), prompt), 'Input', 'option:branch')
-  if (field === undefined) throw new Error('The installer draws no field for branch.')
-  ;(field['onSubmit'] as (value: string) => void)('main')
+  await submitInInstaller(lifecycle, 'option:branch', 'main', 'ci-watch')
   await fake.settle()
+  expect(await installerText(lifecycle, 'ci-watch')).toContain('✓ saved')
   await pressInInstaller(lifecycle, 'next', 'ci-watch')
   await fake.settle()
 
   expect(saved).toContainEqual([cmodProgram, 'option', 'ci-watch', 'branch', 'main'])
   expect(lifecycle.phase).toBe('active')
   expect(branch).toBe('main')
+})
+
+test('a mod whose setup fails after the person saved its settings closes its install page', async () => {
+  const fake = fakeClaude({ name: 'ci-watch', root })
+  const rows: { key: string; value: string }[] = []
+  fake.fakes.process.run = async (argv) => {
+    if (argv[1] === 'option') rows.push({ key: `${argv[2]}.${argv[3]}`, value: argv[4] ?? '' })
+    return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+  }
+  fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false }) as never)
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'ci-watch',
+      options: { branch: option.text({ title: 'Branch', description: '' }) },
+      setup: () => {
+        throw new Error('the GitHub API is down')
+      },
+    }),
+  )
+
+  void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await fake.settle()
+  await submitInInstaller(lifecycle, 'option:branch', 'main', 'ci-watch')
+  await fake.settle()
+  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  await fake.settle()
+
+  expect(lifecycle.phase).toBe('failed')
+  expect(installRequests(fake).at(-1)).toEqual({ requests: [{ close: installPage }] })
 })
 
 test("a mod's own installer step opens after it starts, and Finish waits for isDone", async () => {
@@ -1217,7 +1555,7 @@ test("a mod's own installer step opens after it starts, and Finish waits for isD
   isSignedIn = true
   await pressInInstaller(lifecycle, 'next', 'ci-watch')
   await fake.settle()
-  expect(fake.calls.filter((call) => call.call === 'ui.close').map((call) => call.args[0])).toEqual([{ id: 'installer-ci-watch' }])
+  expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installPage }] }])
 })
 
 test("a step whose isDone fails stays pending, shows the failure, and Finish shows it in the installer", async () => {
@@ -1238,7 +1576,7 @@ test("a step whose isDone fails stays pending, shows the failure, and Finish sho
   expect(await installerText(lifecycle, 'ci-watch')).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
 })
 
-test('a step left on Not now keeps a Finish button and is listed to /mods, and finishing opens the installer on it again', async () => {
+test('a step left on Not now keeps a Finish button and is listed to /mods, and finishing opens the installer on it again without waiting for the person', async () => {
   const fake = fakeClaude({ name: 'ci-watch', root })
   let isSignedIn = false
   const lifecycle = createLifecycle(
@@ -1257,12 +1595,11 @@ test('a step left on Not now keeps a Finish button and is listed to /mods, and f
   expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Finish')).toBeDefined()
   expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: ['Sign in to GitHub'] })
 
-  const finishing = fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:finishSteps', input: null }, { deny: '' })
-  await fake.settle()
+  expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:finishSteps', input: null }, { deny: '' })).toEqual({ value: installerOpen })
   expect(await installerText(lifecycle, 'ci-watch')).toContain('Sign in to GitHub  (1 of 1)')
   isSignedIn = true
   await pressInInstaller(lifecycle, 'next', 'ci-watch')
-  expect(await finishing).toEqual({ value: null })
+  await fake.settle()
   expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: [] })
 })
 
@@ -1608,11 +1945,11 @@ test('a mod checks for the cmod program on disk and starts no process until cmod
   expect(runs).toEqual([])
 })
 
-test('an installer pane that fails to open shows as a failure, not as Not now', async () => {
+test('an install page the cmod plugin refuses to open shows as a failure, not as Not now', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   installCmod(fake)
   fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
-  fake.fakes.ui.open = async () => Promise.reject(new Error('the installer pane did not open'))
+  fake.fakes.cmod.call = async () => Promise.reject(new Error('safe-delete: $.cmod.call: cmod is not installed. Install it in Plugins.'))
   const { definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
 
@@ -1620,7 +1957,59 @@ test('an installer pane that fails to open shows as a failure, not as Not now', 
   await fake.settle()
 
   expect(fake.shown.logs).toEqual([])
-  expect(lifecycle.toasts).toEqual(failed('the installer pane did not open'))
+  expect(lifecycle.toasts).toEqual(failed('cmod is not installed. Install it in Plugins.'))
+})
+
+test('the install page is a tab of the Sidebar: closing the tab is Not now, and hiding the Sidebar keeps the question waiting', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t'], 10)
+  const { runs, definition } = trackedMod()
+  const lifecycle = createLifecycle(definition)
+  const tell = (open: readonly string[], shown: string | null) => askedByCmod(lifecycle, 'safe-delete', partMethods.shown, { open: open.map((id) => ({ id, params: null })), shown, isFocused: shown !== null })
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  await tell([installPage], installPage)
+  await tell([installPage], null)
+  await fake.settle()
+  const waiting = lifecycle.toasts
+  await tell([], null)
+  await fake.settle()
+
+  expect(waiting).toEqual([{ type: 'info', message: 'Installing', description: 'Waiting for your answer' }])
+  expect(lifecycle.phase).toBe('declined')
+  expect(lifecycle.toasts).toEqual([{ type: 'default', message: 'Not installed', description: 'Install it whenever you like.' }])
+  expect(installRequests(fake)).toEqual([installerOpen])
+  expect(runs).toEqual([])
+})
+
+test('the install page draws the consent at the Sidebar width under its question, each permission and change on its own line, Accept first', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  fake.fakes.process.spawn = () => finished(['needs-consent abc123\t./setup/install.sh\t./setup/uninstall.sh\tshift+tab to /mode\t\tnetwork:api.github.com\tprompt'], 10)
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  const { drawing } = await installerDrawing(lifecycle, 'safe-delete', 60)
+
+  expect(rowsOf(drawing, 60).map((row) => row.trimEnd())).toEqual([
+    'Install safe-delete?',
+    '',
+    'safe-delete wants to:',
+    '• Connect to api.github.com',
+    '• Add text Claude reads and start turns',
+    '',
+    'and change your computer:',
+    '• Run ./setup/install.sh now, and ./setup/uninstall.sh when',
+    '  you remove it',
+    '• Bind shift+tab to /mode',
+    '',
+    'You can turn each permission off later in Settings.',
+    '',
+    'a: Accept  n: Not now',
+  ])
 })
 
 test('a whitespace-only chunk of standard error keeps the last error line', async () => {

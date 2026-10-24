@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
 import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 test('cmod check refuses an install command that names no script', async () => {
   const home = await temporaryHome()

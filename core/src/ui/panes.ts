@@ -1,5 +1,5 @@
 import type { Frozen, PaneCloseInput, RenderElement, RenderPropsOf, UiScrollInput } from 'claude-code'
-import type { Mod } from '../mod.js'
+import type { Mod, Surface } from '../mod.js'
 
 export type ScrollTarget = 'start' | 'end' | { readonly key: string }
 
@@ -7,7 +7,7 @@ export type ScrollOptions = { readonly block?: 'start' | 'center' | 'end' | 'nea
 
 export type OpenOptions<Params> = { readonly focus?: true } & (undefined extends Params ? { readonly params?: Params } : { readonly params: Params })
 
-export type PaneProps<Params> = Frozen<RenderPropsOf['Pane']> & { readonly params: Params }
+export type PaneProps<Params> = Frozen<RenderPropsOf['Pane']> & { readonly surface: Surface; readonly params: Params }
 
 export type PaneInit<State extends object = Record<never, never>, Params = undefined> = {
   readonly id: string

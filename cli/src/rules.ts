@@ -31,7 +31,7 @@ export async function readRules(folder: string): Promise<Rule[]> {
 
 export type SyncedRules = { readonly linked: readonly LinkedRules[]; readonly placed: readonly string[]; readonly removed: readonly string[]; readonly watched: readonly string[] }
 
-export async function syncRules(project: string): Promise<SyncedRules> {
+export async function syncRules(project: string, pluginDirs: readonly string[] = []): Promise<SyncedRules> {
   const store = storeFolder(process.env)
   const userRules = join(configRoot(), 'rules')
   const projectRules = join(project, '.claude', 'rules')
@@ -56,7 +56,7 @@ export async function syncRules(project: string): Promise<SyncedRules> {
       const source = rulesFolderOf(record.root)
       watched.add(source)
       const isWanted = existsSync(source) && (await approvals(mod)).includes('prompt')
-      const isEverywhere = user.enabled.get(mod) === true || (await isLinked(record.root))
+      const isEverywhere = user.enabled.get(mod) === true || pluginDirs.includes(record.root) || (await isLinked(record.root))
       const isHere = here.enabled.get(mod) ?? isEverywhere
       const link = !isWanted ? undefined : isEverywhere ? join(userRules, mod) : here.enabled.get(mod) === true ? join(projectRules, mod) : undefined
       const exclude = link !== undefined && isEverywhere && !isHere ? `${link}/**` : undefined

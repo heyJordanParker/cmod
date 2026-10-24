@@ -7,7 +7,7 @@ import { clipboard, commands, config, defineMod, fs, messageOf, model, Note, Per
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
-import { installerPaneOf } from '../src/runtime/installer.js'
+import { installPage } from '../src/runtime/installer.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type FakeSession, type TestedMod } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
@@ -173,7 +173,7 @@ test("an answer a process before method does not take refuses beforePermissionRe
   )
 
   expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toEqual({ refuse: 'gate: it answered deny, which beforePermissionRequest does not take. It takes { allow }, { input }, { updates }, { refuse }, { interrupt }.' })
-  expect(await tested.raise.beforeModelChange({ model: 'haiku' } as never)).toEqual({ refuse: 'gate: it answered deny, which beforeModelChange does not take. It takes { ask }, { refuse }.' })
+  expect(await tested.raise.beforeModelChange({ model: 'haiku' } as never)).toEqual({ refuse: 'gate: it answered deny, which beforeModelChange does not take. It takes { ask }, { refuse }, { note }.' })
 })
 
 test("a process before method's result never stops a later listener: a later refusal still refuses, and the last result wins", async () => {
@@ -477,6 +477,24 @@ test('mod.toast.promise draws a loading toast above the prompt that turns to suc
   ])
 })
 
+test('a loading toast that stays spins for 10 seconds, then draws a still glyph and stops redrawing', async () => {
+  const tested = testMod(defineMod({ name: 'indexer', setup: (mod) => void mod.toast.loading('Waiting for cmod', { id: 'wait' }) }))
+  const frames: (() => void)[] = []
+  let cancelled = 0
+  const every = tested.fakes.clock.every
+  tested.fakes.clock.every = (ms, run) => (ms === 100 ? (frames.push(run), { cancel: () => void (cancelled += 1) }) : every!(ms, run))
+  const prompt = { type: 'Text', children: ['>'] } as unknown as RenderElement
+  const abovePrompt = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 80, rows: 24 } }
+  const glyph = async () => textOf(await tested.fire('ui.render', abovePrompt as never, prompt)).split('\n')[1]?.[0]
+  await tested.start()
+
+  for (let spun = 1; spun < 100; spun += 1) frames[0]?.()
+  expect([await glyph(), cancelled]).toEqual(['⠏', 0])
+
+  frames[0]?.()
+  expect([await glyph(), cancelled]).toEqual(['…', 1])
+})
+
 test('mod.toast.promise rejects only through unwrap, and shows the error toast', async () => {
   let unwrapped: Promise<unknown> | undefined
   const tested = testMod(
@@ -520,7 +538,8 @@ test("a failure toast's Report choices copy the mod and core versions, message, 
   await pressInBand(tested, 'Copy the error')
 
   const [copied] = tested.calls.filter(({ call }) => call === 'ui.copy').map(({ args }) => (args[0] as { text: string }).text)
-  expect(copied).toStartWith(`keep-going 1.4.0, @cmodjs/core ${corePackage.version}\nThe beforeSessionStart listener failed\nthe test runner is missing\n\nError: the test runner is missing\n    at `)
+  expect(copied).toMatch(/^keep-going 1\.4\.0, @cmodjs\/core \S+, at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\n/)
+  expect(copied?.replace(/, at \S+Z\n/, '\n')).toStartWith(`keep-going 1.4.0, @cmodjs/core ${corePackage.version}\nThe beforeSessionStart listener failed\nthe test runner is missing\n\nError: the test runner is missing\n    at `)
   expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('Copied the error.')
 })
 
@@ -541,13 +560,24 @@ test("Report opens its choices in the toast with the keys on Ask Claude, which a
   expect(asked?.text).toContain('The beforeSessionStart listener failed\nthe test runner is missing')
 })
 
-test("one mod's popup pane is its own, so another mod never draws in it", async () => {
-  const shown = { surface: 'terminal', component: 'Pane', requestId: installerPaneOf('keep-going'), props: { title: 'Report keep-going', isFocused: true, bodyColumns: 80, placement: 'dock' } }
+test('an install page a reload left in the Sidebar says the mod needs nothing, and closes its tab', async () => {
+  const tested = testMod(defineMod({ name: 'inbox', setup() {} }))
+  await tested.start()
+
+  const drawn = await tested.fire('cmod.call', { to: 'inbox', method: 'cmod:draw', input: { page: installPage, params: null, columns: 60, isFocused: false }, caller: 'cmod' } as never)
+  await tested.settle()
+
+  expect(drawn).toEqual({ value: { draw: expect.any(Number), tree: { $cmodElement: 'Text', props: { dimColor: true, children: 'inbox needs nothing from you now.' } } } })
+  expect(tested.calls.filter(({ call }) => call === 'cmod.call').map(({ args }) => (args[0] as { input: unknown }).input)).toContainEqual({ requests: [{ close: installPage }] })
+})
+
+test("one mod's install page is its own, so another mod never draws in it", async () => {
   const tested = testMod(defineMod({ name: 'probe', setup() {} }))
   await tested.start()
 
-  expect(installerPaneOf('keep-going')).not.toBe(installerPaneOf('probe'))
-  expect(textOf(await tested.fire('ui.render', shown as never, { type: 'Text', children: ['keep-going draws this'] } as never))).toBe('keep-going draws this')
+  const drawn = await tested.fire('cmod.call', { to: 'keep-going', method: 'cmod:draw', input: { page: installPage, params: null, columns: 60, isFocused: false }, caller: 'cmod' } as never, { value: 'keep-going draws this' })
+
+  expect(drawn).toEqual({ value: 'keep-going draws this' })
 })
 
 test('Hide keeps a failure hidden when it happens again, and a different failure shows', async () => {
@@ -1359,6 +1389,38 @@ test('fs.onChange hears each file that changes, appears, or goes under a folder,
   ])
 })
 
+test('fs.onChange checks a missing path every fourth poll, and still hears it appear', async () => {
+  const changes: unknown[] = []
+  const ticks: (() => void)[] = []
+  const tested = testMod(defineMod({ name: 'reloader', setup: () => void fs.onChange({ path: ['/work/app/later.json', '/work/app/here.json'] }, (change) => void changes.push(change)) }), { files: { '/work/app/here.json': '{}' } })
+  tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
+  const stats: string[] = []
+  const stat = tested.fakes.fs.stat
+  tested.fakes.fs.stat = async (path) => {
+    stats.push(path)
+    if (stat === undefined) throw new Error('the test kit fakes no fs.stat')
+    return stat(path)
+  }
+  await tested.start()
+  await tested.settle()
+  const tick = async () => {
+    for (const run of ticks) run()
+    await tested.settle()
+  }
+
+  stats.length = 0
+  await tick()
+  await tick()
+  await tick()
+  const skipped = stats.filter((path) => path === '/work/app/later.json').length
+  await tested.fakes.fs.write?.('/work/app/later.json', '{}')
+  await tick()
+
+  expect(skipped).toBe(0)
+  expect(stats.filter((path) => path === '/work/app/here.json')).toHaveLength(4)
+  expect(changes).toEqual([{ path: '/work/app/later.json', type: 'add' }])
+})
+
 test('an fs.onChange listener that throws shows an error toast, and the next change still reaches it', async () => {
   const heard: string[] = []
   const ticks: (() => void)[] = []
@@ -1563,6 +1625,31 @@ test('a pane Claude Code shows later counts as open, so toggle closes it', async
 
   expect(handle?.isOpen).toBe(false)
   expect(tested.calls.filter((call) => call.call === 'ui.open' || call.call === 'ui.close').map((call) => call.call)).toEqual(['ui.open', 'ui.close'])
+})
+
+test('a pane the person closes stays closed though Claude Code draws it during the close, so the next toggle opens it', async () => {
+  let handle: Pane | undefined
+  const seenByOnClose: unknown[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'diagrams',
+      setup(mod) {
+        handle = mod.panes.add({ ...drawingPane, onClose: () => void seenByOnClose.push([handle?.isOpen, handle?.isShown]) })
+      },
+    }),
+  )
+  await tested.start()
+  await handle?.toggle()
+
+  await tested.fire('ui.close', { id: 'drawing', origin: { kind: 'person' } } as never)
+  await tested.settle()
+
+  expect([handle?.isOpen, handle?.isShown, seenByOnClose]).toEqual([false, false, [[false, false]]])
+
+  await handle?.toggle()
+
+  expect(handle?.isOpen).toBe(true)
+  expect(tested.calls.filter((call) => call.call === 'ui.open' || call.call === 'ui.close').map((call) => call.call)).toEqual(['ui.open', 'ui.open'])
 })
 
 test('a pane size that is not a whole number above 0 throws in panes.add', async () => {
@@ -1915,6 +2002,46 @@ test("a mod's hotkey runs its listeners, and a listener removed no longer runs",
 
   expect(pressed).toEqual(['first', 'second', 'second'])
   expect(tested.shown.commands).toContain('tree--toggle')
+})
+
+const askedRequests = (calls: readonly TestCall[]) => calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { readonly input: { readonly isAsked?: true } }).input.isAsked === true ? [(input as { readonly input: unknown }).input] : []))
+
+test("a hotkey whose listener drops page.open's promise asks the cmod plugin as the person, which opens the page in the person's frame", async () => {
+  let page: Page | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'inbox',
+      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      setup(mod) {
+        const inbox = mod.sidebar.add({ id: 'inbox', title: 'Inbox', render: () => Text({ children: 'no items' }) })
+        page = inbox
+        mod.hotkeys.toggle.onPress(() => void inbox.open({ focus: true }))
+      },
+    }),
+  )
+
+  await tested.hotkey('toggle')
+
+  expect(askedRequests(tested.calls)).toEqual([{ requests: [{ open: 'inbox', focus: true }], isAsked: true }])
+  expect(tested.shown.page.id).toBe('inbox')
+  expect([page?.isShown, page?.isFocused]).toEqual([true, true])
+})
+
+test("a slash command whose reply drops settings.open's promise opens Settings in the person's frame", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'ci-watch',
+      setup(mod) {
+        mod.settings.add({ id: 'branches', title: 'Branches', render: () => Text({ children: 'main' }) })
+        mod.use(slashCommand({ name: 'ci-settings', description: 'Show the settings', reply: () => void mod.settings.open() }))
+      },
+    }),
+  )
+
+  expect(await tested.type('/ci-settings')).toEqual({})
+
+  expect(askedRequests(tested.calls)).toEqual([{ requests: [{ settings: true }], isAsked: true }])
+  expect(tested.shown.page.id).toBe('branches')
 })
 
 test("a hotkey's combo is the one keybindings.json binds to it, which a person may have changed, and undefined while none does", async () => {

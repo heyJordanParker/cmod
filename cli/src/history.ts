@@ -11,7 +11,7 @@ import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-r
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
 import { TaskEnd, TaskStart } from '@cmodjs/core/src/session/goal/task.js'
 import { UsageChange, type Usage } from '@cmodjs/core/src/session/session.js'
-import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type ConversationState, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '@cmodjs/core/src/session/conversation.js'
+import { createConversation, emptyConversation, ownerOfSpawn, searchLimit, type ContextData, type Conversation, type ConversationState, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine } from '@cmodjs/core/src/utils/text.js'
 import { configRoot } from './settings.js'
 import { storePath } from './store.js'
@@ -44,13 +44,13 @@ create index messages_by_time on messages (at);
 create index messages_by_folder on messages (folder, at);
 create table turns (session text not null, task text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, primary key (session, prompt));
 create table contexts (session text not null, task text not null default '', number integer not null, opened_at text not null, closed_at text, primary key (session, task, number));
-create table tasks (session text not null, id text not null, title text not null, agent_type text not null, model text, opened_by text not null, opened_at text not null, closed_at text, parent text, context integer not null, primary key (session, id));
+create table tasks (session text not null, id text not null, title text not null, agent_type text, forked_from text, model text, opened_by text not null, opened_at text not null, closed_at text, parent text, context integer not null, primary key (session, id));
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-8.sqlite'
+const indexFile = 'history-10.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite']
 
 const chunkBytes = 65_536
 
@@ -60,7 +60,7 @@ const tailBytes = 65_536
 
 const sortedMatches = 20_000
 
-const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"hook_additional_context"', '"forkedFrom"']
+const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
 
 export function openHistory(): Database {
   const path = storePath(indexFile)
@@ -285,12 +285,12 @@ function stepThrough(conversation: Conversation, transcripts: readonly Transcrip
         const row = rowOfLine(raw)
         const changes: SessionChange[] = []
         if (row !== undefined) {
-          if (task !== undefined && !isStarted(task)) changes.push(...conversation.startTask(taskData([...metas.values()].find((meta) => meta.task === task) ?? { task, title: '', agentType: 'general-purpose', call: '' }, row.at)))
+          if (task !== undefined && !isStarted(task)) changes.push(...conversation.startTask(taskData([...metas.values()].find((meta) => meta.task === task) ?? { task, title: '', agentType: 'general-purpose', call: '' }, row.at, conversation.state.session)))
           const added = conversation.add(row, task)
           changes.push(...added)
           for (const change of added) {
             const meta = change.type === Message && change.message.type === ToolCall ? metas.get(change.message.callId) : undefined
-            if (meta !== undefined && !isStarted(meta.task)) changes.push(...conversation.startTask(taskData(meta, row.at, task)))
+            if (meta !== undefined && !isStarted(meta.task)) changes.push(...conversation.startTask(taskData(meta, row.at, conversation.state.session, task)))
           }
         }
         run.isStopped = onStep({ transcript, line, raw, changes }) === false
@@ -312,8 +312,8 @@ function metasOf(tasks: readonly Transcript[]): Map<string, Meta> {
   return metas
 }
 
-function taskData(meta: Meta, at: string, parent?: string): TaskData {
-  return { id: meta.task, title: meta.title, agentType: meta.agentType, openedBy: meta.call, openedAt: at, ...(parent === undefined ? {} : { parent }) }
+function taskData(meta: Meta, at: string, session: string, parent?: string): TaskData {
+  return { id: meta.task, title: meta.title, ...ownerOfSpawn(meta.agentType, session), openedBy: meta.call, openedAt: at, ...(parent === undefined ? {} : { parent }) }
 }
 
 function saveChanges(db: Database, place: { readonly session: string; readonly folder: number; readonly file: number; readonly line: Line; readonly row: string }, changes: readonly SessionChange[]): void {
@@ -337,7 +337,7 @@ function saveChanges(db: Database, place: { readonly session: string; readonly f
       db.query('insert into contexts (session, task, number, opened_at, closed_at) values (?, ?, ?, ?, ?) on conflict (session, task, number) do update set closed_at = excluded.closed_at').run(session, change.context.task ?? '', change.context.number, change.context.openedAt, change.context.closedAt ?? null)
     } else if (change.type === TaskStart) {
       const { task } = change
-      db.query('insert or replace into tasks (session, id, title, agent_type, model, opened_by, opened_at, parent, context) values (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(session, task.id, task.title, task.agentType, task.model ?? null, task.openedBy, task.openedAt, task.parent ?? null, task.context)
+      db.query('insert or replace into tasks (session, id, title, agent_type, forked_from, model, opened_by, opened_at, parent, context) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(session, task.id, task.title, task.agentType ?? null, task.forkedFrom ?? null, task.model ?? null, task.openedBy, task.openedAt, task.parent ?? null, task.context)
     } else if (change.type === TaskEnd) {
       db.query('update tasks set closed_at = ? where session = ? and id = ?').run(change.task.closedAt ?? null, session, change.task.id)
     }
@@ -610,21 +610,32 @@ export function readContexts(db: Database, request: { readonly session: string; 
 export function readTasks(db: Database, request: { readonly session: string; readonly project: string; readonly task?: string; readonly isNested?: boolean }): TaskData[] {
   readSession(db, sessionTranscripts(request.session, request.project))
   const under = request.isNested === true ? '' : 'and parent is ?2'
-  return db
-    .query<{ id: string; title: string; agent_type: string; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; parent: string | null }, (string | null)[]>(
-      `select id, title, agent_type, model, opened_by, opened_at, closed_at, parent from tasks where session = ?1 ${under} order by opened_at`,
+  const indexed = db
+    .query<{ id: string; title: string; agent_type: string | null; forked_from: string | null; model: string | null; opened_by: string; opened_at: string; closed_at: string | null; parent: string | null }, (string | null)[]>(
+      `select id, title, agent_type, forked_from, model, opened_by, opened_at, closed_at, parent from tasks where session = ?1 ${under} order by opened_at`,
     )
     .all(request.session, ...(request.isNested === true ? [] : [request.task ?? null]))
     .map((row) => ({
       id: row.id,
       title: row.title,
-      agentType: row.agent_type,
+      ...(row.agent_type === null ? {} : { agentType: row.agent_type }),
+      ...(row.forked_from === null ? {} : { forkedFrom: row.forked_from }),
       ...(row.model === null ? {} : { model: row.model }),
       openedBy: row.opened_by,
       openedAt: row.opened_at,
       ...(row.closed_at === null ? {} : { closedAt: row.closed_at }),
       ...(row.parent === null ? {} : { parent: row.parent }),
     }))
+  const background = request.task === undefined || request.isNested === true ? backgroundTasks(request.session) : []
+  return [...indexed, ...background].toSorted((first, second) => first.openedAt.localeCompare(second.openedAt))
+}
+
+function backgroundTasks(session: string): TaskData[] {
+  const folder = join(dataFolder(storeFolder(process.env), 'cmod'), 'tasks', session)
+  if (!existsSync(folder)) return []
+  return readdirSync(folder)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(readFileSync(join(folder, name), 'utf8')) as TaskData)
 }
 
 export function readState(db: Database, request: { readonly session: string; readonly project: string }): ConversationState {

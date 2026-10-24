@@ -7,7 +7,7 @@ import { Person, senderOf } from '../session/context/turn/message/sender.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
-import { searchLimit, type ContextData, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
+import { forkAgentType, searchLimit, type ContextData, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
 import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
@@ -41,15 +41,20 @@ export const conversationMethods = {
   before: 'cmod:before',
 } as const
 
-export type Act = 'send' | 'startTask' | 'callTool' | 'usage' | 'surfaces' | 'abort'
+export type Act = 'send' | 'startTask' | 'fork' | 'clone' | 'startBackgroundTask' | 'callTool' | 'usage' | 'surfaces' | 'abort'
 
-const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', usage: 'conversation', surfaces: 'conversation', abort: 'prompt' }
+const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', fork: 'tasks', clone: 'tasks', startBackgroundTask: 'tasks', usage: 'conversation', surfaces: 'conversation', abort: 'prompt' }
 
 const startsTurns: readonly string[] = ['CronCreate']
 
 const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
 
 export const beforePermission = (event: BeforeEvent): string => (event === 'toolCall' ? 'tools' : event === TaskStart ? 'tasks' : 'prompt')
+
+const answerPermissions = (event: BeforeEvent, answer: Partial<Answers>): string[] => [
+  ...(Object.keys(answer).some((key) => key !== 'note') ? [beforePermission(event)] : []),
+  ...(answer.note === undefined ? [] : ['prompt']),
+]
 
 export const isAct = (action: string): action is Act => action === 'callTool' || action in actPermissions
 
@@ -82,7 +87,8 @@ type Owned = { readonly session: string; readonly task: string }
 export async function usageOf(claude: Pick<Claude, 'session'>): Promise<Usage> {
   const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()])
   const { tokens, window, percent } = usage.context
-  return { model, contextWindow: { ...(tokens === undefined ? {} : { tokenCount: tokens }), size: window, ...(percent === undefined ? {} : { percent }) }, ...(usage.cost === undefined ? {} : { cost: { usd: usage.cost.usd } }) }
+  const rateLimits = usage.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ type: kind, percent: percentUsed, ...(resetsAt === undefined ? {} : { resetsAt }) }))
+  return { model, contextWindow: { ...(tokens === undefined ? {} : { tokenCount: tokens }), size: window, ...(percent === undefined ? {} : { percent }) }, rateLimits, ...(usage.cost === undefined ? {} : { cost: { usd: usage.cost.usd } }) }
 }
 
 export function payloadOf(change: SessionChange): unknown {
@@ -90,8 +96,9 @@ export function payloadOf(change: SessionChange): unknown {
   if ('turn' in change) return change.turn
   if ('context' in change) return change.context
   if ('task' in change) {
-    const { id, title, agentType, model, openedBy, openedAt, closedAt } = change.task
-    return { id, title, openedBy, openedAt, ...(closedAt === undefined ? {} : { closedAt }), owner: { id, title, agentType, ...(model === undefined ? {} : { model }), startedAt: openedAt } }
+    const { id, title, agentType, model, openedBy, openedAt, closedAt, isBackground, forkedFrom } = change.task
+    const owner = { id, title, ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), ...(forkedFrom === undefined ? {} : { forkedFrom }), startedAt: openedAt }
+    return { id, title, openedBy, openedAt, ...(closedAt === undefined ? {} : { closedAt }), ...(isBackground === true ? { isBackground } : {}), owner }
   }
   if ('usage' in change) return change.usage
   return change.goal
@@ -224,8 +231,10 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
         if (!decides(entry, session, latest)) return undefined
         const payload = await payloadFor(session, latest)
         const answer = await invoke(entry.method, entry.options, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
-        if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer) || isGranted(beforePermission(event))) return answer
-        throw new Error(`Its ${entry.method} answer changes nothing until you grant ${name} "${permissionWords(beforePermission(event))}". ${grantFix}`)
+        if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer)) return answer
+        const missing = answerPermissions(event, answer as Partial<Answers>).find((permission) => !isGranted(permission))
+        if (missing === undefined) return answer
+        throw new Error(`Its ${entry.method} answer changes nothing until you grant ${name} "${permissionWords(missing)}". ${grantFix}`)
       })
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) }
@@ -293,17 +302,25 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     }
   }
 
-  const taskOf = (session: string, data: TaskData): Task => ({
-    id: data.id,
-    title: data.title,
-    openedBy: data.openedBy,
-    openedAt: data.openedAt,
-    ...(data.closedAt === undefined ? {} : { closedAt: data.closedAt }),
-    owner: ownerOf(session, data),
-    ...recordPart({ session, task: data.id }),
-    tasks: async () => (await call<TaskData[]>(conversationMethods.tasks, { session, task: data.id })).map((task) => taskOf(session, task)),
-    messages: () => messagesFrom(conversationMethods.messages, { session, task: data.id }),
-  })
+  const taskOf = (session: string, data: TaskData): Task => {
+    const record = data.isBackground === true ? { session: data.id } : { session, task: data.id }
+    return {
+      id: data.id,
+      title: data.title,
+      openedBy: data.openedBy,
+      openedAt: data.openedAt,
+      ...(data.closedAt === undefined ? {} : { closedAt: data.closedAt }),
+      ...(data.status === undefined ? {} : { status: data.status }),
+      ...(data.name === undefined ? {} : { name: data.name }),
+      ...(data.spawnedBy === undefined ? {} : { spawnedBy: data.spawnedBy }),
+      ...(data.isBackground === true ? { isBackground: true } : {}),
+      owner: ownerOf(session, data),
+      ...recordPart({ session, task: data.id }),
+      search: (text: string, matcher?: unknown) => searched({ text, ...record }, matcher),
+      tasks: async () => (await call<TaskData[]>(conversationMethods.tasks, record)).map((task) => taskOf(record.session, task)),
+      messages: () => messagesFrom(conversationMethods.messages, record),
+    }
+  }
 
   const goalOf = (where: () => Scope): Goal =>
     ({
@@ -345,11 +362,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     if ('drop' in submitted && typeof submitted.drop === 'string') throw new Error(`${name}: Claude Code dropped the prompt: ${submitted.drop}`)
   }
 
-  const startHere = async (task: TaskStartArgs): Promise<Task> => taskOf(current.id, await spawnTask(claude, task).catch((error: unknown) => Promise.reject(new Error(`${name}: ${messageOf(error)}`))))
-
   const surfacesHere = async (): Promise<Surface[]> => [...(await claude.session.surfaces())]
 
-  const sessionOf = (read: () => SessionData, owned?: Owned) => {
+  const sessionOf = (read: () => SessionData, owned?: Owned, isOwner = owned !== undefined) => {
     const id = () => read().id
     const isHere = () => owned === undefined && id() === current.id
     const scope = (): Scope => (owned === undefined ? { session: id(), isAgent: true } : { session: owned.session, task: owned.task, isAgent: true })
@@ -411,32 +426,34 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
         await act(id(), 'send', message, owned)
       },
     }
-    if (owned !== undefined) return session as unknown as Sessions['current']
+    if (isOwner) return session as unknown as Sessions['current']
+    const started = async (starting: Promise<TaskData>): Promise<Task> => taskOf(id(), await starting.catch((error: unknown) => Promise.reject(new Error(`${name}: ${messageOf(error)}`))))
     return Object.assign(session, {
-      async startTask(task: TaskStartArgs): Promise<Task> {
-        if (isHere()) return startHere(task)
-        const started = await act<TaskData>(id(), 'startTask', task)
-        return taskOf(id(), started)
-      },
+      startTask: (task: TaskStartArgs): Promise<Task> => started(task.isBackground === true ? act<TaskData>(id(), 'startBackgroundTask', task) : isHere() ? spawnTask(claude, task) : act<TaskData>(id(), 'startTask', task)),
+      fork: (task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task> => started(isHere() ? spawnTask(claude, task, current.id) : act<TaskData>(id(), 'fork', task)),
+      clone: (task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task> => started(act<TaskData>(id(), 'clone', task)),
       callTool: async (toolCall: ToolCallArgs): Promise<ToolResult> => (await withFiles(await act<ToolResult>(id(), 'callTool', toolCall))) as ToolResult,
     }) as unknown as Sessions['current']
   }
 
   const ownerOf = (session: string, data: TaskData): TaskOwner => {
     const parent = session === current.id ? current : known.get(session)
+    const isBackground = data.isBackground === true
     return sessionOf(
       () => ({
         id: data.id,
         title: data.title,
         project: parent?.project ?? '',
-        agentType: data.agentType,
+        ...(data.agentType === undefined ? {} : { agentType: data.agentType }),
         model: data.model ?? '',
         cwd: parent?.cwd ?? '',
-        isRunning: data.closedAt === undefined && (parent?.isRunning ?? true),
+        isRunning: data.closedAt === undefined && (isBackground || (parent?.isRunning ?? true)),
         startedAt: data.openedAt,
         lastAt: data.closedAt ?? data.openedAt,
+        ...(data.forkedFrom === undefined ? {} : { forkedFrom: data.forkedFrom }),
       }),
-      { session, task: data.id },
+      isBackground ? undefined : { session, task: data.id },
+      true,
     )
   }
 
@@ -494,7 +511,11 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     }
     const event: { readonly on: string; readonly before?: string } = processEvents[named as ProcessName]
     const hook = (isBefore ? event.before : undefined) ?? event.on
-    if (method === 'beforeSessionStart') routeOn('session.compact', compactionNote)
+    if (method === 'beforeSessionStart') routeOn('session.compact', trackCompaction)
+    if (method === 'beforeModelChange') hookOn(event.on, () => {
+      const notes = modelNotes.splice(0)
+      return notes.length === 0 ? undefined : { additionalContext: notes }
+    })
     const failed = (input: unknown, error: Error) => {
       const refusal = refusalFor(method, processPayloadOf(named as ProcessFieldsName, input), error)
       return refusal === undefined ? undefined : hookAnswerOf(name, named, refusal)
@@ -504,35 +525,38 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       async (input: unknown) => {
         const payload = processPayloadOf(named as ProcessFieldsName, input)
         if (named === 'SessionStart' && payload['source'] === 'compact') {
-          const started = isBefore ? compactionStarts.shift() : undefined
-          return started === undefined ? undefined : hookAnswerOf(name, named, started)
+          if (!isBefore) return undefined
+          const task = compacting?.agentId
+          const model = task === undefined ? await claude.session.model() : undefined
+          const answer = await raise(method, { ...payload, ...defined({ task, model, title: current.title || undefined }) })
+          if (answer === undefined) return undefined
+          return hookAnswerOf(name, named, task === undefined ? answer : defined({ note: answer['note'] }))
         }
         if (!isBefore) {
           void raise(method, payload)
           return undefined
         }
+        if (named === 'ModelChange') modelNotes.splice(0)
         const answer = await raise(method, payload)
-        return answer === undefined ? undefined : hookAnswerOf(name, named, answer)
+        if (answer === undefined) return undefined
+        if (named === 'ModelChange' && typeof answer['note'] === 'string' && answer['refuse'] === undefined) modelNotes.push(modNote(name, answer['note']))
+        return hookAnswerOf(name, named, answer)
       },
       isBefore ? failed : undefined,
     )
   }
 
-  const compactionStarts: HookFields[] = []
+  const modelNotes: string[] = []
 
-  const compactionNote = async (e: Args<'session.compact'>, next: (e: Args<'session.compact'>) => Promise<SessionCompactResult>): Promise<SessionCompactResult> => {
-    const compacted = await next(e)
-    if (e.trigger === 'precompute' || compacted.skip !== undefined) return compacted
-    const model = e.agentId === undefined ? await claude.session.model() : undefined
-    const answer = await raise('beforeSessionStart', { session: current.id, cwd: current.cwd, ...defined({ task: e.agentId, model, title: current.title || undefined, contextTokenCount: compacted.tokensAfter }), source: 'compact' })
-    const { note, ...started } = answer ?? {}
-    if (Object.keys(started).length > 0) compactionStarts.push(started)
-    if (typeof note !== 'string') return compacted
-    if (!isGranted('prompt')) {
-      report('session:beforeSessionStart', 'The beforeSessionStart listener failed', new Error(`${name}: its note adds text Claude reads, which needs the prompt permission.`))
-      return compacted
+  let compacting: Args<'session.compact'> | undefined
+
+  const trackCompaction = async (e: Args<'session.compact'>, next: (e: Args<'session.compact'>) => Promise<SessionCompactResult>): Promise<SessionCompactResult> => {
+    compacting = e
+    try {
+      return await next(e)
+    } finally {
+      if (compacting === e) compacting = undefined
     }
-    return { ...compacted, messages: [...compacted.messages, { role: 'user', text: modNote(name, note), toolUses: [] }] }
   }
 
   const listen = (method: string, args: readonly unknown[], isEveryAgent = false): Subscription => {
@@ -654,9 +678,9 @@ const modelChangeOf = (input: HookFields) => ({
 
 const answerKeys: Readonly<Record<string, readonly string[]>> = {
   Run: ['args', 'note', 'result', 'exitCode', 'refuse'],
-  ProjectSetup: [],
+  ProjectSetup: ['note'],
   SessionStart: ['note', 'title', 'reloadSkills', 'firstPrompt'],
-  ModelChange: ['ask', 'refuse'],
+  ModelChange: ['ask', 'refuse', 'note'],
   WorktreeCreate: ['result'],
   Elicitation: ['refuse'],
   ElicitationResponse: ['refuse'],
@@ -706,19 +730,20 @@ const processFields: { readonly [Name in ProcessFieldsName]: (input: HookFields)
   ReplyDisplay: (input) => ({ replyId: input['message_id'], index: input['index'], isLast: input['final'], text: input['delta'] }),
 }
 
-export async function spawnTask(claude: Pick<Claude, 'agent'>, task: TaskStartArgs): Promise<TaskData> {
+export async function spawnTask(claude: Pick<Claude, 'agent'>, task: TaskStartArgs, forkedFrom?: string): Promise<TaskData> {
   if (task.title.trim() === '') throw new Error('a task needs a title.')
+  const { name, agentType, model, cwd }: TaskStartArgs = forkedFrom === undefined ? task : { prompt: task.prompt, title: task.title, agentType: forkAgentType }
   const started = await claude.agent.spawn({
     prompt: task.prompt,
     description: task.title,
-    ...(task.name === undefined ? {} : { name: task.name }),
-    ...(task.agentType === undefined ? {} : { subagentType: task.agentType }),
-    ...(task.model === undefined ? {} : { model: task.model }),
-    ...(task.cwd === undefined ? {} : { cwd: task.cwd }),
+    ...(name === undefined ? {} : { name }),
+    ...(agentType === undefined ? {} : { subagentType: agentType }),
+    ...(model === undefined ? {} : { model }),
+    ...(cwd === undefined ? {} : { cwd }),
   })
   if (started.deny !== undefined) throw new Error(`Claude Code refused the task: ${started.deny}`)
   if (started.agentId === undefined) throw new Error('Claude Code answered without starting a task.')
-  return { id: started.agentId, title: task.title, agentType: task.agentType ?? 'general-purpose', model: started.model, openedBy: '', openedAt: new Date().toISOString() }
+  return { id: started.agentId, title: task.title, ...(forkedFrom === undefined ? { agentType: agentType ?? 'general-purpose' } : { forkedFrom }), model: started.model, openedBy: '', openedAt: new Date().toISOString() }
 }
 
 export function processPayloadOf(named: ProcessFieldsName, input: unknown): HookFields {
@@ -734,6 +759,7 @@ function hookAnswerOf(name: string, named: string, answer: HookFields): HookFiel
     if (refuse !== undefined) return { permissionDecision: 'deny', permissionDecisionReason: refuse }
     return typeof answer['ask'] === 'string' ? { permissionDecision: 'ask', permissionDecisionReason: answer['ask'] } : undefined
   }
+  if (named === 'ProjectSetup') return defined({ additionalContext: note })
   if (named === 'WorktreeCreate') return defined({ worktreePath: answer['result'] })
   if (named === 'PermissionDenial') return answer['retry'] === true ? { retry: true } : undefined
   if (named === 'ToolBatch') return defined({ additionalContext: note })

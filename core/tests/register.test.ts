@@ -14,6 +14,7 @@ import { Text } from '../src/ui/elements.js'
 type Registration = {
   readonly pattern: string
   readonly hasMatcher: boolean
+  readonly matcher?: unknown
   readonly hook: (...args: never[]) => unknown
   caught?: (...args: never[]) => unknown
 }
@@ -25,7 +26,7 @@ function fakeOn() {
     const hasMatcher = hook !== undefined
     const twin = registrations.find((registration) => registration.pattern === pattern && !registration.hasMatcher)
     if (!hasMatcher && twin !== undefined) throw new Error(`on("${pattern}") is registered twice without a matcher. Register each event once, or give the second a matcher.`)
-    const registration: Registration = { pattern, hasMatcher, hook: (hasMatcher ? hook : matcherOrHook) as Registration['hook'] }
+    const registration: Registration = { pattern, hasMatcher, ...(hasMatcher ? { matcher: matcherOrHook } : {}), hook: (hasMatcher ? hook : matcherOrHook) as Registration['hook'] }
     registrations.push(registration)
     return {
       catch: (handler: (...args: never[]) => unknown) => void (registration.caught = handler),
@@ -106,12 +107,25 @@ const files = {
   }),
 }
 
-test('registerMod registers each Claude Code event once, and no permission check', () => {
-  const fake = fakeOn()
+test("only the cmod plugin registers command.describe, so Claude Code never sends a mod's worker each command it lists, hotkeys or not", () => {
+  const withHotkeys = fakeOn()
+  const cmod = fakeOn()
 
-  registerMod(fake.on, demo, {})
+  registerMod(withHotkeys.on, defineMod({ name: 'modes', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
+  registerMod(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
-  expect(fake.registrations.map((registration) => registration.pattern)).toEqual([
+  expect(withHotkeys.registrations.map((registration) => registration.pattern)).not.toContain('command.describe')
+  expect(cmod.registrations.map((registration) => registration.pattern)).toContain('command.describe')
+})
+
+test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code events once each and no permission check, and the cmod plugin 48', () => {
+  const bare = fakeOn()
+  const cmod = fakeOn()
+
+  registerMod(bare.on, defineMod({ name: 'bare', setup: () => undefined }), {})
+  registerMod(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
+
+  const everyMod = [
     'session.start',
     'classic.Setup',
     'classic.SessionStart',
@@ -146,7 +160,6 @@ test('registerMod registers each Claude Code event once, and no permission check
     'prompt.submit',
     'prompt.context',
     'command.run',
-    'command.describe',
     'session.measure',
     'skill.prompt',
     'ui.render',
@@ -155,9 +168,23 @@ test('registerMod registers each Claude Code event once, and no permission check
     'ui.close',
     'cmod.call',
     'session.compact',
-  ])
+  ]
+  expect(bare.registrations.map((registration) => registration.pattern)).toEqual(everyMod)
+  expect(cmod.registrations.map((registration) => registration.pattern)).toEqual([...everyMod, 'command.describe', 'session.append', 'session.receive', 'agent.spawn', 'prompt.attachment', 'turn.start'])
+  expect([bare.registrations.length, cmod.registrations.length]).toEqual([42, 48])
 })
 
+test("the cmod plugin's ui.render matches only the components it draws, so its redraws never reach the transcript, and a mod's matches every component", () => {
+  const notes = fakeOn()
+  const cmod = fakeOn()
+
+  registerMod(notes.on, defineMod({ name: 'notes', setup: () => undefined }), {})
+  registerMod(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
+
+  const drawing = (registrations: readonly Registration[]) => registrations.find((registration) => registration.pattern === 'ui.render')
+  expect(drawing(notes.registrations)?.hasMatcher).toBe(false)
+  expect(drawing(cmod.registrations)?.matcher).toEqual({ component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] })
+})
 test('registerPermissionCheck registers tool.check and PermissionRequest once each', () => {
   const fake = fakeOn()
 

@@ -3,6 +3,7 @@ import { boundCombos, hotkeyCommand } from '../records.js'
 import { ifMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { cmodPluginName } from './dependencies.js'
 import type { Router } from './router.js'
 import type { Failure } from './toaster.js'
 
@@ -34,6 +35,12 @@ export async function createHotkeys({
   readonly answerInput: <Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>) => Promise<Answer>
   readonly report: (failure: Failure) => void
 }): Promise<Readonly<Record<string, Hotkey>>> {
+  if (name === cmodPluginName) {
+    router.add('command.describe', async (e, next) => {
+      const described = await next(e)
+      return e.command.startsWith(hotkeyCommand(e.provider.plugin, '')) ? { ...described, isHidden: true } : described
+    })
+  }
   const entries = Object.entries(declared)
   if (entries.length === 0) return {}
   const combos = await readCombos(claude, configRoot)
@@ -46,10 +53,6 @@ export async function createHotkeys({
       (error: unknown) => report({ id: `hotkey:${hotkey}`, message: `The ${title} hotkey is not added`, error }),
     )
   }
-  router.add('command.describe', async (e, next) => {
-    const described = await next(e)
-    return commands.has(e.command) ? { ...described, isHidden: true } : described
-  })
   router.add('command.run', async (e, next) => {
     const hotkey = commands.get(e.command)
     if (hotkey === undefined) return next(e)

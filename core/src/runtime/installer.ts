@@ -1,13 +1,17 @@
-import type { Args, Frozen, RenderElement, RenderPropsOf } from 'claude-code'
+import type { RenderElement } from 'claude-code'
 import type { Step } from '../installer.js'
 import type { Mod } from '../mod.js'
 import type { Option } from '../options.js'
-import { permissionWords, secretFix } from '../records.js'
-import { Box, Button, drawWith, Input, Text } from '../ui/elements.js'
+import { isObject, permissionWords, secretFix } from '../records.js'
+import { Box, elementData, Input, Text, type Handler } from '../ui/elements.js'
+import { filledButton } from './buttons.js'
+import type { PageProps } from '../ui/panes.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { cmodPluginName, withBareRefusals } from './dependencies.js'
+import { merged, partMethods, type DrawnPart, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
 
-export const installerPaneOf = (name: string): string => `installer-${name.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 64)
+export const installPage = 'cmod:install'
 
 export type Consent = {
   readonly install: string
@@ -17,65 +21,122 @@ export type Consent = {
   readonly updates?: string | undefined
 }
 
-type Page = {
-  draw(props: Frozen<RenderPropsOf['Pane']>): RenderElement
+type Question = {
+  draw(props: PageProps<undefined>): RenderElement
   cancel(): void
 }
 
 export type Installer = {
-  draws(e: Frozen<Args<'ui.render'>>): boolean
-  draw(e: Frozen<Args<'ui.render'>>): RenderElement
-  closed(id: string): void
+  answer(method: string, input: unknown): Promise<{ readonly value: unknown }> | undefined
+  hear(shown: ShownPages): void
   consent(consent: Consent): Promise<boolean>
   options(missing: readonly (readonly [string, Option])[], save: (key: string, value: string) => Promise<string | undefined>): Promise<boolean>
   step<State extends object>(mod: Mod<State>, step: Step<State>, index: number, total: number): Promise<boolean>
   close(): Promise<void>
+  shown(): Promise<void>
+  collect(run: () => Promise<unknown>): Promise<PartsUpdate>
 }
 
-export function createInstaller(name: string, claude: () => Claude, waiting: { show(open: () => Promise<void>): void; hide(): void }): Installer {
-  const paneId = installerPaneOf(name)
-  let page: Page | undefined
-  let isOpen = false
+const keptDraws = 8
 
-  const open = async () => {
-    isOpen = true
-    await claude().ui.open({ id: paneId, title: `Install ${name}`, focus: true, holdToasts: true, closeOnEscape: true })
+export function createInstaller(name: string, claude: () => Claude, waiting: { show(open: () => Promise<void>): void; hide(): void }, nextDraw: () => number): Installer {
+  let question: Question | undefined
+  let isOpen = false
+  let isSeen = false
+  let waitingForShow: (() => void)[] = []
+  let collected: PartsUpdate[] | undefined
+  const draws = new Map<number, readonly Handler[]>()
+
+  const send = async (update: PartsUpdate) => {
+    if (collected !== undefined) return void collected.push(update)
+    await withBareRefusals(claude()).cmod.call({ to: cmodPluginName, method: partMethods.changed, input: update })
   }
 
-  const show = async <Answer>(build: (answer: (value: Answer) => void) => Omit<Page, 'cancel'>, cancelled: Answer): Promise<Answer> => {
-    page?.cancel()
+  const log = (what: string) => (error: unknown) => claude().ui.log(`${name}: ${what}: ${messageOf(error)}`, { to: 'debug' })
+
+  const open = (isAsked: boolean) => send({ requests: [{ open: installPage, focus: true }], ...(isAsked ? { isAsked: true } : {}) })
+
+  const show = async <Answer>(build: (answer: (value: Answer) => void) => Omit<Question, 'cancel'>, cancelled: Answer): Promise<Answer> => {
+    question?.cancel()
     const answer = new Promise<Answer>((resolve) => {
+      let isAnswered = false
       const done = (value: Answer) => {
-        if (page === shown) page = undefined
+        if (isAnswered) return
+        isAnswered = true
         waiting.hide()
-        resolve(value)
+        claude().clock.after(0, () => resolve(value))
       }
-      const shown: Page = { ...build(done), cancel: () => done(cancelled) }
-      page = shown
+      question = { ...build(done), cancel: () => done(cancelled) }
     })
-    waiting.show(open)
-    if (!isOpen) await open().catch((error: unknown) => {
-      waiting.hide()
-      throw error
-    })
-    claude().ui.invalidate('ui.render')
+    waiting.show(() => open(true))
+    if (isOpen) {
+      await send({ redraw: true }).catch(log('the installer did not redraw'))
+    } else {
+      isOpen = true
+      await open(false).catch((error: unknown) => {
+        isOpen = false
+        waiting.hide()
+        throw error
+      })
+    }
+    for (const resolve of waitingForShow) resolve()
+    waitingForShow = []
     return answer
   }
 
-  const frame = (title: string, body: readonly RenderElement[], actions: readonly RenderElement[]) =>
-    Box({ flexDirection: 'column', gap: 1, paddingX: 1, children: [Text({ bold: true, children: title }), ...body, Box({ gap: 3, children: actions })] })
+  const redraw = () => void send({ redraw: true }).catch(log('the installer did not redraw'))
 
-  const bullet = (text: string) => Text({ children: [Text({ color: 'claude', children: '◆ ' }), text] })
+  const actions = (...buttons: readonly RenderElement[]) => Box({ gap: 2, flexShrink: 0, children: buttons })
+
+  const dialog = (title: RenderElement, ...children: readonly RenderElement[]) => Box({ flexDirection: 'column', gap: 1, children: [title, ...children] })
+
+  const bullet = (text: string) => Box({ gap: 1, children: [Text({ dimColor: true, children: '•' }), Text({ wrap: 'wrap', children: text })] })
+
+  const group = (heading: string, items: readonly string[]) => Box({ flexDirection: 'column', children: [Text({ bold: true, children: heading }), ...items.map(bullet)] })
+
+  const draw = (columns: number, isFocused: boolean): DrawnPart => {
+    if (question === undefined && !isOpen) claude().clock.after(0, () => void send({ requests: [{ close: installPage }] }).catch(log('a leftover install page stayed open')))
+    const handlers: Handler[] = []
+    const tree = elementData(question?.draw({ params: undefined, isFocused, columns }) ?? Text({ dimColor: true, children: `${name} needs nothing from you now.` }), handlers)
+    const drawn = nextDraw()
+    draws.set(drawn, handlers)
+    for (const kept of draws.keys()) if (draws.size > keptDraws) draws.delete(kept)
+    return { draw: drawn, tree }
+  }
+
+  const collect = async (run: () => unknown): Promise<PartsUpdate> => {
+    const outer = collected
+    const mine: PartsUpdate[] = []
+    collected = mine
+    try {
+      await run()
+    } finally {
+      collected = outer
+    }
+    return merged(mine)
+  }
+
+  const press = async ({ draw: drawn, handler, args }: PartPress): Promise<PartsUpdate> => {
+    const run = draws.get(drawn)?.[handler]
+    if (run === undefined) throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`)
+    return collect(() => run(...args))
+  }
 
   return {
-    draws: (e) => e.component === 'Pane' && e.requestId === paneId,
-    draw(e) {
-      return drawWith(claude().ui.resolve(e), () => page?.draw(e.props as Frozen<RenderPropsOf['Pane']>) ?? Text({ dimColor: true, children: `${name} is installing.` }))
+    answer(method, input) {
+      if (method === partMethods.draw && isObject(input) && input['page'] === installPage) return Promise.resolve({ value: draw(Number(input['columns']), input['isFocused'] === true) })
+      if (method === partMethods.press && isObject(input) && typeof input['draw'] === 'number' && draws.has(input['draw'])) return press(input as PartPress).then((value) => ({ value }))
+      return undefined
     },
-    closed(id) {
-      if (id !== paneId) return
+    hear(shown) {
+      if (shown.open.some((each) => each.id === installPage)) {
+        isSeen = isOpen
+        return
+      }
+      if (!isSeen) return
       isOpen = false
-      page?.cancel()
+      isSeen = false
+      question?.cancel()
     },
     consent({ install, uninstall, hotkeys, permissions, updates }) {
       const changes = [
@@ -87,14 +148,12 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       return show<boolean>(
         (answer) => ({
           draw: () =>
-            frame(
-              `${name} wants to:`,
-              [
-                ...(permissions.length === 0 ? [] : [Box({ flexDirection: 'column', children: permissions.map((item) => bullet(permissionWords(item))) })]),
-                ...(changes.length === 0 ? [] : [Text({ children: permissions.length === 0 ? 'Change your computer:' : 'and change your computer:' }), Box({ flexDirection: 'column', children: changes.map(bullet) })]),
-                Text({ dimColor: true, children: 'You can turn each permission off later in Settings.' }),
-              ],
-              [Button({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) }), Button({ key: 'accept', hotkey: 'a', label: 'Accept', onPress: () => answer(true) })],
+            dialog(
+              Text({ bold: true, children: `Install ${name}?` }),
+              ...(permissions.length === 0 ? [] : [group(`${name} wants to:`, permissions.map(permissionWords))]),
+              ...(changes.length === 0 ? [] : [group(permissions.length === 0 ? `${name} wants to change your computer:` : 'and change your computer:', changes)]),
+              Text({ dimColor: true, wrap: 'wrap', children: 'You can turn each permission off later in Settings.' }),
+              actions(filledButton({ key: 'accept', hotkey: 'a', variant: 'primary', label: 'Accept', onPress: () => answer(true) }), filledButton({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) })),
             ),
         }),
         false,
@@ -106,38 +165,36 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       return show<boolean>(
         (answer) => ({
           draw: () =>
-            frame(
-              `${name} needs ${missing.length === 1 ? 'one setting' : `${missing.length} settings`}:`,
-              missing.map(([key, option]) => {
-                const label = Text({ children: [Text({ bold: true, children: option.title }), option.description === '' ? '' : Text({ dimColor: true, children: `  ${option.description}` })] })
-                if (option.type === 'secret') {
-                  return Box({
-                    flexDirection: 'column',
-                    children: [label, Text({ dimColor: true, children: `${secretFix} Then press Next.` }), Button({ key: `secret:${key}`, label: 'Open /config', onPress: () => void claude().command.run({ command: 'config' }) })],
+            dialog(
+              Text({ bold: true, children: `Set up ${name}` }),
+              Text({ children: `${name} needs ${missing.length === 1 ? 'one setting' : `${missing.length} settings`}:` }),
+              ...missing.map(([key, option]) => {
+                  const label = Box({ flexDirection: 'column', children: [Text({ bold: true, children: option.title }), ...(option.description === '' ? [] : [Text({ dimColor: true, wrap: 'wrap', children: option.description })])] })
+                  if (option.type === 'secret') {
+                    return Box({ flexDirection: 'column', children: [label, Text({ dimColor: true, wrap: 'wrap', children: `${secretFix} Then press Next.` }), filledButton({ key: `secret:${key}`, label: 'Open /config', onPress: () => void claude().command.run({ command: 'config' }) })] })
+                  }
+                  const failure = failures.get(key)
+                  const field = Input({
+                    key: `option:${key}`,
+                    label: 'Value',
+                    placeholder: option.type === 'choice' ? (option.choices ?? []).join(', ') : option.type === 'toggle' ? 'true or false' : option.type === 'list' ? 'comma-separated' : '',
+                    value: saved.get(key) ?? '',
+                    submitLabel: 'save',
+                    onSubmit: (value: string) =>
+                      void save(key, value)
+                        .then((refused) => {
+                          if (refused === undefined) {
+                            saved.set(key, value)
+                            failures.delete(key)
+                          } else failures.set(key, refused)
+                        })
+                        .catch((error: unknown) => failures.set(key, messageOf(error)))
+                        .finally(redraw),
                   })
-                }
-                const failure = failures.get(key)
-                const field = Input({
-                  key: `option:${key}`,
-                  label: 'Value',
-                  placeholder: option.type === 'choice' ? (option.choices ?? []).join(', ') : option.type === 'toggle' ? 'true or false' : option.type === 'list' ? 'comma-separated' : '',
-                  value: saved.get(key) ?? '',
-                  submitLabel: 'save',
-                  onSubmit: (value: string) =>
-                    void save(key, value)
-                      .then((refused) => {
-                        if (refused === undefined) {
-                          saved.set(key, value)
-                          failures.delete(key)
-                        } else failures.set(key, refused)
-                      })
-                      .catch((error: unknown) => failures.set(key, messageOf(error)))
-                      .finally(() => claude().ui.invalidate('ui.render')),
-                })
-                const status = failure !== undefined ? Text({ color: 'error', children: failure }) : saved.has(key) ? Text({ color: 'success', children: '✔ saved' }) : Text({ children: '' })
-                return Box({ flexDirection: 'column', children: [label, field, status] })
+                  const status = failure !== undefined ? [Text({ color: 'error', wrap: 'wrap', children: failure })] : saved.has(key) ? [Text({ color: 'success', children: '✓ saved' })] : []
+                return Box({ flexDirection: 'column', children: [label, field, ...status] })
               }),
-              [Button({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) }), Button({ key: 'next', hotkey: 'x', label: 'Next', onPress: () => answer(true) })],
+              actions(filledButton({ key: 'next', hotkey: 'x', variant: 'primary', label: 'Next', onPress: () => answer(true) }), filledButton({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) })),
             ),
         }),
         false,
@@ -152,7 +209,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
             try {
               body = step.render(mod, props)
             } catch (error) {
-              body = Text({ color: 'error', children: `The ${step.title} step could not draw: ${messageOf(error)}` })
+              body = Text({ color: 'error', wrap: 'wrap', children: `The ${step.title} step could not draw: ${messageOf(error)}` })
             }
             const next = async () => {
               try {
@@ -161,12 +218,13 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
               } catch (error) {
                 notice = { color: 'error', text: `The ${step.title} step's isDone failed: ${messageOf(error)}` }
               }
-              claude().ui.invalidate('ui.render')
+              await send({ redraw: true })
             }
-            return frame(
-              `${step.title}  (${index} of ${total})`,
-              [body, ...(notice === undefined ? [] : [Text({ color: notice.color, children: notice.text })])],
-              [Button({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) }), Button({ key: 'next', hotkey: 'x', label: index === total ? 'Finish' : 'Next', onPress: () => void next() })],
+            return dialog(
+              Text({ children: [Text({ bold: true, children: step.title }), Text({ dimColor: true, children: `  (${index} of ${total})` })] }),
+              body,
+              ...(notice === undefined ? [] : [Text({ color: notice.color, wrap: 'wrap', children: notice.text })]),
+              actions(filledButton({ key: 'next', hotkey: 'x', variant: 'primary', label: index === total ? 'Finish' : 'Next', onPress: () => void next() }), filledButton({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) })),
             )
           },
         }),
@@ -174,10 +232,14 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       )
     },
     async close() {
-      page = undefined
+      question?.cancel()
+      question = undefined
       if (!isOpen) return
       isOpen = false
-      await claude().ui.close({ id: paneId })
+      isSeen = false
+      await send({ requests: [{ close: installPage }] }).catch(log('the install page stayed open'))
     },
+    shown: () => new Promise<void>((resolve) => void waitingForShow.push(resolve)),
+    collect,
   }
 }

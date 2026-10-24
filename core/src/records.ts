@@ -60,6 +60,14 @@ export function recordPath(store: string, name: string): string {
   return `${store}/records/${checkedName(name)}.json`
 }
 
+export function programPath(store: string, program: string, version: string): string {
+  return `${store}/bin/${checkedName(program)}/${version}/${program}`
+}
+
+export function isProgramNewer(record: InstallRecord, programModifiedMs: number | undefined): boolean {
+  return record.program !== null && (programModifiedMs === undefined || programModifiedMs > Date.parse(record.installedAt))
+}
+
 export function dataFolder(store: string, name: string): string {
   return `${store}/data/${checkedName(name)}`
 }
@@ -244,6 +252,46 @@ export function pluginsChangedPath(store: string): string {
   return `${store}/plugins-changed`
 }
 
+export function storeChangedPath(store: string): string {
+  return `${store}/store-changed`
+}
+
+export function buildFailuresPath(store: string): string {
+  return `${store}/build-failures.json`
+}
+
+export function linksPath(store: string): string {
+  return `${store}/links.json`
+}
+
+export function instanceFolder(store: string, mod: string): string {
+  return `${store}/instances/${checkedName(mod)}`
+}
+
+export function instancePath(store: string, mod: string, executable: string): string {
+  return `${instanceFolder(store, mod)}/${executable}.json`
+}
+
+export type Links = { readonly marketplaces: Readonly<Record<string, string>>; readonly turnedOff: Readonly<Record<string, readonly string[]>> }
+
+export function parseLinks(value: unknown, path: string): Links {
+  if (value === undefined) return { marketplaces: {}, turnedOff: {} }
+  const isLinks = isObject(value) && isObject(value['marketplaces']) && isObject(value['turnedOff']) && Object.values(value['marketplaces']).every((folder) => typeof folder === 'string') && Object.values(value['turnedOff']).every((ids) => Array.isArray(ids) && ids.every((id) => typeof id === 'string'))
+  if (!isLinks) throw new Error(`${path} is not a map of the marketplaces cmod link added and the plugins it turned off. Delete it, then run cmod link again for each linked checkout.`)
+  return value as Links
+}
+
+export function linkedMarketplacesOf(knownMarketplaces: unknown, links: Links): [name: string, folder: string][] {
+  return Object.entries(links.marketplaces).filter(([name, folder]) => {
+    const known = isObject(knownMarketplaces) ? knownMarketplaces[name] : undefined
+    return isObject(known) && isObject(known['source']) && known['source']['source'] === 'directory' && known['source']['path'] === folder
+  })
+}
+
+export function hasLinkedMods(knownMarketplaces: unknown, links: Links): boolean {
+  return linkedMarketplacesOf(knownMarketplaces, links).length > 0
+}
+
 export function widgetsPath(store: string): string {
   return `${store}/widgets.json`
 }
@@ -263,7 +311,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '4.0.3'
+export const coreVersion = '4.1.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`

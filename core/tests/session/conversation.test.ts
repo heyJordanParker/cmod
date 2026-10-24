@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { ContextEnd, ContextStart } from '../../src/session/context/context.js'
+import { AttachedFile, attachedPathOf } from '../../src/session/context/turn/message/attached-file.js'
 import { InstructionFile } from '../../src/session/context/turn/message/instruction-file.js'
 import { instructionPathOf, Message, rowOfAppend, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
 import { Note } from '../../src/session/context/turn/message/note.js'
@@ -108,6 +109,34 @@ test('a meta row is a Note, a skill row a Skill, a nested CLAUDE.md an Instructi
   expect(messageOf(line({ type: 'user', isMeta: true, message: { role: 'user', content: 'Base directory for this skill: /skills/review\n\nReview the diff.' } }))).toMatchObject({ type: Skill, name: 'review' })
   expect(messageOf(line({ type: 'attachment', attachment: { type: 'nested_memory', path: '/work/src/CLAUDE.md', content: 'Use tabs.' } }))).toMatchObject({ type: InstructionFile, path: '/work/src/CLAUDE.md', text: 'Use tabs.', isRule: false })
   expect(messageOf(line({ type: 'system', subtype: 'informational', content: 'Model switched to haiku.' }))).toMatchObject({ type: Notice, text: 'Model switched to haiku.' })
+})
+
+test('a file Claude Code attaches by itself is an AttachedFile: its contents, a reference without them, or a change', () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Start'))
+  const messageOf = (row: Row) => conversation.add(row).flatMap((change) => (change.type === Message ? [change.message] : []))[0]
+
+  expect(messageOf(line({ type: 'attachment', attachment: { type: 'file', filename: '/work/src/total.ts', content: { type: 'text', file: { filePath: '/work/src/total.ts', content: 'export const total = 0\n' } } } }))).toMatchObject({ type: AttachedFile, path: '/work/src/total.ts', attachmentType: 'contents', text: 'export const total = 0' })
+  expect(messageOf(line({ type: 'attachment', attachment: { type: 'compact_file_reference', filename: '/work/big.log', displayPath: 'big.log' } }))).toMatchObject({ type: AttachedFile, path: '/work/big.log', attachmentType: 'reference', text: '' })
+  expect(messageOf(line({ type: 'attachment', attachment: { type: 'edited_text_file', filename: '/work/src/total.ts', snippet: '1\texport const total = 1' } }))).toMatchObject({ type: AttachedFile, path: '/work/src/total.ts', attachmentType: 'change', text: '1\texport const total = 1' })
+})
+
+test('a file Claude Code attaches as the session runs is an AttachedFile with the path its text names', () => {
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(typed('Start'))
+  const text = 'Called the Read tool with the following input: {"file_path":"/work/src/total.ts"}\nResult of calling the Read tool: 1\texport const total = 0'
+  const row = rowOfAppend({ uuid: 'a1', door: 'attachment', origin: { kind: 'engine' }, message: { type: 'attachment', name: 'file', content: [{ type: 'text', text }] } }, '2026-10-22T10:00:00Z', '/work')
+
+  expect(conversation.add(row).flatMap((change) => (change.type === Message ? [change.message] : []))).toMatchObject([{ type: AttachedFile, path: '/work/src/total.ts', attachmentType: 'contents', text }])
+})
+
+test('a file Claude Code attaches names its path in the text Claude reads', () => {
+  expect(attachedPathOf('Called the Read tool with the following input: {"file_path":"/work/src/total.ts"}\nResult of calling the Read tool: …')).toBe('/work/src/total.ts')
+  expect(attachedPathOf('Note: /work/big.log was read before the last conversation was summarized, but the contents are too large to include.')).toBe('/work/big.log')
+  expect(attachedPathOf('Note: /work/src/total.ts changed on disk since you last read it.')).toBe('/work/src/total.ts')
+  expect(attachedPathOf('Called the Read tool with the following input: {"file_path":"/work/a \\"b\\".ts","offset":2}\nResult of calling the Read tool: …')).toBe('/work/a "b".ts')
+  expect(attachedPathOf('Called the Read tool with the following input: {"file_path":"/work/a.ts", broken\nResult of calling the Read tool: …')).toBe('/work/a.ts')
+  expect(attachedPathOf('Called the Read tool with the following input: {broken\nResult of calling the Read tool: …')).toBe('')
 })
 
 test('an instruction file Claude Code adds as it runs names its path, with or without the kind of file after it', () => {

@@ -3,17 +3,19 @@ import { consentPath, coreVersion, dataFolder, grantFix, isObject, parseConsent 
 import { Message, rowOfAppend, type Row } from '../session/context/turn/message/message.js'
 import { modNote, Note } from '../session/context/turn/message/note.js'
 import { Person } from '../session/context/turn/message/sender.js'
-import { createConversation, emptyConversation, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
+import { createConversation, emptyConversation, ownerOfSpawn, tasksWithAgents, type Conversation, type ConversationState, type ContextData, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import { Session, UsageChange, type BeforeEvent, type Surface, type SessionSend, type TaskStartArgs, type ToolCallArgs } from '../session/session.js'
 import { GoalChange } from '../session/goal/goal.js'
 import { TurnEnd, TurnStart } from '../session/context/turn/turn.js'
+import { TaskStart } from '../session/goal/task.js'
 import { receivedMatcher } from '../utils/matcher.js'
+import { resolve } from '../vendor.js'
 import { ifMissing } from '../utils/paths.js'
 import { formatExit, messageOf } from '../utils/text.js'
-import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Place } from './before.js'
+import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
-import { readLines, runCmod } from './programs.js'
+import { readLines, runCmod, spawnCmod } from './programs.js'
 import type { RoutedHook, Router } from './router.js'
 import { PassedTimeout } from './deadline.js'
 import { actPermission, conversationMethods, everySession, isAct, isHeardBy, isInScope, resultOf, spawnTask, usageOf, type Act, type Listened } from './sessions.js'
@@ -30,9 +32,16 @@ type Question =
   | { readonly kind: 'act'; readonly caller: string; readonly action: Act; readonly input: unknown; readonly task?: string }
   | { readonly kind: 'before'; readonly mod: string; readonly event: BeforeEvent; readonly change: SessionChange; readonly project: string }
 
-type Relay = (Question & { readonly id: string; readonly from: string }) | { readonly kind: 'answer'; readonly id: string; readonly value?: unknown; readonly deny?: string } | { readonly kind: 'watch' } | { readonly kind: 'goal'; readonly task?: string; readonly text: string }
+type Relay =
+  | (Question & { readonly id: string; readonly from: string })
+  | { readonly kind: 'answer'; readonly id: string; readonly value?: unknown; readonly deny?: string }
+  | { readonly kind: 'watch' }
+  | { readonly kind: 'goal'; readonly task?: string; readonly text: string }
+  | { readonly kind: 'taskEnd'; readonly task: TaskData }
 
-const relayKinds: ReadonlySet<unknown> = new Set(['act', 'before', 'answer', 'watch', 'goal'] satisfies Relay['kind'][])
+const relayKinds: ReadonlySet<unknown> = new Set(['act', 'before', 'answer', 'watch', 'goal', 'taskEnd'] satisfies Relay['kind'][])
+
+const taskVariable = 'CMOD_TASK'
 
 const isRelay = (value: unknown): value is Relay => isObject(value) && relayKinds.has(value['kind'])
 
@@ -75,8 +84,12 @@ export function serveConversations({
 }): Conversations {
   const folder = dataFolder(store, cmodPluginName)
   const goals = `${folder}/goals`
+  const backgroundTasks = `${folder}/tasks`
   const watches = `${folder}/before`
+  const listeners = `${folder}/listeners`
   const heard = new Map<string, Map<string, readonly Heard[]>>()
+  const subscribed = new Map<string, Map<string, readonly Listened[]>>()
+  let savingListeners: Promise<unknown> = Promise.resolve()
   const asked = new Map<string, Asked>()
   const ownWatches = new Map<string, Watch>()
   let watchers: readonly Watcher[] = []
@@ -106,6 +119,11 @@ export function serveConversations({
   router.add('classic.Stop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) })(await next(e)))
   router.add('classic.StopFailure', async (e, next) => endTurn({ reason: 'error', failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)))
   router.add('classic.SubagentStop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) }, e.agent_id)(await next(e)))
+  router.add('classic.Stop', async (e, next) => {
+    const below = await next(e)
+    if (below.block === undefined) void answerTask().catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
+    return below
+  })
 
   const json = async <Value>(args: readonly string[]): Promise<Value> => JSON.parse(await runCmod(claude, [...args, '--json', '--project', project()], await claude.session.id())) as Value
 
@@ -154,7 +172,7 @@ export function serveConversations({
     follower?.stop()
     follower = undefined
     if (args.length === 0) return
-    const stream = claude.process.spawn({ argv: ['cmod', 'history', 'follow', ...args, '--json', '--project', project()], env: { CLAUDE_CODE_SESSION_ID: session } })
+    const stream = spawnCmod(claude, ['history', 'follow', ...args, '--json', '--project', project()], session)
     const started = { sessions: wanted, stop: () => void stream.return(undefined as never) }
     follower = started
     void readLines(stream, (line) => {
@@ -241,13 +259,39 @@ export function serveConversations({
     await Promise.all([...told].map((id) => post(id, { kind: 'watch' }).catch((error: unknown) => claude.ui.log(`cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`, { to: 'debug' }))))
   }
 
+  const hear = (caller: string, id: string, list: readonly Listened[]) => {
+    const sessions = heard.get(caller) ?? new Map<string, readonly Heard[]>()
+    sessions.set(id, list.map(({ event, matcher }) => ({ event, matcher: matcher === undefined ? undefined : receivedMatcher(matcher) })))
+    heard.set(caller, sessions)
+    const lists = subscribed.get(caller) ?? new Map<string, readonly Listened[]>()
+    lists.set(id, list)
+    subscribed.set(caller, lists)
+  }
+
+  const saveListeners = (isEnding = false) => {
+    const at = session
+    const kept = isEnding ? {} : Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)]))
+    const next = savingListeners.then(() => (at === '' ? undefined : claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(kept))))
+    savingListeners = next.catch((error: unknown) => claude.ui.log(`cmod: saving the mods' listeners failed: ${messageOf(error)}`, { to: 'debug' }))
+    return next
+  }
+
+  const restoreListeners = async () => {
+    const kept = JSON.parse(await claude.fs.read(`${listeners}/${session}.json`).catch(ifMissing('{}'))) as Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>>
+    for (const [caller, lists] of Object.entries(kept)) if (!subscribed.has(caller)) for (const [id, list] of Object.entries(lists)) hear(caller, id, list)
+  }
+
   const readWatchers = async () => {
     const files = await claude.fs.list(watches).catch(ifMissing([]))
     const found: Watcher[] = []
     for (const file of files) {
       const from = file.name.replace(/\.json$/, '')
-      if (from === session || !file.name.endsWith('.json')) continue
+      if (!file.name.endsWith('.json')) continue
       const list = JSON.parse(await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing('[]'))) as readonly Watch[]
+      if (from === session) {
+        for (const watch of list) if (!ownWatches.has(`${watch.mod}\n${watch.target}`)) ownWatches.set(`${watch.mod}\n${watch.target}`, watch)
+        continue
+      }
       found.push(...list.filter((watch) => watch.target === session || (watch.target === everySession && watch.project === project())).map((watch) => ({ ...watch, from })))
     }
     watchers = found
@@ -299,6 +343,26 @@ export function serveConversations({
     }
   }
 
+  const wants = async (event: BeforeEvent) => {
+    await Promise.all([starting, watching])
+    return deciders(event).length > 0
+  }
+
+  const decide = (): Decide => {
+    let endsAt: Promise<number> | undefined
+    return (event, change) =>
+      foldBefore(
+        event,
+        change,
+        deciders(event).map((watcher) => async (latest: SessionChange) => {
+          if (watcher.from === session) return askHere(watcher.mod, event, latest)
+          endsAt ??= claude.clock.now().then((now) => now + awayFoldMs)
+          return askAway(watcher, event, latest, await endsAt)
+        }),
+        (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error),
+      )
+  }
+
   installBefore({
     claude,
     router,
@@ -307,24 +371,8 @@ export function serveConversations({
         await starting
         return place()
       },
-      wants: async (event) => {
-        await Promise.all([starting, watching])
-        return deciders(event).length > 0
-      },
-      fold: () => {
-        let endsAt: Promise<number> | undefined
-        return (event, change) =>
-          foldBefore(
-            event,
-            change,
-            deciders(event).map((watcher) => async (latest: SessionChange) => {
-              if (watcher.from === session) return askHere(watcher.mod, event, latest)
-              endsAt ??= claude.clock.now().then((now) => now + awayFoldMs)
-              return askAway(watcher, event, latest, await endsAt)
-            }),
-            (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error),
-          )
-      },
+      wants,
+      fold: decide,
     },
   })
 
@@ -345,8 +393,12 @@ export function serveConversations({
             },
             (error: unknown) => report('state', `Starts session ${id} without its earlier turns`, error),
           )
-    follow()
+    const restored = restoreListeners()
+      .catch((error: unknown) => report('listeners', "Could not read back the mods' listeners of this session", error))
+      .then(follow)
+    starting = Promise.all([starting, restored]).then(() => undefined)
     reloadWatchers()
+    if (subscribed.size > 0) void Promise.all([previous === '' ? undefined : claude.fs.write(`${listeners}/${previous}.json`, '{}'), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
     if (ownWatches.size === 0) return
     void Promise.all([previous === '' ? undefined : claude.fs.write(`${watches}/${previous}.json`, '[]'), publishWatches()]).catch((error: unknown) => report('before', 'Kept its before listeners on the session from before', error))
   }
@@ -375,6 +427,7 @@ export function serveConversations({
   })
   router.add('classic.SessionEnd', async (e, next) => {
     if (ownWatches.size > 0) await publishWatches(true).catch((error: unknown) => report('before', 'Left its before listeners registered', error))
+    if (subscribed.size > 0) await saveListeners(true).catch((error: unknown) => report('follow', 'Left its listeners registered', error))
     return next(e)
   })
 
@@ -407,8 +460,8 @@ export function serveConversations({
     const spawned = await next(e)
     if (spawned.deny !== undefined || spawned.agentId === undefined) return spawned
     const id = spawned.agentId
-    const opened: TaskData = { id, title: e.description, agentType: e.subagentType, model: spawned.model, openedBy: e.tool_use_id, openedAt: new Date().toISOString(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
     await starting
+    const opened: TaskData = { id, title: e.description, ...ownerOfSpawn(e.subagentType, session), model: spawned.model, openedBy: e.tool_use_id, openedAt: new Date().toISOString(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
     dispatch(session, conversation.startTask(opened))
     const waiting = waitingRows.get(id) ?? []
     waitingRows.delete(id)
@@ -445,6 +498,11 @@ export function serveConversations({
       changeGoal(relay.task, relay.text)
       return
     }
+    if (relay.kind === 'taskEnd') {
+      await starting
+      dispatch(session, conversation.endTask(relay.task, relay.task.closedAt ?? new Date().toISOString()))
+      return
+    }
     const answered = async (run: () => Promise<unknown>) => {
       try {
         await post(relay.from, { kind: 'answer', id: relay.id, value: (await run()) ?? null })
@@ -477,6 +535,9 @@ export function serveConversations({
       return null
     }
     if (action === 'startTask') return spawnTask(claude, input as TaskStartArgs)
+    if (action === 'fork') return spawnTask(claude, input as TaskStartArgs, session)
+    if (action === 'startBackgroundTask') return startBackground(input as TaskStartArgs)
+    if (action === 'clone') return startBackground(input as TaskStartArgs, session)
     const { name, input: toolInput } = input as ToolCallArgs
     return resultOf(place(), { name, input: toolInput, cwd: await claude.session.cwd() }, await claude.tool.call({ ...toolInput, tool: name } as never))
   }
@@ -501,6 +562,48 @@ export function serveConversations({
     const sent = await claude.session.send({ to: { agentId: task }, text: type === Note ? modNote(caller, text) : text })
     if (sent.isDelivered !== true) throw ended(task)
     return null
+  }
+
+  const startBackground = async (task: TaskStartArgs, forkedFrom?: string): Promise<TaskData> => {
+    if (task.title.trim() === '') throw new Error('a task needs a title.')
+    if (task.name !== undefined) throw new Error('a background task takes no name.')
+    const fresh: Partial<TaskStartArgs> = forkedFrom === undefined ? task : {}
+    const asked: TaskData = { id: '', title: task.title, ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(fresh.agentType === undefined ? {} : { agentType: fresh.agentType }), ...(fresh.model === undefined ? {} : { model: fresh.model }), openedBy: '', openedAt: new Date().toISOString(), isBackground: true }
+    const answer = (await wants(TaskStart)) ? await decide()(TaskStart, { type: TaskStart, task: { ...asked, context: conversation.state.context } }) : undefined
+    if (answer?.refuse !== undefined) throw new Error(`a beforeTaskStart listener refused the task: ${answer.refuse}`)
+    const owner = forkedFrom === undefined ? (answer?.owner ?? {}) : {}
+    const folder = owner.cwd ?? fresh.cwd
+    const here = await claude.session.cwd()
+    const args = [
+      'task',
+      'start',
+      '--title',
+      answer?.title ?? task.title,
+      ...(forkedFrom === undefined ? [] : ['--clone']),
+      ...textArg('--agent', owner.agentType ?? fresh.agentType),
+      ...textArg('--model', owner.model ?? fresh.model),
+      '--cwd',
+      folder === undefined ? here : resolve(here, folder),
+      '--json',
+      '--',
+      answer?.prompt ?? task.prompt,
+    ]
+    const started = JSON.parse(await runCmod(claude, args, session)) as TaskData
+    dispatch(session, conversation.startTask(started))
+    return started
+  }
+
+  const answerTask = async () => {
+    const { env } = await claude.settings.read()
+    const asked = isObject(env) ? env[taskVariable] : undefined
+    if (typeof asked !== 'string') return
+    const answered = `cmod:task-answered:${session}`
+    if ((await claude.store.get(answered)) === true) return
+    await claude.store.set(answered, true)
+    const { session: from, ...task } = JSON.parse(asked) as TaskData & { readonly session: string }
+    const ended: TaskData = { ...task, id: session, closedAt: new Date().toISOString() }
+    await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended))
+    await post(from, { kind: 'taskEnd', task: ended }).catch((error: unknown) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: 'debug' }))
   }
 
   const actElsewhere = async (caller: string, target: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
@@ -531,12 +634,14 @@ export function serveConversations({
     Object.values(conversation.state.tasks).map((task) => ({
       id: task.id,
       title: task.title,
-      agentType: task.agentType,
+      ...(task.agentType === undefined ? {} : { agentType: task.agentType }),
       ...(task.model === undefined ? {} : { model: task.model }),
       openedBy: task.openedBy,
       openedAt: task.openedAt,
       ...(task.closedAt === undefined ? {} : { closedAt: task.closedAt }),
       ...(task.parent === undefined ? {} : { parent: task.parent }),
+      ...(task.forkedFrom === undefined ? {} : { forkedFrom: task.forkedFrom }),
+      ...(task.isBackground === true ? { isBackground: true as const } : {}),
     }))
 
   const liveContext = (task: unknown): ContextData[] => {
@@ -600,7 +705,9 @@ export function serveConversations({
       if (id !== session) return saved
       await starting
       const kept = liveTasks().filter((task) => isNested || task.parent === request['task'])
-      return merged(saved, kept, (task) => task.id)
+      const running = await claude.agent.list().catch((error: unknown) => (claude.ui.log(`cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`, { to: 'debug' }), []))
+      const background = saved.flatMap(({ id, status }) => (status === undefined ? [] : [{ id, status }]))
+      return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background])
     },
     async [conversationMethods.goal](request) {
       const id = String(request['session'])
@@ -629,10 +736,9 @@ export function serveConversations({
       if (caller === undefined) throw new Error('cmod hears no caller for this subscription.')
       const id = String(request['session'])
       const list = Array.isArray(request['subscriptions']) ? (request['subscriptions'] as readonly Listened[]) : []
-      const sessions = heard.get(caller) ?? new Map<string, readonly Heard[]>()
-      sessions.set(id, list.map(({ event, matcher }) => ({ event, matcher: matcher === undefined ? undefined : receivedMatcher(matcher) })))
-      heard.set(caller, sessions)
+      hear(caller, id, list)
       follow()
+      await saveListeners()
       return null
     },
     async [conversationMethods.watchBefore](request, caller) {

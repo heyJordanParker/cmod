@@ -33,7 +33,12 @@ A mod never asks the person to type a command. When a toast, a page, or a pane n
 - `Markdown`, with `MarkdownProps`, draws markdown text, as Claude Code draws a reply.
 - `Input`, with `InputProps`, draws a text input.
 - `Select`, with `SelectProps`, draws a choice of options.
-- `Image`, with `ImageProps`, draws an image, with `alt` text.
+- `Image`, with `ImageProps`, draws an image, with `alt` text. Only the terminal draws it.
+- `Raster`, with `RasterProps`, draws a grid of terminal cells, each a glyph with its colors. Only the terminal draws it.
+- `Svg`, with `SvgProps`, draws an SVG drawing, with `alt` text. The desktop and phone apps draw it, and the terminal does not.
+- `Client`, with `ClientProps`, draws a region the mod's own surface module draws and handles input for, named by `module`, a string literal path such as `'./board.tsx'`. It draws only in a pane or a style. A page or widget that draws it shows `The <title> page could not draw` with `Client draws only in panes and styles.` under it.
+
+Claude Code refuses a whole drawing that holds an element its app does not draw, and draws its own instead. A style reads `surface` to pick what to draw, and a pane reads it from its props.
 
 Write them as JSX in a `.tsx` file. The template's `tsconfig.json` sets `jsx: react` with `jsxFactory: h` and `jsxFragmentFactory: Fragment`. Claude Code declares `h` and `Fragment` as globals, and `testMod` supplies them in tests. Never declare, import, or name anything `h` or `Fragment` in a file that writes JSX. A component is a function that returns a `RenderElement`:
 
@@ -60,7 +65,7 @@ An element built outside a render, at module load or in a hook, holds its props 
 `ui/components.js` exports controls built from the elements and Claude Code's theme colors, so they follow the person's theme and look the same in every mod. Each is a component like the ones a mod writes: a function of props, used in a render.
 
 ```ts
-Tabs(props: { tabs: readonly { key: string; label: string }[]; selected: string; onSelect(key: string): void; children? })
+Tabs(props: { tabs: readonly { key: string; label: string; hotkey?: string }[]; selected: string; onSelect(key: string): void; children? })
 Split(props: { children: readonly RenderElement[] })
 Panel(props: { title: string; children? })
 Toggle(props: { label: string; checked: boolean; onChange(checked: boolean): void })
@@ -71,8 +76,8 @@ Pagination(props: { page: number; pages: number; onPage(page: number): void })
 Progress(props: { value: number; width?: number })
 ```
 
-- `Tabs` draws a row of tabs over `children`. The selected tab's number is in the accent color and its label bold and underlined. Each other tab is a `Button` whose hotkey is its number, so a part that holds the keyboard switches tabs by number, Tab, or a click. A hotkey is one digit, so only the first nine tabs have a number.
-- `Split` lays its children side by side in equal widths. `Panel` frames one part of a page or pane in a rounded border with a bold title.
+- `Tabs` draws a row of tabs over `children`. The selected tab's label is bold and underlined. Each other tab is a `Button`, so a part that holds the keyboard switches tabs by Tab and Enter or a click. A tab given a `hotkey`, one digit or one lowercase letter, draws it before its label, as `o: Open`, and that key switches to it. Leave the Sidebar's digits to the Sidebar: inside a page, a tab's hotkey that matches one replaces it.
+- `Split` lays its children side by side in equal widths. `Panel` frames one part of a page or pane in a rounded border with its bold title in the top border, as `╭─ Changed files ──╮`, grows to fill the room its parent gives it, and is never narrower than its title.
 - `Toggle` draws `[x] label` or `[ ] label` as a `Button`. Enter or a click calls `onChange` with the other value.
 - `Tooltip` shows `text` in an inverted card above its children while the pointer rests on them. The card opens upward, because Claude Code paints a card over the rows drawn before it and under the rows drawn after it. It has no border, so a one-line card needs one free row above its children. The pointer alone opens it, so put nothing only a tooltip says.
 - `Help` draws a `?` that shows `text` the same way. A press of `?` keeps the card open until the next press, so the keyboard reaches it too. Keep `isOpen` in `mod.state`.
@@ -83,7 +88,7 @@ Progress(props: { value: number; width?: number })
 
 ## The Sidebar and its pages
 
-The Sidebar is one pane the cmod plugin draws beside the conversation for every mod. Its tabs are the Dashboard, the pages mods opened, and Settings. The person shows or hides it with `meta+0`, switches tabs with `0` for the Dashboard, `1` to `8` for the pages, and `9` for Settings, and closes a page with the `×` on its tab. They change both combos in Settings, under cmod, Hotkeys.
+The Sidebar is one pane the cmod plugin draws beside the conversation for every mod. Its tabs are the Dashboard, the pages mods opened, and Settings. A mod that asks the person to install it, to set an option, or to finish a step opens its install page there, the `Install <mod>` tab ([install-steps.md](install-steps.md#consent)). The person shows or hides it with `meta+0`, switches tabs with `0` for the Dashboard, `1` to `8` for the pages, and `9` for Settings, and closes a page with the `×` on its tab. They change both combos in Settings, under cmod, Hotkeys.
 
 A page is a part of a mod that draws in the Sidebar. Put each page in its own file in `src/pages/`:
 
@@ -132,7 +137,7 @@ type Page<Params = undefined> = {
 - `toggle` closes an open page and opens a closed one. `close` takes its tab away, and the Sidebar hides once no page is left.
 - `isOpen` is true while the page has a tab, `isShown` while its tab is the one on screen, and `isFocused` while it has the keyboard.
 - `scrollTo` brings an element the page drew with that `key` into view, or the page's start or end.
-- `props.columns` is the width of the Sidebar.
+- `props.columns` is the width the page draws in. The Sidebar draws the page in a panel titled with the mod's name, under its tab bar and above its key bar, so `columns` is the Sidebar's width less 6: its padding of one column on each side, and the panel's border and padding.
 - A page opened from what the person did, such as a slash command they typed, a hotkey, or a `Button` they pressed, shows at any terminal width. A page opened from anything else, such as `setup`, a timer, or a listener, shows only on a terminal 144 columns wide. Below that it waits until the person opens the Sidebar.
 - A page draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects, because the cmod plugin draws it. A `Button`'s `onPress` runs in the mod.
 - A `render` that throws draws nothing, and cmod shows the error toast `The <title> page could not draw` once, until the page draws again.
@@ -187,7 +192,7 @@ type PaneInit<State, Params = undefined> = {
 - `columns` and `rows` ask for a size. A number must be a whole number above 0, or `mod.panes.add` throws. A function reads the state and returns the size, or `undefined` for Claude Code's default. When the state changes the size, cmod resizes an open pane.
 - `closeOnEscape` closes the pane when the person presses Escape while it holds the keyboard. Left out, Escape gives the keyboard back to the prompt and the pane stays.
 - `holdToasts` holds every toast back while the pane is shown, the toasts of other plugins and of Claude Code included. Use it for a pane the person answers and closes, never for one that stays open.
-- `render` draws the pane's body. `props` holds `params`, `title`, `isFocused`, `bodyColumns`, `placement` (`'dock'` or `'inline'`), `scroll`, and `view`, which transcript is on screen beside the pane.
+- `render` draws the pane's body. `props` holds `params`, `surface`, the app that draws it, `title`, `isFocused`, `bodyColumns`, `placement` (`'dock'` or `'inline'`), `scroll`, and `view`, which transcript is on screen beside the pane.
 - `onScroll` runs after this pane's window moved. `onClose` runs after the pane closed, by the person or by `close()`, and `e.origin.kind` is `'person'` or `'plugin'`. A handler that throws shows the error toast `The <title> pane's <handler> threw`.
 - `open` asks Claude Code to show the pane, and `isOpen` turns true once Claude Code places it. A pane opened from what the person did shows at any width, and one opened from anything else only at 144 columns, or 110 for a pane the person opened before.
 - Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give each pane its own id.`
@@ -241,6 +246,7 @@ type WidgetInit<State> = {
   readonly id: string
   readonly title: string
   readonly areas: readonly [Area, ...Area[]]
+  readonly place?: { readonly side?: 'left' | 'right'; readonly size?: 'fit' | 'fill' }
   render(mod: Mod<State>, context: WidgetContext): RenderElement | undefined
 }
 
@@ -260,7 +266,10 @@ type Widget = { readonly id: string; readonly area: Area | undefined; remove(): 
 - `Dashboard` draws on the Sidebar's Dashboard tab.
 
 - `id` is 1 to 64 letters, digits, `_`, or `-`, unique in the mod. `title` names the widget in Settings, under cmod, Widgets.
-- `areas` lists where the person may place the widget. A new widget first draws in the first row of its first area, on the left. `area` on the returned `Widget` is where the person placed it.
+- `areas` lists where the person may place the widget. A new widget first draws in the first row of its first area. `area` on the returned `Widget` is where the person placed it.
+- `place.side` is the side of that row a new widget lands on: `'left'`, the default, or `'right'`.
+- `place.size` is how wide the widget draws. `'fit'`, the default, keeps the widget's own width and never shrinks. `'fill'` gives up width when its line runs short, so the `fit` widgets beside it stay whole.
+- A `fill` widget draws its text with `wrap: 'truncate-end'`, so the text ends in `…` where its width runs out. Text that wraps breaks into lines instead.
 - `render` returns the widget's elements, or `undefined` to draw nothing now. `columns` is the width of the row it draws in.
 - In `TurnEnd`, `context.turn` is the [turn](session.md#turn) that closed, so a widget there reads its answer, failure, or usage.
 - A widget draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects. A `Button`'s `onPress` runs in the mod.
@@ -279,11 +288,32 @@ export const promptsWidget: WidgetInit<{ session: { prompts: number } }> = {
 }
 ```
 
+This mod places a path on the left of the row below the prompt, and its usage, branch, time, and date on the right. The path and the usage are `fill` widgets, so they give up width when the row runs short, and the branch, time, and date always keep their full text.
+
+```tsx
+import { BelowPrompt, defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+
+export const status = defineMod({
+  name: 'status',
+  state: { session: { path: '', usage: '', branch: '', time: '', date: '' } },
+  setup(mod) {
+    mod.widgets.add({ id: 'path', title: 'Path', areas: [BelowPrompt], place: { size: 'fill' }, render: (current) => <Text wrap="truncate-end">{current.state.session.path}</Text> })
+    mod.widgets.add({ id: 'usage', title: 'Usage', areas: [BelowPrompt], place: { side: 'right', size: 'fill' }, render: (current) => <Text wrap="truncate-end">{current.state.session.usage}</Text> })
+    mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt], place: { side: 'right' }, render: (current) => <Text>{current.state.session.branch}</Text> })
+    mod.widgets.add({ id: 'time', title: 'Time', areas: [BelowPrompt], place: { side: 'right' }, render: (current) => <Text>{current.state.session.time}</Text> })
+    mod.widgets.add({ id: 'date', title: 'Date', areas: [BelowPrompt], place: { side: 'right' }, render: (current) => <Text>{current.state.session.date}</Text> })
+  },
+})
+```
+
 ### Where the person places widgets
 
 The person arranges every mod's widgets in Settings, under cmod, Widgets. They pick a widget, then move it with `h`, `j`, `k`, and `l`, or the arrow buttons, and hide or show it with `x`.
 
 - Each area holds rows, and each row has a left side and a right side.
+- A row stays one line. Its `fill` widgets shorten first, and a row too narrow even for its `fit` widgets ends at its right edge, so the person moves a widget to another row in Settings.
+- A widget the person moved stays where they put it, whatever its `place.side` says.
 - Moving a widget down from the last row gives it a row of its own, and moving it down again, or up from the first row, takes it to the next area it can draw in.
 - A hidden widget keeps its place and draws nothing.
 - Claude Code's own hint and mode labels, below the prompt, show there too. The person can hide them, and never move them.
@@ -307,7 +337,7 @@ The rows a style changes:
 - `Working`: the spinner line while Claude works.
 - `TurnEnd`: the line that closes a turn.
 
-`render` gets the mod and `StyleProps<K>`: the props Claude Code draws that row with, plus `Default`.
+`render` gets the mod and `StyleProps<K>`: the props Claude Code draws that row with, plus `surface`, the app that draws it (`'terminal'`, `'desktop'`, `'mobile'`, or `'vscode'`), `columns`, how wide it is, `id`, which row it is, the same id on every draw of that row, and `Default`. A markdown block's `id` is its reply's, and a block outside a reply has none.
 
 - `Default` draws what Claude Code, and the styles of other mods, would draw. Pass it props to change what it draws, such as `<Default word="Baked" />`. Return `<Default />` to change nothing.
 - A style adds to what it wraps. In `Working`, drawing `<Default />` and a line under it keeps the lines of Claude Code and other mods.
@@ -352,7 +382,9 @@ Each kind of markdown block of a reply is a kind of its own. `ui/markdown.js` ex
 - `ThematicBreak`: a `---` line.
 - `HtmlBlock`: an HTML block, with `value`.
 
-Every block's props hold `text`, its plain text, one line per list item, table row, or quoted line, and `source`, its markdown. `Default` draws the block as Claude Code would, and `<Default source="…" />` draws other markdown in its place. A markdown style draws in Claude's replies and in every `Markdown` element of the mod's pages and panes. While a reply streams in, Claude Code draws a block that is not finished yet, and the mod draws it once it is.
+Every block's props hold `text`, its plain text, one line per list item, table row, or quoted line, and `source`, its markdown. `Default` draws the block as Claude Code would, and `<Default source="…" />` draws other markdown in its place. While a reply streams in, Claude Code draws a block that is not finished yet, and the mod draws it once it is.
+
+A markdown style draws wherever markdown shows: in Claude's replies and in every `Markdown` element any mod or cmod draws, in panes, pages, widgets, the Dashboard, Settings, and changelogs. A `Markdown` element goes through the styles of the mod that draws it first, then through each other mod's, in the order the mods added their first markdown style. A mod that removes its last markdown style and adds one again moves to the end. Another mod's style shows as soon as that mod has drawn the block, and Claude Code's drawing shows until then.
 
 ```tsx
 import type { RenderElement } from 'claude-code'

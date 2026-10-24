@@ -1,21 +1,22 @@
-import type { ElementTable, RenderElement } from 'claude-code'
-import { isObject, widgetsPath } from '../records.js'
+import type { ElementTable, MarkdownProps, RenderElement } from 'claude-code'
+import { isObject, storeChangedPath, widgetsPath } from '../records.js'
 import type { TurnData } from '../session/conversation.js'
 import { AbovePrompt, areas, BelowPrompt, TurnEnd, Working, type Area } from '../ui/areas.js'
 import { Box, drawWith } from '../ui/elements.js'
+import type { StyledAt } from '../ui/styles.js'
 import { ifMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
-import { partMethods, type PartsUpdate, type WidgetDeclaration } from './ui.js'
+import { partMethods, styledAt, viewportColumns, type PartsUpdate, type WidgetDeclaration } from './ui.js'
 
 export type WidgetRow = { readonly left: readonly string[]; readonly right: readonly string[] }
 
 export type WidgetLayout = { readonly areas: Readonly<Record<Area, readonly WidgetRow[]>>; readonly hidden: readonly string[] }
 
-export type PlacedWidget = { readonly key: string; readonly mod: string; readonly title: string; readonly areas: readonly Area[] }
+export type PlacedWidget = { readonly key: string; readonly mod: string; readonly title: string; readonly areas: readonly Area[] } & Pick<WidgetDeclaration, 'place'>
 
 export type Move = 'up' | 'down' | 'left' | 'right'
 
@@ -32,7 +33,8 @@ const promptIndent = 4
 
 const transcriptIndent = 2
 
-const terminalColumns = 80
+const widgetSizes = { fit: { flexShrink: 0 }, fill: { flexGrow: 1, flexShrink: 1, minWidth: 0 } } as const
+
 
 const separator = ''
 
@@ -44,7 +46,7 @@ export type Widgets = {
   reload(): Promise<void>
   recheck(): Promise<void>
   rows(area: Area, columns: number): RenderElement[]
-  draw(area: Area, table: ElementTable, columns: number, turn?: TurnData): Promise<RenderElement[]>
+  draw(area: Area, table: ElementTable, at: StyledAt, turn?: TurnData): Promise<RenderElement[]>
 }
 
 export function layoutOf(value: unknown): WidgetLayout {
@@ -99,7 +101,9 @@ function declarationsOf(input: unknown): WidgetDeclaration[] {
   const listed = isObject(input) && Array.isArray(input['widgets']) ? (input['widgets'] as unknown[]) : []
   return listed.filter(isObject).flatMap((each) => {
     const known = Array.isArray(each['areas']) ? (each['areas'] as unknown[]).filter((area): area is Area => (areas as readonly unknown[]).includes(area)) : []
-    return typeof each['id'] === 'string' && typeof each['title'] === 'string' && known.length > 0 ? [{ id: each['id'], title: each['title'], areas: known }] : []
+    const { side, size }: Record<string, unknown> = isObject(each['place']) ? each['place'] : {}
+    const place: NonNullable<WidgetDeclaration['place']> = { ...(side === 'left' || side === 'right' ? { side } : {}), ...(size === 'fit' || size === 'fill' ? { size } : {}) }
+    return typeof each['id'] === 'string' && typeof each['title'] === 'string' && known.length > 0 ? [{ id: each['id'], title: each['title'], areas: known, place }] : []
   })
 }
 
@@ -110,6 +114,7 @@ export function serveWidgets({
   report,
   turnClosedBy,
   parts,
+  markdownIn,
 }: {
   readonly claude: Claude
   readonly router: Router
@@ -117,6 +122,7 @@ export function serveWidgets({
   readonly report: (id: string, message: string, error: unknown) => void
   readonly turnClosedBy: (rowId: string) => TurnData | undefined
   readonly parts: DrawnParts
+  readonly markdownIn: (table: ElementTable, at: StyledAt) => ((props: MarkdownProps) => RenderElement) | undefined
 }): Widgets {
   const path = widgetsPath(store)
   const declared = new Map<string, readonly WidgetDeclaration[]>()
@@ -136,7 +142,7 @@ export function serveWidgets({
 
   const redraw = () => claude.ui.invalidate('ui.render')
 
-  const placed = (): PlacedWidget[] => [...builtInWidgets, ...[...declared].flatMap(([mod, list]) => list.map(({ id, title, areas: listed }) => ({ key: `${mod}/${id}`, mod, title, areas: listed })))]
+  const placed = (): PlacedWidget[] => [...builtInWidgets, ...[...declared].flatMap(([mod, list]) => list.map(({ id, title, areas: listed, place }) => ({ key: `${mod}/${id}`, mod, title, areas: listed, ...(place === undefined ? {} : { place }) })))]
 
   const change = (edit: (current: WidgetLayout) => WidgetLayout) => {
     saving = saving
@@ -148,6 +154,7 @@ export function serveWidgets({
         if (next !== current) {
           const kept = isObject(file) ? file : {}
           await claude.fs.write(path, `${JSON.stringify({ ...kept, ...next, areas: { ...(isObject(kept['areas']) ? kept['areas'] : {}), ...next.areas } }, null, 2)}\n`)
+          await claude.fs.write(storeChangedPath(store), '')
           stored = next
         }
         place()
@@ -164,9 +171,11 @@ export function serveWidgets({
   const withNewWidgets = (current: WidgetLayout) =>
     placed()
       .filter(({ key, mod }) => mod !== 'claude' && placedIn(current, key) === undefined && !placedKeys.has(key))
-      .reduce((next, { key, areas: [area = AbovePrompt] }) => {
+      .reduce((next, { key, areas: [area = AbovePrompt], place }) => {
         const [first, ...rest] = next.areas[area]
-        return { ...next, areas: { ...next.areas, [area]: [{ ...first, left: [...(first?.left ?? []), key], right: first?.right ?? [] }, ...rest] } }
+        const row = { ...first, left: first?.left ?? [], right: first?.right ?? [] }
+        const side = place?.side ?? 'left'
+        return { ...next, areas: { ...next.areas, [area]: [{ ...row, [side]: [...row[side], key] }, ...rest] } }
       }, current)
 
   const ask = async (mod: string) => {
@@ -215,7 +224,9 @@ export function serveWidgets({
 
   const elementFor = (key: string, area: Area, columns: number, turn: TurnData | undefined): RenderElement | undefined => {
     const widget = widgetOf(key)
-    return widget === undefined ? undefined : parts.element(widget.mod, cacheKey(key, area, columns, turn), `${key}:`, nameOf(widget), `widget:${key}`)
+    if (widget === undefined) return undefined
+    const element = parts.element(widget.mod, cacheKey(key, area, columns, turn), `${key}:`, nameOf(widget), `widget:${key}`)
+    return element === undefined ? undefined : Box({ ...widgetSizes[widget.place?.size ?? 'fit'], children: element })
   }
 
   const isHidden = (key: string) => layout.hidden.includes(key)
@@ -227,19 +238,20 @@ export function serveWidgets({
       const side = (keys: readonly string[]) => shown(keys).map((key) => elementFor(key, area, columns, turn)).filter((each) => each !== undefined)
       const left = side(row.left)
       const right = side(row.right)
-      return left.length + right.length === 0 ? [] : [Box({ justifyContent: 'space-between', width: columns, children: [Box({ gap: 2, children: left }), Box({ gap: 2, children: right })] })]
+      const group = (keys: readonly string[], children: readonly RenderElement[]) => Box({ flexShrink: shown(keys).some((key) => widgetOf(key)?.place?.size === 'fill') ? 1 : 0, minWidth: 0, columnGap: 2, children })
+      return left.length + right.length === 0 ? [] : [Box({ justifyContent: 'space-between', width: columns, columnGap: 2, children: [group(row.left, left), group(row.right, right)] })]
     })
 
   const keysIn = (area: Area) => layout.areas[area].flatMap((row) => shown([...row.left, ...row.right]))
 
-  const draw = async (area: Area, table: ElementTable, columns: number, turn?: TurnData): Promise<RenderElement[]> => {
-    await Promise.all(keysIn(area).map((key) => fill(key, area, columns, turn)))
-    return drawWith(table, () => rowsNow(area, columns, turn))
+  const draw = async (area: Area, table: ElementTable, at: StyledAt, turn?: TurnData): Promise<RenderElement[]> => {
+    await Promise.all(keysIn(area).map((key) => fill(key, area, at.columns, turn)))
+    return drawWith(table, () => rowsNow(area, at.columns, turn), markdownIn(table, at))
   }
 
   const rows = (area: Area, columns: number): RenderElement[] => {
     const started = keysIn(area).flatMap((key) => fill(key, area, columns, undefined) ?? [])
-    if (started.length > 0) void Promise.all(started).then(() => claude.ui.invalidate('ui.render'))
+    if (started.length > 0) void Promise.all(started).then(redraw)
     return rowsNow(area, columns, undefined)
   }
 
@@ -249,17 +261,17 @@ export function serveWidgets({
 
   router.add('ui.render', async (e, next) => {
     const table = claude.ui.resolve(e)
-    const columns = (e.viewport?.columns ?? terminalColumns) - transcriptIndent
-    if (e.component === 'AbovePrompt') return e.props.hasSurvey ? next(e) : below(table, await next(e), await draw(AbovePrompt, table, e.props.bodyColumns))
+    const inTranscript = styledAt(e, viewportColumns(e) - transcriptIndent)
+    if (e.component === 'AbovePrompt') return e.props.hasSurvey ? next(e) : below(table, await next(e), await draw(AbovePrompt, table, styledAt(e, e.props.bodyColumns)))
     if (e.component === 'PromptHint') {
-      const added = await draw(BelowPrompt, table, (e.viewport?.columns ?? terminalColumns) - promptIndent)
+      const added = await draw(BelowPrompt, table, styledAt(e, viewportColumns(e) - promptIndent))
       return isHidden(claudeHint) ? column(table, added) : below(table, await next(e), added)
     }
     if (e.component === 'SessionMode') return isHidden(claudeModes) ? column(table, []) : next(e)
-    if (e.component === 'Spinner') return below(table, await next(e), await draw(Working, table, columns))
+    if (e.component === 'Spinner') return below(table, await next(e), await draw(Working, table, inTranscript))
     if (e.component === 'TurnDuration') {
       const turn = turnClosedBy(e.requestId)
-      return below(table, await next(e), turn === undefined ? [] : await draw(TurnEnd, table, columns, turn))
+      return below(table, await next(e), turn === undefined ? [] : await draw(TurnEnd, table, inTranscript, turn))
     }
     return next(e)
   })
@@ -272,7 +284,7 @@ export function serveWidgets({
         const listed = declarationsOf(listing)
         const isNewList = JSON.stringify(listed) !== JSON.stringify(declared.get(mod) ?? [])
         declared.set(mod, listed)
-        if (isNewList) place()
+        if (isNewList) return place()
       }
       claude.ui.invalidate('ui.render')
     },

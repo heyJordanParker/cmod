@@ -7,7 +7,7 @@ import { version as coreVersion } from '@cmodjs/core/package.json'
 import { bundleDefines, isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { validatePlugin } from '../claude.js'
+import { cmodPluginEntry, validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
 import { cmodFloor, cmodRangeOf, readDeclared, readPlugin } from '../plugin.js'
 import { capture, run as runCommand } from '../process.js'
@@ -52,12 +52,6 @@ const leftOut = ['cli', '.github', '.claude']
 const alwaysReleased = ['.claude-plugin', 'package.json', 'tsconfig.json', 'README*', 'LICENSE*', 'CHANGELOG.md']
 
 const releaseBranch = 'release'
-
-const cmodPluginEntry = {
-  name: 'cmod',
-  description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes',
-  source: { source: 'github', repo: 'heyJordanParker/cmod', ref: releaseBranch },
-}
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { 'dry-run': { type: 'boolean', default: false } } })

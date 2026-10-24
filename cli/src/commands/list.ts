@@ -41,7 +41,7 @@ export async function run(argv: string[]): Promise<number> {
     const isCmodPlugin = installed.name === 'cmod' && existsSync(`${root}/.claude-plugin/plugin.json`)
     const mod = isCmodPlugin || (await usesCmod(root, installed.name)) ? await readPlugin(root) : undefined
     if (mod !== undefined) shown.add(mod.name)
-    const origin = installed.scope === 'session' ? `linked from ${root}, ` : ''
+    const origin = installed.isLinked ? `linked from ${root}, ` : ''
     const errors = installed.errors.join('; ')
     const state = !installed.enabled ? `disabled${errors === '' ? '' : `: ${errors}`}` : errors !== '' ? `Claude Code turned it off: ${errors}` : mod === undefined ? 'enabled' : await setupState(mod)
     rows.push({ name: installed.id, version: mod?.version ?? installed.version, state: `${origin}${state}`, unsatisfied: installed.unsatisfied })

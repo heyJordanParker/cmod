@@ -49,6 +49,10 @@ export async function checkGrant(grants: Grants, call: string, item: string | un
   if (!isCovered(grants.granted(), item, grants.home)) throw new PermissionRefused(refusal(grants, call, item))
 }
 
+export async function checkRun(grants: Grants, call: 'process.run' | 'process.spawn', argv: readonly string[]): Promise<void> {
+  await checkGrant(grants, `${call}(${argv.join(' ')})`, `run:${programOf(argv)}`)
+}
+
 export async function checkWrite(grants: Grants, call: string, path: string): Promise<void> {
   await checkGrant(grants, call, writeItem(grants, path))
 }
@@ -63,11 +67,11 @@ export function checkingGrants(claude: Claude, grants: Grants): Claude {
     ...claude,
     process: {
       async run(argv, init) {
-        await gate(`process.run(${argv.join(' ')})`, `run:${programOf(argv)}`)
+        await checkRun(grants, 'process.run', argv)
         return claude.process.run(argv, init)
       },
       spawn(request) {
-        const started = gate(`process.spawn(${request.argv.join(' ')})`, `run:${programOf(request.argv)}`).then(() => claude.process.spawn(request))
+        const started = checkRun(grants, 'process.spawn', request.argv).then(() => claude.process.spawn(request))
         return spawned(started)
       },
     },

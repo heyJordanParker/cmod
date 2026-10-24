@@ -30,9 +30,11 @@ type Entry = {
   readonly options: ToastOptions
   readonly actions: readonly Action[]
   readonly hides?: string
+  at: Date
   isOpen: boolean
   reporting?: Reporting | undefined
   trying?: string | RenderElement | undefined
+  spinsFrom?: number | undefined
   timer: Timer | undefined
 }
 
@@ -46,6 +48,8 @@ const defaultDuration = 4000
 const visibleToasts = 3
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 const spinnerMs = 100
+const spinFrames = 10_000 / spinnerMs
+const still = '…'
 const icons: Record<Exclude<ToastType, 'loading'>, { readonly glyph: string; readonly color?: string }> = {
   default: { glyph: ' ' },
   success: { glyph: '✓', color: 'success' },
@@ -71,15 +75,20 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   let showsAll = false
   let bandId: string | undefined
 
+  const isLoading = (entry: Entry) => entry.type === 'loading' || entry.trying !== undefined
+
+  const isSpinning = (entry: Entry) => entry.spinsFrom !== undefined && frame - entry.spinsFrom < spinFrames
+
   const changed = () => {
-    const isLoading = [...entries.values()].some((entry) => entry.type === 'loading' || entry.trying !== undefined)
-    if (isLoading && spinning === undefined) {
+    for (const entry of entries.values()) entry.spinsFrom = isLoading(entry) ? (entry.spinsFrom ?? frame) : undefined
+    const spins = [...entries.values()].some(isSpinning)
+    if (spins && spinning === undefined) {
       spinning = claude.clock.every(spinnerMs, () => {
         frame += 1
-        claude.ui.invalidate('ui.render')
+        changed()
       })
     }
-    if (!isLoading && spinning !== undefined) {
+    if (!spins && spinning !== undefined) {
       spinning.cancel()
       spinning = undefined
     }
@@ -121,7 +130,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     }
     if (previous !== undefined) disarm(previous)
     const reporting = hides !== undefined && previous?.hides === hides ? previous.reporting : undefined
-    const entry: Entry = { id, type, message, options, actions, ...(hides === undefined ? {} : { hides }), isOpen: previous?.isOpen ?? false, reporting, timer: undefined }
+    const entry: Entry = { id, type, message, options, actions, ...(hides === undefined ? {} : { hides }), at: new Date(), isOpen: previous?.isOpen ?? false, reporting, timer: undefined }
     if (type === 'error' && previous?.message !== message) claude.ui.log(`${name}: ${message}${typeof options.description === 'string' ? `: ${options.description}` : ''}`, { to: 'debug' })
     entries.set(id, entry)
     changed()
@@ -181,14 +190,19 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     if (hidden.get(id) === hides) return id
     hidden.delete(id)
     const shown = entries.get(id)
-    if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) return id
+    if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) {
+      const previous = clockTime(shown.at)
+      shown.at = new Date()
+      if (clockTime(shown.at) !== previous) changed()
+      return id
+    }
     const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
     const details = async () => {
       const modVersion = await claude.fs
         .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
         .then((text) => String((JSON.parse(text) as { version?: unknown }).version))
         .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
-      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
+      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${(entries.get(id)?.at ?? new Date()).toISOString()}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
     }
     const startReporting = async () => {
       const shown = entries.get(id)
@@ -233,13 +247,13 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   const row = (entry: Entry): RenderElement => {
     const { description } = entry.options
     const isText = typeof description === 'string'
-    const icon = entry.type === 'loading' || entry.trying !== undefined ? { glyph: spinner[frame % spinner.length] as string, color: 'claude' } : icons[entry.type]
+    const icon = entry.type === 'loading' || entry.trying !== undefined ? { glyph: isSpinning(entry) ? (spinner[frame % spinner.length] as string) : still, color: 'claude' } : icons[entry.type]
     const message = isText ? Button({ plain: true, key: `toast:${entry.id}:open`, label: entry.message, onPress: toggle(entry) }) : Text({ children: entry.message })
     const details = !isText ? description : Text({ dimColor: true, wrap: entry.isOpen ? 'wrap' : 'truncate-end', children: entry.isOpen ? description : firstLine(description) })
     const fixed = (child: RenderElement) => Box({ flexShrink: 0, children: child })
     const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? '✕' : 'Hide', onPress: () => hide(entry) })
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? 'action' : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }))
-    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, close] })
+    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, close, Text({ dimColor: true, children: clockTime(entry.at) })].map(fixed) })
     const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: 'Trying again:' }), typeof entry.trying === 'string' ? Text({ dimColor: true, wrap: 'truncate-end', children: entry.trying }) : entry.trying] })
     const text = details === undefined ? [message] : [message, trying ?? details]
     const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting)
@@ -361,4 +375,8 @@ function reportPrompt(name: string, contact: Contact | undefined, details: strin
         ? `Report it as an issue on https://github.com/${contact.repository}.`
         : `Email it to ${contact.address}.`
   return `The ${name} mod failed. Report it to its author. ${where} First check whether it is reported already, and add to that report instead of filing a new one. Show me the report before you post it.\n\n${details}`
+}
+
+function clockTime(at: Date): string {
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
 }

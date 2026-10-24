@@ -1,6 +1,6 @@
 import type { ElementName, ElementTable, Elements, MarkdownProps, RenderElement } from 'claude-code'
 
-type Terminal = Elements['terminal']
+type Terminal = Elements['terminal'] & Elements['desktop']
 
 type CompletedTable = Record<ElementName, (props: object) => RenderElement>
 
@@ -53,6 +53,7 @@ export function elementData(value: unknown, handlers: Handler[]): unknown {
   if (typeof value !== 'object' || value === null) return value
   if (unbuilt in value) {
     const { name, props } = (value as Unbuilt)[unbuilt]
+    if (name === 'Client') throw new Error('Client draws only in panes and styles.')
     return { [elementKey]: name, props: elementData(props, handlers) }
   }
   if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
@@ -83,5 +84,8 @@ export const Markdown = element('Markdown')
 export const Input = element('Input')
 export const Select = element('Select')
 export const Image = element('Image')
+export const Svg = element('Svg')
+export const Raster = element('Raster')
+export const Client = element('Client')
 
-const constructors = { Box, Text, Button, Link, Code, Markdown, Input, Select, Image }
+const constructors = { Box, Text, Button, Link, Code, Markdown, Input, Select, Image, Svg, Raster }

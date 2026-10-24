@@ -48,32 +48,36 @@ const kit = defineMod({
   },
 })
 
-test('Tabs draws the active tab as text and the others as hotkey buttons that switch to them', async () => {
+test('Tabs draws the active tab as text and the others as buttons that switch to them, with no hotkeys of its own', async () => {
   const tested = testMod(kit)
-  expect((await tested.shown.pane.lines())[0]).toBe('1: Controls   2: Split')
+  expect((await tested.shown.pane.lines())[0]).toBe('Controls   Split')
 
   await tested.shown.pane.press('Split')
 
   expect(tested.state.session.tab).toBe('split')
-  expect(await tested.shown.pane.lines()).toEqual(['1: Controls   2: Split', '', ' Changed files  Preview', ' src/mod.tsx    12 lines'])
+  expect(await tested.shown.pane.lines()).toEqual(['Controls   Split', '', '╭─ Changed files ─╮ ╭─ Preview ─╮', '│ src/mod.tsx     │ │ 12 lines  │', '╰─────────────────╯ ╰───────────╯'])
 })
 
-test('Tabs numbers only the first nine tabs, because a hotkey is one digit', async () => {
-  const many = [...'abcdefghij'].map((letter, index) => ({ key: `t${index + 1}`, label: letter }))
+test('a tab given a hotkey draws it before its label and keeps it on the button', async () => {
+  const keyed = [
+    { key: 'open', label: 'Open', hotkey: 'o' },
+    { key: 'done', label: 'Done', hotkey: 'd' },
+    { key: 'all', label: 'All' },
+  ]
   const tested = testMod(
     defineMod({
-      name: 'many',
-      state: { session: { tab: 't10' } },
+      name: 'keyed',
+      state: { session: { tab: 'open' } },
       async setup(mod) {
-        await mod.panes.add({ id: 'many', title: 'Many', render: ({ state: { session } }) => <Tabs tabs={many} selected={session.tab} onSelect={(tab) => void (session.tab = tab)} /> }).open()
+        await mod.panes.add({ id: 'keyed', title: 'Keyed', render: ({ state: { session } }) => <Tabs tabs={keyed} selected={session.tab} onSelect={(tab) => void (session.tab = tab)} /> }).open()
       },
     }),
   )
 
-  expect((await tested.shown.pane.lines())[0]).toBe('1: a   2: b   3: c   4: d   5: e   6: f   7: g   8: h   9: i   j')
-  await tested.shown.pane.press('a')
-  expect((await tested.shown.pane.lines())[0]).toBe('1: a   2: b   3: c   4: d   5: e   6: f   7: g   8: h   9: i   j')
-  expect(tested.state.session.tab).toBe('t1')
+  expect((await tested.shown.pane.lines())[0]).toBe('o: Open   d: Done   All')
+  await tested.shown.pane.press('Done')
+  expect((await tested.shown.pane.lines())[0]).toBe('o: Open   d: Done   All')
+  expect(tested.state.session.tab).toBe('done')
 })
 
 test('Toggle flips its checked state on a press', async () => {

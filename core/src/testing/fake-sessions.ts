@@ -1,4 +1,5 @@
 import { isObject } from '../records.js'
+import { AttachedFile, attachmentNameOf, type AttachmentType } from '../session/context/turn/message/attached-file.js'
 import { InstructionFile } from '../session/context/turn/message/instruction-file.js'
 import { Message, messagesOf, noFiles, searchText, skillPrefix, type Row } from '../session/context/turn/message/message.js'
 import { Note } from '../session/context/turn/message/note.js'
@@ -7,12 +8,12 @@ import { Prompt } from '../session/context/turn/message/prompt.js'
 import { Reply } from '../session/context/turn/message/reply.js'
 import { Mod, Person, Schedule, type Sender } from '../session/context/turn/message/sender.js'
 import { GoalChange } from '../session/goal/goal.js'
-import { Task } from '../session/goal/task.js'
+import { Task, TaskStart } from '../session/goal/task.js'
 import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
-import { createConversation, emptyConversation, searchLimit, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
-import type { Place } from '../runtime/before.js'
+import { createConversation, emptyConversation, searchLimit, tasksWithAgents, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
+import type { Decide, Place } from '../runtime/before.js'
 import type { Claude } from '../runtime/claude.js'
 import { conversationMethods, everySession, isHeardBy, resultOf, type Listened } from '../runtime/sessions.js'
 import { receivedMatcher } from '../utils/matcher.js'
@@ -26,6 +27,7 @@ export type MessageDraft =
   | { readonly type: typeof ToolResult; readonly callId: string; readonly output: string; readonly isError?: boolean }
   | { readonly type: typeof Skill; readonly name: string; readonly text: string }
   | { readonly type: typeof InstructionFile; readonly path: string; readonly text: string }
+  | { readonly type: typeof AttachedFile; readonly path: string; readonly attachmentType: AttachmentType; readonly text: string }
   | { readonly type: typeof Notice; readonly text: string }
 
 export type FakeSession = Partial<Omit<SessionData, 'id'>> & {
@@ -45,6 +47,8 @@ type Kept = {
 
 type Heard = { readonly event: Listened['event']; readonly matcher: unknown }
 
+export type StartedTask = { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string; readonly isBackground?: true; readonly forkedFrom?: string }
+
 
 export type FakeSessions = {
   answer(caller: string, method: string, input: unknown): unknown
@@ -52,15 +56,15 @@ export type FakeSessions = {
   draft(draft: MessageDraft, task?: string): Message
   place(): Place
   wants(mod: string, event: string): boolean
-  endTurn(ending?: TurnEnding): void
+  endTurn(ending?: TurnEnding, task?: string): void
   compact(): void
-  startTask(task: { readonly title: string; readonly agentType?: string; readonly model?: string; readonly openedBy?: string; readonly parent?: string }): string
+  startTask(task: StartedTask): string
   start(id: string): void
   lastTurn(): TurnData | undefined
   readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string }[]
 }
 
-export function fakeSessions({ project, cwd, given, push, callTool }: { readonly project: () => string; readonly cwd: () => string; readonly given: readonly FakeSession[]; readonly push: (mod: string, session: string, change: SessionChange) => void; readonly callTool: Claude['tool']['call'] }): FakeSessions {
+export function fakeSessions({ project, cwd, given, push, callTool, listAgents, decide }: { readonly project: () => string; readonly cwd: () => string; readonly given: readonly FakeSession[]; readonly push: (mod: string, session: string, change: SessionChange) => void; readonly callTool: Claude['tool']['call']; readonly listAgents: Claude['agent']['list']; readonly decide: Decide }): FakeSessions {
   const kept = new Map<string, Kept>()
   const heard = new Map<string, Map<string, readonly Heard[]>>()
   const watches = new Map<string, Map<string, readonly string[]>>()
@@ -96,6 +100,14 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
     return session.messages.slice(before)
   }
 
+  const openTask = (session: Kept, { title, agentType, model, openedBy = '', parent, isBackground, forkedFrom }: StartedTask): TaskData => {
+    const owner = forkedFrom !== undefined ? { forkedFrom } : isBackground === true ? (agentType === undefined ? {} : { agentType }) : { agentType: agentType ?? 'general-purpose' }
+    const data: TaskData = { id: `task-${(ids += 1)}`, title, ...owner, openedBy, openedAt: now(), ...(model === undefined ? {} : { model }), ...(parent === undefined ? {} : { parent }), ...(isBackground === true ? { isBackground } : {}) }
+    if (isBackground === true) keep({ id: data.id, title, project: session.data.project, cwd: session.data.cwd, model: model ?? session.data.model, startedAt: data.openedAt, lastAt: data.openedAt, isRunning: true, ...owner })
+    record(session, session.conversation.startTask(data))
+    return data
+  }
+
   for (const each of given) {
     const session = keep({ title: '', project: project(), cwd: project(), model: 'test-model', startedAt: now(), lastAt: '', isRunning: false, ...each })
     for (const draft of each.messages ?? []) add(session, draft)
@@ -114,6 +126,8 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
     const { session, context, contextOpenedAt, turn, tasks, taskTurns, openCalls } = currentSession().conversation.state
     return { session, context, contextOpenedAt, ...(turn === undefined ? {} : { turn }), tasks, taskTurns, ...(openCalls === undefined ? {} : { openCalls }) }
   }
+
+  const wantsBefore = (mod: string, event: string) => [current, everySession].some((target) => (watches.get(mod)?.get(target) ?? []).includes(event))
 
   const taskOf = (session: Kept, id: string) => {
     const task = session.tasks.get(id)
@@ -172,7 +186,11 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
       const task = taskOf(session, request['task'])
       return [{ number: session.conversation.state.tasks[task.id]?.context ?? 1, openedAt: task.openedAt, ...(task.closedAt === undefined ? {} : { closedAt: task.closedAt }) }]
     },
-    [conversationMethods.tasks]: (request) => [...sessionOf(String(request['session'])).tasks.values()].filter((task) => request['all'] === true || task.parent === request['task']),
+    async [conversationMethods.tasks](request) {
+      const session = String(request['session'])
+      const tasks = [...sessionOf(session).tasks.values()].filter((task) => request['all'] === true || task.parent === request['task'])
+      return session === current ? tasksWithAgents(tasks, await listAgents()) : tasks
+    },
     [conversationMethods.goal](request) {
       const session = sessionOf(String(request['session']))
       const task = request['task']
@@ -196,7 +214,7 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
       watches.set(caller, targets)
       return null
     },
-    async [conversationMethods.act](request) {
+    async [conversationMethods.act](request, caller) {
       const session = sessionOf(String(request['session']))
       const action = String(request['action'])
       const input = isObject(request['input']) ? request['input'] : {}
@@ -214,11 +232,24 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
         sent.push({ session: session.data.id, ...(task === undefined ? {} : { task }), type: String(input['type']), text: String(input['text']), ...(typeof input['as'] === 'string' ? { as: input['as'] } : {}) })
         return null
       }
-      if (action === 'startTask') {
-        const id = `task-${(ids += 1)}`
-        const data: TaskData = { id, title: typeof input['title'] === 'string' ? input['title'] : '', agentType: typeof input['agentType'] === 'string' ? input['agentType'] : 'general-purpose', openedBy: '', openedAt: now(), ...(typeof input['model'] === 'string' ? { model: input['model'] } : {}) }
-        record(session, session.conversation.startTask(data))
-        return data
+      const text = (key: string) => (typeof input[key] === 'string' ? input[key] : undefined)
+      const title = text('title') ?? ''
+      if (action === 'startTask' || action === 'fork' || action === 'startBackgroundTask' || action === 'clone') {
+        if (title.trim() === '') throw new Error('a task needs a title.')
+        const isClone = action === 'clone'
+        const isBackground = isClone || action === 'startBackgroundTask'
+        const forkedFrom = isClone || action === 'fork' ? session.data.id : undefined
+        const agentType = forkedFrom === undefined ? text('agentType') : undefined
+        const model = forkedFrom === undefined ? text('model') : undefined
+        const fresh = { ...(agentType === undefined ? {} : { agentType }), ...(model === undefined ? {} : { model }), ...(forkedFrom === undefined ? {} : { forkedFrom }) }
+        if (!isBackground) return openTask(session, { title, ...fresh })
+        if (input['name'] !== undefined) throw new Error('a background task takes no name.')
+        const asked: TaskData = { id: '', title, ...fresh, openedBy: '', openedAt: now(), isBackground: true }
+        const answer = wantsBefore(caller, TaskStart) ? await decide(TaskStart, { type: TaskStart, task: { ...asked, context: session.conversation.state.context } }) : undefined
+        if (answer?.refuse !== undefined) throw new Error(`a beforeTaskStart listener refused the task: ${answer.refuse}`)
+        const owner = forkedFrom === undefined ? (answer?.owner ?? {}) : {}
+        const chosen = { ...(owner.agentType === undefined ? {} : { agentType: owner.agentType }), ...(owner.model === undefined ? {} : { model: owner.model }) }
+        return openTask(session, { ...fresh, ...chosen, title: answer?.title ?? title, isBackground: true })
       }
       if (session.data.id === current) return resultOf(place(), { name: String(input['name']), input: input['input'] as Readonly<Record<string, unknown>>, cwd: project() }, await callTool({ ...input['input'] as object, tool: String(input['name']) } as never))
       return { id: '', type: ToolResult, at: now(), session: session.data.id, context: session.conversation.state.context, callId: '', name: '', input: {}, cwd: project(), files: noFiles, output: '', isError: false }
@@ -242,7 +273,10 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
         return { deny: messageOf(error) }
       }
     },
-    add: (draft, task) => add(currentSession(), draft, task),
+    add(draft, task) {
+      const session = currentSession()
+      return task !== undefined && session.tasks.get(task)?.isBackground === true ? add(sessionOf(task), draft) : add(session, draft, task)
+    },
     draft(draft, task) {
       const where = place()
       const [unplaced] = messagesOf(rowOf(draft, `message-${(ids += 1)}`, now(), cwd()), task !== undefined)
@@ -252,21 +286,23 @@ export function fakeSessions({ project, cwd, given, push, callTool }: { readonly
       return { ...unplaced, ...call, session: where.session, context: task === undefined ? where.context : (where.tasks[task]?.context ?? where.context), ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) }
     },
     place,
-    wants: (mod, event) => [current, everySession].some((target) => (watches.get(mod)?.get(target) ?? []).includes(event)),
-    endTurn(ending = {}) {
+    wants: wantsBefore,
+    endTurn(ending = {}, task) {
       const session = currentSession()
-      record(session, session.conversation.endTurn(now(), { reason: 'answer', ...ending }))
+      const background = task === undefined ? undefined : session.tasks.get(task)
+      if (background?.isBackground !== true) {
+        record(session, session.conversation.endTurn(now(), { reason: 'answer', ...ending }, task))
+        return
+      }
+      const owner = sessionOf(background.id)
+      record(owner, owner.conversation.endTurn(now(), { reason: 'answer', ...ending }))
+      record(session, session.conversation.endTask(background, now()))
     },
     compact() {
       const session = currentSession()
       record(session, session.conversation.add({ id: `compact-${(ids += 1)}`, at: now(), type: 'system', name: 'compact_boundary', isMeta: false, isSummary: false, content: [] }))
     },
-    startTask({ title, agentType = 'general-purpose', model, openedBy = '', parent }) {
-      const session = currentSession()
-      const id = `task-${(ids += 1)}`
-      record(session, session.conversation.startTask({ id, title, agentType, openedBy, openedAt: now(), ...(model === undefined ? {} : { model }), ...(parent === undefined ? {} : { parent }) }))
-      return id
-    },
+    startTask: (task) => openTask(currentSession(), task).id,
     start(id) {
       current = id
       const session = kept.get(id) ?? keep({ id, title: '', project: project(), cwd: project(), model: 'test-model', startedAt: now(), lastAt: now(), isRunning: true })
@@ -289,5 +325,6 @@ function rowOf(draft: MessageDraft, id: string, at: string, cwd: string): Row {
   if (draft.type === ToolResult) return { ...base, type: 'user', content: [{ type: 'tool_result', tool_use_id: draft.callId, content: draft.output, ...(draft.isError === true ? { is_error: true } : {}) }] }
   if (draft.type === Skill) return { ...base, type: 'user', isMeta: true, content: text(`${skillPrefix} /skills/${draft.name}\n\n${draft.text}`) }
   if (draft.type === InstructionFile) return { ...base, type: 'attachment', name: 'nested_memory', content: text(draft.text), path: draft.path }
+  if (draft.type === AttachedFile) return { ...base, type: 'attachment', name: attachmentNameOf(draft.attachmentType), content: text(draft.text), path: draft.path }
   return { ...base, type: 'system', name: 'informational', content: text(draft.text) }
 }

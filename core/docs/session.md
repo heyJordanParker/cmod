@@ -79,7 +79,9 @@ type Session = {
   onMessage(matcher?, listener, options?): Subscription      // and every on method below
   beforePrompt(matcher?, listener, options?): Subscription   // and every before method below
   send(message: { type: Prompt | Note; text: string; as?: Person | Session }): Promise<void>
-  startTask(task: { prompt: string; title: string; agentType?: string; model?: string; name?: string; cwd?: string }): Promise<Task>
+  startTask(task: { prompt: string; title: string; agentType?: string; model?: string; name?: string; cwd?: string; isBackground?: boolean }): Promise<Task>
+  fork(task: { prompt: string; title: string }): Promise<Task>
+  clone(task: { prompt: string; title: string }): Promise<Task>
   callTool(call: { name: string; input: Record<string, unknown> }): Promise<ToolResult>
   usage(): Promise<Usage>
   surfaces(): Promise<Surface[]>
@@ -90,7 +92,7 @@ type Session = {
 - `project` is the project the session works in, and `cwd` is its working folder. For the current session both follow `/cd`, and `cwd` follows a `cd` in a Bash or PowerShell call.
 - `agentType` is the agent definition the session runs, such as `Explore` for a task's owner, or the agent a session started with `claude --agent` runs. A plain session has none.
 - `model` is the model the session runs on. `startedAt` and `lastAt` are ISO times.
-- `forkedFrom` names the session a `/branch` or a fork copied it from.
+- `forkedFrom` names the session a `/branch` or a fork copied it from, and for a task's owner the session whose `fork` or `clone` started it.
 - `isRunning` is true while the session is open in a Claude Code window, and for a task's owner while its task runs.
 
 ### Read a record
@@ -137,7 +139,7 @@ A turn or a context that has ended takes no listener: its methods throw `<mod>: 
 | Method | The listener gets | It happens in |
 | --- | --- | --- |
 | `onMessage` | Every new message. | Its turn |
-| `onPrompt`, `onNote`, `onReply`, `onToolCall`, `onToolResult`, `onSkill`, `onInstructionFile`, `onNotice` | Each new message of that type. | Its turn |
+| `onPrompt`, `onNote`, `onReply`, `onToolCall`, `onToolResult`, `onSkill`, `onInstructionFile`, `onAttachedFile`, `onNotice` | Each new message of that type. | Its turn |
 | `onTurnStart`, `onTurnEnd` | The `Turn` that started or ended. | Its context |
 | `onContextStart`, `onContextEnd` | The `Context` that started or ended. | The session |
 | `onTaskStart`, `onTaskEnd` | The `Task` that started or ended. | Its parent task, or the goal |
@@ -184,11 +186,12 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 | `beforeNote` | `{ text }` | A note any mod or Claude Code adds |
 | `beforeSkill` | `{ text }` | A Skill as Claude Code loads it |
 | `beforeInstructionFile` | `{ text }` or `{ refuse }` | A `CLAUDE.md` file as Claude Code reads it. `refuse` leaves it out |
+| `beforeAttachedFile` | `{ text }` or `{ refuse }` | A file Claude Code attaches by itself, such as one the person mentions with `@` or one it puts back after a compaction. `text` replaces what Claude reads, and `refuse` leaves it out |
 | `beforeReply`, `beforeNotice` | `{ text }` | The text the transcript keeps |
 | `beforeToolResult` | `{ output?, isError?, note? }` | The result, after the tool ran. Here `output` is what the tool answered Claude Code, such as `{ stdout, stderr }` for Bash, and an `output` answer replaces it in the same shape, `note` adds text beside it, and `isError: true` makes Claude read it as a failure, with the note as the reason. A failed call takes only a note |
-| `beforeToolCall` | `{ input }`, `{ result }`, or `{ refuse }` | A tool call. `result` answers it without running the tool |
-| `beforeTaskStart` | `{ owner: { model } }` or `{ refuse }` | A task about to start, and the model its owner runs |
-| `beforeTurnEnd` | `{ refuse }` | The agent about to stop. `refuse` sends it on with the reason. On `task.owner`, it is the task about to hand back its answer |
+| `beforeToolCall` | `{ input?, note? }`, `{ result, note? }`, or `{ refuse }` | A tool call. `result` answers it without running the tool, and `note` reaches Claude with the call's result |
+| `beforeTaskStart` | `{ prompt?, title?, owner?: { agentType?, model?, cwd? }, isAsync? }` or `{ refuse }` | A task about to start. `prompt` and `title` replace what Claude wrote, `owner` picks the agent that does it, its model, and its folder, and `isAsync` runs a subagent while Claude goes on. A background task takes `prompt`, `title`, `owner`, and `refuse`, a fork and a clone take `prompt`, `title`, and `refuse`, and a workflow's agent takes only `refuse` |
+| `beforeTurnEnd` | `{ note }` or `{ refuse }` | The agent about to stop. `refuse` tells it it may not stop yet, and it reads the reason as an error. `note` gives it new information, which it reads at once and keeps working. On `task.owner`, it is the task about to hand back its answer |
 | `beforeContextEnd` | `{ refuse }` | A compaction about to start. `refuse` keeps the context |
 
 ```ts
@@ -197,7 +200,7 @@ sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ o
 sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { refuse: 'The tests fail. Fix them before you stop.' }))
 ```
 
-An answer that changes text needs the `prompt` permission, a `beforeToolCall` answer needs `tools`, and a `beforeTaskStart` answer needs `tasks`. Without it the answer changes nothing, and the toast `The <method> listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
+An answer that changes text needs the `prompt` permission, a `beforeToolCall` answer needs `tools`, and a `beforeTaskStart` answer needs `tasks`. A `note` always needs `prompt`, so a `beforeToolCall` answer with both `input` and `note` needs both. Without it the answer changes nothing, and the toast `The <method> listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
 Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>…</tracer_mod>` for the mod `tracer`. Every note Claude received becomes a `Note` whose `from` is `{ type: 'mod', name }`, so `onNote({ from: { type: 'mod', name: 'tracer' } })` hears each note of tracer's that Claude got, and never one Claude Code dropped.
 
@@ -207,10 +210,10 @@ Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>�
 
 | Method | Claude Code's moment | The payload | The listener can answer |
 | --- | --- | --- | --- |
-| `beforeProjectSetup`, `onProjectSetup` | `claude --init-only` sets up the project | `ProjectSetup`: `trigger` | nothing: Claude Code waits for it |
+| `beforeProjectSetup`, `onProjectSetup` | `claude --init-only` sets up the project | `ProjectSetup`: `trigger` | `{ note }`, which Claude reads in the session it sets up. Claude Code waits for the answer |
 | `beforeSessionStart`, `onSessionStart` | a startup, resume, `/clear`, or fork, and for `beforeSessionStart` a compaction | `SessionStartAsked`, `SessionStarted`: `source`, `model?`, `title?`, `idleSeconds?`, `contextTokenCount?`, `isCacheWarm?`, `cacheWriteUsd?` | `{ note?, title?, reloadSkills?, firstPrompt? }` |
 | `onSessionEnd` | the session ends | `SessionEnded`: `reason` | |
-| `beforeModelChange`, `onModelChange` | `/model` switches the model | `ModelChange`: `model`, `previous`, `requested?`, `source`, `contextTokenCount`, `isCacheWarm`, `cacheTtl`, `cacheWriteUsd`, `pricing?` | `{ ask }` or `{ refuse }` |
+| `beforeModelChange`, `onModelChange` | `/model` switches the model | `ModelChange`: `model`, `previous`, `requested?`, `source`, `contextTokenCount`, `isCacheWarm`, `cacheTtl`, `cacheWriteUsd`, `pricing?` | `{ ask }`, `{ refuse }`, or `{ note }`, which Claude reads right after the switch |
 | `onCwdChange` | the working folder moves | `CwdChange`: `previous`, and `cwd` is the new folder | |
 | `onDirectoryAdd` | `/add-dir` adds a folder | `DirectoryAdd`: `directory`, `source` | |
 | `beforeWorktreeCreate`, `onWorktreeCreate`, `onWorktreeRemove` | a worktree is made or removed | `Worktree`: `name?`, `path?` | `{ result }`, the worktree's path |
@@ -226,7 +229,7 @@ Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>�
 
 The four `PermissionCheck` and `PermissionRequest` methods work only in a mod whose `hooks/register.ts` calls `registerPermissionCheck` ([mod.md](mod.md#register-the-mod-with-claude-code)). Without it they throw where they are called.
 
-At a compaction, Claude reads the `note` at the start of the window the compaction opens, and `title`, `reloadSkills`, and `firstPrompt` apply to the whole session. The payload carries `model` for the main agent and `contextTokenCount` as the compaction left it. `sessions.current.beforeSessionStart` hears the main agent's compactions. `sessions.current.goal.beforeSessionStart` also hears every subagent's, with the subagent in `task`, and its note reaches that subagent's window:
+At a compaction, Claude reads the `note` at the start of the window the compaction opens, and the person never sees it, and `title`, `reloadSkills`, and `firstPrompt` apply to the whole session. The payload carries `model` for the main agent and `contextTokenCount` as the compaction left it. `sessions.current.beforeSessionStart` hears the main agent's compactions. `sessions.current.goal.beforeSessionStart` also hears every subagent's, with the subagent in `task`, and its note reaches that subagent's window. A subagent's compaction takes only `note`:
 
 ```ts
 sessions.current.goal.beforeSessionStart({ source: 'compact' }, ({ task }) => ({ note: primerFor(task) }))
@@ -252,11 +255,30 @@ Every action works on the current session and on every other running session. cm
   - `as: Session` sends it to another session as a message from this one, which Claude Code shows as one session writing to another.
   - To a task's owner, `send` delivers the text to that running subagent.
 - `startTask` starts a task in the session, the way the Agent tool starts one, and resolves the `Task` once it started. It does not wait for the task to finish. `title` is the task's title, `agentType` names the owner's agent type, such as `Explore`, `name` is the address a teammate's `SendMessage` reaches it by, and `model` and `cwd` change what it runs on and where. It needs the `tasks` permission, and rejects with `<mod>: Claude Code refused the task: <reason>` when a hook refuses it.
+  - With `isBackground: true`, the owner is a new background Claude Code session, as `claude --bg` starts, which starts fresh on the prompt and keeps running after this session ends. It takes no `name`, and rejects with `<mod>: a background task takes no name.` for one.
+- `fork` starts a subagent that keeps this session's whole conversation and does what the prompt says.
+- `clone` starts a new background session with a copy of this session's conversation, which carries on with the prompt.
+
+Every task needs the `tasks` permission and shows in this session's goal. `fork` and `clone` take only `prompt` and `title`, because the owner is a copy of this session. A `beforeTaskStart` listener that refuses a background task or a clone rejects the call with `<mod>: a beforeTaskStart listener refused the task: <reason>`.
+
+```ts
+await sessions.current.startTask({ title: 'Map the auth code', prompt, agentType: 'Explore' })
+await sessions.current.fork({ title: 'Write the tests', prompt: 'Write tests for what we just built.' })
+await sessions.current.clone({ title: 'Try SQL instead', prompt: 'Rebuild this on SQL.' })
+await sessions.current.startTask({ title: 'Upgrade dependencies', prompt, isBackground: true })
+```
+
+| Call | `task.isBackground` | `task.owner` |
+| --- | --- | --- |
+| `startTask` | absent | a subagent of this session, with its `agentType` |
+| `fork` | absent | a subagent of this session, `forkedFrom` this session |
+| `clone` | `true` | a new session whose `id` is the task's, `forkedFrom` this session |
+| `startTask` with `isBackground` | `true` | a new session whose `id` is the task's |
 - `callTool` runs a tool in the session, such as `{ name: 'Bash', input: { command: 'bun test' } }`, and resolves its `ToolResult`. It needs the `tools` permission.
-- `usage` answers the session's model, its context window's fill, and its cost so far, as the status line shows them: `{ model, contextWindow: { tokenCount?, size?, percent? }, cost?: { usd } }`. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript.
+- `usage` answers the session's model, its context window's fill, its rate limits, and its cost so far, as the status line shows them: `{ model, contextWindow: { tokenCount?, size?, percent? }, rateLimits?: { type, percent, resetsAt? }[], cost?: { usd } }`. Each rate limit is one window of the account's plan: its `type`, such as `five_hour`, `seven_day`, or a Claude gateway's `spend_limit`, how much of it is used, 0 to 100, and when it resets, as an ISO 8601 time. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript, with no rate limits.
 - `surfaces` answers the Claude apps showing the session now: `'terminal'`, `'desktop'`, `'mobile'`, and `'vscode'`. An ended session shows in none.
 
-A task's owner is a `TaskOwner`, a session without `startTask` and `callTool`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `surfaces`. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
+A task's owner is a `TaskOwner`, a session without `startTask`, `fork`, `clone`, and `callTool`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `surfaces`. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
 
 A prompt that comes on a clock, such as every 10 minutes, belongs in a `schedule` job instead, which Claude Code shows as one `Running scheduled task` row ([jobs.md](jobs.md#schedule)).
 
@@ -316,6 +338,7 @@ type MessageOf<Type> = {
 | `'toolResult'` | `ToolResult` | `callId`, `name`, `input`, `cwd`, `files`, `output`, `isError`: the call's tool, input, folder, and files, and what the tool answered. `output` is the text Claude read, or the tool's own result for `callTool`. |
 | `'skill'` | `Skill` | `name`, `text`: a Skill Claude Code loaded. |
 | `'instructionFile'` | `InstructionFile` | `path`, `text`, `isRule`: a `CLAUDE.md` file or a rule file Claude Code read. `isRule` is true for a file in a `.claude/rules/` folder. |
+| `'attachedFile'` | `AttachedFile` | `path`, `attachmentType`, `text`: a file Claude Code attached by itself, without a tool call. `attachmentType` is `'contents'` for the whole file, such as one the person mentioned with `@` or one Claude Code put back after a compaction, `'reference'` for a file Claude read before a compaction whose contents Claude Code left out, and `'change'` for what changed in a file Claude read since it read it. `text` is what Claude reads. A file Claude reads with a tool is a `ToolResult` instead. |
 | `'notice'` | `Notice` | `text`: a line Claude Code added, such as a model switch. |
 
 ### files: what a tool call reads and changes
@@ -380,6 +403,8 @@ type Context = { readonly number: number; readonly openedAt: string; readonly cl
 
 type Goal = { text(): Promise<string>; tasks(): Promise<Task[]>; search; on…; before…; update(change: { text: string }): Promise<void> }
 
+type TaskStatus = 'pending' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'killed'
+
 type Task = {
   readonly id: string
   readonly title: string
@@ -387,6 +412,10 @@ type Task = {
   readonly openedBy: string
   readonly openedAt: string
   readonly closedAt?: string
+  readonly status?: TaskStatus
+  readonly name?: string
+  readonly spawnedBy?: string
+  readonly isBackground?: true
   tasks(): Promise<Task[]>
   messages(): Promise<Message[]>
   search; on…; before…
@@ -405,7 +434,9 @@ sessions.current.onTurnEnd((turn) => {
 - A context's `number` counts from 1. Its `closedAt` is set at the compaction that ended it.
 - A goal's text starts as the session's first prompt, and `text()` reads it. `update` replaces it, and `onGoalChange` hears the goal, whose `text()` reads the new text.
 - A task's `owner` is a `TaskOwner`: the session doing the work, which can't start tasks or call tools. Its goal is the task's prompt, its `agentType` and `model` are what the task runs, and its turns and messages are the task's own. Claude Code's checklist tools, `TaskCreate`, `TaskUpdate`, and `TaskList`, are not tasks: they are its todo list, which `onTodoCreate` and `onTodoComplete` hear.
-- A task's `openedBy` is the `callId` of the Agent call that started it, and empty for a task a mod started. Its `closedAt` is set once it answered.
+- A task's `openedBy` is the `callId` of the Agent call that started it, and empty for a task a mod started. Its `closedAt` is set once it answered: a subagent's when it stops, and a background session's at that session's first stop, which its cmod tells this session.
+- A task with `isBackground` is done by a separate session, whose `id` is the task's. Its owner reads that session's own turns and messages, and `task.messages()`, `task.tasks()`, and `task.search` read them too. `task.on…` and `task.before…` hear the task's start and end, and `task.owner.on…` hears what happens in that session. Claude Code's own fork agent reads as a fork: an Agent call that forks shows an owner `forkedFrom` this session, with no `agentType`.
+- A task of `sessions.current` that Claude Code still runs holds `status`, where its agent stands now, `name`, the name a teammate is messaged by, and `spawnedBy`, the plugin that started it, absent when Claude or the person did. A task read from another session or after its agent ended has none of these. A background task holds the `status` `claude agents` lists for its session.
 
 ## Test it
 

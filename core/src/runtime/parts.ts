@@ -7,10 +7,11 @@ import { partMethods, type DrawnPart, type PartPress } from './ui.js'
 export type DrawnParts = {
   fill(mod: string, cached: string, input: Readonly<Record<string, unknown>>, name: string): Promise<void> | undefined
   element(mod: string, cached: string, keyPrefix: string, name: string, reportId: string): RenderElement | undefined
+  failure(mod: string, cached: string): string | undefined
   forget(mod: string): void
 }
 
-type Drawn = { readonly data: DrawnPart | null; readonly generation: number }
+type Drawn = { readonly data: DrawnPart | null; readonly failure?: string; readonly generation: number }
 
 const keptDrawings = 200
 
@@ -26,9 +27,9 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
       const key = keyOf(mod, cached)
       const generation = generationOf(mod)
       if (drawn.get(key)?.generation === generation) return undefined
-      const keep = (data: DrawnPart | null) => {
+      const keep = (data: DrawnPart | null, failure?: string) => {
         drawn.delete(key)
-        drawn.set(key, { data, generation })
+        drawn.set(key, { data, ...(failure === undefined ? {} : { failure }), generation })
         const [oldest] = drawn.keys()
         if (drawn.size > keptDrawings && oldest !== undefined) drawn.delete(oldest)
         if (generationOf(mod) !== generation) claude.ui.invalidate('ui.render')
@@ -41,7 +42,7 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
             (data) => keep((data ?? null) as DrawnPart | null),
             (error: unknown) => {
               claude.ui.log(`cmod: ${name} drew nothing: ${messageOf(error)}`, { to: 'debug' })
-              keep(null)
+              keep(drawn.get(key)?.data ?? null, messageOf(error))
             },
           )
           .finally(() => drawing.delete(key))
@@ -62,6 +63,9 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
         report(reportId, `${name} could not draw`, error)
         return undefined
       }
+    },
+    failure(mod, cached) {
+      return drawn.get(keyOf(mod, cached))?.failure
     },
     forget(mod) {
       generations.set(mod, generationOf(mod) + 1)

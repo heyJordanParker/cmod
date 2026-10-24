@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { RenderElement, RenderPropsOf } from 'claude-code'
-import { AbovePrompt, defineMod, Reply, ToolCall, TurnEnd, type Kind, type Mod } from '../../src/mod.js'
+import { AbovePrompt, defineMod, Reply, ToolCall, TurnEnd, type Kind, type Mod, type Pane } from '../../src/mod.js'
 import { Heading } from '../../src/ui/markdown.js'
 import { testMod } from '../../src/testing.js'
 import { rowsOf, textOf } from '../../src/testing/fake-elements.js'
@@ -22,6 +22,12 @@ test('a style changes the props Claude draws with', async () => {
   )
 
   expect(await tested.lines(ToolCall, bashRow)).toEqual(bashRowLines('deploy --token •••'))
+})
+
+test('a style knows the app that draws the row, how wide it is, and which row it is', async () => {
+  const tested = testMod(defineMod({ name: 'skin', setup: (mod) => void mod.styles.add({ kind: ToolCall, render: (_mod, { surface, columns, id }) => <Text>{`${surface} ${columns} ${id}`}</Text> }) }))
+
+  expect(await tested.lines(ToolCall, bashRow, 'toolu_7')).toEqual(['terminal 80 toolu_7'])
 })
 
 test("a style adds to Claude's drawing", async () => {
@@ -236,6 +242,27 @@ test("a pane's onClose hears it close, and a throwing handler is logged", async 
 
   expect(closed).toEqual(['person'])
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: "The Board pane's onClose threw", description: 'no board file' })
+})
+
+test('a pane the person closes with its ✕ is no longer open, so the next toggle opens it', async () => {
+  let accounts: Pane | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'pool',
+      async setup(mod) {
+        accounts = mod.panes.add({ id: 'accounts', title: 'Accounts', render: () => Text({ children: 'rows' }) })
+        await accounts.open()
+      },
+    }),
+  )
+  await tested.start()
+
+  await tested.fire('ui.close', { id: 'accounts', origin: { kind: 'person' } } as never, undefined)
+  await tested.settle()
+
+  expect(accounts!.isOpen).toBe(false)
+  await accounts!.toggle()
+  expect(accounts!.isOpen).toBe(true)
 })
 
 test('onScreen is passed on unchanged and cmod draws the bullet beside Default pieces it wraps', async () => {

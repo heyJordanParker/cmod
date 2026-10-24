@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { chmod, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 

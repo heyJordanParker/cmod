@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,7 +9,7 @@ import { capture } from '../src/process.js'
 import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 setDefaultTimeout(15_000)
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 test("cmod new writes a CHANGELOG.md whose section for the first version cmod publish releases", async () => {
   const home = await temporaryHome()

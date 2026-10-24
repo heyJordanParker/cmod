@@ -3,8 +3,9 @@ import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, hotkeyBindings, hotkeyWords, marketplaceOf, permissionWords, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, hotkeyBindings, hotkeyWords, isProgramNewer, marketplaceOf, permissionWords, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
+import { relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
@@ -36,7 +37,9 @@ setup and removes what it set up. When the install step of a mod that is not
 set up fails or is stopped, the setup runs the mod's uninstall step, then
 removes what it set up. When the install step of an upgrade fails or is
 stopped, the setup keeps the version the record names. Once the install step
-has finished, the setup records the mod, then exits.
+has finished, the setup records the mod, then exits. Before all of that, it
+links each folder still in CLAUDE_CODE_PLUGIN_DIRS, which a cmod before 4.1.0
+linked, as cmod link does now, and takes it out of that list.
 
 Options:
   --events            Print one event per line for a program to read:
@@ -58,6 +61,7 @@ export async function run(argv: string[]): Promise<number> {
   })
   if (positionals.length !== 1) throw new Error(`cmod setup takes one plugin root.\n\n${help}`)
   const root = positionals[0] as string
+  await relinkPluginFolders()
   if (values.events) return setupWithEvents(root, values.consent)
   const plugin = await readPlugin(root)
   const progress = startProgress()
@@ -161,7 +165,8 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   refuseThisMachine(plugin)
   const sha256 = await scriptsSha256(plugin.steps, { read: (path) => readText(join(plugin.root, path)), list: (folder) => listFiles(join(plugin.root, folder)) })
   const record = await readRecord(readText, storeFolder(process.env), plugin.name)
-  const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256
+  const programModifiedMs = record === undefined || record.program === null ? undefined : (await stat(programPath(storeFolder(process.env), record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
+  const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, programModifiedMs)
   const approved = await approvals(plugin.name)
   const missing = (plugin.steps.permissions ?? []).filter((item) => !approved.includes(item))
   const needsConsent = !isCurrent && Object.keys(plugin.steps).length > 0 && !approved.includes(sha256)

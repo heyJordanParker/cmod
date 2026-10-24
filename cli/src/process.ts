@@ -45,7 +45,7 @@ export function bunArgv(...args: string[]): { argv: string[]; env: Record<string
   return { argv: [process.execPath, ...args], env: { ...process.env, BUN_BE_BUN: '1' } }
 }
 
-export function spawn<Out extends 'pipe' | 'inherit' | 'ignore'>(argv: string[], options: RunOptions & { stdout: Out; stderr: Out }) {
+export function spawn<Out extends 'pipe' | 'inherit' | 'ignore', Err extends 'pipe' | 'inherit' | 'ignore' = Out>(argv: string[], options: RunOptions & { stdout: Out; stderr: Err }) {
   try {
     return Bun.spawn(argv, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -60,7 +60,7 @@ export function spawn<Out extends 'pipe' | 'inherit' | 'ignore'>(argv: string[],
   }
 }
 
-async function readLines(stream: ReadableStream<Uint8Array> | number | undefined, onLine: (text: string) => void): Promise<void> {
+export async function readLines(stream: ReadableStream<Uint8Array> | number | undefined, onLine: (text: string) => void): Promise<void> {
   if (!(stream instanceof ReadableStream)) return
   const decoder = new TextDecoder()
   let pending = ''

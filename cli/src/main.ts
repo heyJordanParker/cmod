@@ -12,15 +12,18 @@ import * as list from './commands/list.js'
 import * as newMod from './commands/new.js'
 import * as option from './commands/option.js'
 import * as permission from './commands/permission.js'
+import * as program from './commands/program.js'
 import * as publish from './commands/publish.js'
 import * as remove from './commands/remove.js'
 import * as rules from './commands/rules.js'
 import * as settings from './commands/settings.js'
 import * as setup from './commands/setup.js'
+import * as task from './commands/task.js'
 import * as teardown from './commands/teardown.js'
 import * as tryMod from './commands/try.js'
 import * as unlink from './commands/unlink.js'
 import * as update from './commands/update.js'
+import * as watch from './commands/watch.js'
 import { interruptProgress } from './progress.js'
 import { syncRules } from './rules.js'
 import { markPluginsChanged } from './store.js'
@@ -48,6 +51,9 @@ const commands: Record<string, Command> = {
   settings,
   rules,
   history,
+  task,
+  watch,
+  program,
   download,
 }
 

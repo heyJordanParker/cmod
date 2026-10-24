@@ -39,10 +39,10 @@ test('the consent hash of the same steps and scripts stays what @cmodjs/core 4.0
   expect(await scriptsSha256(steps, files)).not.toBe('96f736d098a5ad1de83771adb885122f09b9dffd27ece7de603d86d1b0769934')
 })
 
-test('a mod answers every method the cmod plugin of @cmodjs/core 4.0.0 calls on it', async () => {
+test('a mod answers every method the cmod plugin of @cmodjs/core 4.0.0 and 4.1.0 calls on it', async () => {
   const tested = testMod(defineMod({ name: 'notes', setup() {} }))
   await tested.start()
-  const methods = ['cmod:changed', 'cmod:before', 'cmod:parts', 'cmod:draw', 'cmod:press', 'cmod:shown', 'cmod:pendingSteps', 'cmod:finishSteps']
+  const methods = ['cmod:changed', 'cmod:before', 'cmod:parts', 'cmod:draw', 'cmod:press', 'cmod:shown', 'cmod:pendingSteps', 'cmod:finishSteps', 'cmod:markdownStylers']
 
   const refusal = async (method: string) => {
     const answer = await claudeCodeOf(tested)

@@ -89,12 +89,14 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
   return answer
 }
 
-function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: Next<N>): Promise<EventResult<N>> {
-  return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>)
+type PassOn<N extends RoutedEvent> = { readonly event: N; (e: never): Promise<EventResult<N>> }
+
+function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: PassOn<N>): Promise<EventResult<N>> {
+  return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as never))
 }
 
-function routeFailure<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: Next<N> & Caught): Promise<EventResult<N>> {
-  return lifecycle.caught(passOn.event, eventInput, (passed: unknown) => passOn(passed as Args<N>) as Promise<EventResult<N>>, passOn.error)
+function routeFailure<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: PassOn<N> & Caught): Promise<EventResult<N>> {
+  return lifecycle.caught(passOn.event, eventInput, (passed: unknown) => passOn(passed as never), passOn.error)
 }
 
 const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>) => ({ ...eventInput, caller: passOn.origin.plugin }) as Frozen<Args<'cmod.call'>>
@@ -147,16 +149,17 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('prompt.submit', routeToMod).catch(routeFailure)
   addHook('prompt.context', routeToMod).catch(routeFailure)
   addHook('command.run', routeToMod).catch(routeFailure)
-  addHook('command.describe', routeToMod).catch(routeFailure)
   addHook('session.measure', routeToMod).catch(routeFailure)
   addHook('skill.prompt', routeToMod).catch(routeFailure)
-  addHook('ui.render', routeToMod).catch(routeFailure)
+  if (definition.name === cmodPluginName) addHook('ui.render', { component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] }, routeToMod).catch(routeFailure)
+  else addHook('ui.render', routeToMod).catch(routeFailure)
   addHook('ui.press', routeToMod).catch(routeFailure)
   addHook('ui.scroll', routeToMod).catch(routeFailure)
   addHook('ui.close', routeToMod).catch(routeFailure)
   addHook('cmod.call', routeCallToMod).catch(routeCallFailure)
   addHook('session.compact', routeToMod).catch(routeFailure)
   if (definition.name !== cmodPluginName) return
+  addHook('command.describe', routeToMod).catch(routeFailure)
   addHook('session.append', routeToMod).catch(routeFailure)
   addHook('session.receive', routeToMod).catch(routeFailure)
   addHook('agent.spawn', routeToMod).catch(routeFailure)

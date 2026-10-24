@@ -32,8 +32,8 @@ export async function run(argv: string[]): Promise<number> {
   const progress = startProgress()
   let exitCode = 0
   const updated: string[] = []
-  for (const { id, name: pluginName, scope, installPath } of plugins) {
-    if (scope === 'session') {
+  for (const { id, name: pluginName, isLinked, installPath } of plugins) {
+    if (isLinked) {
       progress.skip(`${id} is linked from ${installPath}, so saving its files updates it.`)
       continue
     }

@@ -66,7 +66,7 @@ jobs:
           (cd core && bun test)
           bun run --cwd core build
           bun run --cwd cli check
-          (cd cli && bun test)
+          bun run --cwd cli test
 
       - name: Publish @cmodjs/core to npm
         if: steps.version.outputs.core != 'done'

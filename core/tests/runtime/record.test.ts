@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type Subscription, type TaskOwner, type Turn } from '../../src/mod.js'
+import { AttachedFile, defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type AttachmentType, type Subscription, type TaskOwner, type Turn } from '../../src/mod.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { Message } from '../../src/session/context/turn/message/message.js'
 import { TaskStart } from '../../src/session/goal/task.js'
@@ -83,6 +83,18 @@ test("a task hears its subtask's replies, though it listens only for replies", a
   expect(heard).toEqual(['Found it.'])
 })
 
+test("a running task of this session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  const id = await tested.startTask({ title: 'Find the pane' })
+  tested.fakes.agent.list = async () => [{ id, description: 'Find the pane', type: 'Explore', status: 'waiting', name: 'scout', spawnedBy: 'scoper' } as never]
+
+  const [task] = await sessions.current.goal.tasks()
+
+  expect([task?.status, task?.name, task?.spawnedBy]).toEqual(['waiting', 'scout', 'scoper'])
+})
+
 test("a task refuses its subtask's start", async () => {
   const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
   await tested.start()
@@ -95,21 +107,21 @@ test("a task refuses its subtask's start", async () => {
   expect(await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Read tree.ts', description: 'Read', tool_use_id: 'toolu_9', parentAgentId: parent, parentModel: 'opus' } as never)).toEqual({ deny: 'No subtasks' })
 })
 
-test("beforePrompt in a task adds a note the subagent reads at its start, with the spawn's prompt", async () => {
-  const prompts: string[] = []
+test("beforePrompt in a task hears the spawn's prompt when Claude Code starts the subagent inside the spawn, before cmod knows its task, and its note reaches the subagent", async () => {
+  const prompts: { text: string; task: string | undefined }[] = []
   const tested = testMod(defineMod({ name: 'modes', setup() {} }), { permissions: ['prompt'] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   ;sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => {
-    prompts.push(prompt.text)
+    prompts.push({ text: prompt.text, task: prompt.task })
     return { note: 'You are in read-only mode.' }
   })
   await tested.settle()
-  await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
-  const task = await tested.startTask({ title: 'Find', openedBy: 'toolu_9' })
 
-  expect(await claudeCodeOf(tested).fire('SubagentStart', { agent_id: task, agent_type: 'Explore' } as never)).toEqual({ additionalContext: ['<modes_mod>\nYou are in read-only mode.\n</modes_mod>'] })
-  expect(prompts).toEqual(['Find the pane'])
+  await claudeCodeOf(tested).fire('agent.spawn', { prompt: 'Find the pane', description: 'Find', subagentType: 'Explore', tool_use_id: 'toolu_9', parentModel: 'opus' } as never)
+
+  expect(prompts).toEqual([{ text: 'Find the pane', task: 'agent-1' }])
+  expect(tested.shown.notes).toEqual(['You are in read-only mode.'])
 })
 
 test("a goal refuses its session's top-level task starts", async () => {
@@ -135,6 +147,67 @@ test("a task's owner keeps its context through a compaction and its turn through
 
   expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', agentId: id } as never)).toEqual({ skip: 'Keep the findings' })
   expect(await claudeCodeOf(tested).fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ block: 'Name the file first' })
+})
+
+test("a note at the session's turn end, at a task owner's turn end, and on a tool call reaches Claude in the mod's tag", async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'prompt'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  const id = await tested.startTask({ title: 'Find the pane' })
+  await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
+  const [task] = await sessions.current.goal.tasks()
+  sessions.current.beforeTurnEnd(() => ({ note: 'Run the tests before you stop.' }))
+  task!.owner.beforeTurnEnd(() => ({ note: 'Name the file.' }))
+  sessions.current.beforeToolCall({ name: 'Edit' }, () => ({ note: 'src/gen is generated. Edit src/schema instead.' }))
+  await tested.settle()
+  const code = claudeCodeOf(tested)
+
+  expect(await code.fire('Stop', {} as never)).toMatchObject({ additionalContext: ['<history_mod>\nRun the tests before you stop.\n</history_mod>'] })
+  expect(await code.fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ additionalContext: ['<history_mod>\nName the file.\n</history_mod>'] })
+  expect(await code.fire('tool.call', { tool: 'Edit', tool_use_id: 'toolu_3', file_path: '/work/src/gen/a.ts', old_string: 'a', new_string: 'b' } as never, { result: 'edited' } as never)).toEqual({
+    result: 'edited',
+    context: ['<history_mod>\nsrc/gen is generated. Edit src/schema instead.\n</history_mod>'],
+  })
+})
+
+test('a note needs the prompt permission, even where the rest of the answer needs another', async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tools'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  sessions.current.beforeToolCall({ name: 'Edit' }, () => ({ note: 'src/gen is generated.' }))
+  await tested.settle()
+
+  expect(await claudeCodeOf(tested).fire('tool.call', { tool: 'Edit', tool_use_id: 'toolu_3', file_path: '/work/a.ts', old_string: 'a', new_string: 'b' } as never, { result: 'edited' } as never)).toEqual({ result: 'edited' })
+  expect(tested.shown.toasts.map(({ message }) => message)).toContain('The beforeToolCall listener failed')
+})
+
+test('beforeAttachedFile keeps a file out of what Claude reads, or rewrites it, and beforeInstructionFile still answers for a CLAUDE.md', async () => {
+  const heard: unknown[] = []
+  const tested = testMod(defineMod({ name: 'secrets', setup() {} }), { permissions: ['prompt'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Read the config' })
+  sessions.current.beforeAttachedFile({ path: /\.env$/ }, () => ({ refuse: '.env holds secrets' }))
+  sessions.current.beforeAttachedFile({ path: /notes\.txt$/ }, (file) => (heard.push({ path: file.path, attachmentType: file.attachmentType }), { text: 'The notes are private.' }))
+  sessions.current.beforeInstructionFile(() => ({ text: 'Use tabs.' }))
+  await tested.settle()
+  const attached = (type: string, text: string) => claudeCodeOf(tested).fire('prompt.attachment', { type, text, origin: { kind: 'engine' } } as never, { text } as never)
+
+  expect(await attached('file', 'Called the Read tool with the following input: {"file_path":"/work/.env"}\nResult of calling the Read tool: KEY=1')).toEqual({ text: null })
+  expect(await attached('file', 'Called the Read tool with the following input: {"file_path":"/work/notes.txt"}\nResult of calling the Read tool: launch code')).toEqual({ text: 'The notes are private.' })
+  expect(await attached('compact_file_reference', 'Note: /work/big.log was read before the last conversation was summarized, but the contents are too large to include.')).toEqual({ text: 'Note: /work/big.log was read before the last conversation was summarized, but the contents are too large to include.' })
+  expect(await attached('nested_memory', 'Contents of /work/src/CLAUDE.md:\n\nUse spaces.')).toEqual({ text: 'Use tabs.' })
+  expect(heard).toEqual([{ path: '/work/notes.txt', attachmentType: 'contents' }])
+})
+
+test('an attached file a test adds reaches the mod as the attachment type it was given', async () => {
+  const tested = testMod(defineMod({ name: 'secrets', setup() {} }), { permissions: ['conversation'] })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Read the config' })
+  const types: AttachmentType[] = ['contents', 'reference', 'change']
+
+  const added = await Promise.all(types.map((attachmentType) => tested.add({ type: AttachedFile, path: '/work/config.ts', attachmentType, text: 'export const port = 1' })))
+
+  expect(added.flat().map((message) => (message.type === AttachedFile ? message.attachmentType : message.type))).toEqual(types)
 })
 
 test("a message sent to a task meets that task's prompt guard, and never the session's own", async () => {
@@ -222,7 +295,7 @@ test("beforeSessionStart's note, title, and first prompt reach Claude Code, and 
   expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'resume', session_id: 's1' })).toEqual({ additionalContext: ['<tracer_mod>\nDocs held: none.\n</tracer_mod>'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
 })
 
-test("a compaction's note reaches the window of the agent that compacted, and only the goal's listeners hear a subagent's", async () => {
+test("a compaction's note reaches the window of the agent that compacted, hidden from the person, and only the goal's listeners hear a subagent's", async () => {
   const tested = testMod(
     defineMod({
       name: 'tracer',
@@ -237,12 +310,13 @@ test("a compaction's note reaches the window of the agent that compacted, and on
   const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
   const compact = (agentId?: string) => claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [], ...(agentId === undefined ? {} : { agentId }) } as never, { messages: [kept] } as never)
 
-  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({})
-  expect(await compact()).toEqual({ messages: [kept, { role: 'user', text: '<tracer_mod>\nMain agent docs.\n\nDocs of the main agent.\n</tracer_mod>', toolUses: [] }] })
-  expect(await compact('a1')).toEqual({ messages: [kept, { role: 'user', text: '<tracer_mod>\nDocs of a1.\n</tracer_mod>', toolUses: [] }] })
+  expect(await compact()).toEqual({ messages: [kept] })
+  expect(tested.shown.notes).toEqual(['Main agent docs.\n\nDocs of the main agent.'])
+  expect(await compact('a1')).toEqual({ messages: [kept] })
+  expect(tested.shown.notes).toEqual(['Main agent docs.\n\nDocs of the main agent.', 'Docs of a1.'])
 })
 
-test("a compaction's title, Skill reload, and first prompt reach Claude Code at the SessionStart after it, and its payload carries the model and the tokens left", async () => {
+test("a compaction's title, Skill reload, and first prompt answer the SessionStart Claude Code raises inside it, and its payload carries the model and the tokens left", async () => {
   const heard: unknown[] = []
   const tested = testMod(
     defineMod({
@@ -256,11 +330,8 @@ test("a compaction's title, Skill reload, and first prompt reach Claude Code at 
     { permissions: ['prompt'] },
   )
   await tested.start()
-  const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
 
-  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [] } as never, { messages: [kept], tokensAfter: 1200 } as never)).toEqual({ messages: [kept], tokensAfter: 1200 })
-  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({ sessionTitle: 'Compacted', reloadSkills: true, initialUserMessage: 'Go on.' })
-  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1' })).toEqual({})
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1', context_tokens: 1200 } as never)).toEqual({ sessionTitle: 'Compacted', reloadSkills: true, initialUserMessage: 'Go on.' })
   expect(heard).toMatchObject([{ source: 'compact', model: expect.any(String), contextTokenCount: 1200 }])
 })
 
@@ -269,7 +340,8 @@ test("a compaction's note needs the prompt permission, as every note does", asyn
   const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
 
   expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [] } as never, { messages: [kept] } as never)).toEqual({ messages: [kept] })
-  expect(tested.shown.toasts.map(({ message }) => message)).toContain('The beforeSessionStart listener failed')
+  expect(tested.shown.notes).toEqual([])
+  expect(tested.shown.toasts.map(({ message }) => message)).toContain('Answered additionalContext without your grant to "Add text Claude reads and start turns", so cmod dropped it')
 })
 
 test('beforeModelChange refuses a switch, and onCwdChange hears the new folder without answering', async () => {
@@ -293,6 +365,60 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
   expect(await claudeCodeOf(tested).fire('CwdChanged', { session_id: 's1', cwd: '/work/c', old_cwd: '/work/b', new_cwd: '/work/c', agent_id: 'a1' } as never)).toEqual({})
   await tested.settle()
   expect(moved).toEqual([{ cwd: '/work/b', previous: '/work/a' }])
+})
+
+test("beforeModelChange's note reaches Claude after the switch, and beforeProjectSetup's in the session claude --init-only sets up", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      setup() {
+        sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' }))
+        sessions.current.beforeProjectSetup(() => ({ note: 'Run bun install first.' }))
+      },
+    }),
+    { permissions: ['prompt'] },
+  )
+  await tested.start()
+  const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
+  const code = claudeCodeOf(tested)
+
+  expect(await code.fire('PreModelSwitch', switched as never)).toEqual({})
+  expect(await code.fire('PostModelSwitch', switched as never)).toEqual({ additionalContext: ['<modes_mod>\nKeep answers short on haiku.\n</modes_mod>'] })
+  expect(await code.fire('PostModelSwitch', switched as never)).toEqual({})
+  expect(await code.fire('Setup', { session_id: 's1', cwd: '/work/a', trigger: 'init' } as never)).toEqual({ additionalContext: ['<modes_mod>\nRun bun install first.\n</modes_mod>'] })
+})
+
+test("a model change's note reaches only the switch it answered, so a switch refused later leaves none for the next", async () => {
+  const tested = testMod(defineMod({ name: 'modes', setup: () => void sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' })) }), { permissions: ['prompt'] })
+  await tested.start()
+  const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
+  const code = claudeCodeOf(tested)
+
+  await code.fire('PreModelSwitch', switched as never)
+  await code.fire('PreModelSwitch', { ...switched, to_model: 'sonnet', requested_model: 'sonnet' } as never)
+
+  expect(await code.fire('PostModelSwitch', { ...switched, to_model: 'sonnet', requested_model: 'sonnet' } as never)).toEqual({})
+})
+
+test('a model change or project setup note needs the prompt permission, as every note does', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'modes',
+      setup() {
+        sessions.current.beforeModelChange(() => ({ note: 'Keep answers short.' }))
+        sessions.current.beforeProjectSetup(() => ({ note: 'Run bun install first.' }))
+      },
+    }),
+  )
+  await tested.start()
+  const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
+  const code = claudeCodeOf(tested)
+
+  await code.fire('PreModelSwitch', switched as never)
+
+  expect(await code.fire('PostModelSwitch', switched as never)).toEqual({})
+  expect(await code.fire('Setup', { session_id: 's1', cwd: '/work/a', trigger: 'init' } as never)).toEqual({})
+  expect(tested.shown.toasts.filter(({ type }) => type === 'warning').map(({ message }) => message)).toEqual([expect.stringContaining('without your grant to "Add text Claude reads and start turns"')])
 })
 
 test("beforePrompt's note reaches Claude beside the prompt, and its title names the session", async () => {
@@ -536,6 +662,27 @@ test('beforeTaskStart picks the model a task runs on', async () => {
   expect(await claudeCodeOf(tested).fire('agent.spawn', { ...spawn, subagentType: 'Plan' } as never)).toEqual({ agentId: 'agent-1', model: 'opus' } as never)
 })
 
+test("beforeTaskStart rewrites a task's prompt and owner, and the task's agent starts on the answered prompt", async () => {
+  const prompts: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'scoper',
+      setup() {
+        sessions.current.beforeTaskStart(() => ({ prompt: 'Find it in src only.', title: 'Find it in src', owner: { agentType: 'Explore', model: 'haiku', cwd: '/work/src' }, isAsync: true }))
+        sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => void prompts.push(prompt.text))
+      },
+    }),
+    { permissions: ['conversation', 'tasks', 'prompt'] },
+  )
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Find the config' })
+
+  const spawn = { tool_use_id: 'toolu_1', prompt: 'Find it.', description: 'Find it', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'opus', background: false, fork: false }
+
+  expect(await claudeCodeOf(tested).fire('agent.spawn', spawn as never)).toEqual({ agentId: 'agent-1', model: 'haiku' } as never)
+  expect(prompts).toEqual(['Find it in src only.'])
+})
+
 test('a removed before listener stops answering', async () => {
   let listening: Subscription | undefined
   const tested = testMod(
@@ -705,4 +852,130 @@ test('surfaces() names the Claude apps showing the session, and an ended session
   expect(await sessions.current.surfaces()).toEqual(['terminal'])
   expect(await older!.surfaces()).toEqual([])
   expect((await older!.usage()).model).toBe('test-model')
+})
+
+test("usage() names each rate limit of the account's plan, how much of it is used, and when it resets", async () => {
+  const tested = testMod(defineMod({ name: 'limits', setup() {} }))
+  tested.fakes.session.usage = async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'five_hour', percentUsed: 23.5, resetsAt: '2026-10-22T20:00:00.000Z' }, { kind: 'seven_day', percentUsed: 7 }] })
+  await tested.start()
+
+  expect((await sessions.current.usage()).rateLimits).toEqual([
+    { type: 'five_hour', percent: 23.5, resetsAt: '2026-10-22T20:00:00.000Z' },
+    { type: 'seven_day', percent: 7 },
+  ])
+})
+
+type SeenTask = { readonly id: string; readonly isBackground?: true; readonly owner: { readonly id: string; readonly agentType?: string; readonly model?: string; readonly forkedFrom?: string } }
+
+const seenOf = ({ id, isBackground, owner }: SeenTask) => ({ id, isBackground, owner: { id: owner.id, agentType: owner.agentType, model: owner.model, forkedFrom: owner.forkedFrom } })
+
+test("a subagent's task has no isBackground and no forkedFrom, takes every beforeTaskStart answer, and ends at its result", async () => {
+  const started: SeenTask[] = []
+  const ended: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tasks',
+      setup() {
+        sessions.current.beforeTaskStart((task) => void started.push(task))
+        sessions.current.beforeTaskStart(() => ({ prompt: 'Look in src.', title: 'Look in src', owner: { model: 'haiku' }, isAsync: true }))
+        sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
+      },
+    }),
+    { permissions: ['conversation', 'tasks'] },
+  )
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+
+  expect(await claudeCodeOf(tested).fire('agent.spawn', { tool_use_id: 'toolu_1', prompt: 'Look.', description: 'Look', subagentType: 'Explore', parentModel: 'opus' } as never)).toEqual({ agentId: 'agent-1', model: 'haiku' } as never)
+  const id = await tested.startTask({ title: 'Look in src', agentType: 'Explore', openedBy: 'toolu_1' })
+  await tested.add({ type: ToolResult, callId: 'toolu_1', output: 'Found it.', isError: false })
+
+  expect(started.map(seenOf)).toEqual([{ id: '', isBackground: undefined, owner: { id: '', agentType: 'Explore', model: 'opus', forkedFrom: undefined } }])
+  expect(ended).toEqual([id])
+})
+
+test("a fork's owner is a subagent forked from this session, without an agent type, whose beforeTaskStart takes only prompt, title, and refuse", async () => {
+  const started: SeenTask[] = []
+  const ended: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tasks',
+      setup() {
+        sessions.current.beforeTaskStart((task) => void started.push(task))
+        sessions.current.beforeTaskStart(() => ({ title: 'Write the tests now', owner: { model: 'haiku' }, isAsync: true }))
+        sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
+      },
+    }),
+    { permissions: ['conversation', 'tasks'] },
+  )
+  const spawned: unknown[] = []
+  tested.fakes.agent.spawn = async (args) => (spawned.push(args), { agentId: 'agent-7', model: 'opus' })
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Build the parser' })
+
+  const fork = await sessions.current.fork({ title: 'Write the tests', prompt: 'Write tests for what we just built.' })
+  expect(await claudeCodeOf(tested).fire('agent.spawn', { tool_use_id: 'toolu_1', prompt: 'Write tests.', description: 'Write the tests', subagentType: 'fork', parentModel: 'opus' } as never)).toEqual({ agentId: 'agent-1', model: 'opus' } as never)
+  const id = await tested.startTask({ title: 'Write the tests', forkedFrom: 'test-session', openedBy: 'toolu_1' })
+  await tested.add({ type: ToolResult, callId: 'toolu_1', output: 'Wrote them.', isError: false })
+
+  expect(seenOf(fork)).toEqual({ id: 'agent-7', isBackground: undefined, owner: { id: 'agent-7', agentType: undefined, model: 'opus', forkedFrom: 'test-session' } })
+  expect(spawned).toEqual([{ prompt: 'Write tests for what we just built.', description: 'Write the tests', subagentType: 'fork' }])
+  expect(started.map(seenOf)).toEqual([{ id: '', isBackground: undefined, owner: { id: '', agentType: undefined, model: 'opus', forkedFrom: 'test-session' } }])
+  expect(ended).toEqual([id])
+})
+
+test("a background task's owner is a new session whose id is the task's, its beforeTaskStart takes prompt, title, owner, and refuse, and it ends at that session's first answer", async () => {
+  const ended: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tasks',
+      setup() {
+        sessions.current.beforeTaskStart({ isBackground: true }, () => ({ title: 'Upgrade the dependencies', owner: { model: 'haiku' } }))
+        sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
+      },
+    }),
+    { permissions: ['conversation', 'tasks'] },
+  )
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Ship the release' })
+  await tested.settle()
+
+  const task = await sessions.current.startTask({ title: 'Upgrade', prompt: 'Upgrade every dependency.', isBackground: true })
+  await tested.add({ type: Prompt, text: 'Upgrade every dependency.' }, { task: task.id })
+  await tested.add({ type: Reply, text: 'Upgraded.' }, { task: task.id })
+  await tested.endTurn({ answer: 'Upgraded.' }, { task: task.id })
+  await tested.add({ type: Prompt, text: 'And the lockfile?' }, { task: task.id })
+  await tested.endTurn({ answer: 'Done.' }, { task: task.id })
+
+  expect(seenOf(task)).toEqual({ id: task.id, isBackground: true, owner: { id: task.id, agentType: undefined, model: 'haiku', forkedFrom: undefined } })
+  expect(task.title).toBe('Upgrade the dependencies')
+  expect((await task.owner.messages()).map((message) => message.type)).toEqual([Prompt, Reply, Prompt])
+  expect(await task.owner.goal.text()).toBe('Upgrade every dependency.')
+  expect(ended).toEqual([task.id])
+  await expect(sessions.current.startTask({ title: 'Upgrade', prompt: 'Upgrade.', isBackground: true, name: 'upgrader' })).rejects.toThrow('tasks: a background task takes no name.')
+})
+
+test("a clone is a background task whose owner is forked from this session, and its beforeTaskStart refuses it", async () => {
+  const ended: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'tasks',
+      setup() {
+        sessions.current.beforeTaskStart({ isBackground: true, owner: { forkedFrom: 'test-session' }, title: 'Try SQL' }, () => ({ refuse: 'SQL is out.' }))
+        sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
+      },
+    }),
+    { permissions: ['conversation', 'tasks'] },
+  )
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Store the notes' })
+  await tested.settle()
+
+  await expect(sessions.current.clone({ title: 'Try SQL', prompt: 'Rebuild this on SQL.' })).rejects.toThrow('tasks: a beforeTaskStart listener refused the task: SQL is out.')
+  const clone = await sessions.current.clone({ title: 'Try files', prompt: 'Rebuild this on plain files.' })
+  await tested.endTurn({ answer: 'Rebuilt.' }, { task: clone.id })
+
+  expect(seenOf(clone)).toEqual({ id: clone.id, isBackground: true, owner: { id: clone.id, agentType: undefined, model: '', forkedFrom: 'test-session' } })
+  expect((await sessions.current.goal.tasks()).map((task) => task.title)).toEqual(['Try files'])
+  expect(ended).toEqual([clone.id])
 })

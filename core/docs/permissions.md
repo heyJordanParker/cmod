@@ -35,7 +35,7 @@ Anthropic's plugin directory does not list a mod that can approve Claude's tool 
 
 ## What the person sees
 
-The install opens the installer pane in Claude Code and lists every permission in `permissions`, with the install step, the program, and the hotkeys. An update asks again only when it adds a permission, and lists only the new ones. Removing the mod revokes everything it was granted.
+The install opens the mod's install page in the Sidebar of Claude Code and lists every permission in `permissions`, with the install step, the program, and the hotkeys. An update asks again only when it adds a permission, and lists only the new ones. Removing the mod revokes everything it was granted.
 
 Settings lists the same permissions as toggles, under the mod, Permissions. A toggle runs `cmod permission <mod> <name> [value] on|off`, and the mod sees the change before its next call, with no reload.
 

@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 import { excludeRules } from '../src/settings.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const record = (root: string) => JSON.stringify({ name: 'house-style', version: '1.0.0', root, installedAt: '2026-10-14T10:00:00.000Z', scriptsSha256: '', uninstall: null, program: null, keys: {} })
 
@@ -54,10 +54,8 @@ test("cmod rules links a mod's rules into Claude Code's rules folder and prints 
 test("a mod whose installed folder is gone leaves every other mod's rules linked", async () => {
   const home = await temporaryHome()
   const root = await modWithRules(home, ['prompt'], { 'house-style@market': true })
-  await writeFiles(home, {
-    '.local/share/cmod/records/gone.json': record(join(home, 'deleted-folder')).replace('"house-style"', '"gone"'),
-    '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true }, env: { CLAUDE_CODE_PLUGIN_DIRS: root } }),
-  })
+  await writeFiles(home, { '.local/share/cmod/records/gone.json': record(join(home, 'deleted-folder')).replace('"house-style"', '"gone"') })
+  await writeLinked(home, root)
 
   const result = await cmod(home, 'rules')
 

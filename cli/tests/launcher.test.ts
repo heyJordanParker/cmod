@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readlinkSync } from 'node:fs'
 import { chmod, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const checkout = join(import.meta.dir, '..', '..')
 const build = `cmod-${process.platform}-${process.arch}`
@@ -164,6 +164,17 @@ test("the cmod plugin's SessionStart hook puts cmod's programs folder first in C
 
   expect(hook.exitCode).toBe(0)
   expect(bash.stdout.toString()).toBe("cmod's ls\n")
+})
+
+test("the cmod plugin's SessionStart hook adds its PATH line once, however often the session starts, so Claude's Bash evaluates it once", async () => {
+  const home = await temporaryHome()
+  const envFile = join(home, 'sessionstart-hook-0.sh')
+  const hooks = JSON.parse(await readFile(join(checkout, 'hooks/hooks.json'), 'utf8'))
+  const command = (hooks.hooks.SessionStart[0].hooks[0].command as string).replace('${CLAUDE_PLUGIN_ROOT}', checkout)
+  const start = () => Bun.spawnSync(['sh', '-c', command], { env: { HOME: home, PATH: '/usr/bin:/bin', CLAUDE_ENV_FILE: envFile } }).exitCode
+
+  expect([start(), start(), start()]).toEqual([0, 0, 0])
+  expect(await readFile(envFile, 'utf8')).toBe(`export PATH="${join(home, '.local/share/cmod/programs')}:$PATH"\n`)
 })
 
 test("the bootstrap keeps a ~/.local/bin/cmod it did not make, and still links cmod into the programs folder Claude Code runs", async () => {

@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readText } from '../src/files.js'
 import { claudeAnswering, cmod, cmodInTerminal, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 async function waitForTeardown(home: string): Promise<void> {
   for (let waited = 0; waited < 10_000 && !(existsSync(join(home, 'uninstalls')) && leftovers(home).length === 0); waited += 100) await Bun.sleep(100)
@@ -83,7 +83,7 @@ test('try prints each step for a mod with no steps, and passes the arguments aft
       '✔ demo has no packages to install',
       'Installing demo…',
       '✔ demo 0.1.0 is ready',
-      'claude -p hello',
+      `claude --plugin-dir ${root} -p hello`,
       'Uninstalling demo…',
       '✔ Removed what cmod set up for demo',
       '',
@@ -108,31 +108,29 @@ test("cmod try places the mod's rules before the session starts, so the first tu
   expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
 })
 
-test('try --home ~ links each mod into your settings for the session and unlinks only what it linked', async () => {
+test('try --home ~ loads each mod in its session with --plugin-dir and leaves your settings as they were', async () => {
   const home = await temporaryHome()
   const tried = join(home, 'demo')
-  const linked = join(home, 'Developer/tracer')
+  const other = join(home, 'Developer/tracer')
+  const settings = JSON.stringify({ env: { FOO: '1' } })
   await writeFiles(home, {
-    'bin/claude': claudeAnswering(cmodPluginListed, `cat "$HOME/.claude/settings.json" > "${home}/session-settings"`),
+    'bin/claude': claudeAnswering(cmodPluginListed, 'true'),
     'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
     'Developer/tracer/.claude-plugin/plugin.json': JSON.stringify({ name: 'tracer', version: '0.5.0' }),
-    '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/Developer/tracer' } }),
+    '.claude/settings.json': settings,
   })
 
-  const result = await cmod(home, 'try', '--home', '~', tried, linked)
+  const result = await cmod(home, 'try', '--home', '~', tried, other)
 
   expect(result.exitCode).toBe(0)
-  expect(JSON.parse(await readFile(join(home, 'session-settings'), 'utf8')).env.CLAUDE_CODE_PLUGIN_DIRS).toBe('~/Developer/tracer:~/demo')
-  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8')).env.CLAUDE_CODE_PLUGIN_DIRS).toBe('~/Developer/tracer')
+  expect(await readFile(join(home, 'claude-sessions'), 'utf8')).toBe(`--plugin-dir ${tried} --plugin-dir ${other}\n`)
+  expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe(settings)
 })
 
-test('try --option sets the option under the id Claude Code lists for the linked folder', async () => {
+test('try --option sets the option under the id Claude Code gives the mod its session loads with --plugin-dir', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
-  const listed = `[${JSON.stringify(cmodPluginListed[0])},{"id":"demo@inline","version":"0.1.0","scope":"session","enabled":true,"installPath":"${root}"}]`
-  const claude = claudeAnswering(cmodPluginListed, 'true')
-    .replace(/  "plugin list --json"\) echo '.*' ;;/, `  "plugin list --json")\n    if grep -q '${root}' "$HOME/.claude/settings.json" 2>/dev/null; then echo '${listed}'; else echo '${JSON.stringify(cmodPluginListed)}'; fi ;;`)
-    .replace('  "plugin "*) exit 1 ;;', `  "plugin configure demo@inline --values-stdin --json") cat > "${home}/configured" ;;\n  "plugin "*) exit 1 ;;`)
+  const claude = claudeAnswering(cmodPluginListed, 'true').replace('  "plugin "*) exit 1 ;;', `  "plugin "*) exit 1 ;;\n  "--plugin-dir ${root} plugin configure demo@inline --values-stdin --json") cat > "${home}/configured" ;;`)
   await writeFiles(home, {
     'bin/claude': claude,
     'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', userConfig: { branch: { type: 'string', title: 'Branch', description: '' } } }),
@@ -173,7 +171,7 @@ test('cmod try runs several mods in a new home that it deletes after the session
   expect(result.exitCode).toBe(0)
   expect(await sessionHome()).not.toBe(home)
   expect(existsSync(await sessionHome())).toBe(false)
-  expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe('-p hello\n')
+  expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe(`--plugin-dir ${join(home, 'notes')} --plugin-dir ${join(home, 'modes')} -p hello\n`)
   expect(await readFile(join(home, 'session-records'), 'utf8')).toBe('modes.json\nnotes.json\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
   expect(JSON.parse(await readFile(join(home, 'session-keys'), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
@@ -208,7 +206,7 @@ cat "$HOME/.claude.json" > "${home}/session-state"
 echo "$ANTHROPIC_CONFIG_DIR $CLAUDE_SECURESTORAGE_CONFIG_DIR" > "${home}/session-pointers"`,
     ),
     'config/settings.json': JSON.stringify({
-      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HTTPS_PROXY: 'http://proxy:3128', CLAUDE_CODE_PLUGIN_DIRS: '~/mods/notes' },
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HTTPS_PROXY: 'http://proxy:3128' },
       apiKeyHelper: '~/bin/key.sh',
       forceLoginMethod: 'claudeai',
       permissions: { allow: ['Bash(git:*)'], deny: ['Read(./.env)'] },
@@ -224,7 +222,7 @@ echo "$ANTHROPIC_CONFIG_DIR $CLAUDE_SECURESTORAGE_CONFIG_DIR" > "${home}/session
 
   expect(result.exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(home, 'session-settings'), 'utf8'))).toEqual({
-    env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HTTPS_PROXY: 'http://proxy:3128', CLAUDE_CODE_PLUGIN_DIRS: join(home, 'notes') },
+    env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317', HTTPS_PROXY: 'http://proxy:3128' },
     apiKeyHelper: `${home}/bin/key.sh`,
     forceLoginMethod: 'claudeai',
     permissions: { deny: ['Read(./.env)'] },
@@ -259,7 +257,7 @@ test('cmod try loads a fresh cmod new mod in a home without the cmod plugin', as
 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(
-    'plugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n\n',
+    `plugin list --json\nplugin marketplace list --json\nplugin marketplace add heyJordanParker/cmod\nplugin install cmod@cmod --json\n--plugin-dir ${root}\n`,
   )
 }, 15_000)
 

@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { cmod, cmodFromSource, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
 
-afterEach(deleteTemporaryHomes)
+afterAll(deleteTemporaryHomes)
 
 const machine = `${process.platform}-${process.arch}`
 const otherMachine = machine === 'linux-x64' ? 'darwin-arm64' : 'linux-x64'

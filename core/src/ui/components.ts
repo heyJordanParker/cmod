@@ -1,15 +1,14 @@
 import type { RenderChildren, RenderElement } from 'claude-code'
 import { Box, Button, Text } from './elements.js'
 
-export type Tab = { readonly key: string; readonly label: string }
+export type Tab = { readonly key: string; readonly label: string; readonly hotkey?: string }
 
 export function Tabs({ tabs, selected, onSelect, children }: { readonly tabs: readonly Tab[]; readonly selected: string; readonly onSelect: (key: string) => void; readonly children?: RenderChildren }): RenderElement {
-  const row = tabs.map((tab, index) => {
-    const hotkey = index < 9 ? `${index + 1}` : undefined
-    return tab.key === selected
-      ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: 'claude', children: hotkey }), ': ']), Text({ bold: true, underline: true, children: tab.label })] })
-      : Button({ plain: true, dimColor: true, key: `tab:${tab.key}`, ...(hotkey === undefined ? {} : { hotkey }), label: tab.label, onPress: () => onSelect(tab.key) })
-  })
+  const row = tabs.map(({ key, label, hotkey }) =>
+    key === selected
+      ? Text({ children: [...(hotkey === undefined ? [] : [Text({ color: 'claude', children: hotkey }), ': ']), Text({ bold: true, underline: true, children: label })] })
+      : Button({ plain: true, dimColor: true, key: `tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: () => onSelect(key) }),
+  )
   return Box({ flexDirection: 'column', gap: 1, children: [Box({ gap: 3, children: row }), children] })
 }
 
@@ -19,7 +18,14 @@ export function Split({ children }: { readonly children: readonly RenderElement[
 }
 
 export function Panel({ title, children }: { readonly title: string; readonly children?: RenderChildren }): RenderElement {
-  return Box({ flexDirection: 'column', flexGrow: 1, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children: [Text({ bold: true, children: title }), children] })
+  return Box({
+    flexDirection: 'column',
+    flexGrow: 1,
+    children: [
+      Box({ flexDirection: 'column', flexGrow: 1, minWidth: [...title].length + 6, borderStyle: 'round', borderColor: 'subtle', paddingX: 1, children }),
+      Box({ position: 'absolute', top: 0, left: 2, children: Text({ bold: true, wrap: 'truncate-end', children: ` ${title} ` }) }),
+    ],
+  })
 }
 
 export function Toggle({ label, checked, onChange }: { readonly label: string; readonly checked: boolean; readonly onChange: (checked: boolean) => void }): RenderElement {
