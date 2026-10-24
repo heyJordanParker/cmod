@@ -34,6 +34,8 @@ const reloadEcho = '<command-name>/reload-plugins</command-name>'
 
 const reloadNote = '<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>'
 
+const reloadToast = 'reload'
+
 type SyncedRules = {
   readonly linked: readonly { readonly mod: string; readonly rules: readonly { readonly name: string; readonly isGlobal: boolean; readonly text: string }[] }[]
   readonly placed: readonly string[]
@@ -101,36 +103,25 @@ export const cmodPlugin = defineMod({
       ])
     const hidingReload = `cmod:hiding-reload:${await claude.session.id()}`
     let seenChange = await pluginsState()
-    let isReloading = false
-    let isWaitingForInput = false
     const reloadIfChanged = async () => {
       const change = await pluginsState()
-      if (change === seenChange || isReloading) return
+      if (change === seenChange) return
       seenChange = change
       if ((await claude.session.surfaces()).length === 0) return
-      isReloading = true
-      mod.after(reloadDelayMs, reload)
+      mod.toast.info('Plugins changed', { id: reloadToast, description: 'Reload to use them in this session.', action: { label: 'Reload', onClick: () => void mod.after(1, reload) }, duration: Infinity })
     }
     const reload = async () => {
+      mod.toast.dismiss(reloadToast)
       try {
         seenChange = await pluginsState()
         await claude.store.set(hidingReload, true)
         await claude.command.run({ command: 'reload-plugins' })
-        isWaitingForInput = false
         await widgets.recheck()
       } catch (error) {
         await claude.store.delete(hidingReload)
-        const wasPromptRetry = isWaitingForInput
-        if (wasPromptRetry) report({ id: 'reload', message: 'Could not reload the mods', error })
-        isWaitingForInput = !wasPromptRetry
-      } finally {
-        isReloading = isWaitingForInput
+        report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload })
       }
-      if (!isReloading) await reloadIfChanged()
     }
-    sessions.current.onPrompt(() => {
-      if (isWaitingForInput) mod.after(reloadDelayMs, reload)
-    })
     router.add('session.append', async (e, next) => {
       if (e.door !== 'command' || e.message.isMeta === true || (await claude.store.get(hidingReload)) !== true) return next(e)
       const isOwnReload = e.origin.kind === 'plugin' && 'name' in e.origin && e.origin.name === mod.name && JSON.stringify(e.message.content).includes(reloadEcho)

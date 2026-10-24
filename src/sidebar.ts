@@ -27,7 +27,7 @@ const focusedKeys = [
   ['esc', 'hide'],
 ] as const
 
-const unfocusedKeys = [['ctrl+x tab', 'focus']] as const
+const unfocusedKeys = [['click', 'focus']] as const
 
 const panelColumns = 4
 
@@ -35,7 +35,9 @@ type TabView = { readonly key: string; readonly label: string; readonly hotkey: 
 
 const tabText = ({ label, hotkey }: Pick<TabView, 'label' | 'hotkey'>) => (hotkey === undefined ? label : `${hotkey}: ${label}`)
 
-const tabColumns = (each: TabView) => [...tabText(each)].length + 2 + (each.onClose === undefined ? 0 : 2)
+const closeGlyph = ' × '
+
+const tabColumns = (each: TabView) => [...tabText(each)].length + 2 + (each.onClose === undefined ? 0 : 1 + [...closeGlyph].length)
 
 export const sidebarSession: SidebarState['session'] = { pages: [], shown: dashboardTab }
 
@@ -91,18 +93,13 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
   }
 
   const tab = ({ key, label, hotkey, isShown, onClose }: TabView): RenderElement => {
-    const closes = onClose === undefined ? [] : [onClose]
+    const closes = onClose === undefined ? [] : [Button({ plain: true, key: `close:${key}`, onPress: onClose, children: Text({ ...(isShown ? { color: shownColor, backgroundColor: 'inverseText' } : { color: barColor, backgroundColor: 'inactive' }), children: closeGlyph }) })]
     return Box({
       flexShrink: 0,
       paddingX: 1,
       columnGap: 1,
       ...(isShown ? { backgroundColor: shownColor } : {}),
-      children: isShown
-        ? [Text({ color: 'inverseText', bold: true, children: tabText({ label, hotkey }) }), ...closes.map((close) => Button({ plain: true, key: `close:${key}`, onPress: close, children: Text({ color: 'inverseText', children: '×' }) }))]
-        : [
-            Button({ plain: true, dimColor: true, key: `tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: () => show(key) }),
-            ...closes.map((close) => Button({ plain: true, dimColor: true, key: `close:${key}`, label: '×', onPress: close })),
-          ],
+      children: [isShown ? Text({ color: 'inverseText', bold: true, children: tabText({ label, hotkey }) }) : Button({ plain: true, dimColor: true, key: `tab:${key}`, ...(hotkey === undefined ? {} : { hotkey }), label, onPress: () => show(key) }), ...closes],
     })
   }
 

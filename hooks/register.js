@@ -369,7 +369,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.1.0";
+var coreVersion = "4.1.1";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -6120,8 +6120,14 @@ var conversationMethods = {
   watchBefore: "cmod:watchBefore",
   act: "cmod:act",
   changed: "cmod:changed",
-  before: "cmod:before"
+  before: "cmod:before",
+  sessionColor: "cmod:sessionColor"
 };
+var resetColors = ["default", "reset", "none", "gray", "grey"];
+function pickedColor(args) {
+  const picked = args.trim().toLowerCase();
+  return resetColors.includes(picked) ? undefined : picked;
+}
 var actPermissions = { send: "prompt", startTask: "tasks", fork: "tasks", clone: "tasks", startBackgroundTask: "tasks", usage: "conversation", surfaces: "conversation", abort: "prompt" };
 var startsTurns = ["CronCreate"];
 var ownSchedule = ["CronDelete", "CronList"];
@@ -6219,6 +6225,8 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
   const parents = new Map;
   const known = new Map;
   let current2 = { id: "", title: "", project: "", cwd: "", model: "", startedAt: "", lastAt: "", isRunning: true };
+  let told = { session: "" };
+  const colored = ({ color: _color, ...data }) => told.session === data.id && told.color !== undefined ? { ...data, color: told.color } : data;
   const keyOf = (scope) => scope.session ?? everySession;
   const subscribe = (key) => {
     if (queued.has(key))
@@ -6437,6 +6445,9 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       },
       get title() {
         return read().title;
+      },
+      get color() {
+        return read().color;
       },
       get project() {
         return read().project;
@@ -6681,7 +6692,7 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     follow(next) {
       const moved = next.id !== current2.id && current2.id !== "";
       const previous = current2.id;
-      current2 = { ...next, title: next.title || (next.id === current2.id ? current2.title : ""), isRunning: true, lastAt: new Date().toISOString() };
+      current2 = colored({ ...next, title: next.title || (next.id === current2.id ? current2.title : ""), isRunning: true, lastAt: new Date().toISOString() });
       if (!moved)
         return;
       for (const into of [listening, deciding]) {
@@ -6697,6 +6708,10 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       parents.delete(previous);
       subscribe(previous);
       subscribe(current2.id);
+    },
+    recolor(next) {
+      told = next;
+      current2 = colored(current2);
     }
   };
 }
@@ -6890,6 +6905,27 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   };
   const ended = (id) => new Error(`session ${id} has ended`);
   const isRunning = async (id) => (await json(["history", "sessions", "--running", "--all"])).some((each) => each.id === id);
+  let color = { session: "" };
+  let onColor = () => {
+    return;
+  };
+  const recolor = (id, picked) => {
+    if (session !== id)
+      return;
+    color = { session: id, ...picked === undefined ? {} : { color: picked } };
+    onColor(color);
+  };
+  const readColor = (id) => void json(["history", "sessions", "--running", "--all"]).then((running) => recolor(id, running.find((each) => each.id === id)?.color)).catch((error) => report("color", `Could not read the color of session ${id}`, error));
+  router.add("command.run", async (e, next) => {
+    const answer = await next(e);
+    if (e.command !== "color" || session === "")
+      return answer;
+    if (e.args.trim() === "")
+      readColor(session);
+    else
+      recolor(session, pickedColor(e.args));
+    return answer;
+  });
   let lastTurn;
   const closings = new Map;
   const dispatch = (to, changes, isInProject = true) => {
@@ -7131,7 +7167,10 @@ ${watcher.mod}`, watcher])).values()];
     liveIds.clear();
     waitingRows.clear();
     conversation = createConversation(emptyConversation(id));
-    starting = source === "startup" || source === "clear" ? Promise.resolve(dispatch(id, conversation.startContext(new Date().toISOString()))) : json(["history", "state", id]).then((state) => {
+    const isNew = source === "startup" || source === "clear";
+    if (!isNew)
+      readColor(id);
+    starting = isNew ? Promise.resolve(dispatch(id, conversation.startContext(new Date().toISOString()))) : json(["history", "state", id]).then((state) => {
       if (session === id)
         conversation = createConversation({ ...emptyConversation(id), ...state });
     }, (error) => report("state", `Starts session ${id} without its earlier turns`, error));
@@ -7540,6 +7579,10 @@ ${target}`, { mod: caller, target, project: project(), events: [...new Set(list.
   };
   return {
     turnClosedBy: (rowId) => closings.get(rowId),
+    color: () => color,
+    onColor(listener) {
+      onColor = listener;
+    },
     moved() {
       for (const [key, watch] of ownWatches)
         ownWatches.set(key, { ...watch, project: project() });
@@ -8445,12 +8488,13 @@ var partMethods = {
   changed: "cmod:partsChanged",
   stylers: "cmod:markdownStylers"
 };
+var stalePress = "that button drew before the last redraw. Press the one it shows now.";
 var unmeasuredColumns = 80;
 function viewportColumns(e) {
   return e.viewport?.columns ?? unmeasuredColumns;
 }
 function styledAt(e, columns = viewportColumns(e)) {
-  return { surface: e.surface, columns };
+  return { surface: e.surface, columns: Math.max(columns, 0) };
 }
 var bullet = "⏺";
 function paneSize(pane, state) {
@@ -8575,7 +8619,8 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       return;
     stylers = heard;
     stylersSeen += 1;
-    claude.ui.invalidate("ui.render");
+    if (name === cmodPluginName || panes.size > 0)
+      claude.ui.invalidate("ui.render");
   };
   const treeOf = (render, handlers) => {
     const drawn = render();
@@ -9017,7 +9062,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     const known = draws.get(drawn);
     const run = known?.handlers[handler];
     if (known === undefined || run === undefined)
-      throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`);
+      throw new Error(`${name}: ${stalePress}`);
     if (caller !== cmodPluginName && known.id !== "markdown")
       throw new Error(`${name}: ${caller} pressed a button only the cmod plugin draws.`);
     const pressed = async () => {
@@ -9179,7 +9224,7 @@ function createInstaller(name, claude, waiting, nextDraw) {
   const press = async ({ draw: drawn, handler, args }) => {
     const run = draws.get(drawn)?.[handler];
     if (run === undefined)
-      throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`);
+      throw new Error(`${name}: ${stalePress}`);
     return collect(() => run(...args));
   };
   return {
@@ -9201,10 +9246,11 @@ function createInstaller(name, claude, waiting, nextDraw) {
       isSeen = false;
       question?.cancel();
     },
-    consent({ install, uninstall, hotkeys, permissions, updates }) {
+    consent({ install, uninstall, program, hotkeys, permissions, updates }) {
       const changes = [
         ...install === "" ? [] : [`Run ${install} now${uninstall === "" ? "" : `, and ${uninstall} when you remove it`}`],
         ...install === "" && uninstall !== "" ? [`Run ${uninstall} when you remove it`] : [],
+        ...program === "" ? [] : [`Install ${program}, which Claude runs by its name`],
         ...hotkeys === "" ? [] : [`Bind ${hotkeys}`],
         ...updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]
       ];
@@ -9916,7 +9962,7 @@ async function createHotkeys({ name, declared, configRoot, claude, router, answe
   if (name === cmodPluginName) {
     router.add("command.describe", async (e, next) => {
       const described2 = await next(e);
-      return e.command.startsWith(hotkeyCommand(e.provider.plugin, "")) ? { ...described2, isHidden: true } : described2;
+      return e.command.startsWith(hotkeyCommand(e.provider.plugin.replace(/@[^@]*$/, ""), "")) ? { ...described2, isHidden: true } : described2;
     });
   }
   const entries = Object.entries(declared);
@@ -10039,13 +10085,16 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
     const pending = claude.cmod.call({ to: mod, method: partMethods.press, input }).then((answer) => void update(mod, isObject(answer) ? answer : {}), (error) => {
       parts.forget(mod);
       claude.ui.invalidate("ui.render");
-      report(`press:${mod}`, `${mod} did not take the press`, error);
+      if (messageOf(error).includes(stalePress))
+        claude.ui.log(`cmod: ${mod} draws its page again, because the button pressed was from an older drawing:${messageOf(error)}`, { to: "debug" });
+      else
+        report(`press:${mod}`, `${mod} did not take the press`, error);
     }).finally(() => pressing.delete(pending));
     pressing.add(pending);
     if (inputDepth === 0)
       pending.then(takeWaiting);
   };
-  const cacheKey = (page, params, columns, isFocused) => `${page}\x00${JSON.stringify(params ?? null)}\x00${columns}\x00${isFocused}`;
+  const lastDrawn = new Map;
   const plain2 = (data) => JSON.parse(JSON.stringify(data));
   return {
     declared: () => [...declared].map(([mod, pages]) => ({ mod, pages })),
@@ -10053,11 +10102,18 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
     element(mod, page, params, columns, isFocused) {
       if (!declared.has(mod))
         ask(mod);
-      const cached = cacheKey(page, params, columns, isFocused);
+      const given = JSON.stringify(params ?? null);
+      const cached = `${page}\x00${given}\x00${columns}\x00${isFocused}`;
       const name = `The ${page} page of ${mod}`;
+      const keyPrefix = `${mod}/${page}:`;
       parts.fill(mod, cached, { page, params: plain2(params ?? null), columns, isFocused }, name)?.then(() => claude.ui.invalidate("ui.render"));
       const failure = parts.failure(mod, cached);
-      return parts.element(mod, cached, `${mod}/${page}:`, name, `page:${mod}/${page}`) ?? (failure === undefined ? undefined : Text({ color: "error", children: `${name} could not draw: ${failure}` }));
+      const drawnAt = (key) => parts.element(mod, key, keyPrefix, name, `page:${mod}/${page}`);
+      const last = lastDrawn.get(keyPrefix);
+      const drawn = drawnAt(cached);
+      if (drawn !== undefined)
+        lastDrawn.set(keyPrefix, { params: given, cached });
+      return drawn ?? (last?.params === given ? drawnAt(last.cached) : undefined) ?? (failure === undefined ? undefined : Text({ color: "error", children: `${name} could not draw: ${failure}` }));
     },
     press,
     update,
@@ -10339,7 +10395,8 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
   };
   const reload = async () => {
     stored = await read();
-    place();
+    if (JSON.stringify(withNewWidgets(stored)) !== JSON.stringify(layout))
+      place();
   };
   saving = (async () => {
     const recorded = (await claude.fs.list(`${store}/records`).catch(ifMissing([]))).map((entry) => entry.name).filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -".json".length));
@@ -10722,6 +10779,8 @@ function createLifecycle(definition, permissionRoutes = () => {
     phase = "active";
     stopWatchingRecord();
     runtime.claude.ui.invalidate("ui.render");
+    if (definition.name === cmodPluginName)
+      runtime.claude.ui.invalidate("command.describe");
     runSteps(active.mod).catch((error) => toastFailure({ id: "cmod:steps", message: "Its installer stopped", error }));
     const missed = missedSessionStart;
     missedSessionStart = undefined;
@@ -10772,7 +10831,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     });
     const installedElsewhere = new Promise((resolve2) => settleAsked = () => resolve2("installed"));
     watchRecord();
-    const answer = await Promise.race([installer.consent({ ...event, updates }), installedElsewhere]).finally(() => {
+    const answer = await Promise.race([installer.consent({ ...event, program: plugin?.steps.program ?? "", updates }), installedElsewhere]).finally(() => {
       settleAsked = undefined;
     });
     await installer.close();
@@ -11103,7 +11162,7 @@ function createLifecycle(definition, permissionRoutes = () => {
         return answer;
       return runtime.toaster.draw(await answer, runtime.claude.ui.resolve(render), render.props, render.requestId);
     },
-    async caught(event, e, next, { kind, message }) {
+    async caught(event, e, next, { error: { kind, message }, called }) {
       const call = e;
       const isAsk = event === "cmod.call" && call.to === definition.name && beforeAskOf(call) !== undefined;
       const reasons = { timeout: `it ran past the ${hookMs / 1000} s Claude Code gives a hook`, throw: message ?? "it threw" };
@@ -11111,7 +11170,11 @@ function createLifecycle(definition, permissionRoutes = () => {
       if (reason === undefined)
         return isAsk ? { value: null } : next(e);
       const error = new Error(reason);
-      toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, "")} hook`, error });
+      const failedBeneath = called && kind === "throw" ? await next(e).then(() => {
+        return;
+      }, messageOf) : undefined;
+      if (failedBeneath === undefined || failedBeneath !== message)
+        toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, "")} hook`, error });
       return router.dispatchFailure(event, e, error, next);
     }
   };
@@ -11443,6 +11506,16 @@ async function createMod(definition, runtime) {
   parts = drawnParts({ claude, report: reportPart, press: (to, input) => pages === undefined ? pressElsewhere(to, input) : pages.press(to, input) });
   const widgets = conversations === undefined ? undefined : serveWidgets({ claude, router, store: runtime.store, report: reportPart, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn: area.markdownIn });
   pages = widgets === undefined ? undefined : servePages({ claude, router, report: reportPart, widgets, parts, tellStylers: area.restyled });
+  const tellColor = (to, told) => {
+    if (told.session === "" || to === cmodPluginName)
+      return;
+    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error) => claude.ui.log(`cmod: ${to} did not hear the session's color: ${messageOf(error)}`, { to: "debug" })));
+  };
+  conversations?.onColor((told) => {
+    client.recolor(told);
+    for (const { mod: to } of pages?.declared() ?? [])
+      tellColor(to, told);
+  });
   router.add("cmod.call", async (e, next) => {
     if (e.to !== definition.name)
       return next(e);
@@ -11454,11 +11527,18 @@ async function createMod(definition, runtime) {
       client.changed(changedSession, change, isInProject !== false);
       return { value: null };
     }
+    if (e.method === conversationMethods.sessionColor && call.caller === cmodPluginName) {
+      client.recolor(e.input);
+      return { value: null };
+    }
     const ask = beforeAskOf(call);
     if (ask !== undefined)
       return { value: await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject) ?? null };
     if (e.method === partMethods.changed && call.caller !== undefined && pages !== undefined) {
-      return { value: { isHeld: pages.update(call.caller, e.input), stylers: pages.stylers() } };
+      const update = e.input;
+      if (update.parts !== undefined && conversations !== undefined)
+        tellColor(call.caller, conversations.color());
+      return { value: { isHeld: pages.update(call.caller, update), stylers: pages.stylers() } };
     }
     if (call.caller !== undefined) {
       const turn = e.method === partMethods.draw ? e.input.turn : undefined;
@@ -11618,7 +11698,7 @@ function routeToMod(_$, eventInput, passOn) {
   return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed));
 }
 function routeFailure(_$, eventInput, passOn) {
-  return lifecycle.caught(passOn.event, eventInput, (passed) => passOn(passed), passOn.error);
+  return lifecycle.caught(passOn.event, eventInput, (passed) => passOn(passed), passOn);
 }
 var withCaller = (eventInput, passOn) => ({ ...eventInput, caller: passOn.origin.plugin });
 var withoutCaller = (passOn) => (passed) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== "caller")));
@@ -11626,7 +11706,7 @@ function routeCallToMod(_$, eventInput, passOn) {
   return lifecycle.route("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn));
 }
 function routeCallFailure(_$, eventInput, passOn) {
-  return lifecycle.caught("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn), passOn.error);
+  return lifecycle.caught("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn), passOn);
 }
 function registerMod(addHook, definition, options) {
   permissionCheck = undefined;
@@ -11675,11 +11755,11 @@ function registerMod(addHook, definition, options) {
   addHook("ui.press", routeToMod).catch(routeFailure);
   addHook("ui.scroll", routeToMod).catch(routeFailure);
   addHook("ui.close", routeToMod).catch(routeFailure);
-  addHook("cmod.call", routeCallToMod).catch(routeCallFailure);
+  addHook("cmod.call", { to: definition.name }, routeCallToMod).catch(routeCallFailure);
   addHook("session.compact", routeToMod).catch(routeFailure);
   if (definition.name !== cmodPluginName)
     return;
-  addHook("command.describe", routeToMod).catch(routeFailure);
+  addHook("command.describe", { command: /--/ }, routeToMod).catch(routeFailure);
   addHook("session.append", routeToMod).catch(routeFailure);
   addHook("session.receive", routeToMod).catch(routeFailure);
   addHook("agent.spawn", routeToMod).catch(routeFailure);
@@ -11750,7 +11830,7 @@ function oneLine(error) {
   return messageOf(error).replace(/\s*\n\s*/g, " ");
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-0EgdCG/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-OjnmbC/release/src/settings.ts
 var settingsMemory = { removing: null, views: [] };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12087,7 +12167,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-0EgdCG/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-OjnmbC/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12098,10 +12178,11 @@ var focusedKeys = [
   ["tab", "move"],
   ["esc", "hide"]
 ];
-var unfocusedKeys = [["ctrl+x tab", "focus"]];
+var unfocusedKeys = [["click", "focus"]];
 var panelColumns2 = 4;
 var tabText = ({ label, hotkey }) => hotkey === undefined ? label : `${hotkey}: ${label}`;
-var tabColumns = (each) => [...tabText(each)].length + 2 + (each.onClose === undefined ? 0 : 2);
+var closeGlyph = " × ";
+var tabColumns = (each) => [...tabText(each)].length + 2 + (each.onClose === undefined ? 0 : 1 + [...closeGlyph].length);
 var sidebarSession = { pages: [], shown: dashboardTab };
 var keyOf = ({ mod, page }) => `${mod}/${page}`;
 function sidebar(mod, settings3) {
@@ -12147,16 +12228,13 @@ function sidebar(mod, settings3) {
     show(keyOf(next));
   };
   const tab = ({ key, label, hotkey, isShown, onClose }) => {
-    const closes = onClose === undefined ? [] : [onClose];
+    const closes = onClose === undefined ? [] : [Button({ plain: true, key: `close:${key}`, onPress: onClose, children: Text({ ...isShown ? { color: shownColor, backgroundColor: "inverseText" } : { color: barColor, backgroundColor: "inactive" }, children: closeGlyph }) })];
     return Box({
       flexShrink: 0,
       paddingX: 1,
       columnGap: 1,
       ...isShown ? { backgroundColor: shownColor } : {},
-      children: isShown ? [Text({ color: "inverseText", bold: true, children: tabText({ label, hotkey }) }), ...closes.map((close) => Button({ plain: true, key: `close:${key}`, onPress: close, children: Text({ color: "inverseText", children: "×" }) }))] : [
-        Button({ plain: true, dimColor: true, key: `tab:${key}`, ...hotkey === undefined ? {} : { hotkey }, label, onPress: () => show(key) }),
-        ...closes.map((close) => Button({ plain: true, dimColor: true, key: `close:${key}`, label: "×", onPress: close }))
-      ]
+      children: [isShown ? Text({ color: "inverseText", bold: true, children: tabText({ label, hotkey }) }) : Button({ plain: true, dimColor: true, key: `tab:${key}`, ...hotkey === undefined ? {} : { hotkey }, label, onPress: () => show(key) }), ...closes]
     });
   };
   const edge = (glyph, left, right, columns) => {
@@ -12344,7 +12422,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-0EgdCG/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-OjnmbC/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12398,7 +12476,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-0EgdCG/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-OjnmbC/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -12407,6 +12485,7 @@ var watchCheckMs = 1e4;
 var watchStaleMs = 15000;
 var reloadEcho = "<command-name>/reload-plugins</command-name>";
 var reloadNote = "<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>";
+var reloadToast = "reload";
 async function tipOf(mod) {
   const messages = await engineOf(mod).claude.session.messages();
   if (messages.length === 0)
@@ -12463,41 +12542,27 @@ var cmodPlugin = defineMod({
     ]);
     const hidingReload = `cmod:hiding-reload:${await claude.session.id()}`;
     let seenChange = await pluginsState();
-    let isReloading = false;
-    let isWaitingForInput = false;
     const reloadIfChanged = async () => {
       const change = await pluginsState();
-      if (change === seenChange || isReloading)
+      if (change === seenChange)
         return;
       seenChange = change;
       if ((await claude.session.surfaces()).length === 0)
         return;
-      isReloading = true;
-      mod.after(reloadDelayMs, reload);
+      mod.toast.info("Plugins changed", { id: reloadToast, description: "Reload to use them in this session.", action: { label: "Reload", onClick: () => void mod.after(1, reload) }, duration: Infinity });
     };
     const reload = async () => {
+      mod.toast.dismiss(reloadToast);
       try {
         seenChange = await pluginsState();
         await claude.store.set(hidingReload, true);
         await claude.command.run({ command: "reload-plugins" });
-        isWaitingForInput = false;
         await widgets.recheck();
       } catch (error) {
         await claude.store.delete(hidingReload);
-        const wasPromptRetry = isWaitingForInput;
-        if (wasPromptRetry)
-          report({ id: "reload", message: "Could not reload the mods", error });
-        isWaitingForInput = !wasPromptRetry;
-      } finally {
-        isReloading = isWaitingForInput;
+        report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload });
       }
-      if (!isReloading)
-        await reloadIfChanged();
     };
-    sessions.current.onPrompt(() => {
-      if (isWaitingForInput)
-        mod.after(reloadDelayMs, reload);
-    });
     router.add("session.append", async (e, next) => {
       if (e.door !== "command" || e.message.isMeta === true || await claude.store.get(hidingReload) !== true)
         return next(e);
@@ -12710,7 +12775,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-0EgdCG/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-OjnmbC/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
