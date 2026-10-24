@@ -187,7 +187,7 @@ The current session, `test-session`, starts empty. A test builds the conversatio
 
 Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: InstructionFile, path, text }`, `{ type: AttachedFile, path, attachmentType, text }`, or `{ type: Notice, text }`.
 
-The `sessions` option gives the earlier conversations, each a `FakeSession`: an `id`, its `messages` as drafts, its `goal`, and any `Session` field, such as `title`, `project`, or `isRunning`. A session that names no `project` is in the test's project.
+The `sessions` option gives the earlier conversations, each a `FakeSession`: an `id`, its `messages` as drafts, its `goal`, and any `Session` field, such as `title`, `color`, `project`, or `isRunning`. A session that names no `project` is in the test's project. `{ id: 'test-session', color: 'cyan' }` gives the current session its `/color` from the mod's start, and `tested.type('/color cyan')` and `tested.type('/color default')` run Claude Code's `/color`, which changes `sessions.current.color`. `tested.type('/color')` throws, because Claude Code picks a random color for it.
 
 ```ts
 import { expect, test } from 'bun:test'

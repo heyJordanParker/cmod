@@ -6,7 +6,7 @@ import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
-import { partMethods, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
+import { partMethods, stalePress, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
 import type { Widgets } from './widgets.js'
 
 const askedWaitMs = 1000
@@ -129,7 +129,8 @@ export function servePages({
         (error: unknown) => {
           parts.forget(mod)
           claude.ui.invalidate('ui.render')
-          report(`press:${mod}`, `${mod} did not take the press`, error)
+          if (messageOf(error).includes(stalePress)) claude.ui.log(`cmod: ${mod} draws its page again, because the button pressed was from an older drawing:${messageOf(error)}`, { to: 'debug' })
+          else report(`press:${mod}`, `${mod} did not take the press`, error)
         },
       )
       .finally(() => pressing.delete(pending))
@@ -137,7 +138,7 @@ export function servePages({
     if (inputDepth === 0) void pending.then(takeWaiting)
   }
 
-  const cacheKey = (page: string, params: unknown, columns: number, isFocused: boolean) => `${page}\u0000${JSON.stringify(params ?? null)}\u0000${columns}\u0000${isFocused}`
+  const lastDrawn = new Map<string, { readonly params: string; readonly cached: string }>()
 
   const plain = <Data,>(data: Data): Data => JSON.parse(JSON.stringify(data)) as Data
 
@@ -146,11 +147,17 @@ export function servePages({
     stylers: () => [...stylers],
     element(mod, page, params, columns, isFocused) {
       if (!declared.has(mod)) void ask(mod)
-      const cached = cacheKey(page, params, columns, isFocused)
+      const given = JSON.stringify(params ?? null)
+      const cached = `${page}\u0000${given}\u0000${columns}\u0000${isFocused}`
       const name = `The ${page} page of ${mod}`
+      const keyPrefix = `${mod}/${page}:`
       void parts.fill(mod, cached, { page, params: plain(params ?? null), columns, isFocused }, name)?.then(() => claude.ui.invalidate('ui.render'))
       const failure = parts.failure(mod, cached)
-      return parts.element(mod, cached, `${mod}/${page}:`, name, `page:${mod}/${page}`) ?? (failure === undefined ? undefined : Text({ color: 'error', children: `${name} could not draw: ${failure}` }))
+      const drawnAt = (key: string) => parts.element(mod, key, keyPrefix, name, `page:${mod}/${page}`)
+      const last = lastDrawn.get(keyPrefix)
+      const drawn = drawnAt(cached)
+      if (drawn !== undefined) lastDrawn.set(keyPrefix, { params: given, cached })
+      return drawn ?? (last?.params === given ? drawnAt(last.cached) : undefined) ?? (failure === undefined ? undefined : Text({ color: 'error', children: `${name} could not draw: ${failure}` }))
     },
     press,
     update,

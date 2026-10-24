@@ -196,7 +196,7 @@ export function serveWidgets({
 
   const reload = async () => {
     stored = await read()
-    place()
+    if (JSON.stringify(withNewWidgets(stored)) !== JSON.stringify(layout)) place()
   }
 
   saving = (async () => {

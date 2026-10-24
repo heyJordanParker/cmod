@@ -12,6 +12,7 @@ import type { UsageChange, Usage } from './session.js'
 export type SessionData = {
   readonly id: string
   readonly title: string
+  readonly color?: string
   readonly project: string
   readonly cwd: string
   readonly model: string

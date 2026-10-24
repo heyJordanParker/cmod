@@ -73,6 +73,13 @@ test("hiding Claude Code's hint leaves the BelowPrompt widgets, and hiding its m
   expect(await fire([claudeModes], 'SessionMode')).toEqual([])
 })
 
+test('a prompt narrower than its indent still draws its BelowPrompt widgets, at no width instead of a negative one', async () => {
+  const tested = testMod(withWidgets('git', label('branch', 'main')))
+  const drawn = await tested.fire('ui.render', { surface: 'terminal', component: 'PromptHint', requestId: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '' }, viewport: { columns: 2, rows: 24 } } as never, elements.Text({ children: '' }))
+
+  expect(rowsOf(drawn, 2)).toEqual(['', 'main'])
+})
+
 test('a TurnEnd widget draws under the turn that ended, and reads that turn', async () => {
   const tested = testMod(withWidgets('turns', { id: 'prompt', title: 'Prompt', areas: [TurnEnd], render: (_mod, context) => <Text>{context.area === TurnEnd ? `answered: ${context.turn.prompt.text}` : ''}</Text> }))
 
@@ -266,6 +273,20 @@ test('a layout change marks store-changed, which every other session polls, and 
   await widgets.change((current) => toggled(current, 'git/branch'))
 
   expect(await fake.claude.fs.exists(stamp)).toBe(true)
+})
+
+test('a store change that leaves the widget layout as it was asks Claude Code for no redraw, and one that moves a widget asks for one', async () => {
+  const { fake, widgets } = servedLayout(layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }))
+  await fake.settle()
+  const redraws = () => fake.calls.filter(({ call }) => call === 'ui.invalidate').length
+  const start = redraws()
+
+  await widgets.reload()
+  const afterSameLayout = redraws() - start
+  await fake.claude.fs.write(layoutFile, layout({ belowPrompt: [{ left: [], right: ['git/branch'] }] }))
+  await widgets.reload()
+
+  expect([afterSameLayout, redraws() - start]).toEqual([0, 1])
 })
 
 test("a mod that lists an area that is not one still lets the other mods' new widgets be placed", async () => {

@@ -432,6 +432,27 @@ test('a mod that only binds keys asks about the keys alone', async () => {
   expect(shown).not.toContain('Run ')
 })
 
+test('a consent whose only change is the program names the program it installs', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  Object.assign(
+    fake.fakes.fs,
+    fakeFiles({
+      [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+      [`${root}/package.json`]: '{ "cmod": { "program": "trash" } }',
+    }),
+  )
+  installCmod(fake)
+  fake.fakes.process.spawn = () => finished(['needs-consent abc123\t\t\t'], 10)
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, readPlugin)
+  await fake.settle()
+
+  const shown = await installerText(lifecycle)
+  expect(shown).toContain('safe-delete wants to change your computer:')
+  expect(shown).toContain('Install trash, which Claude runs by its name')
+})
+
 test('a mod installed from a marketplace with no update choice says it will update automatically, and one the person chose for says nothing', async () => {
   const cached = '/test/home/.claude/plugins/cache/safe-market/safe-delete/0.2.0'
   const shownFor = async (autoUpdate: boolean | undefined) => {
@@ -475,16 +496,27 @@ test('each hotkey of a mod is a command that runs at once', async () => {
   expect(fake.shown.commands).toEqual(['modes--cycle'])
 })
 
-test("the cmod plugin hides every mod's hotkey command from the slash command list, and no other command", async () => {
+test("the cmod plugin hides every mod's hotkey command from the slash command list, and no other command, whose provider Claude Code names with its marketplace", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
   await fake.settle()
-  const described = (command: string, plugin: string) => fire(lifecycle, 'command.describe', { command, provider: { plugin, tier: 'plugin' } }, { description: 'Switch mode', isHidden: false })
+  const described = (command: string, plugin: string) => fire(lifecycle, 'command.describe', { command, provider: { plugin, tier: 'user' } }, { description: 'Switch mode', isHidden: false })
 
+  expect(await described('modes--cycle', 'modes@market')).toEqual({ description: 'Switch mode', isHidden: true })
+  expect(await described('cmod--sidebar', 'cmod@cmod')).toEqual({ description: 'Switch mode', isHidden: true })
   expect(await described('modes--cycle', 'modes')).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await described('review', 'modes')).toEqual({ description: 'Switch mode', isHidden: false })
-  expect(await described('notes--cycle', 'modes')).toEqual({ description: 'Switch mode', isHidden: false })
+  expect(await described('review', 'modes@market')).toEqual({ description: 'Switch mode', isHidden: false })
+  expect(await described('notes--cycle', 'modes@market')).toEqual({ description: 'Switch mode', isHidden: false })
+})
+
+test('the cmod plugin asks Claude Code to list the commands again once it can hide hotkey commands, because Claude Code keeps the list it made before the plugin started', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
+  await fake.settle()
+
+  expect(fake.calls.filter(({ call, args }) => call === 'ui.invalidate' && args[0] === 'command.describe')).toHaveLength(1)
 })
 
 test('Not now declines the install with one notice naming cmod install, and setup never runs', async () => {
@@ -790,6 +822,50 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
   await draw()
 
   expect(asked.filter((method) => method === partMethods.draw || method === partMethods.press)).toEqual([partMethods.draw, partMethods.press, partMethods.draw])
+})
+
+test('a page keeps its drawing while its mod draws it for a focused pane or a new width, so Claude Code never clamps the scrolled window to a one-line placeholder', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  fake.fakes.cmod.call = async (call) => {
+    if (call.method !== partMethods.draw) return null
+    const { columns, isFocused } = call.input as { readonly columns: number; readonly isFocused: boolean }
+    return { draw: 1, tree: { $cmodElement: 'Text', props: { children: `runs at ${columns}${isFocused ? ', focused' : ''}` } } }
+  }
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const shown = async (columns: number, isFocused: boolean, params: unknown = { run: 7 }) => {
+    const drawn = drawWith(elements, () => pages.element('ci-watch', 'runs', params, columns, isFocused))
+    await fake.settle()
+    return drawn === undefined ? 'Drawing Runs…' : textOf(drawn)
+  }
+
+  await shown(80, false)
+
+  expect([await shown(80, false), await shown(80, true), await shown(80, true), await shown(60, true), await shown(60, true), await shown(60, true, { run: 8 })]).toEqual([
+    'runs at 80',
+    'runs at 80',
+    'runs at 80, focused',
+    'runs at 80, focused',
+    'runs at 60, focused',
+    'Drawing Runs…',
+  ])
+})
+
+test('a press on a page drawn before its mod restarted only draws the page again, and a press the mod refuses for another reason shows its failure', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const refusals: Readonly<Record<string, string>> = { 'ci-watch': 'ci-watch: that button drew before the last redraw. Press the one it shows now.', deploys: 'deploys: the deploy key is missing' }
+  fake.fakes.cmod.call = async (call) => calledAnswer('cmod', call.method === partMethods.press ? { deny: refusals[call.to] ?? 'unknown mod' } : { value: null })
+  const reported: string[] = []
+  const redraws = () => fake.calls.filter((call) => call.call === 'ui.invalidate').length
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: (_id, message, error) => void reported.push(`${message}: ${messageOf(error)}`), widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+
+  pages.press('ci-watch', { draw: 3, handler: 0, args: [] })
+  await fake.settle()
+  const redrawnForStale = redraws()
+  pages.press('deploys', { draw: 3, handler: 0, args: [] })
+  await fake.settle()
+
+  expect([redrawnForStale, reported]).toEqual([1, ['deploys did not take the press: cmod: $.cmod.call: deploys: the deploy key is missing']])
+  expect(fake.shown.debug).toContain('cmod: ci-watch draws its page again, because the button pressed was from an older drawing:cmod: $.cmod.call: ci-watch: that button drew before the last redraw. Press the one it shows now.')
 })
 
 test('after a mod restarts with its install question open, Not now on the shown install tab declines on the first press', async () => {

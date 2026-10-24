@@ -85,7 +85,7 @@ test('readers of a session longer than several write batches, running at once, e
   )
   const [first, second, task, turns] = results.map((result) => JSON.parse(result.stdout) as { id: string }[])
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
-  const db = new Database(join(home, '.local/share/cmod/history-10.sqlite'), { readonly: true })
+  const db = new Database(join(home, '.local/share/cmod/history-11.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
@@ -300,6 +300,22 @@ test("sessions lists the project's conversations newest first, and --all, --sinc
   expect(ids(await json(home, 'search', 'tree pane', '--project', project, '--running'))).toEqual(['u1'])
 })
 
+test('sessions carries the color each session last took with /color, and none after a reset to default', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  const transcript = (session: string) => join(home, projectFolder(project), `${session}.jsonl`)
+  const colors = async () => Object.fromEntries(((await json(home, 'sessions', '--project', project)) as { id: string; color?: string }[]).map(({ id, color }) => [id, color ?? 'none']))
+  await appendFile(transcript('s1'), lines([{ type: 'agent-color', agentColor: 'cyan', sessionId: 's1' }, { type: 'agent-color', agentColor: 'green', sessionId: 's1' }]))
+  await json(home, 'messages', 's1', '--project', project)
+
+  expect(await colors()).toEqual({ s1: 'green', s0: 'none' })
+
+  await appendFile(transcript('s1'), lines([{ type: 'agent-color', agentColor: 'default', sessionId: 's1' }]))
+  await appendFile(transcript('s0'), lines([{ type: 'agent-color', agentColor: 'purple', sessionId: 's0' }, { type: 'agent-color', agentColor: 'orange', sessionId: 's0' }]))
+
+  expect(await colors()).toEqual({ s1: 'none', s0: 'orange' })
+})
+
 test('search finds every message whose text or tool input holds the text, newest first, in the project or every project, and never a tool result', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
@@ -376,15 +392,15 @@ test('sessions leaves out a session no one prompted, and lists one whose first p
   expect(await json(home, 'sessions', '--project', project)).toEqual([late])
 })
 
-test('an index made by an older cmod is deleted, and the index is history-10.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-11.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite']
+  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite']
   await writeFiles(home, Object.fromEntries(older.map((name) => [`.local/share/cmod/${name}`, 'an older index\n'])))
 
   await json(home, 'sessions', '--project', project)
 
-  expect([...older, 'history-10.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
+  expect([...older, 'history-11.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
 })
 
 test('the README names the conversation index cmod writes', async () => {

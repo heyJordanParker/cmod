@@ -39,7 +39,17 @@ export const conversationMethods = {
   act: 'cmod:act',
   changed: 'cmod:changed',
   before: 'cmod:before',
+  sessionColor: 'cmod:sessionColor',
 } as const
+
+export type SessionColor = { readonly session: string; readonly color?: string }
+
+const resetColors: readonly string[] = ['default', 'reset', 'none', 'gray', 'grey']
+
+export function pickedColor(args: string): string | undefined {
+  const picked = args.trim().toLowerCase()
+  return resetColors.includes(picked) ? undefined : picked
+}
 
 export type Act = 'send' | 'startTask' | 'fork' | 'clone' | 'startBackgroundTask' | 'callTool' | 'usage' | 'surfaces' | 'abort'
 
@@ -77,7 +87,8 @@ export type SessionsClient = {
   listen(method: string, args: readonly unknown[]): Subscription
   turn(data: TurnData): Turn
   /** An empty title keeps the title the session already has. */
-  follow(current: Omit<SessionData, 'isRunning' | 'lastAt'>): void
+  follow(current: Omit<SessionData, 'isRunning' | 'lastAt' | 'color'>): void
+  recolor(told: SessionColor): void
 }
 
 type Listening = { scope: Scope; readonly event: SessionEvent; readonly method: string; readonly matcher: unknown; readonly listener: (payload: never, time: ListenTime) => unknown; readonly options: ListenOptions }
@@ -156,6 +167,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
   const parents = new Map<string, Map<string, string | undefined>>()
   const known = new Map<string, SessionData>()
   let current: SessionData = { id: '', title: '', project: '', cwd: '', model: '', startedAt: '', lastAt: '', isRunning: true }
+  let told: SessionColor = { session: '' }
+
+  const colored = ({ color: _color, ...data }: SessionData): SessionData => (told.session === data.id && told.color !== undefined ? { ...data, color: told.color } : data)
 
   const keyOf = (scope: Scope) => scope.session ?? everySession
 
@@ -377,6 +391,9 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       },
       get title() {
         return read().title
+      },
+      get color() {
+        return read().color
       },
       get project() {
         return read().project
@@ -632,7 +649,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     follow(next) {
       const moved = next.id !== current.id && current.id !== ''
       const previous = current.id
-      current = { ...next, title: next.title || (next.id === current.id ? current.title : ''), isRunning: true, lastAt: new Date().toISOString() }
+      current = colored({ ...next, title: next.title || (next.id === current.id ? current.title : ''), isRunning: true, lastAt: new Date().toISOString() })
       if (!moved) return
       for (const into of [listening, deciding]) {
         const kept = into.get(previous)
@@ -644,6 +661,10 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       parents.delete(previous)
       subscribe(previous)
       subscribe(current.id)
+    },
+    recolor(next) {
+      told = next
+      current = colored(current)
     },
   }
 }

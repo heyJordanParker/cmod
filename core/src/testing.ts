@@ -33,7 +33,7 @@ import { createRouter } from './runtime/router.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
-import { conversationMethods } from './runtime/sessions.js'
+import { conversationMethods, pickedColor, type SessionColor } from './runtime/sessions.js'
 import type { ShownToast } from './runtime/toaster.js'
 import { Message } from './session/context/turn/message/message.js'
 import { Note, untagged } from './session/context/turn/message/note.js'
@@ -174,6 +174,13 @@ export function testMod<State extends object, Declared extends Options = Options
   })
   conversations.start(sessionId)
   const callMod = async (method: string, input: unknown, caller = cmodPluginName) => calledAnswer(caller, await lifecycle.route('cmod.call', { to: name, method, input, caller } as unknown as Frozen<Args<'cmod.call'>>, async () => ({ deny: notInstalled(name) })))
+  const tellColor = async (told: SessionColor) => {
+    if (name !== cmodPluginName) await callMod(conversationMethods.sessionColor, told)
+  }
+  const tellHeldColor = async () => {
+    const held = conversations.color()
+    if (held.color !== undefined) await tellColor(held)
+  }
   let declaredPages: ReturnType<typeof pagesOf> = []
   let openPages: { readonly id: string; readonly params: unknown }[] = []
   let shownPage: { readonly id: string; readonly params: unknown; readonly isFocused: boolean } | undefined
@@ -276,6 +283,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
   const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => permissionRoutes,(options.options ?? {}) as PluginOptions, false)
   let started: Promise<void> | undefined
+  let isColorTold = false
 
   const start = async () => {
     started ??= lifecycle.start(fake.claude, async (claude) => {
@@ -299,6 +307,9 @@ export function testMod<State extends object, Declared extends Options = Options
       throw new Error(`${name} needs ${listed(failure.titles)}, which a person sets in /config. Give ${failure.keys.length === 1 ? 'it' : 'them'} to the tested mod: testMod(mod, { options: { ${given} } }).`)
     }
     if (lifecycle.phase !== 'active') throw failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)
+    if (isColorTold) return
+    isColorTold = true
+    await tellHeldColor()
   }
 
   const cmodPlugin = createRouter()
@@ -347,12 +358,20 @@ export function testMod<State extends object, Declared extends Options = Options
     return answer
   }
 
-  const runCommand = async (command: string, args: string): Promise<CommandRunResult> => {
+  const runCommand = async (command: string, args: string, builtIn: CommandRunResult = {}): Promise<CommandRunResult> => {
     await start()
     const reached: Set<string> = new Set()
-    const ownRun = async (): Promise<CommandRunResult> => (reached.add(command), {})
+    const ownRun = async (): Promise<CommandRunResult> => (reached.add(command), builtIn)
     const answer = await cmodPlugin.dispatch('command.run', { command, args, origin: { kind: 'composer' }, presentation }, (passed) => lifecycle.route('command.run', passed, (e) => cmodBeneath.dispatch('command.run', e, ownRun)))
     if (reached.has(command) && answer.text === undefined) throw new Error(!fake.shown.commands.includes(command) ? `${name} has no slash command /${command}. Add it in setup with mod.use(slashCommand({ name: '${command}', … })).` : `${name}: /${command} reached Claude Code's own run of the command, so Claude Code shows "${name} registered /${command} but no command.run hook answered it". Answer it without calling next(e).`)
+    return answer
+  }
+
+  const runColor = async (args: string): Promise<CommandRunResult> => {
+    if (args.trim() === '') throw new Error(`Claude Code's /color with no color picks one at random, so a test names the color, such as tested.type('/color cyan').`)
+    const color = pickedColor(args)
+    const answer = await runCommand('color', args, { text: color === undefined ? 'Session color reset to default' : `Session color set to: ${color}` })
+    await tellColor(conversations.recolor(color))
     return answer
   }
 
@@ -474,7 +493,11 @@ export function testMod<State extends object, Declared extends Options = Options
     const toolUse = toolUseEvents.includes(event) ? { tool_use_id: `toolu_${(toolUses += 1)}` } : {}
     const transcript = `/test/transcripts/${sessionId}.jsonl`
     const filled = { session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event, ...toolUse, ...input }
-    if (event === 'SessionStart' && !('transcript_path' in input)) return files.write(transcript, '').then(() => route('classic.SessionStart', filled, below))
+    if (event === 'SessionStart') {
+      const source = (input as { readonly source?: string }).source
+      const started = 'transcript_path' in input ? route('classic.SessionStart', filled, below) : files.write(transcript, '').then(() => route('classic.SessionStart', filled, below))
+      return source === 'startup' || source === 'clear' ? started : started.then(async (answer) => (await tellHeldColor(), answer))
+    }
     if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
   }) as ClaudeCode['fire']
@@ -585,7 +608,7 @@ export function testMod<State extends object, Declared extends Options = Options
       const typed = /^\/(\S+)\s*(.*)$/s.exec(line)
       if (typed === null) throw new Error(`type takes a slash command the way the user types it, such as tested.type('/help'), and "${line}" does not start with /.`)
       const [, command = '', args = ''] = typed
-      return replyOf(await runCommand(command, args))
+      return replyOf(await (command === 'color' ? runColor(args) : runCommand(command, args)))
     },
     async callTool(toolName, input) {
       const tool = `mcp__${name}__${toolName}`

@@ -4,6 +4,8 @@ type Drawn = { readonly type: string; readonly props: Record<string, unknown>; r
 
 const boxInsides = new WeakMap<object, Drawn>()
 
+const measuredProps = ['width', 'height', 'minWidth', 'minHeight'] as const
+
 function element(type: string) {
   return (props: Record<string, unknown>): RenderElement => {
     const { children, ...rest } = props
@@ -11,6 +13,10 @@ function element(type: string) {
     const keyed = type === 'Button' ? { key: rest['label'] ?? flat.map(textOf).join(''), ...rest } : rest
     const drawn: Drawn = { type, props: keyed, ...(flat.length === 0 ? {} : { children: flat }) }
     if (type !== 'Box') return drawn as unknown as RenderElement
+    for (const size of measuredProps) {
+      const value = rest[size]
+      if (typeof value === 'number' && !(Number.isFinite(value) && value >= 0 && value <= 10000)) throw new Error(`Box prop "${size}" must be a finite number between 0 and 10000`)
+    }
     const box = Object.freeze({})
     boxInsides.set(box, drawn)
     return box as unknown as RenderElement

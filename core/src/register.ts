@@ -96,7 +96,7 @@ function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Froz
 }
 
 function routeFailure<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: PassOn<N> & Caught): Promise<EventResult<N>> {
-  return lifecycle.caught(passOn.event, eventInput, (passed: unknown) => passOn(passed as never), passOn.error)
+  return lifecycle.caught(passOn.event, eventInput, (passed: unknown) => passOn(passed as never), passOn)
 }
 
 const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>) => ({ ...eventInput, caller: passOn.origin.plugin }) as Frozen<Args<'cmod.call'>>
@@ -108,7 +108,7 @@ function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'
 }
 
 function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'> & Caught): Promise<EventResult<'cmod.call'>> {
-  return lifecycle.caught('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn.error)
+  return lifecycle.caught('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn)
 }
 
 export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
@@ -156,10 +156,10 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('ui.press', routeToMod).catch(routeFailure)
   addHook('ui.scroll', routeToMod).catch(routeFailure)
   addHook('ui.close', routeToMod).catch(routeFailure)
-  addHook('cmod.call', routeCallToMod).catch(routeCallFailure)
+  addHook('cmod.call', { to: definition.name }, routeCallToMod).catch(routeCallFailure)
   addHook('session.compact', routeToMod).catch(routeFailure)
   if (definition.name !== cmodPluginName) return
-  addHook('command.describe', routeToMod).catch(routeFailure)
+  addHook('command.describe', { command: /--/ }, routeToMod).catch(routeFailure)
   addHook('session.append', routeToMod).catch(routeFailure)
   addHook('session.receive', routeToMod).catch(routeFailure)
   addHook('agent.spawn', routeToMod).catch(routeFailure)

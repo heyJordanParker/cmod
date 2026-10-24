@@ -156,6 +156,7 @@ export type ToolCallArgs = {
 export type Session = RecordPart & {
   readonly id: string
   readonly title: string
+  readonly color?: string
   readonly project: string
   readonly agentType?: string
   readonly model: string

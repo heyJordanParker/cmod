@@ -18,7 +18,7 @@ import { cmodPluginName } from './dependencies.js'
 import { readLines, runCmod, spawnCmod } from './programs.js'
 import type { RoutedHook, Router } from './router.js'
 import { PassedTimeout } from './deadline.js'
-import { actPermission, conversationMethods, everySession, isAct, isHeardBy, isInScope, resultOf, spawnTask, usageOf, type Act, type Listened } from './sessions.js'
+import { actPermission, conversationMethods, everySession, isAct, isHeardBy, isInScope, pickedColor, resultOf, spawnTask, usageOf, type Act, type Listened, type SessionColor } from './sessions.js'
 
 type Request = Readonly<Record<string, unknown>>
 
@@ -61,6 +61,8 @@ export type Conversations = {
   answer(e: Frozen<Args<'cmod.call'>> & { readonly caller?: string }): Promise<EventResult<'cmod.call'> | undefined>
   moved(): void
   turnClosedBy(rowId: string): TurnData | undefined
+  color(): SessionColor
+  onColor(listener: (told: SessionColor) => void): void
 }
 
 const keptClosings = 200
@@ -139,6 +141,28 @@ export function serveConversations({
   const ended = (id: string) => new Error(`session ${id} has ended`)
 
   const isRunning = async (id: string) => (await json<SessionData[]>(['history', 'sessions', '--running', '--all'])).some((each) => each.id === id)
+
+  let color: SessionColor = { session: '' }
+  let onColor: (told: SessionColor) => void = () => undefined
+
+  const recolor = (id: string, picked: string | undefined) => {
+    if (session !== id) return
+    color = { session: id, ...(picked === undefined ? {} : { color: picked }) }
+    onColor(color)
+  }
+
+  const readColor = (id: string) =>
+    void json<SessionData[]>(['history', 'sessions', '--running', '--all'])
+      .then((running) => recolor(id, running.find((each) => each.id === id)?.color))
+      .catch((error: unknown) => report('color', `Could not read the color of session ${id}`, error))
+
+  router.add('command.run', async (e, next) => {
+    const answer = await next(e)
+    if (e.command !== 'color' || session === '') return answer
+    if (e.args.trim() === '') readColor(session)
+    else recolor(session, pickedColor(e.args))
+    return answer
+  })
 
   let lastTurn: TurnData | undefined
   const closings = new Map<string, TurnData>()
@@ -384,8 +408,10 @@ export function serveConversations({
     liveIds.clear()
     waitingRows.clear()
     conversation = createConversation(emptyConversation(id))
+    const isNew = source === 'startup' || source === 'clear'
+    if (!isNew) readColor(id)
     starting =
-      source === 'startup' || source === 'clear'
+      isNew
         ? Promise.resolve(dispatch(id, conversation.startContext(new Date().toISOString())))
         : json<ConversationState>(['history', 'state', id]).then(
             (state) => {
@@ -762,6 +788,10 @@ export function serveConversations({
 
   return {
     turnClosedBy: (rowId) => closings.get(rowId),
+    color: () => color,
+    onColor(listener) {
+      onColor = listener
+    },
     moved() {
       for (const [key, watch] of ownWatches) ownWatches.set(key, { ...watch, project: project() })
       void publishWatches().catch((error: unknown) => report('before', 'Kept its before listeners on the project from before', error))

@@ -15,7 +15,7 @@ import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { createConversation, emptyConversation, searchLimit, tasksWithAgents, type ContextData, type Conversation, type SessionChange, type SessionData, type TaskData, type TurnData, type TurnEnding } from '../session/conversation.js'
 import type { Decide, Place } from '../runtime/before.js'
 import type { Claude } from '../runtime/claude.js'
-import { conversationMethods, everySession, isHeardBy, resultOf, type Listened } from '../runtime/sessions.js'
+import { conversationMethods, everySession, isHeardBy, resultOf, type Listened, type SessionColor } from '../runtime/sessions.js'
 import { receivedMatcher } from '../utils/matcher.js'
 import { firstLine, messageOf } from '../utils/text.js'
 
@@ -60,6 +60,8 @@ export type FakeSessions = {
   compact(): void
   startTask(task: StartedTask): string
   start(id: string): void
+  color(): SessionColor
+  recolor(color: string | undefined): SessionColor
   lastTurn(): TurnData | undefined
   readonly sent: { readonly session: string; readonly task?: string; readonly type: string; readonly text: string; readonly as?: string }[]
 }
@@ -121,6 +123,8 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
   }
 
   const currentSession = () => sessionOf(current)
+
+  const colorOf = ({ data: { id, color } }: Kept): SessionColor => ({ session: id, ...(color === undefined ? {} : { color }) })
 
   const place = (): Place => {
     const { session, context, contextOpenedAt, turn, tasks, taskTurns, openCalls } = currentSession().conversation.state
@@ -308,6 +312,13 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       const session = kept.get(id) ?? keep({ id, title: '', project: project(), cwd: project(), model: 'test-model', startedAt: now(), lastAt: now(), isRunning: true })
       session.data = { ...session.data, isRunning: true }
       if (session.conversation.state.context === 0) record(session, session.conversation.startContext(now()))
+    },
+    color: () => colorOf(currentSession()),
+    recolor(color) {
+      const session = currentSession()
+      const { color: _color, ...data } = session.data
+      session.data = color === undefined ? data : { ...data, color }
+      return colorOf(session)
     },
     lastTurn: () => [...currentSession().turns.values()].filter((turn) => turn.prompt.task === undefined).at(-1),
     sent,

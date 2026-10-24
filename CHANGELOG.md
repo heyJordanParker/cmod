@@ -4,6 +4,27 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-10-24
+
+### Added
+- `color` on every `Session`: the color the person last picked with `/color`, such as `cyan`, absent when they never picked one or reset it. `sessions.current.color` follows each `/color` in every mod, with or without the `conversation` permission. The test kit takes it on a `FakeSession`, as it takes `title`, and `tested.type('/color cyan')` runs `/color`. The conversation index is `history-11.sqlite`, and cmod deletes `history-10.sqlite` and reads every conversation again.
+
+### Changed
+- cmod no longer runs `/reload-plugins` in your sessions. When a plugin is installed, updated, turned on or off, removed, linked, or unlinked, each session shows a `Plugins changed` toast, and its `Reload` button reloads that session only.
+- The `×` that closes a Sidebar tab draws as a filled button, and the key bar of a Sidebar you are not in says to click it instead of naming a two-key shortcut.
+- When Claude Code lists its commands, about 190 of them, the cmod plugin's code runs only for the hotkey commands, instead of for every one.
+- A call from one mod to another runs only in the mod it calls, instead of passing through every mod in the session.
+- A session no longer redraws its widget rows each time another session writes to the cmod store but leaves the widget layout as it was.
+- A mod without a pane no longer redraws the whole screen each time a mod that styles markdown starts or changes its parts.
+
+### Fixed
+- Every session no longer reloads every few seconds while a mod is linked. Claude Code writes `.claude-plugin/types/` into a linked checkout each time it loads the mod, and `cmod watch` took that for an edit. `cmod watch` now skips every change to a file git ignores.
+- A press on a button Claude Code had already redrawn no longer shows a `Claude Code stopped its ui.press hook` toast from every mod in the session. A mod now shows a hook failure only when its own hook failed, never when it passed on a failure from beneath it. A press on a page its mod drew before it restarted no longer shows `<mod> did not take the press`. The page draws again, and the next press works.
+- A Sidebar or Settings page no longer jumps back to its top when you click into the Sidebar or its width changes. The page keeps its drawing while its mod draws it again, instead of a one-line `Drawing…` that Claude Code scrolled to the top.
+- A mod's hotkey commands, such as `/cmod--sidebar`, no longer show in the slash command menu. Claude Code names a command's plugin with its marketplace, such as `cmod@cmod`, so cmod never matched them, and it lists the commands before the cmod plugin starts, so cmod now asks it to list them again once it has.
+- A widget row above or below a prompt narrower than its indent no longer fails with `Box prop "width" must be a finite number between 0 and 10000`.
+- An update that only drops a hotkey or a permission no longer opens a blank `Install <mod>` tab in every session. cmod now asks again only for a changed command or script file, a new hotkey or default combo, or a new permission, and lists only those. A mod you approved before this version asks nothing new either, once any `cmod` command has run before its next update. The `Install <mod>` tab now names the program a mod installs, so a consent whose only change is the program lists it.
+
 ## [4.1.0] - 2026-10-24
 
 ### Added

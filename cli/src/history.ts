@@ -24,7 +24,7 @@ type Line = { readonly bytes: Buffer; readonly offset: number; readonly length: 
 
 type Place = { readonly row: number; readonly id: string; readonly session: string; readonly task: string; readonly context: number; readonly turn: string | null; readonly file: number; readonly offset: number; readonly length: number; readonly part: number }
 
-type Summary = { startedAt: string; lastAt: string; project: string; cwd: string; model: string; title: string; customTitle: string | null; forkedFrom: string | null; isPrompted: number }
+type Summary = { startedAt: string; lastAt: string; project: string; cwd: string; model: string; title: string; customTitle: string | null; color: string | null; forkedFrom: string | null; isPrompted: number }
 
 type Meta = { readonly task: string; readonly title: string; readonly agentType: string; readonly call: string }
 
@@ -34,7 +34,7 @@ export type Scope = { readonly project: string; readonly everyProject: boolean; 
 
 const schema = `
 create table files (id integer primary key, path text not null unique, session text not null, task text not null, offset integer not null);
-create table sessions (id text primary key, folder text not null, project text not null default '', cwd text not null default '', model text not null default '', title text not null default '', custom_title text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer, state text);
+create table sessions (id text primary key, folder text not null, project text not null default '', cwd text not null default '', model text not null default '', title text not null default '', custom_title text, color text, started_at text not null default '', last_at text not null default '', forked_from text, is_prompted integer not null default 0, is_fork_checked integer not null default 0, summarized_size integer, state text);
 create table folders (id integer primary key, path text not null unique);
 create table messages (row integer primary key, id text not null, session text not null, task text not null, type text not null, context integer not null, turn text, folder integer not null, at text not null, file integer not null, offset integer not null, length integer not null, part integer not null, seq integer, unique (file, offset, part));
 create index messages_by_id on messages (id);
@@ -48,9 +48,9 @@ create table tasks (session text not null, id text not null, title text not null
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-10.sqlite'
+const indexFile = 'history-11.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite']
 
 const chunkBytes = 65_536
 
@@ -60,7 +60,7 @@ const tailBytes = 65_536
 
 const sortedMatches = 20_000
 
-const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
+const wantedRows: readonly string[] = ['"type":"user"', '"type":"assistant"', '"type":"system"', '"type":"custom-title"', '"type":"agent-color"', '"nested_memory"', '"type":"file"', '"compact_file_reference"', '"edited_text_file"', '"hook_additional_context"', '"forkedFrom"']
 
 export function openHistory(): Database {
   const path = storePath(indexFile)
@@ -398,7 +398,7 @@ function assignSeq(db: Database, session: string): void {
 }
 
 function emptySummary(): Summary {
-  return { startedAt: '', lastAt: '', project: '', cwd: '', model: '', title: '', customTitle: null, forkedFrom: null, isPrompted: 0 }
+  return { startedAt: '', lastAt: '', project: '', cwd: '', model: '', title: '', customTitle: null, color: null, forkedFrom: null, isPrompted: 0 }
 }
 
 function noteRow(summary: Summary, session: string, raw: Raw): void {
@@ -410,6 +410,7 @@ function noteRow(summary: Summary, session: string, raw: Raw): void {
     summary.cwd = raw['cwd']
   }
   if (raw['type'] === 'custom-title' && typeof raw['customTitle'] === 'string') summary.customTitle = raw['customTitle']
+  if (raw['type'] === 'agent-color' && typeof raw['agentColor'] === 'string') summary.color = raw['agentColor']
   const forked = isObject(raw['forkedFrom']) ? raw['forkedFrom']['sessionId'] : undefined
   if (typeof forked === 'string' && forked !== session) summary.forkedFrom = forked
   const row = rowOfLine(raw)
@@ -432,10 +433,11 @@ function saveSummary(db: Database, session: string, summary: Summary): void {
        model = case when ?5 = '' then model else ?5 end,
        title = case when title = '' then ?6 else title end,
        custom_title = coalesce(?7, custom_title),
-       forked_from = coalesce(forked_from, ?8),
-       is_prompted = max(is_prompted, ?9)
-     where id = ?10`,
-  ).run(summary.startedAt, summary.lastAt, summary.project, summary.cwd, summary.model, summary.title, summary.customTitle, summary.forkedFrom, summary.isPrompted, session)
+       color = coalesce(?8, color),
+       forked_from = coalesce(forked_from, ?9),
+       is_prompted = max(is_prompted, ?10)
+     where id = ?11`,
+  ).run(summary.startedAt, summary.lastAt, summary.project, summary.cwd, summary.model, summary.title, summary.customTitle, summary.color, summary.forkedFrom, summary.isPrompted, session)
 }
 
 function summarize(db: Database, main: Transcript, size: number): void {
@@ -515,8 +517,8 @@ export function listSessions(db: Database, scope: Scope): SessionData[] {
   const running = runningSessions()
   readFolders(db, folders, false, scope.running === true ? running : undefined)
   const rows = db
-    .query<{ id: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
-      `select id, project, cwd, model, title, custom_title, started_at, last_at, forked_from, is_fork_checked,
+    .query<{ id: string; project: string; cwd: string; model: string; title: string; custom_title: string | null; color: string | null; started_at: string; last_at: string; forked_from: string | null; is_fork_checked: number; is_indexed: number }, string[]>(
+      `select id, project, cwd, model, title, custom_title, nullif(color, 'default') as color, started_at, last_at, forked_from, is_fork_checked,
          case when forked_from is null and is_fork_checked = 0 then exists (select 1 from messages where session = sessions.id and task = '') else 0 end as is_indexed
        from sessions where folder in (${foldersMarks(folders.length)}) and last_at >= ? and (is_prompted = 1 or custom_title is not null) order by last_at desc`,
     )
@@ -525,7 +527,7 @@ export function listSessions(db: Database, scope: Scope): SessionData[] {
     .filter((row) => scope.running !== true || running.has(row.id))
     .map((row) => {
       const forkedFrom = row.forked_from ?? (row.is_fork_checked === 0 && row.is_indexed === 1 ? foundParent(db, row.id, row.started_at) : undefined)
-      return { id: row.id, title: row.custom_title ?? row.title, project: row.project, cwd: row.cwd || row.project, model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), isRunning: running.has(row.id) }
+      return { id: row.id, title: row.custom_title ?? row.title, ...(row.color === null ? {} : { color: row.color }), project: row.project, cwd: row.cwd || row.project, model: row.model, startedAt: row.started_at, lastAt: row.last_at, ...(forkedFrom === undefined ? {} : { forkedFrom }), isRunning: running.has(row.id) }
     })
 }
 

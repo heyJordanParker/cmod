@@ -61,6 +61,7 @@ While a mod holds the `conversation` permission, the cmod plugin indexes every c
 type Session = {
   readonly id: string
   readonly title: string
+  readonly color?: string
   readonly project: string
   readonly agentType?: string
   readonly model: string
@@ -89,6 +90,7 @@ type Session = {
 ```
 
 - `id` is Claude Code's session id, and a task owner's `id` is its task's id. `title` is the name the person gave it with `/rename`, or the first line of its first prompt. A resumed or forked session with no name, and a session the mod started in after its first prompt, has an empty `sessions.current.title` until `sessions.list()` reads it.
+- `color` is the color the person last picked with `/color`, such as `cyan`, and is absent when they never picked one or reset it with `/color default`. A task's owner has none. `sessions.current.color` follows each `/color` the person runs, and a resumed session's color holds from the mod's start, with or without the `conversation` permission, as `title` does.
 - `project` is the project the session works in, and `cwd` is its working folder. For the current session both follow `/cd`, and `cwd` follows a `cd` in a Bash or PowerShell call.
 - `agentType` is the agent definition the session runs, such as `Explore` for a task's owner, or the agent a session started with `claude --agent` runs. A plain session has none.
 - `model` is the model the session runs on. `startedAt` and `lastAt` are ISO times.

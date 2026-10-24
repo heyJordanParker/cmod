@@ -9,13 +9,14 @@ import type { PageProps } from '../ui/panes.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, withBareRefusals } from './dependencies.js'
-import { merged, partMethods, type DrawnPart, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
+import { merged, partMethods, stalePress, type DrawnPart, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
 
 export const installPage = 'cmod:install'
 
 export type Consent = {
   readonly install: string
   readonly uninstall: string
+  readonly program: string
   readonly hotkeys: string
   readonly permissions: readonly string[]
   readonly updates?: string | undefined
@@ -118,7 +119,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
 
   const press = async ({ draw: drawn, handler, args }: PartPress): Promise<PartsUpdate> => {
     const run = draws.get(drawn)?.[handler]
-    if (run === undefined) throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`)
+    if (run === undefined) throw new Error(`${name}: ${stalePress}`)
     return collect(() => run(...args))
   }
 
@@ -138,10 +139,11 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       isSeen = false
       question?.cancel()
     },
-    consent({ install, uninstall, hotkeys, permissions, updates }) {
+    consent({ install, uninstall, program, hotkeys, permissions, updates }) {
       const changes = [
         ...(install === '' ? [] : [`Run ${install} now${uninstall === '' ? '' : `, and ${uninstall} when you remove it`}`]),
         ...(install === '' && uninstall !== '' ? [`Run ${uninstall} when you remove it`] : []),
+        ...(program === '' ? [] : [`Install ${program}, which Claude runs by its name`]),
         ...(hotkeys === '' ? [] : [`Bind ${hotkeys}`]),
         ...(updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]),
       ]

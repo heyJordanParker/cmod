@@ -40,6 +40,49 @@ test('the name Claude Code gives a session is its title', async () => {
   expect(seen[0]?.current).toBe('Login fix')
 })
 
+function colors(isListing: boolean) {
+  const seen: { readonly current: string | undefined; readonly listed?: Readonly<Record<string, string | undefined>> }[] = []
+  const mod = defineMod({
+    name: 'colors',
+    setup(mod) {
+      engineOf(mod).router.add('classic.UserPromptSubmit', async (e, next) => {
+        const current = sessions.current.color
+        seen.push(isListing ? { current, listed: Object.fromEntries((await sessions.list()).map((session) => [session.id, session.color])) } : { current })
+        return next(e)
+      })
+    },
+  })
+  return { mod, seen }
+}
+
+test('sessions.current.color follows /color in a mod without the conversation grant, and /color default clears it', async () => {
+  const { mod, seen } = colors(false)
+  const tested = testMod(mod)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Fix the login bug' })
+  await tested.type('/color cyan')
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Now add a test' })
+  await tested.type('/color default')
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Ship it' })
+
+  expect(seen).toEqual([{ current: undefined }, { current: 'cyan' }, { current: undefined }])
+})
+
+test("the color a session already has reaches sessions.current when the mod starts, and each listed session carries its own", async () => {
+  const { mod, seen } = colors(true)
+  const tested = testMod(mod, { permissions: ['conversation'], sessions: [{ id: 'test-session', color: 'cyan' }, { id: 'plain', title: 'No color picked' }] })
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
+  await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Fix the login bug' })
+
+  expect(seen).toEqual([{ current: 'cyan', listed: { 'test-session': 'cyan', plain: undefined } }])
+})
+
+test('/color with no color names the color to give in a test, because Claude Code picks one at random', async () => {
+  const tested = testMod(colors(false).mod)
+
+  await expect(tested.type('/color')).rejects.toThrow("tested.type('/color cyan')")
+})
+
 test('a mod that starts after the first prompt takes the title from the index, never from the prompt it first hears', async () => {
   const { tested, seen } = titles()
   await tested.add({ type: 'prompt', text: 'Fix the login bug' })

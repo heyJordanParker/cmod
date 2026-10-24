@@ -37,6 +37,31 @@ test('cmod watch reloads every session once a linked mod builds after it stops c
   watching.child.kill()
 }, 60000)
 
+test('cmod watch reloads no session for a change only to files git ignores, such as the types Claude Code writes each time it loads the mod', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'Developer/demo-checkout')
+  await writeFiles(root, {
+    '.gitignore': '.claude-plugin/types/\n',
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'hooks/hooks.json': JSON.stringify({ modules: ['./register.js'] }),
+    'hooks/register.js': 'export function register() {}\n',
+  })
+  expect(Bun.spawnSync(['git', 'init', '-q', root]).exitCode).toBe(0)
+  await writeLinked(home, root)
+  await writeFiles(home, { '.local/share/cmod/records/.keep': '' })
+  const watching = startCmod(home, 'watch')
+  await until(() => existsSync(store(home, `watch.lock/${watching.child.pid}`)))
+  await Bun.sleep(500)
+
+  await writeFiles(root, { '.claude-plugin/types/claude-code/index.d.ts': 'export {}\n' })
+  await Bun.sleep(3500)
+  expect(existsSync(store(home, 'plugins-changed'))).toBe(false)
+
+  await writeFiles(root, { 'hooks/register.js': 'export function register() { return }\n' })
+  await until(() => existsSync(store(home, 'plugins-changed')))
+  watching.child.kill()
+}, 60000)
+
 async function until(isDone: () => boolean): Promise<void> {
   const deadline = Date.now() + 20000
   while (!isDone()) {

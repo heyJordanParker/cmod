@@ -1,7 +1,7 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import type { EngineCreateResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
-import { findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
+import { elements, findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
@@ -761,7 +761,7 @@ test("a mod's install page is a Sidebar tab named for the mod, drawn by the mod,
   await tested.shown.pane.press('close:ci-watch/cmod:install')
   await tested.settle()
 
-  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install ci-watch ×${' '.repeat(32)}9: Settings`, '▀'.repeat(80), '', ` ╭─ ci-watch ${'─'.repeat(65)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide'])
+  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install ci-watch  ×${' '.repeat(31)}9: Settings`, '▀'.repeat(80), '', ` ╭─ ci-watch ${'─'.repeat(65)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide'])
   expect(called).toContain('ci-watch cmod:draw')
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
@@ -777,7 +777,7 @@ test('two mods that install at once each get an install tab, and the later one s
   await shown()
   await tested.settle()
 
-  expect((await tested.shown.pane.lines())[1]).toBe(` 0: Dashboard  1: Install ci-watch ×  2: Install notes ×${' '.repeat(12)}9: Settings`)
+  expect((await tested.shown.pane.lines())[1]).toBe(` 0: Dashboard  1: Install ci-watch  ×   2: Install notes  ×${' '.repeat(9)}9: Settings`)
   expect(tested.state.session.shown).toBe('notes/cmod:install')
 })
 
@@ -857,8 +857,38 @@ test('every Sidebar tab keeps its width whether it shows or not, so switching ta
   await tested.shown.pane.press('tab:dashboard')
   const dashboardShown = (await tested.shown.pane.lines())[1]
 
-  expect(pageShown).toBe(` 0: Dashboard  1: Runs ×${' '.repeat(44)}9: Settings`)
+  expect(pageShown).toBe(` 0: Dashboard  1: Runs  ×${' '.repeat(43)}9: Settings`)
   expect(dashboardShown).toBe(pageShown)
+})
+
+test("a page tab's × draws as a reversed block, its tab's text color filled behind a glyph in its tab's background, on the shown tab and on every other one", async () => {
+  const { tested, declare } = testSettings()
+  await tested.start()
+  await declare([
+    { id: 'runs', title: 'Runs', place: 'sidebar' },
+    { id: 'logs', title: 'Logs', place: 'sidebar' },
+  ])
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }, { open: 'logs' }] }, caller: 'ci-watch' } as never)
+  await tested.settle()
+
+  const buttons = spyOn(elements, 'Button')
+  const tabBar = (await tested.shown.pane.lines())[1]
+  const closes = new Map(buttons.mock.calls.map(([props]) => [props.key, props.children]))
+  buttons.mockRestore()
+
+  expect(tabBar).toBe(` 0: Dashboard  1: Runs  ×   2: Logs  ×${' '.repeat(30)}9: Settings`)
+  expect(closes.get('close:ci-watch/runs')).toEqual(elements.Text({ color: 'userMessageBackground', backgroundColor: 'inactive', children: ' × ' }))
+  expect(closes.get('close:ci-watch/logs')).toEqual(elements.Text({ color: 'claude', backgroundColor: 'inverseText', children: ' × ' }))
+})
+
+test('the key bar of a Sidebar without the focus says a click focuses it, and names no chord', async () => {
+  const { tested, declare } = testSettings()
+  await tested.start()
+  await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }])
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'ci-watch' } as never)
+  await tested.settle()
+
+  expect((await tested.shown.pane.lines()).at(-1)).toBe(' click focus')
 })
 
 test('cmod.call denies a call no mod takes with the install command', async () => {
@@ -1318,7 +1348,17 @@ test('a store file cmod changes without the store-changed stamp is not read', as
   expect(tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')).toEqual([])
 })
 
-test("a plugin turned on in this session's own /plugin, which raises no ConfigChange here, reloads at the next prompt", async () => {
+const changedToasts = (tested: ReturnType<typeof testMod>) => tested.shown.toasts.filter((toast) => toast.message === 'Plugins changed')
+
+const pressReload = async (tested: ReturnType<typeof testMod>, tick: () => Promise<void>) => {
+  const band = await tested.fire('ui.render', { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } } as never, { type: 'Text', children: ['>'] } as never)
+  const reload = findElement(band, 'Button', 'Reload')
+  if (reload === undefined) throw new Error('The Plugins changed toast draws no Reload button.')
+  await (reload['onPress'] as () => Promise<void>)()
+  await tick()
+}
+
+test("a plugin turned on in this session's own /plugin, which raises no ConfigChange here, shows the Plugins changed toast at the next prompt and sends the session no command", async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1330,10 +1370,27 @@ test("a plugin turned on in this session's own /plugin, which raises no ConfigCh
   await prompt(tested, 'hello')
   await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(reloads).toEqual([])
+  expect(changedToasts(tested)).toEqual([{ type: 'info', message: 'Plugins changed', description: 'Reload to use them in this session.' }])
 })
 
-test('a user settings change Claude Code reports turns a plugin on, and reloads once Claude Code has loaded it', async () => {
+test('Reload on the Plugins changed toast reloads only this session, once, and the toast leaves', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+
+  await pressReload(tested, tick)
+
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(changedToasts(tested)).toEqual([])
+})
+
+test('a user settings change Claude Code reports turns a plugin on, and shows the Plugins changed toast once Claude Code has loaded it', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1346,10 +1403,11 @@ test('a user settings change Claude Code reports turns a plugin on, and reloads 
   await tick()
   await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(reloads).toEqual([])
+  expect(changedToasts(tested)).toHaveLength(1)
 })
 
-test('a change cmod marks in its store reloads the plugins once, and the mark the session started with reloads nothing', async () => {
+test('a change cmod marks in its store shows the Plugins changed toast, and the mark the session started with shows nothing', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const changed = `${store}/plugins-changed`
   await tested.fakes.fs.write?.(changed, '1 100\n')
@@ -1360,13 +1418,14 @@ test('a change cmod marks in its store reloads the plugins once, and the mark th
 
   await tick()
   await tick()
-  expect(reloads).toEqual([])
+  expect(changedToasts(tested)).toEqual([])
 
   await writeStoreFile(tested, changed, '2 200\n')
   await writeStoreFile(tested, changed, '3 300\n')
   await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(changedToasts(tested)).toHaveLength(1)
+  expect(reloads).toEqual([])
 })
 
 const reloadEcho = '<command-name>/reload-plugins</command-name>\n<command-message>reload-plugins</command-message>\n<command-args></command-args>'
@@ -1379,7 +1438,7 @@ const appendedRow = async (tested: ReturnType<typeof testMod>, uuid: string, ori
   return kept.message?.content
 }
 
-test("cmod's own /reload-plugins leaves no row in the conversation, and a person's own still shows", async () => {
+test("the reload the Plugins changed toast runs leaves no row in the conversation, and a person's own /reload-plugins still shows", async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1389,7 +1448,7 @@ test("cmod's own /reload-plugins leaves no row in the conversation, and a person
 
   await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
-  await tick()
+  await pressReload(tested, tick)
 
   expect(reloads).toEqual(['reload-plugins'])
   expect(await appendedRow(tested, 'echo-1', { kind: 'plugin', name: 'cmod' }, 'user', reloadEcho)).toEqual(hiddenReload)
@@ -1398,7 +1457,7 @@ test("cmod's own /reload-plugins leaves no row in the conversation, and a person
   expect(await appendedRow(tested, 'output-2', { kind: 'engine' }, 'system', reloadOutput)).toEqual([{ type: 'text', text: reloadOutput }])
 })
 
-test("cmod's own /reload-plugins hides its output row even when Claude Code restarted the cmod plugin before the echo row reached it", async () => {
+test("the toast's reload hides its output row even when Claude Code restarted the cmod plugin before the echo row reached it", async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1408,14 +1467,14 @@ test("cmod's own /reload-plugins hides its output row even when Claude Code rest
 
   await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
-  await tick()
+  await pressReload(tested, tick)
 
   expect(reloads).toEqual(['reload-plugins'])
   expect(await appendedRow(tested, 'output-1', { kind: 'engine' }, 'system', reloadOutput)).toEqual(hiddenReload)
   expect(await appendedRow(tested, 'echo-4', { kind: 'composer' }, 'user', '<command-name>/model</command-name>')).toEqual([{ type: 'text', text: '<command-name>/model</command-name>' }])
 })
 
-test('a plugin Claude Code installs, updates, or turns on without cmod reloads the plugins, and other settings reload nothing', async () => {
+test('a plugin Claude Code installs, updates, or turns on without cmod shows the Plugins changed toast, and other settings show nothing', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.1.0' }] } }))
   const reloads: string[] = []
@@ -1427,21 +1486,24 @@ test('a plugin Claude Code installs, updates, or turns on without cmod reloads t
   await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.2.0' }] } }))
   await tick()
   await tick()
+  expect(changedToasts(tested)).toHaveLength(1)
+  await pressReload(tested, tick)
   expect(reloads).toEqual(['reload-plugins'])
 
   await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   await tick()
   await tick()
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(changedToasts(tested)).toEqual([])
 
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
   await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   await tick()
   await tick()
-  expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
+  expect(changedToasts(tested)).toHaveLength(1)
+  expect(reloads).toEqual(['reload-plugins'])
 })
 
-test('a session no app shows, such as claude -p, never reloads, so its answer stays the run\'s result', async () => {
+test('a session no app shows, such as claude -p, never shows the Plugins changed toast or reloads, so its answer stays the run\'s result', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   tested.fakes.session.surfaces = async () => []
   const reloads: string[] = []
@@ -1455,9 +1517,10 @@ test('a session no app shows, such as claude -p, never reloads, so its answer st
   await tick()
 
   expect(reloads).toEqual([])
+  expect(changedToasts(tested)).toEqual([])
 })
 
-test('a plugin install that writes the user settings, then installed_plugins.json before the reload runs, reloads once', async () => {
+test('a plugin install that writes the user settings, then installed_plugins.json, shows one Plugins changed toast', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1472,10 +1535,11 @@ test('a plugin install that writes the user settings, then installed_plugins.jso
   await tick()
   await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(changedToasts(tested)).toHaveLength(1)
+  expect(reloads).toEqual([])
 })
 
-test('a change cmod marks while a reload runs reloads once more after it', async () => {
+test('a change cmod marks while the toast\'s reload runs shows the Plugins changed toast again after it', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const changed = `${store}/plugins-changed`
   const reloads: string[] = []
@@ -1494,15 +1558,17 @@ test('a change cmod marks while a reload runs reloads once more after it', async
 
   await writeStoreFile(tested, changed, '1 100\n')
   await tick()
+  const pressed = pressReload(tested, tick)
   await tick()
   finish()
-  await tick()
+  await pressed
   await tick()
 
-  expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(changedToasts(tested)).toHaveLength(1)
 })
 
-test('a reload the session refuses waits for the next prompt, and a second refusal is shown', async () => {
+test('a reload the session refuses shows why, and Retry reloads', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const changed = `${store}/plugins-changed`
   const reloads: string[] = []
@@ -1518,26 +1584,20 @@ test('a reload the session refuses waits for the next prompt, and a second refus
   const { tick } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
-  const goOn = async (text: string) => {
-    await prompt(tested, text)
-    await tick()
-  }
 
   await writeStoreFile(tested, changed, '1 100\n')
   await tick()
-  await tick()
+  await pressReload(tested, tick)
   expect(reloads).toEqual(['reload-plugins'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'Could not reload the plugins', description: 'the session was stopped and nobody has sent input since' }])
 
-  await goOn('Go on')
+  const band = await tested.fire('ui.render', { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } } as never, { type: 'Text', children: ['>'] } as never)
+  const retry = findElement(band, 'Button', 'Retry')
+  if (retry === undefined) throw new Error('The reload failure draws no Retry button.')
+  await (retry['onPress'] as () => Promise<void>)()
+  await tick()
   expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
-
-  refusals = 2
-  await writeStoreFile(tested, changed, '2 200\n')
-  await tick()
-  await goOn('Keep going')
-  expect(tested.shown.toasts.filter((toast) => toast.message === 'Could not reload the mods')).toHaveLength(1)
 })
 const gitWidgets = {
   'cmod:parts': () => ({ widgets: [{ id: 'branch', title: 'Branch', areas: ['belowPrompt', 'dashboard'] }], pages: [] }),

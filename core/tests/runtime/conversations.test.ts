@@ -760,6 +760,35 @@ test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this c
   expect(denials.map(({ deny }) => deny.replace(/ for \w+\. .*$/, ''))).toEqual(['prompt', 'tasks', 'tasks', 'tasks', 'tasks', 'tools', 'conversation', 'conversation', 'prompt'].map((permission) => `pinger needs the ${permission} permission`))
 })
 
+test("the cmod plugin tells each mod of its session the color the index holds at the session's start, and each color /color picks", async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  const indexed = { id: 'test-session', title: 'Fix the login bug', project: '/test/project', cwd: '/test/project', model: 'test-model', startedAt: '', lastAt: '', isRunning: true }
+  let color = 'green'
+  tested.fakes.process.spawn = (request) => printed(JSON.stringify(request.argv.includes('sessions') ? [{ ...indexed, color }] : {}))
+  const told: unknown[] = []
+  tested.fakes.cmod.call = async (call) => (told.push({ to: call.to, method: call.method, ...(call.input as object) }), null)
+  const pick = (args: string) => claudeCodeOf(tested).fire('command.run', { command: 'color', args, origin: { kind: 'composer' } } as never, {} as never)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
+  await tested.settle()
+
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+  await tested.settle()
+  await pick('Cyan')
+  await tested.settle()
+  await pick('grey')
+  await tested.settle()
+  color = 'purple'
+  await pick('')
+  await tested.settle()
+
+  expect(told.filter((call) => (call as { method: string }).method === conversationMethods.sessionColor)).toEqual([
+    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session', color: 'green' },
+    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session', color: 'cyan' },
+    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session' },
+    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session', color: 'purple' },
+  ])
+})
+
 function followerChild() {
   let finish: (result: ProcessSpawnResult | undefined) => void = () => {}
   const ended = new Promise<ProcessSpawnResult | undefined>((resolve) => (finish = resolve))

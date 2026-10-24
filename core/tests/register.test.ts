@@ -7,9 +7,10 @@ import { processEvents } from '../src/session/session.js'
 import { Message } from '../src/session/context/turn/message/message.js'
 import { ToolCall } from '../src/session/context/turn/message/tool-call.js'
 import { conversationMethods } from '../src/runtime/sessions.js'
-import { bundleDefines, scriptsSha256 } from '../src/records.js'
+import { bundleDefines, hotkeyCommand, scriptsSha256 } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
+import { messageOf } from '../src/utils/text.js'
 
 type Registration = {
   readonly pattern: string
@@ -35,17 +36,17 @@ function fakeOn() {
   return {
     on: on as unknown as On,
     registrations,
-    fail(event: string, $: EngineInterface, e: unknown, below: unknown, error: HookFailure, caller = 'engine'): Promise<unknown> {
+    fail(event: string, $: EngineInterface, e: unknown, below: unknown, error: HookFailure, caller = 'engine', called = false): Promise<unknown> {
       const caught = registrations.find((registration) => registration.pattern === event)?.caught
       if (caught === undefined) throw new Error(`on("${event}") has no .catch`)
-      const next = Object.assign(async () => below, { event, error, called: false, origin: { plugin: caller } })
+      const next = Object.assign(async () => (below instanceof Error ? Promise.reject(below) : below), { event, error, called, origin: { plugin: caller } })
       return Promise.resolve((caught as (...args: unknown[]) => unknown)($, e, next))
     },
     dispatch(event: string, $: EngineInterface, e: unknown, below: unknown): Promise<unknown> {
       const chain = registrations.filter((registration) => registration.pattern === event)
       const call = async (index: number, current: unknown): Promise<unknown> => {
         const registration = chain[index]
-        if (registration === undefined) return below
+        if (registration === undefined) return below instanceof Error ? Promise.reject(below) : below
         const next = Object.assign((passed: unknown) => call(index + 1, passed), { event })
         return (registration.hook as (...args: unknown[]) => unknown)($, current, next)
       }
@@ -185,6 +186,41 @@ test("the cmod plugin's ui.render matches only the components it draws, so its r
   expect(drawing(notes.registrations)?.hasMatcher).toBe(false)
   expect(drawing(cmod.registrations)?.matcher).toEqual({ component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] })
 })
+
+const isMatched = (matcher: unknown, value: unknown): boolean => {
+  if (matcher instanceof RegExp) return matcher.test(String(value))
+  if (Array.isArray(matcher)) return matcher.some((each) => isMatched(each, value))
+  if (typeof matcher !== 'object' || matcher === null) return matcher === value
+  return typeof value === 'object' && value !== null && Object.entries(matcher).every(([key, wanted]) => isMatched(wanted, (value as Record<string, unknown>)[key]))
+}
+
+const hearersOf = (chain: Readonly<Record<string, ReturnType<typeof fakeOn>>>, event: string, e: unknown) =>
+  Object.keys(chain).filter((name) => chain[name]?.registrations.some((registration) => registration.pattern === event && (!registration.hasMatcher || isMatched(registration.matcher, e))))
+
+const registeredChain = (names: readonly string[]) =>
+  Object.fromEntries(
+    names.map((name) => {
+      const plugin = fakeOn()
+      registerMod(plugin.on, defineMod({ name, setup: () => undefined }), {})
+      return [name, plugin]
+    }),
+  )
+
+test("a command.describe pass reaches the cmod plugin's worker only for hotkey commands, because Claude Code 2.1.310 hops only when a hook's matcher selects the command", () => {
+  const chain = registeredChain(['cmod', 'notes'])
+  const listed = [...Array.from({ length: 188 }, (_, index) => `skill-${index}`), hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('modes', 'cycle')]
+
+  const hops = listed.filter((command) => hearersOf(chain, 'command.describe', { command, description: '', isHidden: false, immediate: true, provider: { plugin: 'cmod', tier: 'user' } }).length > 0)
+
+  expect(hops).toEqual([hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('modes', 'cycle')])
+})
+
+test('a cmod.call runs the hook of the mod it names only, never every mod in the chain', () => {
+  const chain = registeredChain(['cmod', 'notes', 'tasks'])
+
+  expect([hearersOf(chain, 'cmod.call', { to: 'tasks', method: 'cmod:draw', input: null }), hearersOf(chain, 'cmod.call', { to: 'cmod', method: 'cmod:changed', input: {} }), hearersOf(chain, 'cmod.call', { to: 'missing', method: 'list', input: null })]).toEqual([['tasks'], ['cmod'], []])
+})
+
 test('registerPermissionCheck registers tool.check and PermissionRequest once each', () => {
   const fake = fakeOn()
 
@@ -224,6 +260,39 @@ test('a hook Claude Code stopped shows its failure, and the event goes on as if 
   expect([drawnOnce > 0, redraws]).toEqual([true, drawnOnce])
   expect(shown).toContain('Claude Code stopped its PostToolBatch hook')
   expect(shown).not.toContain('Stop hook')
+})
+
+const releasedPress = { plugin: 'cmod', element: 'inbox/items:open', component: 'Pane', requestId: 'sidebar', surface: 'terminal' }
+
+const released = new Error('ui.press/ui.input/ui.select: no handler is held under handle 5483')
+
+test('a press on a drawing Claude Code already let go of shows the person no failure, because it failed beneath the mod, and the failure passes on', async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  await $.store.set('cmod:announced', { version: '1.0.0', added: [] })
+  registerMod(fake.on, demo, {})
+  await fake.dispatch('session.start', $, {}, {})
+
+  const pressed = await fake.dispatch('ui.press', $, releasedPress, released).catch(messageOf)
+  const caught = await fake.fail('ui.press', $, releasedPress, released, { kind: 'throw', message: released.message, budget: 1000 }, 'engine', true).catch(messageOf)
+  const shown = textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)
+
+  expect([pressed, caught]).toEqual([released.message, released.message])
+  expect(shown).not.toContain('stopped')
+})
+
+test('a hook that fails on its own after the hooks beneath it failed still shows its own failure', async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  await $.store.set('cmod:announced', { version: '1.0.0', added: [] })
+  registerMod(fake.on, demo, {})
+  await fake.dispatch('session.start', $, {}, {})
+
+  await fake.fail('ui.press', $, releasedPress, released, { kind: 'throw', message: 'the press handler read past the list', budget: 1000 }, 'engine', true).catch(messageOf)
+  const shown = textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)
+
+  expect(shown).toContain('Claude Code stopped its ui.press hook')
+  expect(shown).toContain('the press handler read past the list')
 })
 
 test('a before ask that reaches the mod inside its own hook answers nothing and shows no failure', async () => {

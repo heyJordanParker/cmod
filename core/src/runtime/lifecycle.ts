@@ -1,4 +1,4 @@
-import type { Args, ClassicHookInputs, EventResult, Frozen, HookBudget, HookFailure, PluginOptions, RenderElement, Timer } from 'claude-code'
+import type { Args, Caught, ClassicHookInputs, EventResult, Frozen, HookBudget, PluginOptions, RenderElement, Timer } from 'claude-code'
 import type { Step } from '../installer.js'
 
 import type { Allowed, Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
@@ -22,7 +22,7 @@ import { fitsOption } from '../options.js'
 import { createInstaller } from './installer.js'
 import { createOptions, MissingOptions } from './options.js'
 import { createRouter, type Router, type RouterNext } from './router.js'
-import { conversationMethods, createSessionsClient, type SessionsClient } from './sessions.js'
+import { conversationMethods, createSessionsClient, type SessionColor, type SessionsClient } from './sessions.js'
 import type { SessionChange, TurnData } from '../session/conversation.js'
 import type { BeforeEvent } from '../session/session.js'
 import { matches } from '../utils/matcher.js'
@@ -58,7 +58,7 @@ export type Lifecycle<State extends object> = {
   readonly toasts: readonly ShownToast[]
   start(claude: Claude, read: (claude: Claude) => Promise<Plugin>): Promise<void>
   route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>): Promise<EventResult<N>>
-  caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, failure: HookFailure): Promise<EventResult<N>>
+  caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, failure: Caught): Promise<EventResult<N>>
   raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
 }
 
@@ -383,6 +383,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     phase = 'active'
     stopWatchingRecord()
     runtime.claude.ui.invalidate('ui.render')
+    if (definition.name === cmodPluginName) runtime.claude.ui.invalidate('command.describe')
     void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error }))
     const missed = missedSessionStart
     missedSessionStart = undefined
@@ -439,7 +440,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     })
     const installedElsewhere = new Promise<'installed'>((resolve) => (settleAsked = () => resolve('installed')))
     watchRecord()
-    const answer = await Promise.race([installer.consent({ ...event, updates }), installedElsewhere]).finally(() => {
+    const answer = await Promise.race([installer.consent({ ...event, program: plugin?.steps.program ?? '', updates }), installedElsewhere]).finally(() => {
       settleAsked = undefined
     })
     await installer.close()
@@ -746,14 +747,15 @@ export function createLifecycle<State extends object, Declared extends Options =
       if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined) return answer
       return runtime.toaster.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.props, render.requestId) as EventResult<N>
     },
-    async caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, { kind, message }: HookFailure): Promise<EventResult<N>> {
+    async caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, { error: { kind, message }, called }: Caught): Promise<EventResult<N>> {
       const call = e as Frozen<Args<'cmod.call'>>
       const isAsk = event === 'cmod.call' && call.to === definition.name && beforeAskOf(call) !== undefined
       const reasons: Readonly<Record<string, string>> = { timeout: `it ran past the ${hookMs / 1000} s Claude Code gives a hook`, throw: message ?? 'it threw' }
       const reason = reasons[kind]
       if (reason === undefined) return isAsk ? ({ value: null } as EventResult<N>) : next(e)
       const error = new Error(reason)
-      toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, '')} hook`, error })
+      const failedBeneath = called && kind === 'throw' ? await next(e).then(() => undefined, messageOf) : undefined
+      if (failedBeneath === undefined || failedBeneath !== message) toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, '')} hook`, error })
       return router.dispatchFailure(event, e, error, next)
     },
   }
@@ -1078,6 +1080,14 @@ async function createMod<State extends object, Declared extends Options>(definit
   parts = drawnParts({ claude, report: reportPart, press: (to, input) => (pages === undefined ? pressElsewhere(to, input) : pages.press(to, input)) })
   const widgets = conversations === undefined ? undefined : serveWidgets({ claude, router, store: runtime.store, report: reportPart, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn: area.markdownIn })
   pages = widgets === undefined ? undefined : servePages({ claude, router, report: reportPart, widgets, parts, tellStylers: area.restyled })
+  const tellColor = (to: string, told: SessionColor) => {
+    if (told.session === '' || to === cmodPluginName) return
+    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error: unknown) => claude.ui.log(`cmod: ${to} did not hear the session's color: ${messageOf(error)}`, { to: 'debug' })))
+  }
+  conversations?.onColor((told) => {
+    client.recolor(told)
+    for (const { mod: to } of pages?.declared() ?? []) tellColor(to, told)
+  })
   router.add('cmod.call', async (e, next) => {
     if (e.to !== definition.name) return next(e)
     const call = e as typeof e & { readonly caller?: string }
@@ -1087,10 +1097,16 @@ async function createMod<State extends object, Declared extends Options>(definit
       client.changed(changedSession, change, isInProject !== false)
       return { value: null }
     }
+    if (e.method === conversationMethods.sessionColor && call.caller === cmodPluginName) {
+      client.recolor(e.input as SessionColor)
+      return { value: null }
+    }
     const ask = beforeAskOf(call)
     if (ask !== undefined) return { value: (await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject)) ?? null }
     if (e.method === partMethods.changed && call.caller !== undefined && pages !== undefined) {
-      return { value: { isHeld: pages.update(call.caller, e.input as PartsUpdate), stylers: pages.stylers() } }
+      const update = e.input as PartsUpdate
+      if (update.parts !== undefined && conversations !== undefined) tellColor(call.caller, conversations.color())
+      return { value: { isHeld: pages.update(call.caller, update), stylers: pages.stylers() } }
     }
     if (call.caller !== undefined) {
       const turn = e.method === partMethods.draw ? (e.input as { readonly turn?: TurnData }).turn : undefined

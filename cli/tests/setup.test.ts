@@ -339,6 +339,57 @@ test('an update that asks for one more permission asks consent for that permissi
   expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\t\tnetwork:api.github.com\n`)
 })
 
+test('an update that drops a permission sets the mod up without asking', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true, network: ['api.github.com'] } })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions: { prompt: true } } }),
+  })
+
+  const updated = await cmod(home, 'setup', root, '--events')
+
+  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch'))?.scriptsSha256).toBe(await hashOf(root))
+})
+
+async function consentTheOldWay(home: string): Promise<string> {
+  const root = await createWatcher(home, { install: './setup/install.sh', permissions: { prompt: true, network: ['api.github.com'] } })
+  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n' })
+  const sha256 = await hashOf(root)
+  await cmod(home, 'setup', root, '--events', '--consent', sha256)
+  await writeFiles(home, { '.local/share/cmod/consent.json': JSON.stringify({ 'ci-watch': [sha256, 'network:api.github.com', 'prompt'] }) })
+  await rm(join(home, '.local/share/cmod/consent-parts'), { force: true })
+  return root
+}
+
+test('a mod consented before cmod 4.1.1, then updated to drop a permission, sets up without asking once any cmod command has run', async () => {
+  const home = await temporaryHome()
+  const root = await consentTheOldWay(home)
+
+  await cmod(home, 'list')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { install: './setup/install.sh', permissions: { prompt: true } } }),
+  })
+  const updated = await cmod(home, 'setup', root, '--events')
+
+  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
+})
+
+test('a mod consented before cmod 4.1.1 whose script changed since its install still asks for the changed script', async () => {
+  const home = await temporaryHome()
+  const root = await consentTheOldWay(home)
+  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
+
+  await cmod(home, 'list')
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t./setup/install.sh\t\t\n`, exitCode: 10 })
+  expect(existsSync(join(home, '.local/share/cmod/consent-parts'))).toBe(true)
+})
+
 test('cmod permission turns a permission the mod lists off and on, and refuses one it does not list', async () => {
   const home = await temporaryHome()
   const root = await createWatcher(home, { permissions: { prompt: true, network: ['api.github.com'] } })
@@ -1361,17 +1412,36 @@ test('setup writes keybindings.json under CLAUDE_CONFIG_DIR through its symbolic
   })
 })
 
-test('an upgrade that drops a hotkey removes its binding, and a changed hotkey asks consent again', async () => {
+test('an upgrade that drops a hotkey removes its binding without asking, and a hotkey with a new default asks for it alone', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle, review })
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
   await createHotkeysMod(home, { cycle })
 
-  const asked = await cmod(home, 'setup', root, '--events')
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const dropped = await cmod(home, 'setup', root, '--events')
+  const bound = JSON.parse(await readFile(keybindings(home), 'utf8'))
+  await createHotkeysMod(home, { cycle, review: { ...review, default: 'alt+r' } })
+  const changed = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.exitCode).toBe(10)
-  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
+  expect(dropped).toMatchObject({ stdout: 'done modes 0.1.0\n', exitCode: 0 })
+  expect(bound).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
+  expect(changed).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t\t\talt+r to Review\n`, exitCode: 10 })
+})
+
+test('an update that drops its hotkeys and keeps its permissions sets the mod up without asking', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'inbox')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'inbox', cmod: { hotkeys: { toggle: { title: 'Show the inbox', default: 'meta+1' } }, permissions: { run: ['git'], prompt: true } } }),
+  })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'inbox', cmod: { permissions: { run: ['git'], prompt: true } } }) })
+
+  const updated = await cmod(home, 'setup', root, '--events')
+
+  expect(updated).toMatchObject({ stdout: 'done inbox 0.2.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [] })
 })
 
 test('teardown removes a Chat block it leaves empty, and keeps the other blocks', async () => {

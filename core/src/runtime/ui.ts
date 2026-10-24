@@ -22,6 +22,8 @@ export const partMethods = {
   stylers: 'cmod:markdownStylers',
 } as const
 
+export const stalePress = 'that button drew before the last redraw. Press the one it shows now.'
+
 export type PagePlace = 'sidebar' | 'settings'
 
 export type WidgetDeclaration = { readonly id: string; readonly title: string; readonly areas: readonly Area[]; readonly place?: NonNullable<WidgetInit['place']> }
@@ -44,7 +46,7 @@ export function viewportColumns(e: Frozen<Args<'ui.render'>>): number {
 }
 
 export function styledAt(e: Frozen<Args<'ui.render'>>, columns = viewportColumns(e)): StyledAt {
-  return { surface: e.surface, columns }
+  return { surface: e.surface, columns: Math.max(columns, 0) }
 }
 
 export type PartPress = { readonly draw: number; readonly handler: number; readonly args: readonly unknown[] }
@@ -234,7 +236,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     if (!isRestyled && heard.join('\0') === stylers.join('\0')) return
     stylers = heard
     stylersSeen += 1
-    claude.ui.invalidate('ui.render')
+    if (name === cmodPluginName || panes.size > 0) claude.ui.invalidate('ui.render')
   }
 
   const treeOf = (render: () => RenderElement | undefined, handlers: Handler[]) => {
@@ -663,7 +665,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
   const press = async ({ draw: drawn, handler, args }: PartPress, caller: string): Promise<PartsUpdate | null> => {
     const known = draws.get(drawn)
     const run = known?.handlers[handler]
-    if (known === undefined || run === undefined) throw new Error(`${name}: that button drew before the last redraw. Press the one it shows now.`)
+    if (known === undefined || run === undefined) throw new Error(`${name}: ${stalePress}`)
     if (caller !== cmodPluginName && known.id !== 'markdown') throw new Error(`${name}: ${caller} pressed a button only the cmod plugin draws.`)
     const pressed = async () => {
       try {

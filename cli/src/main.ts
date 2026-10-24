@@ -86,6 +86,7 @@ if (name === '--version' || name === '-v') {
   if (ownArguments.includes('--help') || ownArguments.includes('-h')) {
     process.stdout.write(`${command.help}\n`)
   } else {
+    await setup.backfillConsentParts().catch((error: unknown) => process.stderr.write(`cmod: the approvals from before cmod 4.1.1 were not split into their parts, so a mod you update may ask consent once more: ${messageOf(error)}\n`))
     try {
       process.exitCode = await command.run(argv)
       if (process.exitCode === 0 && changesRules.includes(name)) await syncRules(process.cwd())

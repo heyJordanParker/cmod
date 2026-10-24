@@ -38,7 +38,7 @@ export async function createHotkeys({
   if (name === cmodPluginName) {
     router.add('command.describe', async (e, next) => {
       const described = await next(e)
-      return e.command.startsWith(hotkeyCommand(e.provider.plugin, '')) ? { ...described, isHidden: true } : described
+      return e.command.startsWith(hotkeyCommand(e.provider.plugin.replace(/@[^@]*$/, ''), '')) ? { ...described, isHidden: true } : described
     })
   }
   const entries = Object.entries(declared)

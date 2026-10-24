@@ -31,7 +31,7 @@ A mod never asks the person to type a command. When a toast, a page, or a pane n
 - `Link`, with `LinkProps`, draws a link.
 - `Code`, with `CodeProps`, draws highlighted code.
 - `Markdown`, with `MarkdownProps`, draws markdown text, as Claude Code draws a reply.
-- `Input`, with `InputProps`, draws a text input.
+- `Input`, with `InputProps`, draws a text input. It is one line tall unless `rows` says more: `rows: 4` draws four lines that wrap, as a `<textarea>`, for a note or a comment.
 - `Select`, with `SelectProps`, draws a choice of options.
 - `Image`, with `ImageProps`, draws an image, with `alt` text. Only the terminal draws it.
 - `Raster`, with `RasterProps`, draws a grid of terminal cells, each a glyph with its colors. Only the terminal draws it.

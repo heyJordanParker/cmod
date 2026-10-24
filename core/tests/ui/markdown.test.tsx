@@ -414,6 +414,23 @@ test("a pane of one mod draws another mod's markdown style once that mod draws i
   expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toContain('diagram: graph TD')
 })
 
+test('hearing which mods style markdown redraws only a mod with a pane, because the cmod plugin draws every widget and page', async () => {
+  const redrawsOf = async (definition: ModDefinition) => {
+    const fake = fakeClaude({ name: definition.name, root: `/test/plugins/${definition.name}` })
+    const lifecycle = createLifecycle(definition)
+    await lifecycle.start(fake.claude, async () => ({ name: definition.name, root: `/test/plugins/${definition.name}`, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+    await fake.settle()
+    const before = fake.calls.filter(({ call }) => call === 'ui.invalidate').length
+    await lifecycle.route('cmod.call', { to: definition.name, method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+    return fake.calls.filter(({ call }) => call === 'ui.invalidate').length - before
+  }
+
+  const withWidget = await redrawsOf(defineMod({ name: 'usage', setup: (mod) => void mod.widgets.add({ id: 'usage', title: 'Usage', areas: [BelowPrompt], render: () => Markdown({ text: 'Usage.' }) }) }))
+  const withPane = await redrawsOf(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
+
+  expect([withWidget, withPane]).toEqual([0, 1])
+})
+
 test("another mod's markdown drawing stays while this mod's own parts change and the stylers stay the same", async () => {
   const diagrams = await started(defineMod({ name: 'diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
   const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
