@@ -98,6 +98,7 @@ tool<Schema, State>(options: {
   readonly name: string
   readonly description: string
   readonly inputSchema?: Schema
+  readonly isDeferred?: boolean
   readonly execute: (input: FromSchema<Schema>, mod: Mod<State>) => unknown
 }): Job<Tool, State>
 
@@ -107,6 +108,7 @@ type Tool = { readonly name: string; remove(): void }
 - `name` is 1 to 64 letters, digits, `_`, or `-`. Claude sees the tool as `mcp__<plugin name>__<name>`, and the handle's `name` is that full name. `remove()` on the handle stops the mod answering the tool.
 - `description` tells Claude what the tool does.
 - `inputSchema` is a JSON Schema with `type: 'object'`. It types `execute`'s `input`, so write it inline. cmod checks each call's input against it, draft 2020-12, and denies an input that does not fit with the list of its errors. Its properties cannot be named `tool`, `tool_use_id`, `consent`, or `agentId`, which Claude Code keeps for itself.
+- `isDeferred: false` puts the tool's schema in Claude's tool list from the first turn, for a tool Claude calls in most turns. `true`, or leaving it out, keeps the tool behind Claude Code's ToolSearch, so Claude searches for it before its first call. Each tool kept in the list adds its schema to every turn's context.
 - `execute` returns the result Claude reads. A `string` and an array of content blocks go to Claude as they are. Any other value goes as JSON. `undefined` returns nothing.
 - An input that does not fit the schema is denied with one line per error under a heading, such as `The open_ticket tool input is not valid:` followed by `- #: Instance does not have required property "title".` The text after `- ` is the location in the input, `#` for its root, and the validator's message.
 - An `execute` that throws denies the call with `The <name> tool failed: <error>`.

@@ -2,8 +2,10 @@ import { expect, test } from 'bun:test'
 import type { Args } from 'claude-code'
 import { tool } from '../../src/jobs/tool.js'
 import { defineMod, http, process } from '../../src/mod.js'
+import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
+import { fakeClaude } from '../../src/testing/fake-claude.js'
 
 test('a call without the required title is denied with title named, and execute never runs', async () => {
   const executed: unknown[] = []
@@ -148,4 +150,24 @@ test('an inputSchema with a key Claude Code keeps for itself throws in setup', a
   )
 
   await expect(tested.start()).rejects.toThrow("tickets: the ticket tool's inputSchema has the property tool, which Claude Code keeps for itself. Rename it.")
+})
+
+test('isDeferred reaches Claude Code as given, and a tool without it leaves the placement to Claude Code', async () => {
+  const fake = fakeClaude({ name: 'memory', root: '/plugins/memory' })
+  const definition = defineMod({
+    name: 'memory',
+    setup(mod) {
+      mod.use(tool({ name: 'zoom', description: 'Zoom into a memory', isDeferred: false, execute: () => undefined }))
+      mod.use(tool({ name: 'date', description: 'Find a memory by date', execute: () => undefined }))
+    },
+  })
+  const plugin = { name: 'memory', root: '/plugins/memory', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }
+
+  await createLifecycle(definition).start(fake.claude, async () => plugin)
+  await fake.settle()
+
+  expect(fake.calls.filter(({ call }) => call === 'tool.register').map(({ args }) => args[0])).toEqual([
+    { name: 'zoom', description: 'Zoom into a memory', isDeferred: false },
+    { name: 'date', description: 'Find a memory by date' },
+  ])
 })

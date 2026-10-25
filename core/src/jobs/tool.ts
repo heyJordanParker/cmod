@@ -15,9 +15,10 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
   readonly name: string
   readonly description: string
   readonly inputSchema?: Schema
+  readonly isDeferred?: boolean
   readonly execute: (input: Schema extends JSONSchema ? FromSchema<Schema> : never, mod: Mod<State>) => unknown
 }): Job<Tool, State> {
-  const { name, description, inputSchema, execute } = options
+  const { name, description, inputSchema, isDeferred, execute } = options
   return (job) => {
     const { mod, announce, reserveName } = job
     const { claude, router, report } = engineOf(mod)
@@ -29,7 +30,7 @@ export function tool<const Schema extends object = { type: 'object' }, State ext
 
     const validator = new Validator(inputSchema ?? { type: 'object' }, '2020-12', false)
     let registered: string | undefined
-    claude.tool.register({ name, description, ...(inputSchema === undefined ? {} : { inputSchema: inputSchema as Record<string, unknown> }) }).then(
+    claude.tool.register({ name, description, ...(inputSchema === undefined ? {} : { inputSchema: inputSchema as Record<string, unknown> }), ...(isDeferred === undefined ? {} : { isDeferred }) }).then(
       (answer) => {
         registered = answer.tool
       },

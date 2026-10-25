@@ -218,6 +218,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     },
     tool: {
       register: async (tool) => {
+        calls.push({ call: 'tool.register', args: [tool] })
         shown.tools.push(tool.name)
         return { tool: `mcp__${plugin.name}__${tool.name}` }
       },
