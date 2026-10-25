@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-26
+
+### Added
+- `isDeferred` on `tool`. `isDeferred: false` puts the tool in Claude's tool list from the first turn, so Claude calls a tool it uses in most turns without searching for it first. Left out, Claude Code keeps the tool behind ToolSearch, as before.
+
 ## [4.1.1] - 2026-10-24
 
 ### Added
