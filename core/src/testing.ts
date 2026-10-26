@@ -336,7 +336,9 @@ export function testMod<State extends object, Declared extends Options = Options
       await widgetsOf()
       await fake.settle()
     }
-    return cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (await claudeCodeRuns(event, e, below)) as EventResult<N>))
+    const answer = await cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (await claudeCodeRuns(event, e, below)) as EventResult<N>))
+    await fake.settle()
+    return answer
   }
 
   const claudeCodeRuns = async (event: RoutedEvent, e: unknown, below: unknown): Promise<unknown> => {
@@ -470,13 +472,16 @@ export function testMod<State extends object, Declared extends Options = Options
     await fake.settle()
     const turn = area === TurnEndArea ? conversations.lastTurn() : undefined
     if (area === TurnEndArea && turn?.closedAt === undefined) throw new Error(`${name} has no ended turn, so TurnEnd draws nothing. End one with tested.add({ type: Prompt, text: '…' }), then tested.endTurn().`)
-    return { drawing: elements.Box({ flexDirection: 'column', children: [...(await withOwnMarkdown(() => served.draw(area, elements, { surface: 'terminal', columns }, turn)))] }), columns }
+    const drawn = await withOwnMarkdown(() => served.draw(area, elements, { surface: 'terminal', columns }, turn))
+    await fake.settle()
+    return { drawing: elements.Box({ flexDirection: 'column', children: [...drawn] }), columns }
   }
 
   const drawSlot = async (component: RenderComponent, props: object, requestId = `${component}_${(slotDraws += 1)}`) => {
     await start()
     const input = { surface: 'terminal', component, requestId, props } as Frozen<Args<'ui.render'>>
     const drawing = await lifecycle.route('ui.render', input, async (e) => plainOutput(e as Args<'ui.render'>))
+    await fake.settle()
     return { drawing, columns: defaultColumns }
   }
 

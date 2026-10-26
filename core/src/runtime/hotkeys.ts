@@ -61,7 +61,7 @@ export async function createHotkeys({
         try {
           await listener()
         } catch (error) {
-          report({ id: `hotkey:${hotkey}`, message: `The ${declared[hotkey]?.title ?? hotkey} hotkey failed`, error })
+          report({ id: `hotkey:${hotkey}`, message: `The ${declared[hotkey]?.title ?? hotkey} hotkey failed`, error, isCritical: true })
         }
       }
       return {}

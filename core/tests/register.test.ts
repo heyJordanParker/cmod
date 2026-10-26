@@ -84,6 +84,20 @@ function engine(files: Record<string, string>, env: Record<string, string> = { H
   return { $, shown }
 }
 
+declare function setTimeout(run: () => void, ms: number): unknown
+declare function clearTimeout(timer: unknown): void
+
+function keepTime($: EngineInterface): void {
+  Object.assign($.clock, {
+    after: (ms: number, run: () => void) => {
+      const timer = setTimeout(run, ms)
+      return { cancel: () => clearTimeout(timer) }
+    },
+  })
+}
+
+const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
 const demo = defineMod({
   name: 'demo',
   setup() {
@@ -249,11 +263,14 @@ test('a hook Claude Code stopped shows its failure, and the event goes on as if 
 
   let redraws = 0
   Object.assign($.ui, { invalidate: () => void (redraws += 1) })
+  keepTime($)
 
   const timedOut = await fake.fail('classic.PostToolBatch', $, {}, below, { kind: 'timeout', budget: 1000 })
+  await settled()
   const drawnOnce = redraws
   await fake.fail('classic.PostToolBatch', $, {}, below, { kind: 'timeout', budget: 1000 })
   const reentered = await fake.fail('classic.Stop', $, {}, below, ({ kind: 're-entry', budget: 1000 } as unknown as HookFailure))
+  await settled()
   const shown = textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)
 
   expect([timedOut, reentered]).toEqual([below, below])
@@ -287,8 +304,10 @@ test('a hook that fails on its own after the hooks beneath it failed still shows
   await $.store.set('cmod:announced', { version: '1.0.0', added: [] })
   registerMod(fake.on, demo, {})
   await fake.dispatch('session.start', $, {}, {})
+  keepTime($)
 
   await fake.fail('ui.press', $, releasedPress, released, { kind: 'throw', message: 'the press handler read past the list', budget: 1000 }, 'engine', true).catch(messageOf)
+  await settled()
   const shown = textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)
 
   expect(shown).toContain('Claude Code stopped its ui.press hook')

@@ -16,7 +16,6 @@ import { beforeAnswerKeys, foldAnswers, foldBefore, methodOf, takenAnswer, type 
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
 import { messageOf } from '../utils/text.js'
-import { grantFix, permissionWords } from '../records.js'
 import { listenerOf, PassedTimeout, withinTime, type ListenOptions, type ListenTime } from './deadline.js'
 import { callFiles, type HomeFolders, type HookFields } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
@@ -159,7 +158,7 @@ export function withoutPermissionCheck(name: string, hearer: string): string {
 
 export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>, failed?: (input: unknown, error: Error) => HookFields | undefined) => Subscription
 
-export function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
+export function createSessionsClient({ name, claude, report, isGranted, permissionRefusal, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly permissionRefusal: (call: string, permission: string) => string; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
   const call = <Answer>(method: string, input: unknown) => claude.cmod.call({ to: cmodPluginName, method, input }) as Promise<Answer>
   const listening = new Map<string, Set<Listening>>()
   const deciding = new Map<string, Set<Listening>>()
@@ -181,6 +180,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
       const heard = (from: Map<string, Set<Listening>>): Listened[] =>
         [...(from.get(key) ?? [])].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...(options.onFailure === 'refuse' ? { onFailure: 'refuse' as const, scope } : {}) }))
       const tracksTasks = [...(listening.get(key) ?? []), ...(deciding.get(key) ?? [])].some(({ scope }) => scope.task !== undefined || scope.isGoal === true)
+      if (tracksTasks) void learnTasks(key).catch((error: unknown) => report(`tasks:${key}`, 'Could not read the tasks it listens under', error))
       const subscriptions = [...heard(listening), ...(tracksTasks ? [{ event: TaskStart }] : [])]
       await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error: unknown) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
       await call(conversationMethods.watchBefore, { session: key, subscriptions: heard(deciding) }).catch((error: unknown) => report(`before:${key}`, `Changes nothing in ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
@@ -210,7 +210,6 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     const set = into.get(key) ?? new Set()
     set.add(entry)
     into.set(key, set)
-    if (scope.task !== undefined || scope.isGoal === true) void learnTasks(scope.session ?? current.id).catch((error: unknown) => report(`tasks:${key}`, 'Could not read the tasks it listens under', error))
     onChange(key)
     return {
       remove() {
@@ -248,7 +247,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
         if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer)) return answer
         const missing = answerPermissions(event, answer as Partial<Answers>).find((permission) => !isGranted(permission))
         if (missing === undefined) return answer
-        throw new Error(`Its ${entry.method} answer changes nothing until you grant ${name} "${permissionWords(missing)}". ${grantFix}`)
+        throw new Error(permissionRefusal(`${entry.method} with the answer { ${Object.keys(answer).join(', ')} }`, missing))
       })
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) }
@@ -507,7 +506,7 @@ export function createSessionsClient({ name, claude, report, isGranted, hookOn, 
     const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise('beforeRun', run)
     if (typeof answer?.['refuse'] === 'string') return { text: answer['refuse'] }
     const changes = answer !== undefined && isGranted('prompt') ? answer : undefined
-    if (answer !== undefined && changes === undefined) report('session:beforeRun', 'The beforeRun listener failed', new Error(`${name}: its answer changes a command, which needs the prompt permission.`))
+    if (answer !== undefined && changes === undefined) report('session:beforeRun', 'The beforeRun listener failed', new Error(permissionRefusal(`beforeRun with the answer { ${Object.keys(answer).join(', ')} }`, 'prompt')))
     if (typeof changes?.['result'] === 'string') return { text: changes['result'], ...(typeof changes['exitCode'] === 'number' ? { exitCode: changes['exitCode'] } : {}) }
     const args = typeof changes?.['args'] === 'string' ? changes['args'] : e.args
     const ran = await next(args === e.args ? e : { ...e, args })

@@ -14,7 +14,7 @@ type Modifiers = 'ctrl' | 'alt' | 'shift' | 'meta' | 'ctrl+alt' | 'ctrl+shift' |
 
 export type Combo = `${Modifiers}+${Key}`
 
-export type HotkeyInit = { readonly title: string; readonly default: Combo }
+export type HotkeyInit = { readonly title: string; readonly default?: Combo }
 
 export type Hotkeys = Readonly<Record<string, HotkeyInit>>
 
@@ -42,6 +42,7 @@ export function checkHotkeys(name: string, hotkeys: Hotkeys): Hotkeys {
     const at = `${name}: hotkeys.${key}`
     if (!hotkeyName.test(key)) throw new Error(`${at} is not a hotkey name. Use letters, digits, and _, starting with a letter.`)
     if (declared.title.trim() === '') throw new Error(`${at} needs a title, the label Settings shows beside its combo.`)
+    if (declared.default === undefined) continue
     if (!isCombo(declared.default)) throw new Error(`${at} defaults to "${String(declared.default)}", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".`)
     const taken = combos.get(declared.default)
     if (taken !== undefined) throw new Error(`${at} defaults to ${declared.default}, which hotkeys.${taken} has too. Give each hotkey its own combo.`)

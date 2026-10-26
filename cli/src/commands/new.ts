@@ -79,7 +79,7 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'CHANGELOG.md': `# Changelog
 
-What changed in each version of ${name}, for the people who use it. cmod publish releases the section for the version, and the Updated toast and Settings show it.
+What changed in each version of ${name}, for the people who use it. cmod publish releases the section for the version, and Settings shows it.
 
 ## [Unreleased]
 

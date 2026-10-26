@@ -95,6 +95,7 @@ test('a file cmod cannot read comes back with the line, read throws it, and cmod
 
   expect(found).toEqual({ path, metadata: {}, error: `${path} line 4: a metadata value holds a list or a map. Each value is one line of text, and a list is one space-separated text.` })
   await expect(metadata.read(path)).rejects.toThrow(`modes: ${path} line 4:`)
+  await tested.settle()
   expect(tested.shown.toasts.filter(({ description }) => description?.includes('line 4') === true)).toEqual([
     { type: 'error', message: `Skips the metadata of ${path}`, description: `${path} line 4: a metadata value holds a list or a map. Each value is one line of text, and a list is one space-separated text.` },
   ])

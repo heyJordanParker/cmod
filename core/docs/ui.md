@@ -19,7 +19,7 @@ Claude Mod Manager (cmod) draws the mod again whenever a value in `mod.state` ch
 
 ## Every message the person acts on carries a button
 
-A mod never asks the person to type a command. When a toast, a page, or a pane needs the person to do something, it draws a `Button` that does it, or that opens the place where they do it, such as `mod.settings.open()` or a page's `open()`. cmod follows the same rule: a failure caused by a permission the person turned off carries a `Settings` button that opens the mod's Permissions, and a secret option carries an `Open /config` button.
+A mod never asks the person to type a command. When a toast, a page, or a pane needs the person to do something, it draws a `Button` that does it, or that opens the place where they do it, such as `mod.settings.open()` or a page's `open()`. cmod follows the same rule: a failure caused by a provider that is not installed carries a `Plugins` button, and a secret option carries an `Open /config` button. A failure caused by a permission the person turned off shows no toast, because the person chose it, and goes to the Log in Settings.
 
 ## Elements
 
@@ -438,9 +438,18 @@ type ToastOptions = {
 - `✕` closes the toast. The band shows the newest 3, and `+N more` shows every toast.
 - `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
-An error cmod catches for a mod, such as a listener that throws, shows as an error toast that stays, with its buttons on a line under the message:
+Every error cmod catches for a mod, such as a listener that throws, goes to the Log, in Settings on cmod's page. The Log keeps the newest 100 failures of every session, each with the mod, the time, the message, `Copy`, and `Report`, and the same failure again updates its entry.
 
-- `Settings` opens the mod's Permissions in Settings, when the failure came from a permission the person turned off.
+An error also shows as a toast when any of these holds:
+
+- it is critical: the mod's install or setup failed, its program stopped, or a button or hotkey the person pressed failed
+- the mod runs from its checkout, linked with [`cmod link`](commands.md#cmod-link) or loaded with `--plugin-dir`, because the person is its author
+- `Show errors from installed mods` is on, in Settings on cmod's page under Preferences
+
+A refusal for a permission the mod declared and the person turned off, whose text ends in `Turn it on in Settings.`, shows no toast. It goes to the Log and to Claude Code's debug log. A cmod older than 4.3.0 keeps no Log, so there every error shows its toast, this one included.
+
+The error toast stays, with its buttons on a line under the message:
+
 - `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped.
 - `Report` replaces the toast's buttons with the ways to tell the mod's author. `Ask Claude to report it` sends this session a prompt to file the report with the person's own tools. `Report it on GitHub (opens your browser)` opens a filled-in issue on the mod's `supportUrl` or `repository` in its `plugin.json`, or `Email the author (opens your mail app)` writes to its `author.email`. `Copy the error` copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack.
 - `Hide` closes the toast and keeps the same failure hidden in later sessions. A new version of the mod, or a different failure, shows again.

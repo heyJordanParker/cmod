@@ -3,14 +3,14 @@ import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, hotkeyBindings, hotkeyWords, isProgramNewer, marketplaceOf, permissionWords, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, hotkeyWords, isProgramNewer, marketplaceOf, parsePreferences, permissionWords, preferencesPath, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import type { Hotkeys } from '@cmodjs/core/src/hotkeys.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
-import { ifMissing, listFiles, readText, tilde, writeAtomically } from '../files.js'
+import { ifMissing, listFiles, readJson, readText, tilde, writeAtomically } from '../files.js'
 import { paint, startProgress, type Progress } from '../progress.js'
 import { bindKeys, isLinked, keybindingsPath, modBindings, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
 import { approvals, approve, modLock, recordNames, revokeApprovals, storePath, takeLock } from '../store.js'
@@ -26,7 +26,7 @@ the program its package.json "cmod.program" names, which Claude Code
 then runs by its name, or builds it from the checkout's cli/ when cmod link
 loaded the mod, and links it into ~/.local/bin for a terminal,
 runs the mod's install step from its package.json "cmod" key,
-saves its uninstall step, binds the hotkeys its "cmod.hotkeys" declares in
+saves its uninstall step, binds the default combos its "cmod.hotkeys" declares in
 Claude Code's keybindings.json, and records the mod as set up. A hotkey you
 rebound keeps your combo, and a combo you already bound to something else
 stays yours, and the setup prints the line to add. An unchanged mod runs
@@ -52,7 +52,7 @@ Options:
   --consent <sha256>  Approve the scripts whose hash a needs-consent event named
   --yes               Approve the scripts without asking`
 
-type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean; asked: readonly string[]; hotkeys: Hotkeys; missing: readonly string[]; updates: string | undefined }
+type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean; asked: readonly string[]; hotkeys: Hotkeys; missing: readonly string[]; granted: readonly string[]; updates: string | undefined }
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -172,7 +172,7 @@ async function consentOf(plugin: Plugin): Promise<{ sha256: string; changes: rea
   const { hotkeys = {}, permissions = [], ...commands } = plugin.steps
   return {
     sha256: await scriptsSha256(plugin.steps, files),
-    changes: [...(Object.keys(commands).length === 0 ? [] : [await scriptsSha256(commands, files)]), ...Object.entries(hotkeys).map(([name, { default: combo }]) => hotkeyApproval(name, combo))],
+    changes: [...(Object.keys(commands).length === 0 ? [] : [await scriptsSha256(commands, files)]), ...Object.entries(hotkeys).flatMap(([name, { default: combo }]) => (combo === undefined ? [] : [hotkeyApproval(name, combo)]))],
     permissions,
   }
 }
@@ -180,15 +180,20 @@ async function consentOf(plugin: Plugin): Promise<{ sha256: string; changes: rea
 async function checkSetup(plugin: Plugin): Promise<SetupState> {
   refuseThisMachine(plugin)
   const { sha256, changes, permissions } = await consentOf(plugin)
-  const record = await readRecord(readText, storeFolder(process.env), plugin.name)
-  const programModifiedMs = record === undefined || record.program === null ? undefined : (await stat(programPath(storeFolder(process.env), record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
+  const store = storeFolder(process.env)
+  const record = await readRecord(readText, store, plugin.name)
+  const programModifiedMs = record === undefined || record.program === null ? undefined : (await stat(programPath(store, record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
   const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, programModifiedMs)
   const approved = await approvals(plugin.name)
-  const asked = [...changes, ...permissions].filter((item) => !approved.includes(item))
-  const hotkeys = Object.fromEntries(Object.entries(plugin.steps.hotkeys ?? {}).filter(([name, { default: combo }]) => asked.includes(hotkeyApproval(name, combo))))
-  const missing = permissions.filter((item) => asked.includes(item))
+  const recorded = approved.length === 0 ? null : (record?.permissions ?? null)
+  const added = permissions.filter((item) => !approved.includes(item) && (recorded === null || !recorded.includes(item)))
+  const preferences = preferencesPath(store)
+  const granted = recorded !== null && added.length > 0 && !parsePreferences(await readJson(preferences), preferences).asksBeforeUpdatePermissions ? added : []
+  const missing = added.filter((item) => !granted.includes(item))
+  const asked = [...changes.filter((item) => !approved.includes(item)), ...missing]
+  const hotkeys = Object.fromEntries(Object.entries(plugin.steps.hotkeys ?? {}).filter(([name, { default: combo }]) => combo !== undefined && asked.includes(hotkeyApproval(name, combo))))
   const needsConsent = !isCurrent && !approved.includes(sha256) && asked.length > 0
-  return { sha256, isCurrent, needsConsent, asked, hotkeys, missing, updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
+  return { sha256, isCurrent, needsConsent, asked, hotkeys, missing, granted, updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
 }
 
 export async function backfillConsentParts(): Promise<void> {
@@ -221,12 +226,14 @@ async function runSetup(plugin: Plugin, consent: string | undefined, emit: (even
   }
   if (hold.signal !== undefined) return 1
   const store = storeFolder(process.env)
+  const approving = [...(state.needsConsent ? [state.sha256, ...state.asked] : []), ...state.granted]
   let code = 1
   try {
+    if (approving.length > 0) await approve(plugin.name, approving)
     code = await setUpMod(plugin, state, hold, emit)
     return code
   } finally {
-    if (code !== 0 && state.needsConsent) await revokeApprovals(plugin.name, [state.sha256, ...state.asked])
+    if (code !== 0 && approving.length > 0) await revokeApprovals(plugin.name, approving)
     if (code !== 0 && !existsSync(recordPath(store, plugin.name))) await removeData(plugin.name)
   }
 }
@@ -235,7 +242,6 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   const { install, uninstall, program } = plugin.steps
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
-  if (state.needsConsent) await approve(plugin.name, [state.sha256, ...state.asked])
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
   const folder = storePath('uninstall', plugin.name)
@@ -273,7 +279,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
     }
     before = await modBindings(plugin.name, previous?.keys ?? {})
     await unbindKeys(before)
-    const keys = await bindKeys(keptBindings(hotkeyBindings(plugin.name, plugin.steps.hotkeys), before))
+    const keys = await bindKeys(keptBindings(plugin.name, plugin.steps.hotkeys ?? {}, before))
     bound = keys.bound
     for (const text of keys.kept) emit({ type: 'log', text })
     await writeRecord(writeAtomically, store, {
@@ -285,6 +291,8 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       uninstall: hasUninstall ? join(folder, 'uninstall.sh') : null,
       program: program ?? null,
       keys: bound,
+      permissions: plugin.steps.permissions ?? [],
+      grantedOnUpdate: state.granted,
     })
     isRecorded = true
     if (state.updates !== undefined) {
@@ -306,8 +314,9 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   return 0
 }
 
-function keptBindings(defaults: Readonly<Record<string, string>>, previous: Readonly<Record<string, string>>): Record<string, string> {
-  const commands = new Set(Object.values(defaults))
+function keptBindings(mod: string, hotkeys: Hotkeys, previous: Readonly<Record<string, string>>): Record<string, string> {
+  const commands = new Set(Object.keys(hotkeys).map((name) => hotkeyCommand(mod, name)))
+  const defaults = hotkeyBindings(mod, hotkeys)
   const rebound = Object.entries(previous).filter(([, command]) => commands.has(command))
   const reboundCommands = new Set(rebound.map(([, command]) => command))
   const reboundCombos = new Set(rebound.map(([combo]) => combo))
@@ -357,7 +366,7 @@ async function askConsent(plugin: Plugin, { hotkeys, missing, updates }: SetupSt
           `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
         ]),
     ...(program === undefined ? [] : [`  It installs the program ${style.cyan(program)}, which Claude runs by its name.`]),
-    ...(Object.keys(hotkeys).length === 0 ? [] : [`  It binds hotkeys in ${tilde(keybindingsPath())}:`, ...Object.values(hotkeys).map(({ title, default: combo }) => `    ${combo.padEnd(14)} ${style.cyan(title)}`)]),
+    ...(Object.keys(hotkeys).length === 0 ? [] : [`  It binds hotkeys in ${tilde(keybindingsPath())}:`, ...Object.values(hotkeys).flatMap(({ title, default: combo }) => (combo === undefined ? [] : [`    ${combo.padEnd(14)} ${style.cyan(title)}`]))]),
     ...(missing.length === 0 ? [] : ['  It asks to:', ...missing.map((item) => `    ${style.cyan(permissionWords(item))}`)]),
     ...(updates === undefined ? [] : [`  It updates automatically from the ${style.cyan(updates)} marketplace, set in ${tilde(settingsPath())}.`]),
     '',

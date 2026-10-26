@@ -8,14 +8,14 @@ import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
-import { announcedOf, announcementMs, announcementOf } from './announce.js'
+import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
 import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
-import { checkedAnswer, checkingGrants, checkRun, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, type AnswerCheck, type Grants } from './grants.js'
+import { checkedAnswer, checkingGrants, checkRun, checkSettings, checksAnswers, checkWrite, isCovered, itemOf, passedDown, programAddresses, refusal, type AnswerCheck, type Grants } from './grants.js'
 import { cmodError, locatingPrograms, readLines, spawnCmod, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
 import { fitsOption } from '../options.js'
@@ -33,7 +33,7 @@ import { createHotkeys } from './hotkeys.js'
 import { servePages, type Pages } from './pages.js'
 import { drawnParts, type DrawnParts } from './parts.js'
 import { createWatches } from './watches.js'
-import { createUi, partMethods, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type SettingsTab, type ShownPages, type UiArea } from './ui.js'
+import { createUi, partMethods, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownPages, type UiArea } from './ui.js'
 import { serveWidgets } from './widgets.js'
 import { Progress } from '../ui/components.js'
 import { Box, Text } from '../ui/elements.js'
@@ -192,8 +192,8 @@ export function createLifecycle<State extends object, Declared extends Options =
   const granted = new Set<string>()
   let activation: Promise<void> | undefined
   let mod: Mod<State> | undefined
-  const openSettings = async (tab?: SettingsTab) => {
-    await claude().cmod.call({ to: cmodPluginName, method: partMethods.changed, input: { requests: [{ settings: true, ...(tab === undefined ? {} : { tab }) }], isAsked: true } })
+  const openSettings = async () => {
+    await claude().cmod.call({ to: cmodPluginName, method: partMethods.changed, input: { requests: [{ settings: true }], isAsked: true } })
   }
   let imports: Imports | undefined
   let raise: SessionsClient['raise'] | undefined
@@ -233,7 +233,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     phase = 'failed'
     failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}${fix === undefined ? '' : ` ${fix}`}`, { cause: error })
     const again = retry === undefined ? {} : { retry: () => ((failure = undefined), stopRetrying(), retry().catch(report)) }
-    toastFailure({ id: installId, message: reason, ...(fix === undefined ? {} : { description: fix }), ...(error === undefined ? {} : { error }), ...again })
+    toastFailure({ id: installId, message: reason, ...(fix === undefined ? {} : { description: fix }), ...(error === undefined ? {} : { error }), ...again, isCritical: true })
     watchRecord()
   }
 
@@ -293,7 +293,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       runtime?.toaster.toast.dismiss(recordId)
       return programs?.refresh()
     }
-    if (failed !== undefined) return void toastFailure({ id: recordId, message: failed, retry: record })
+    if (failed !== undefined) return void toastFailure({ id: recordId, message: failed, retry: record, isCritical: true })
     throw new Error(`cmod setup ${formatExit(code, lastError)}`)
   }
 
@@ -384,19 +384,17 @@ export function createLifecycle<State extends object, Declared extends Options =
     stopWatchingRecord()
     runtime.claude.ui.invalidate('ui.render')
     if (definition.name === cmodPluginName) runtime.claude.ui.invalidate('command.describe')
-    void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error }))
+    void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error, isCritical: true }))
     const missed = missedSessionStart
     missedSessionStart = undefined
     if (missed !== undefined) await replaySessionStart(missed)
-    const version = plugin.version ?? ''
-    const announced = announcedOf(await runtime.claude.store.get(announcedKey))
-    if (announced?.version === version) {
+    if ((await runtime.claude.store.get(announcedKey)) !== undefined) {
       runtime.toaster.toast.dismiss(installId)
       return
     }
-    await runtime.claude.store.set(announcedKey, { version, added })
+    await runtime.claude.store.set(announcedKey, { version: plugin.version ?? '' })
     const { toaster } = runtime
-    void announcementOf(runtime.claude, plugin, granted, added, announced, openSettings)
+    void announcementOf(runtime.claude, plugin, granted, added, openSettings)
       .then(({ message, ...options }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options }))
       .catch((error: unknown) => toastFailure({ id: installId, message: 'Could not say what it installed', error }))
   }
@@ -631,13 +629,11 @@ export function createLifecycle<State extends object, Declared extends Options =
     dropped(item, part) {
       if (droppedParts.has(item)) return
       droppedParts.add(item)
-      const declared = plugin?.steps.permissions ?? []
-      const isDeclared = declared.includes(item)
-      runtime?.toaster.toast.warning(`Answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it`, {
+      const isDeclared = (plugin?.steps.permissions ?? []).includes(item)
+      toastFailure({
         id: `dropped:${item}`,
+        message: `Answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it`,
         description: isDeclared ? grantFix : `It needs "permissions": { "${item}": true } in package.json "cmod".`,
-        duration: Infinity,
-        ...(isDeclared ? { action: { label: 'Settings', onClick: () => openSettings('permissions') } } : {}),
       })
     },
   }
@@ -686,7 +682,16 @@ export function createLifecycle<State extends object, Declared extends Options =
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
       programs = locatingPrograms(claudeCalls)
-      runtime = { claude: programs.claude, toaster: createToaster(claudeCalls, definition.name, () => plugin?.version, () => openSettings('permissions')) }
+      const callingCmod: Claude = {
+        ...claudeCalls,
+        cmod: {
+          async call(input) {
+            if (input.to === definition.name) await holdUntilStarted()
+            return answeringOwnCalls(claudeCalls, router).cmod.call(input)
+          },
+        },
+      }
+      runtime = { claude: programs.claude, toaster: createToaster(callingCmod, definition.name, () => plugin?.version) }
       readStarted = read
       try {
         drawCount = (await claudeCalls.clock.now()) * drawsPerMs
@@ -732,7 +737,7 @@ export function createLifecycle<State extends object, Declared extends Options =
         if (call.method === pendingStepsMethod) return { value: await pendingSteps(mod) } as EventResult<N>
         if (call.method === finishStepsMethod) {
           const active = mod
-          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error: unknown) => void toastFailure({ id: 'cmod:steps', message: 'Could not finish the setup', error })), installer.shown()]))
+          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error: unknown) => void toastFailure({ id: 'cmod:steps', message: 'Could not finish the setup', error, isCritical: true })), installer.shown()]))
           return { value: opened } as EventResult<N>
         }
       }
@@ -780,7 +785,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     home,
     configRoot,
     projectRoot: () => modState.root,
-    freeFolders: () => [modState.root, runtime.dataFolder],
+    freeFolders: () => [modState.root, definition.name === cmodPluginName ? runtime.store : runtime.dataFolder],
     freeAddresses: () => programAddresses(mod),
   }
   const checked = checkingGrants(claude, grants)
@@ -838,6 +843,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     claude: checked,
     report: (id, message, error) => report({ id, message, error }),
     isGranted: (permission) => flag(permission),
+    permissionRefusal: (call, permission) => refusal(grants, call, permission),
     hookOn: (hook, listener, failed) => hookOn(hook as Hook, listener as HookListener<Hook>, failed),
     routeOn: (event: RoutedEvent, hook: unknown, failed?: unknown) => router.add(event, hook as never, failed as never),
     permissionRoutes: runtime.permissionRoutes,

@@ -37,10 +37,10 @@ test("a project's options.json beats the person's own value, and a secret in it 
 
   const path = '/test/project/.claude/cmods/ci-watch/options.json'
   expect(tested.shown.toasts).toEqual([
-    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets every to 0, and Check every takes 1 or more.` },
-    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets githubToken, a secret, and a project file is committed for everyone to read. Remove it. Set it in /config, where Claude Code keeps it in your keychain.` },
     { type: 'default', message: 'watching release every 10 minutes as ghp_' },
     { type: 'success', message: 'Installed' },
+    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets every to 0, and Check every takes 1 or more.` },
+    { type: 'error', message: `Ignores part of ${path}`, description: `${path} sets githubToken, a secret, and a project file is committed for everyone to read. Remove it. Set it in /config, where Claude Code keeps it in your keychain.` },
   ])
 })
 

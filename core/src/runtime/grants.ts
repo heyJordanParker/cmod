@@ -29,7 +29,7 @@ export function programAddresses(mod: object): Set<string> {
 
 const projectSettingsFiles: readonly string[] = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json']
 
-const conversationCalls: Readonly<Record<string, string>> = {
+export const conversationCalls: Readonly<Record<string, string>> = {
   [conversationMethods.sessions]: 'sessions.list',
   [conversationMethods.search]: 'sessions.search',
   [conversationMethods.messages]: 'messages',

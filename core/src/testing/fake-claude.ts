@@ -78,7 +78,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   }
   const rejected = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Promise<Result>) | undefined) => {
     const run = faked(call, answer)
-    return async (...args: Args): Promise<Result> => run(...args)
+    return async (...args: Args): Promise<Result> => await run(...args)
   }
 
   const cmodCall = rejected('cmod.call', () => fakes.cmod.call ?? cmodTakesParts)
@@ -129,6 +129,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         lines.push(text)
       },
       notice: () => undefined,
+      toast: (...args) => void calls.push({ call: 'ui.toast', args }),
       invalidate: (event) => void calls.push({ call: 'ui.invalidate', args: [event] }),
       ask: rejected('ui.ask', () => fakes.ui.ask),
       open: async (pane) => {

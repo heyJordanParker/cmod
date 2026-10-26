@@ -22,7 +22,7 @@ type ModDefinition<State, Name, Options, Hotkeys> = {
 - `name` is the mod's name. Use the `name` in `.claude-plugin/plugin.json`. Claude Mod Manager (cmod) keys the saved state and the options by this name, and the data folder and the Skill overrides by the plugin's name, so the two must match. `defineMod` throws `defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.` for a blank name.
 - `state` holds the starting values, grouped by how long they last. [state.md](state.md) explains the groups.
 - `options` declares what a person sets, such as a token, and types `mod.options`. [options.md](options.md) explains them.
-- `hotkeys` declares the key combos the mod listens for, each with a title and a default combo the person can change ([Hotkeys](#hotkeys)).
+- `hotkeys` declares the key combos the mod listens for, each with a title and an optional default combo the person can change ([Hotkeys](#hotkeys)).
 - `installer` lists the steps the person finishes in Claude Code after the permissions and the options, such as signing in. [install-steps.md](install-steps.md#steps-in-claude-code) explains them.
 - `setup` runs once when the mod starts. It adds listeners, pages, panes, widgets, styles, and jobs. It may be `async`. What it returns is the mod's API: an object of methods other mods call. Return nothing for a mod that offers none. [dependencies.md](dependencies.md) explains it.
 
@@ -47,7 +47,7 @@ export const greeter = defineMod({
 
 Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod the person has not accepted yet opens its install page, the `Install <name>` tab of the Sidebar, which lists its permissions and the changes it makes to the computer, and waits for Accept ([install-steps.md](install-steps.md)). An option with no default and no value is asked next on the same page. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the install page again for each `installer` step the mod declares that is not done.
 
-The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, the Branch widget and /deploy.`, what its install step set up, and each permission the person allowed, with a Settings button that opens Settings at the mod. The first time a new version starts, the toast is `Updated to <version>`: the first three changes of that version's `CHANGELOG.md` section, the version the machine ran before, and a Changelog button ([Release notes](#release-notes)). A mod with no changelog lists what it adds now and no longer adds instead. A new session, `/reload-plugins`, and a version the machine already ran show no toast.
+The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, the Branch widget and /deploy.`, what its install step set up, and each permission the person allowed, with a Settings button that opens Settings at the mod. A new version shows no toast of the mod's own: after the reload that loads it, the cmod plugin shows `<mod> updated to <version>` in the corner, followed by each permission the update granted ([commands.md](commands.md#install-mods)). A new session and `/reload-plugins` show no toast.
 
 When a step fails, or the person declines the install, the mod stays stopped. Once another session sets it up, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
 
@@ -62,7 +62,7 @@ When a step fails, the mod does not start. An error toast above the prompt names
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
 
-Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)).
+Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)). A failed step is critical, so its toast shows for an installed mod too, unless the failure is a refusal for a permission the person turned off, which goes only to the Log.
 
 ## Rules
 
@@ -100,7 +100,7 @@ A mod's `CHANGELOG.md`, at its root, holds what changed in each version, written
 ```
 
 - `cmod publish` releases the version's section as the GitHub release's notes, and refuses a version with no section ([commands.md](commands.md#cmod-publish)). Every release ships the file.
-- The Updated toast shows the first three changes of the new version's section, and its Changelog button opens the mod's Changelog in Settings, the whole file with the installed version at the top of the view.
+- Settings shows the mod's Changelog, the whole file with the installed version at the top of the view.
 - A linked checkout whose version has no section yet shows its `[Unreleased]` section, so the notes show as soon as the version moves.
 - `cmod new` writes the file with an `[Unreleased]` and a `[0.1.0]` section.
 
@@ -246,10 +246,10 @@ With `{ to: 'transcript' }`, the line shows dim in the conversation, where the p
 
 ### Hotkeys
 
-A hotkey is a key combo the mod listens for, such as `alt+shift+p` to show a page. The mod declares each one with a title and a default combo, and the person changes the combo in Settings, under the mod, Hotkeys, the way VS Code handles an extension's keybindings.
+A hotkey is a key combo the mod listens for, such as `alt+shift+p` to show a page. The mod declares each one with a title and an optional default combo, and the person changes the combo in Settings, under the mod, Hotkeys, the way VS Code handles an extension's keybindings.
 
 ```ts
-hotkeys?: { readonly [name: string]: { readonly title: string; readonly default: Combo } }
+hotkeys?: { readonly [name: string]: { readonly title: string; readonly default?: Combo } }
 
 type Hotkey = {
   readonly title: string
@@ -261,8 +261,9 @@ type Hotkey = {
 - A name is letters, digits, and `_`, starting with a letter. `title` is the label Settings shows beside the combo.
 - A combo is one or two of `ctrl`, `alt`, `shift`, and `meta`, in that order, then a key: a letter, a digit, `f1` to `f12`, `tab`, `enter`, `escape`, `space`, `backspace`, `delete`, an arrow, `home`, `end`, `pageup`, `pagedown`, or a mark such as `/`. `ctrl+q`, `alt+shift+p`, and `ctrl+shift+k` are combos.
 - `defineMod` throws for a name, a title, or a combo that is not one, and for two hotkeys with one default.
-- `cmod check` writes the hotkeys into `package.json` `"cmod".hotkeys`, and `cmod publish` refuses a mod whose `package.json` differs from `defineMod`. The install question lists each combo, and `cmod setup` binds it in Claude Code's `keybindings.json`. A combo the person already bound to something else keeps their binding, and the hotkey has no combo until they pick one in Settings.
-- `combo` is the combo bound when the mod started, or `undefined` when `keybindings.json` binds none to the hotkey, such as when another binding kept the default.
+- `cmod check` writes the hotkeys into `package.json` `"cmod".hotkeys`, and `cmod publish` refuses a mod whose `package.json` differs from `defineMod`. The install question lists each default combo, and `cmod setup` binds it in Claude Code's `keybindings.json`. A combo the person already bound to something else keeps their binding, and the hotkey has no combo until they pick one in Settings.
+- A hotkey without a `default` starts unbound. The install question and the Installed toast leave it out, and Settings lists it as unbound until the person binds it there or with `cmod hotkey` ([commands.md](commands.md#cmod-hotkey)). Leave out `default` when the person should choose the key, such as for an action few people press.
+- `combo` is the combo bound when the mod started, or `undefined` when `keybindings.json` binds none to the hotkey, such as when another binding kept the default or the hotkey has no default.
 - `onPress` runs `listener` each time the person presses the combo. A page or pane the listener opens shows at any width, because the press is the person's own ([ui.md](ui.md#the-sidebar-and-its-pages)).
 - `tested.hotkey(name)` presses a hotkey in a test ([testing.md](testing.md)).
 

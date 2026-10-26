@@ -164,9 +164,9 @@ test('a prompt without the grant to add text Claude reads adds nothing, and says
 
   expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
   expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(tested.shown.toasts.filter(({ type }) => type === 'warning')).toEqual([
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([
     {
-      type: 'warning',
+      type: 'error',
       message: 'Answered changed context without your grant to "Add text Claude reads and start turns", so cmod dropped it',
       description: 'It needs "permissions": { "prompt": true } in package.json "cmod".',
     },

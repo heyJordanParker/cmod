@@ -671,7 +671,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
       try {
         await run(...args)
       } catch (error) {
-        report({ id: known.id, message: 'Its button failed', error })
+        report({ id: known.id, message: 'Its button failed', error, isCritical: true })
       }
     }
     if (caller === cmodPluginName) return collect(pressed)

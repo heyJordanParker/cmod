@@ -96,6 +96,9 @@ test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
     fn()
     return { cancel: () => undefined }
   }
+  const logged: unknown[] = []
+  const answerCmod = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (call) => (call.method === 'cmod:failed' ? (logged.push(call.input), { showsToast: false }) : answerCmod?.(call))
 
   const started = await ready()
   const answered = expect(started.ready()).rejects.toThrow(
@@ -103,9 +106,11 @@ test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
   )
   await tested.settle()
 
-  expect(delays).toEqual([1000, 2000, 4000, 8000, 16000])
+  expect(delays.filter((ms) => ms > 0)).toEqual([1000, 2000, 4000, 8000, 16000])
   expect(starts).toBe(6)
   expect(started.state).toBe('fatal')
+  expect(logged).toEqual([expect.objectContaining({ mod: 'preview', id: 'program:preview-server', message: 'The preview-server program stopped', isCritical: true })])
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The preview-server program stopped', description: 'it did not start again after 5 tries: listen EADDRINUSE (start 6).' })
   await answered
 })
 
@@ -163,7 +168,7 @@ test('a program the mod has no grant to run stops at once and names the line to 
   await expect((handle as Program).ready()).rejects.toThrow(
     'preview calls process.spawn(preview-server), which needs "permissions": { "run": ["preview-server"] } in package.json "cmod".',
   )
-  expect(tested.calls.filter((call) => call.call === 'clock.after')).toEqual([])
+  expect(tested.calls.filter((call) => call.call === 'clock.after' && call.args[0] !== 0)).toEqual([])
 })
 
 test("a mod fetches its own program's address with no network grant, and any other address still needs one", async () => {

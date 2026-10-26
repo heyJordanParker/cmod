@@ -4,10 +4,16 @@ import { Box, Button, drawWith, Link, Text } from '../ui/elements.js'
 import { coreVersion, grantFix, installFix, isObject, secretFix } from '../records.js'
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { beforeDeadline } from './deadline.js'
+import { cmodPluginName } from './dependencies.js'
 
 export type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 
-export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown }
+export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown; readonly isCritical?: boolean }
+
+export type LoggedFailure = { readonly mod: string; readonly id: string; readonly message: string; readonly details: string; readonly at: string; readonly isCritical: boolean; readonly root: string; readonly contact?: Contact }
+
+export const failedMethod = 'cmod:failed'
 
 export type Toaster = {
   readonly toast: Toast
@@ -19,7 +25,7 @@ export type Toaster = {
 
 type Action = { readonly label: string; readonly onClick: () => unknown }
 
-type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
+export type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
 
 type Reporting = { readonly contact: Contact | undefined; readonly details: string; readonly status?: string }
 
@@ -44,6 +50,8 @@ const linkLimit = 2048
 
 const hiddenKey = 'cmod:hidden-failures'
 
+const failedCallMs = 30_000
+
 const defaultDuration = 4000
 const visibleToasts = 3
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
@@ -58,9 +66,10 @@ const icons: Record<Exclude<ToastType, 'loading'>, { readonly glyph: string; rea
   error: { glyph: '✗', color: 'error' },
 }
 
-export function createToaster(claude: Claude, name: string, version: () => string | undefined, openPermissions: () => unknown): Toaster {
+export function createToaster(claude: Claude, name: string, version: () => string | undefined): Toaster {
   const entries = new Map<ToastId, Entry>()
   const hidden = new Map<string, string>()
+  const sent = new Map<string, string>()
   void claude.store.get(hiddenKey).then(
     (saved) => {
       if (typeof saved !== 'object' || saved === null) return
@@ -112,6 +121,8 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   }
 
   const dismiss = (id?: ToastId) => {
+    if (id === undefined) sent.clear()
+    else sent.delete(String(id))
     for (const entry of entries.values()) {
       if (id !== undefined && entry.id !== id) continue
       disarm(entry)
@@ -183,31 +194,64 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   const press = (entry: Entry, run: () => unknown) => () =>
     void Promise.resolve()
       .then(run)
-      .catch((error: unknown) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error }))
+      .catch((error: unknown) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error, isCritical: true }))
 
-  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry }: Failure): ToastId => {
-    const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
-    if (hidden.get(id) === hides) return id
-    hidden.delete(id)
-    const shown = entries.get(id)
-    if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) {
-      const previous = clockTime(shown.at)
-      shown.at = new Date()
-      if (clockTime(shown.at) !== previous) changed()
-      return id
+  const logFailure = (failure: LoggedFailure) => claude.cmod.call({ to: cmodPluginName, method: failedMethod, input: failure })
+
+  const showsToast = async (failure: LoggedFailure, isShown: boolean): Promise<boolean | undefined> => {
+    try {
+      const logged = logFailure(failure)
+      const answer = await (isShown ? logged : beforeDeadline(claude, { ms: failedCallMs }, failedMethod, logged))
+      if (isObject(answer) && typeof answer['showsToast'] === 'boolean') return answer['showsToast']
+      throw new Error(`cmod answered ${answer === undefined ? 'nothing' : JSON.stringify(answer)}, not { showsToast: true or false }`)
+    } catch (error) {
+      claude.ui.log(`${name}: cmod kept no Log of ${failure.id}, so it shows the toast: ${messageOf(error)}`, { to: 'debug' })
+      return undefined
     }
+  }
+
+  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry, isCritical = false }: Failure): ToastId => {
+    const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
+    const at = new Date()
+    const repeat = `${hides}\n${description ?? ''}\n${at.toISOString().slice(0, 16)}`
+    if (sent.get(id) === repeat) return id
+    sent.set(id, repeat)
     const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
-    const details = async () => {
+    const details = async (failedAt: Date) => {
       const modVersion = await claude.fs
         .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
         .then((text) => String((JSON.parse(text) as { version?: unknown }).version))
         .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
-      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${(entries.get(id)?.at ?? new Date()).toISOString()}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
+      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${failedAt.toISOString()}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
+    }
+    const text = `${message}\n${description ?? ''}`
+    const isGrantRefusal = text.includes(grantFix)
+    const isShownAtOnce = isCritical && !isGrantRefusal
+    const logged = async () => {
+      const contact = await contactOf(claude)
+      const failure: LoggedFailure = { mod: name, id, message, details: await details(at), at: at.toISOString(), isCritical, root: claude.plugin.root, ...(contact === undefined ? {} : { contact }) }
+      const shows = await showsToast(failure, isShownAtOnce)
+      if (isShownAtOnce) return
+      if (shows === undefined || (shows && !isGrantRefusal)) return show()
+      claude.ui.log(`${name}: ${message}${description === undefined ? '' : `: ${description}`}`, { to: 'debug' })
+    }
+    const show = () => {
+      if (hidden.get(id) === hides) return
+      hidden.delete(id)
+      const shown = entries.get(id)
+      if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) {
+        const previous = clockTime(shown.at)
+        shown.at = new Date()
+        if (clockTime(shown.at) !== previous) changed()
+        return
+      }
+      const actions = [...fixes, ...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
+      put('error', message, { id, ...(description === undefined ? {} : { description }), duration: Infinity }, actions, hides)
     }
     const startReporting = async () => {
       const shown = entries.get(id)
       if (shown === undefined) return
-      shown.reporting = { contact: await contactOf(claude), details: await details() }
+      shown.reporting = { contact: await contactOf(claude), details: await details(shown.at) }
       disarm(shown)
       changed()
       if (bandId === undefined) return
@@ -228,14 +272,13 @@ export function createToaster(claude: Claude, name: string, version: () => strin
         }
       }
     }
-    const text = `${message}\n${description ?? ''}`
     const fixes = [
-      { sentence: grantFix, label: 'Settings', onClick: openPermissions },
       { sentence: installFix, label: 'Plugins', onClick: () => claude.command.run({ command: 'plugin' }) },
       { sentence: secretFix, label: 'Open /config', onClick: () => claude.command.run({ command: 'config' }) },
     ].filter(({ sentence }) => text.includes(sentence))
-    const actions = [...fixes, ...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
-    return put('error', message, { id, ...(description === undefined ? {} : { description }), duration: Infinity }, actions, hides)
+    if (isShownAtOnce) show()
+    claude.clock.after(0, () => void logged())
+    return id
   }
 
   const toggle = (entry: Entry) => () => {
@@ -285,7 +328,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
       const copied = await claude.ui.copy({ text: details })
       say(copied.isCopied ? 'Copied the error.' : `Could not copy it: ${copied.reason}`)
     }
-    const report = contact === undefined ? [] : [Link({ href: reportLink(contact, name, entry.message, details), label: contact.kind === 'github' ? 'Report it on GitHub (opens your browser)' : 'Email the author (opens your mail app)' })]
+    const report = contact === undefined ? [] : [reportLink(contact, name, entry.message, details)]
     return [
       Text({ dimColor: true, children: 'Claude writes up the problem and files it with your tools. You approve each step before anything is posted.' }),
       Box({
@@ -356,7 +399,7 @@ async function contactOf(claude: Claude): Promise<Contact | undefined> {
   return typeof address === 'string' && address !== '' ? { kind: 'email', address } : undefined
 }
 
-function reportLink(contact: Contact, name: string, message: string, details: string): string {
+export function reportLink(contact: Contact, name: string, message: string, details: string): RenderElement {
   const title = `${name}: ${message}`.slice(0, 120)
   const linkOf = (body: string) =>
     contact.kind === 'github'
@@ -364,10 +407,10 @@ function reportLink(contact: Contact, name: string, message: string, details: st
       : `mailto:${contact.address}?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`
   let body = details
   while (linkOf(body).length > linkLimit && body.length > 0) body = `${body.slice(0, Math.floor(body.length * 0.8))}…`
-  return linkOf(body)
+  return Link({ href: linkOf(body), label: contact.kind === 'github' ? 'Report it on GitHub (opens your browser)' : 'Email the author (opens your mail app)' })
 }
 
-function reportPrompt(name: string, contact: Contact | undefined, details: string): string {
+export function reportPrompt(name: string, contact: Contact | undefined, details: string): string {
   const where =
     contact === undefined
       ? `${name} names no place to report it, so find its author from its plugin.json or its marketplace.`

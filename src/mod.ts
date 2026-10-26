@@ -1,12 +1,13 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, fs, longestMs, messageOf, process, sessions, settings, type Mod } from '../node_modules/@cmodjs/core/mod.js'
-import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { defineMod, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
+import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, permissionWords, pluginsChangedPath, readRecord, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
+import { failedMethod } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
-import { configRootOf, readConsent, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { configRootOf, failureLog, readConsent, readJson, refreshPreferences, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
 
@@ -22,9 +23,15 @@ type Listed = { readonly name: string; readonly version: string; readonly state:
 
 const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, ...settingsSession }
 
+type InstalledCopy = { readonly version: string; readonly projectPath?: string }
+
+type Versions = Readonly<Record<string, string>>
+
 const newestMessages = 8
 
 const reloadDelayMs = 500
+
+const changesQuietMs = 2000
 
 const watchCheckMs = 10_000
 
@@ -35,6 +42,12 @@ const reloadEcho = '<command-name>/reload-plugins</command-name>'
 const reloadNote = '<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>'
 
 const reloadToast = 'reload'
+
+const shownUpdates = 3
+
+const setupWaitMs = 10_000
+
+const recordCheckMs = 500
 
 type SyncedRules = {
   readonly linked: readonly { readonly mod: string; readonly rules: readonly { readonly name: string; readonly isGlobal: boolean; readonly text: string }[] }[]
@@ -101,29 +114,101 @@ export const cmodPlugin = defineMod({
         pluginsFile === undefined ? '' : await fs.read(pluginsFile).catch(ifMissing('')),
         (await settings.user.read())['enabledPlugins'] ?? null,
       ])
-    const hidingReload = `cmod:hiding-reload:${await claude.session.id()}`
+    const sessionKey = async (name: string) => `cmod:${name}:${await claude.session.id()}`
+    const loadedVersions = async (): Promise<Versions> => {
+      if (pluginsFile === undefined) return {}
+      const installed = JSON.parse(await fs.read(pluginsFile).catch(ifMissing('{}'))) as { readonly plugins?: Readonly<Record<string, readonly InstalledCopy[]>> }
+      const enabled = (await claude.settings.read())['enabledPlugins'] as Readonly<Record<string, unknown>> | undefined
+      const root = await claude.session.root()
+      return Object.fromEntries(
+        Object.entries(installed.plugins ?? {}).flatMap(([id, copies]) => {
+          const loaded = copies.find((copy) => copy.projectPath === root) ?? copies.find((copy) => copy.projectPath === undefined)
+          return enabled?.[id] === true && loaded !== undefined ? [[id, loaded.version]] : []
+        }),
+      )
+    }
+    const grantedWords = async (name: string, version: string): Promise<string[]> => {
+      for (let waitedMs = 0; ; waitedMs += recordCheckMs) {
+        const record = await readRecord((path) => fs.read(path).catch(ifMissing(undefined)), store, name)
+        if (record?.version === version) return record.grantedOnUpdate.map(permissionWords)
+        if (record === undefined || waitedMs >= setupWaitMs) return []
+        await new Promise<void>((resolve) => mod.after(recordCheckMs, resolve))
+      }
+    }
+    let loaded: Versions = {}
+    const takeVersionsBeforeReload = async () => {
+      const key = await sessionKey('versions-before-reload')
+      const before = (await claude.store.get(key)) as Versions | undefined
+      await claude.store.delete(key)
+      return before
+    }
+    const showUpdates = async (isAfterOwnReload: boolean) => {
+      const before = await takeVersionsBeforeReload()
+      loaded = await loadedVersions()
+      if (!isAfterOwnReload || before === undefined) return
+      const updates = await Promise.all(
+        Object.entries(loaded)
+          .filter(([id, version]) => before[id] !== undefined && before[id] !== version)
+          .map(async ([id, version]) => {
+            const name = id.replace(/@[^@]*$/, '')
+            return { line: `${name} updated to ${version}`, words: await grantedWords(name, version) }
+          }),
+      )
+      const rest = updates.filter(({ words }) => words.length === 0)
+      for (const { line, words } of updates) if (words.length > 0) claude.ui.toast([line, ...words].join(' · '))
+      if (rest.length > shownUpdates) claude.ui.toast(`${rest.length} plugins updated`)
+      else for (const { line } of rest) claude.ui.toast(line)
+    }
+    const announceUpdates = (isAfterOwnReload: boolean) => void showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
+    announceUpdates((await claude.store.get(await sessionKey('hiding-reload'))) === true)
+
     let seenChange = await pluginsState()
+    let isReloadDue = false
+    let quietWait: Timer | undefined
+    const reloadAfter = (ms: number) => {
+      quietWait?.stop()
+      quietWait = mod.after(ms, reloadWhenIdle)
+    }
+    let reloading = Promise.resolve()
+    const reloadWhenIdle = () => {
+      reloading = reloading
+        .then(async () => {
+          if (!isReloadDue || (await sessions.current.turn()) !== undefined) return
+          isReloadDue = false
+          await reload()
+        })
+        .catch((error: unknown) => report({ id: reloadToast, message: 'Could not tell whether a turn runs, so the plugins did not reload', error, retry: reload, isCritical: true }))
+    }
     const reloadIfChanged = async () => {
       const change = await pluginsState()
       if (change === seenChange) return
       seenChange = change
       if ((await claude.session.surfaces()).length === 0) return
-      mod.toast.info('Plugins changed', { id: reloadToast, description: 'Reload to use them in this session.', action: { label: 'Reload', onClick: () => void mod.after(1, reload) }, duration: Infinity })
+      isReloadDue = true
+      reloadAfter(changesQuietMs)
     }
     const reload = async () => {
       mod.toast.dismiss(reloadToast)
       try {
         seenChange = await pluginsState()
-        await claude.store.set(hidingReload, true)
+        await claude.store.set(await sessionKey('versions-before-reload'), loaded)
+        await claude.store.set(await sessionKey('hiding-reload'), true)
         await claude.command.run({ command: 'reload-plugins' })
         await widgets.recheck()
+        announceUpdates(true)
       } catch (error) {
-        await claude.store.delete(hidingReload)
-        report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload })
+        await claude.store.delete(await sessionKey('hiding-reload'))
+        await takeVersionsBeforeReload()
+        report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload, isCritical: true })
       }
     }
+    sessions.current.onTurnEnd(() => {
+      if (isReloadDue && quietWait?.isRunning !== true) reloadAfter(reloadDelayMs)
+    })
     router.add('session.append', async (e, next) => {
-      if (e.door !== 'command' || e.message.isMeta === true || (await claude.store.get(hidingReload)) !== true) return next(e)
+      if (e.door !== 'command' || e.message.isMeta === true) return next(e)
+      const hidingReload = await sessionKey('hiding-reload')
+      if ((await claude.store.get(hidingReload)) !== true) return next(e)
       const isOwnReload = e.origin.kind === 'plugin' && 'name' in e.origin && e.origin.name === mod.name && JSON.stringify(e.message.content).includes(reloadEcho)
       if (!isOwnReload) {
         await claude.store.delete(hidingReload)
@@ -157,7 +242,7 @@ export const cmodPlugin = defineMod({
           off = needing(await listed())
         }
         if (reason === '') await claude.store.delete(updatedFor)
-        if (off.length > 0) report({ id: 'needs-cmod', message: `${off.map((row) => row.name).join(', ')} ${off.length === 1 ? 'is' : 'are'} off`, description: off.map((row) => row.state).join('\n'), retry: updateAgain })
+        if (off.length > 0) report({ id: 'needs-cmod', message: `${off.map((row) => row.name).join(', ')} ${off.length === 1 ? 'is' : 'are'} off`, description: off.map((row) => row.state).join('\n'), retry: updateAgain, isCritical: true })
         else mod.toast.dismiss('needs-cmod')
         mod.state.global.pluginsCheckedAt = checked
       } finally {
@@ -165,7 +250,7 @@ export const cmodPlugin = defineMod({
       }
       if ((await modifiedAt(pluginsFile)) !== checked) await keepCmodCurrent()
     }
-    const checkPlugins = () => void keepCmodCurrent().catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain }))
+    const checkPlugins = () => void keepCmodCurrent().catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain, isCritical: true }))
     const updateAgain = async () => {
       await claude.store.delete(updatedFor)
       mod.state.global.pluginsCheckedAt = null
@@ -178,10 +263,10 @@ export const cmodPlugin = defineMod({
     const showBuildFailures = async () => {
       const failures = JSON.parse(await fs.read(failuresFile).catch(ifMissing('{}'))) as Record<string, string>
       for (const name of shownFailures) if (!Object.hasOwn(failures, name)) mod.toast.dismiss(`build:${name}`)
-      for (const [name, error] of Object.entries(failures)) report({ id: `build:${name}`, message: `${name} does not build`, description: error })
+      for (const [name, error] of Object.entries(failures)) report({ id: `build:${name}`, message: `${name} does not build`, description: error, isCritical: true })
       shownFailures = Object.keys(failures)
     }
-    const followBuildFailures = () => showBuildFailures().catch((error: unknown) => report({ id: 'build-failures', message: 'Could not read which linked mods fail to build', error }))
+    const followBuildFailures = () => showBuildFailures().catch((error: unknown) => report({ id: 'build-failures', message: 'Could not read which linked mods fail to build', error, isCritical: true }))
     void followBuildFailures()
     const watchLock = `${store}/watch.lock`
     let isWatchRunning = false
@@ -193,19 +278,15 @@ export const cmodPlugin = defineMod({
       if (touched.some((at) => now - at < watchStaleMs)) return
       isWatchRunning = true
       void runCmod(claude, ['watch'], await claude.session.id())
-        .catch((error: unknown) => report({ id: 'watch', message: 'Stopped reloading the linked mods', error }))
+        .catch((error: unknown) => report({ id: 'watch', message: 'Stopped reloading the linked mods', error, isCritical: true }))
         .finally(() => void (isWatchRunning = false))
     }
     const linksFile = linksPath(store)
     const knownMarketplaces = configRoot === undefined ? undefined : `${configRoot}/plugins/known_marketplaces.json`
-    const readJsonFile = async (path: string): Promise<unknown> => {
-      const text = await fs.read(path).catch(ifMissing(undefined))
-      return text === undefined ? undefined : JSON.parse(text)
-    }
     let isWatching = false
     const watchIfLinked = async () => {
       if (isWatching || knownMarketplaces === undefined || (await claude.session.surfaces()).length === 0) return
-      if (!hasLinkedMods(await readJsonFile(knownMarketplaces), parseLinks(await readJsonFile(linksFile), linksFile))) return
+      if (!hasLinkedMods(await readJson(knownMarketplaces), parseLinks(await readJson(linksFile), linksFile))) return
       isWatching = true
       const watchAgain = () => void keepWatching().catch((error: unknown) => report({ id: 'watch', message: 'Could not check that a cmod watch runs', error }))
       watchAgain()
@@ -221,7 +302,7 @@ export const cmodPlugin = defineMod({
         return reloadIfChanged()
       }
       void followBuildFailures()
-      return Promise.all([widgets.reload(), reloadIfChanged()])
+      return Promise.all([widgets.reload(), reloadIfChanged(), refreshPreferences(mod)])
     })
     settings.beforeFileChange({ source: 'user' }, () => void mod.after(reloadDelayMs, reloadIfChanged))
     sessions.current.onPrompt(() => reloadIfChanged())
@@ -236,8 +317,8 @@ export const cmodPlugin = defineMod({
       const isAnswered = outcome.type === 'done' || outcome.type === 'missing' || outcome.type === 'failed'
       if (isAnswered) mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
       if (outcome.type === 'done') mod.toast.success(`${name} is uninstalled`)
-      else if (outcome.type === 'failed') report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message })
-      else if (exitCode !== 0) report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, 'teardown'))}` })
+      else if (outcome.type === 'failed') report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message, isCritical: true })
+      else if (exitCode !== 0) report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, 'teardown'))}`, isCritical: true })
     }
 
     const watchRemovals = async () => {
@@ -250,7 +331,7 @@ export const cmodPlugin = defineMod({
       for (const name of removed) {
         if (triedRemovals.has(name)) continue
         triedRemovals.add(name)
-        void tearDown(name).catch((error: unknown) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error }))
+        void tearDown(name).catch((error: unknown) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error, isCritical: true }))
       }
     }
 
@@ -313,6 +394,7 @@ export const cmodPlugin = defineMod({
         await runCmod(claude, ['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project], await claude.session.id())
         return null
       },
+      [failedMethod]: failureLog(mod),
     }
   },
 })

@@ -10,6 +10,8 @@ export type InstallRecord = {
   uninstall: string | null
   program: string | null
   keys: Readonly<Record<string, string>>
+  permissions: readonly string[] | null
+  grantedOnUpdate: readonly string[]
 }
 
 export type Steps = {
@@ -123,6 +125,10 @@ function parseRecord(text: string, path: string): InstallRecord {
   if (program !== null && typeof program !== 'string') throw new Error(`${path} has a "program" that is neither a command name nor null. ${fix}`)
   const keys = value['keys'] ?? {}
   if (!isObject(keys) || Object.values(keys).some((command) => typeof command !== 'string')) throw new Error(`${path} has "keys" that are not key bindings. ${fix}`)
+  const permissions = value['permissions'] ?? null
+  if (permissions !== null && !isTextList(permissions)) throw new Error(`${path} has "permissions" that are not a list of permissions. ${fix}`)
+  const grantedOnUpdate = value['grantedOnUpdate'] ?? []
+  if (!isTextList(grantedOnUpdate)) throw new Error(`${path} has a "grantedOnUpdate" that is not a list of permissions. ${fix}`)
   return {
     name: value['name'] as string,
     version: value['version'] as string,
@@ -132,6 +138,8 @@ function parseRecord(text: string, path: string): InstallRecord {
     uninstall,
     program,
     keys: keys as Record<string, string>,
+    permissions,
+    grantedOnUpdate,
   }
 }
 
@@ -296,9 +304,21 @@ export function widgetsPath(store: string): string {
   return `${store}/widgets.json`
 }
 
+export function preferencesPath(store: string): string {
+  return `${store}/preferences.json`
+}
+
+export type Preferences = { readonly asksBeforeUpdatePermissions: boolean; readonly showsInstalledModErrors: boolean }
+
+export function parsePreferences(value: unknown, path: string): Preferences {
+  if (value === undefined) return { asksBeforeUpdatePermissions: false, showsInstalledModErrors: false }
+  if (!isObject(value) || ['asksBeforeUpdatePermissions', 'showsInstalledModErrors'].some((key) => value[key] !== undefined && typeof value[key] !== 'boolean')) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
+  return { asksBeforeUpdatePermissions: value['asksBeforeUpdatePermissions'] === true, showsInstalledModErrors: value['showsInstalledModErrors'] === true }
+}
+
 export function parseConsent(value: unknown, path: string): Record<string, string[]> {
   if (value === undefined) return Object.create(null)
-  if (!isObject(value) || Object.values(value).some((items) => !Array.isArray(items) || items.some((item) => typeof item !== 'string'))) {
+  if (!isObject(value) || !Object.values(value).every(isTextList)) {
     throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod asks again.`)
   }
   return Object.assign(Object.create(null), value) as Record<string, string[]>
@@ -307,18 +327,18 @@ export function parseConsent(value: unknown, path: string): Record<string, strin
 function readHotkeys(hotkeys: unknown): Steps {
   if (hotkeys === undefined) return {}
   const fix = 'cmod check writes it from the hotkeys defineMod declares, so run cmod check.'
-  if (!isObject(hotkeys) || !Object.values(hotkeys).every((each) => isObject(each) && typeof each['title'] === 'string' && typeof each['default'] === 'string')) throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and default combo. ${fix}`)
+  if (!isObject(hotkeys) || !Object.values(hotkeys).every((each) => isObject(each) && typeof each['title'] === 'string' && (each['default'] === undefined || typeof each['default'] === 'string'))) throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`)
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '4.2.0'
+export const coreVersion = '4.3.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`
 }
 
 export function hotkeyBindings(mod: string, hotkeys: Hotkeys | undefined): Record<string, string> {
-  return Object.fromEntries(Object.entries(hotkeys ?? {}).map(([name, { default: combo }]) => [combo, hotkeyCommand(mod, name)]))
+  return Object.fromEntries(Object.entries(hotkeys ?? {}).flatMap(([name, { default: combo }]) => (combo === undefined ? [] : [[combo, hotkeyCommand(mod, name)]])))
 }
 
 export function boundCombos(keybindings: unknown): Map<string, string> {
@@ -332,7 +352,7 @@ export function boundCombos(keybindings: unknown): Map<string, string> {
 }
 
 export function hotkeyWords(hotkeys: Hotkeys | undefined): string {
-  return listed(Object.values(hotkeys ?? {}).map(({ title, default: combo }) => `${combo} to ${title}`))
+  return listed(Object.values(hotkeys ?? {}).flatMap(({ title, default: combo }) => (combo === undefined ? [] : [`${combo} to ${title}`])))
 }
 
 function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall'): Steps {
@@ -442,4 +462,8 @@ export function isAtLeast(version: string, minimum: string): boolean {
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isTextList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }

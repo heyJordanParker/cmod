@@ -23,6 +23,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     ui: {
       log: (text, options) => $.ui.log(text, options),
       notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
+      toast: (text, options) => $.ui.toast(text, options),
       invalidate: (event) => $.ui.invalidate(event),
       ask: (question, options) => $.ui.ask(question, options),
       open: (pane) => $.ui.open(pane),

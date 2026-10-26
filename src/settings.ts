@@ -1,10 +1,11 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
-import { AbovePrompt, BelowPrompt, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { consentPath, finishStepsMethod, hotkeyCommand, isObject, parseConsent, pendingStepsMethod, permissionWords, readRecord, readSteps, storeFolder } from '../node_modules/@cmodjs/core/records.js'
+import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
+import { consentPath, finishStepsMethod, hotkeyCommand, isObject, marketplaceOf, parseConsent, parsePreferences, pendingStepsMethod, permissionWords, preferencesPath, readRecord, readSteps, storeChangedPath, storeFolder, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
 import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
+import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
@@ -14,9 +15,12 @@ import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import type { SettingsView } from './sidebar.js'
 
-export type SettingsState = { readonly memory: { removing: string | null; views: readonly ModView[] }; readonly session: { selected: string | null; section: string; pageParams: unknown; notice: string | null; widget: string | null } }
+export type SettingsState = {
+  readonly memory: { removing: string | null; views: readonly ModView[]; log: readonly LogEntry[]; reporting: string | null; preferences: Preferences }
+  readonly session: { selected: string | null; section: string; pageParams: unknown; notice: string | null; widget: string | null }
+}
 
-export const settingsMemory: SettingsState['memory'] = { removing: null, views: [] }
+export const settingsMemory: SettingsState['memory'] = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, 'preferences.json') }
 
 export const settingsSession: SettingsState['session'] = { selected: null, section: 'options', pageParams: null, notice: null, widget: null }
 
@@ -51,6 +55,15 @@ export type ModView = {
   readonly changelog: readonly ChangelogSection[]
 }
 
+type LogEntry = Omit<LoggedFailure, 'isCritical' | 'root'>
+
+const loggedFailures = 100
+
+const preferenceTitles: Readonly<Record<keyof Preferences, string>> = {
+  asksBeforeUpdatePermissions: 'Ask before an update adds a permission',
+  showsInstalledModErrors: 'Show errors from installed mods',
+}
+
 const pageSection = 'page:'
 
 const selectedColor = 'userMessageBackground'
@@ -77,6 +90,90 @@ export async function configRootOf(mod: object): Promise<string | undefined> {
   const { claude } = engineOf(mod)
   const [configHome, home] = await Promise.all([claude.env.configHome(), claude.env.home()])
   return configHome ?? (home === undefined ? undefined : `${home}/.claude`)
+}
+
+export async function readJson(path: string): Promise<unknown> {
+  const text = await fs.read(path).catch(ifMissing(undefined))
+  return text === undefined ? undefined : JSON.parse(text)
+}
+
+const isText = (value: unknown) => typeof value === 'string'
+
+const isLogEntry = (value: unknown): value is LogEntry => isObject(value) && ['mod', 'id', 'message', 'details', 'at'].every((key) => isText(value[key]))
+
+const sameFailure = (left: LogEntry) => (right: LogEntry) => left.mod === right.mod && left.id === right.id
+
+async function readEntries(path: string): Promise<LogEntry[]> {
+  const value = await readJson(path).catch((error: unknown) => {
+    throw new Error(`${path} is not JSON (${messageOf(error)}). Delete it, and cmod starts it again.`)
+  })
+  if (value === undefined) return []
+  if (!Array.isArray(value) || !value.every(isLogEntry)) throw new Error(`${path} is not a list of mod failures. Delete it, and cmod starts it again.`)
+  return value
+}
+
+const logFolder = (mod: Mod<object>) => `${mod.dataFolder}/log`
+
+export async function readLog(mod: Mod<object>): Promise<LogEntry[]> {
+  const folder = logFolder(mod)
+  const files = (await fs.list(folder).catch(ifMissing([]))).filter((file) => file.isFile && file.name.endsWith('.json')).toSorted((left, right) => right.modifiedAt - left.modifiedAt)
+  const newest = new Map<string, LogEntry>()
+  const newestFirst = () => [...newest.values()].toSorted((left, right) => right.at.localeCompare(left.at))
+  for (const file of files) {
+    const oldestKept = newestFirst()[loggedFailures - 1]
+    if (oldestKept !== undefined && Date.parse(oldestKept.at) > file.modifiedAt) break
+    const entries = await readEntries(`${folder}/${file.name}`).catch((error: unknown) => {
+      mod.log(`the Log skips a file: ${messageOf(error)}`)
+      return []
+    })
+    for (const entry of entries) {
+      const key = `${entry.mod}\n${entry.id}`
+      if ((newest.get(key)?.at ?? '') < entry.at) newest.set(key, entry)
+    }
+  }
+  return newestFirst().slice(0, loggedFailures)
+}
+
+async function readPreferences(mod: Mod<object>): Promise<Preferences> {
+  const path = preferencesPath(await storeOf(mod))
+  return parsePreferences(await readJson(path), path)
+}
+
+export async function refreshPreferences<State extends SettingsState>(mod: Mod<State>): Promise<void> {
+  mod.state.memory.preferences = await readPreferences(mod)
+}
+
+export function failureLog<State extends SettingsState>(mod: Mod<State>): (failure: LoggedFailure) => Promise<{ readonly showsToast: boolean }> {
+  let writing: Promise<unknown> = Promise.resolve()
+  const add = async (entry: LogEntry) => {
+    const path = `${logFolder(mod)}/${await engineOf(mod).claude.session.id()}.json`
+    const kept = [entry, ...(await readEntries(path)).filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures)
+    await fs.write(path, `${JSON.stringify(kept, null, 2)}\n`)
+    mod.state.memory.log = [entry, ...mod.state.memory.log.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures)
+  }
+  return async (failure) => {
+    if (!isLogEntry(failure) || !isText(failure.root) || typeof failure.isCritical !== 'boolean') throw new Error(`${failedMethod} takes the failure's mod, id, message, details, at, and root as text, and isCritical as true or false.`)
+    const { mod: name, id, message, details, at, contact } = failure
+    const added = writing.then(() => add({ mod: name, id, message, details, at, ...(contact === undefined ? {} : { contact }) }))
+    writing = Promise.allSettled([added])
+    await added
+    return { showsToast: failure.isCritical || marketplaceOf(failure.root, failure.mod) === undefined || (await readPreferences(mod)).showsInstalledModErrors }
+  }
+}
+
+async function writePreference(mod: Mod<object>, key: keyof Preferences, isOn: boolean): Promise<void> {
+  const store = await storeOf(mod)
+  const path = preferencesPath(store)
+  const saved = await readJson(path)
+  parsePreferences(saved, path)
+  await fs.write(path, `${JSON.stringify({ ...(isObject(saved) ? saved : {}), [key]: isOn }, null, 2)}\n`)
+  await fs.write(storeChangedPath(store), '')
+}
+
+function timeOf(at: string): string {
+  const date = new Date(at)
+  const two = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`
 }
 
 function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets: Widgets): RenderElement {
@@ -166,11 +263,10 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
     let hasLoaded = false
     const refresh = async () => {
       hasLoaded = true
-      try {
-        mod.state.memory.views = await load()
-      } catch (error) {
-        mod.state.session.notice = `The mods did not load: ${messageOf(error)}`
-      }
+      const failed = (what: string) => (error: unknown) => void (mod.state.session.notice = `${what} did not load: ${messageOf(error)}`)
+      await load().then((views) => void (mod.state.memory.views = views), failed('The mods'))
+      await readLog(mod).then((log) => void (mod.state.memory.log = log), failed('The Log'))
+      await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed('The preferences'))
     }
 
     const act = (task: () => Promise<string | undefined>) =>
@@ -211,7 +307,13 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         ...own.map((page) => ({ key: `${pageSection}${page.id}`, label: page.title })),
         ...(view.name === mod.name ? [] : [{ key: 'options', label: 'Options' }, { key: 'permissions', label: 'Permissions' }]),
         { key: 'hotkeys', label: 'Hotkeys' },
-        ...(view.name === mod.name ? [{ key: 'widgets', label: 'Widgets' }] : []),
+        ...(view.name === mod.name
+          ? [
+              { key: 'widgets', label: 'Widgets' },
+              { key: 'log', label: 'Log' },
+              { key: 'preferences', label: 'Preferences' },
+            ]
+          : []),
         ...(view.changelog.length === 0 ? [] : [{ key: 'changelog', label: 'Changelog' }]),
       ]
     }
@@ -223,9 +325,66 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       return { view, section: sections.some(({ key }) => key === section) ? section : (sections[0]?.key ?? 'hotkeys') }
     }
 
+    const failuresLog = (): RenderElement => {
+      const { log, reporting } = mod.state.memory
+      if (log.length === 0) return Text({ dimColor: true, children: 'No mod has failed.' })
+      const copy = (entry: LogEntry) =>
+        act(async () => {
+          await clipboard.write(entry.details)
+          return 'Copied the error.'
+        })
+      const askClaude = (entry: LogEntry) =>
+        act(async () => {
+          mod.state.memory.reporting = null
+          await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, entry.details), asUser: true })
+          return undefined
+        })
+      return Box({
+        flexDirection: 'column',
+        gap: 1,
+        children: log.map((entry) => {
+          const key = `${entry.mod}/${entry.id}`
+          const choices =
+            reporting === key
+              ? [
+                  Button({ plain: true, key: `ask-claude:${key}`, label: 'Ask Claude to report it', onPress: () => askClaude(entry) }),
+                  ...(entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, entry.details)]),
+                  Button({ plain: true, dimColor: true, key: `back:${key}`, label: 'Back', onPress: () => void (mod.state.memory.reporting = null) }),
+                ]
+              : [
+                  Button({ plain: true, key: `copy:${key}`, label: 'Copy', onPress: () => copy(entry) }),
+                  Button({ plain: true, key: `report:${key}`, label: 'Report', onPress: () => void (mod.state.memory.reporting = key) }),
+                ]
+          return Box({
+            key: `log:${key}`,
+            flexDirection: 'column',
+            children: [
+              Text({ wrap: 'truncate-end', children: [Text({ bold: true, children: entry.mod }), Text({ dimColor: true, children: ` · ${timeOf(entry.at)}` })] }),
+              Text({ wrap: 'wrap', children: entry.message }),
+              Box({ gap: 2, flexWrap: 'wrap', children: choices }),
+            ],
+          })
+        }),
+      })
+    }
+
     const drawSection = (view: ModView, section: string, columns: number, isFocused: boolean): RenderElement => {
       if (section.startsWith(pageSection)) return pages.element(view.name, section.slice(pageSection.length), mod.state.session.pageParams, columns, isFocused) ?? Text({ dimColor: true, children: 'Drawing…' })
       if (section === 'widgets') return widgetsLayout(mod, widgets)
+      if (section === 'log') return failuresLog()
+      if (section === 'preferences') {
+        return Box({
+          flexDirection: 'column',
+          children: Object.entries(preferenceTitles).map(([key, title]) => {
+            const isOn = mod.state.memory.preferences[key as keyof Preferences]
+            const turn = async () => {
+              await writePreference(mod, key as keyof Preferences, !isOn)
+              return undefined
+            }
+            return Button({ plain: true, key: `preference:${key}`, label: `${isOn ? '[x]' : '[ ]'} ${title}`, onPress: () => act(turn) })
+          }),
+        })
+      }
       if (section === 'options') {
         if (view.options.length === 0) return Text({ dimColor: true, children: `${view.name} has no options.` })
         return Box({
@@ -255,7 +414,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             Box({
               flexDirection: 'column',
               children: [
-                Text({ bold: true, children: hotkey.title }),
+                Text({ children: [Text({ bold: true, children: hotkey.title }), ...(hotkey.combo === undefined ? [Text({ dimColor: true, children: ' · unbound' })] : [])] }),
                 Input({ key: `hotkey:${hotkey.name}`, label: 'Combo', value: hotkey.combo ?? '', placeholder: 'ctrl+shift+k', submitLabel: 'bind', onSubmit: (combo: string) => bind(view.name, hotkey, combo) }),
               ],
             }),

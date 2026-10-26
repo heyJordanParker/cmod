@@ -15,18 +15,3 @@ export function changelogSections(markdown: string): ChangelogSection[] {
   }
   return sections.map(({ version, date, lines }) => ({ version, ...(date === undefined ? {} : { date }), text: lines.join('\n').trim() }))
 }
-
-export function changeLines(text: string): string[] {
-  let group: string | undefined
-  return text.split('\n').flatMap((line) => {
-    const trimmed = line.trim()
-    const subheading = /^###\s+(.+)$/.exec(trimmed)?.[1]
-    if (subheading !== undefined) {
-      group = subheading
-      return []
-    }
-    const item = /^[-*]\s+(.+)$/.exec(trimmed)?.[1] ?? trimmed
-    if (item === '') return []
-    return [group === undefined ? item : `${group}: ${item}`]
-  })
-}

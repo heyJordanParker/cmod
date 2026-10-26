@@ -629,58 +629,15 @@ test('Retry on a failure with a description shows its progress in the descriptio
   expect(trying[1]?.slice(1)).toBe(failed[1]?.slice(1))
 })
 
-const changelog = `# Changelog
-
-## [Unreleased]
-
-## [0.2.0] - 2026-10-13
-
-### Added
-- /rollback undoes the last deploy.
-
-### Changed
-- Deploys wait for CI.
-- The status line names the branch.
-
-### Removed
-- /deploy-old.
-
-## [0.1.0] - 2026-09-30
-
-- First release.
-`
-
-async function updatedFrom(previous: unknown, files: Record<string, string>, pluginRoot = root) {
-  const fake = fakeClaude({ name: 'safe-delete', root: pluginRoot })
-  const disk = fakeFiles(files)
-  fake.fakes.fs.read = disk.read
-  fake.store.set('cmod:announced', previous)
-  const opened: unknown[] = []
-  fake.fakes.cmod.call = async (call) => void opened.push(call)
+test("an update shows no toast of the mod's own, because the cmod plugin's toast names the new version", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.fakes.cmod.call = async () => null
+  fake.store.set('cmod:announced', { version: '0.1.0', added: [] })
   const lifecycle = createLifecycle(trackedMod().definition)
-  await lifecycle.start(fake.claude, given({ ...pending, root: pluginRoot, isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
-  return { fake, lifecycle, opened }
-}
 
-test("an update shows the new version's changelog, where it came from, and a Changelog button that opens it in /mods", async () => {
-  const { fake, lifecycle, opened } = await updatedFrom({ version: '0.1.0', added: [] }, { [`${root}/CHANGELOG.md`]: changelog })
-
-  expect(lifecycle.toasts).toEqual([
-    {
-      type: 'success',
-      message: 'Updated to 0.2.0',
-      description: 'Added: /rollback undoes the last deploy.\nChanged: Deploys wait for CI.\nChanged: The status line names the branch.\n…\nFrom 0.1.0, loaded from /plugins/safe-delete.',
-    },
-  ])
-  const button = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Changelog')
-  if (button === undefined) throw new Error('The Updated toast draws no Changelog button.')
-  await (button['onPress'] as () => Promise<void>)()
-  await fake.settle()
-  expect(opened).toEqual([
-    { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } } },
-    { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'changelog' }], isAsked: true } },
-  ])
+  expect(lifecycle.toasts).toEqual([])
 })
 
 const commandFrom = (isHeld: boolean) => async () => {
@@ -946,60 +903,169 @@ test('a page opened in setup reaches the cmod plugin with the first list of part
   expect(told).toEqual([{ to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'hello', title: 'Hello', place: 'sidebar' }] }, requests: [{ open: 'hello' }] } }])
 })
 
-test('a failure for a permission the person turned off has a Settings button that opens its Permissions', async () => {
+function loggingFailures(fake: ReturnType<typeof fakeClaude>, answer: unknown): unknown[] {
+  const logged: unknown[] = []
+  fake.fakes.cmod.call = async (call) => {
+    if (call.method !== 'cmod:failed') return null
+    logged.push(call.input)
+    return answer
+  }
+  return logged
+}
+
+test('a failure for a permission the person turned off goes to the Log and the debug log, and shows no toast even when cmod answers show', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
-  const opened: unknown[] = []
-  fake.fakes.cmod.call = async (call) => void opened.push(call)
+  const logged = loggingFailures(fake, { showsToast: true })
   const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => model.complete({ prompt: 'Green?' } as never)) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true, steps: { permissions: ['model'] } }))
   await fake.settle()
 
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   await fake.settle()
-  const button = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Settings')
-  if (button === undefined) throw new Error('The failure toast draws no Settings button.')
-  await (button['onPress'] as () => Promise<void>)()
-  await fake.settle()
 
-  expect(lifecycle.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'safe-delete calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.' })
-  expect(opened).toContainEqual({ to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'permissions' }], isAsked: true } })
+  const refusal = 'safe-delete calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.'
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged).toEqual([expect.objectContaining({ mod: 'safe-delete', id: 'session:onSessionStart', message: 'The onSessionStart listener failed', isCritical: false, root })])
+  expect(fake.shown.debug).toContain(`safe-delete: The onSessionStart listener failed: ${refusal}`)
 })
 
-test('a setup that fails for a permission the person turned off still has a Settings button that opens its Permissions', async () => {
+test('a setup that fails for a permission the person turned off goes to the Log as critical, and shows no toast', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
-  const opened: unknown[] = []
-  fake.fakes.cmod.call = async (call) => void opened.push(call)
+  const logged = loggingFailures(fake, { showsToast: true })
   const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: async () => void (await model.complete({ prompt: 'Green?' } as never)) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true, steps: { permissions: ['model'] } }))
   await fake.settle()
 
-  const button = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Settings')
-  if (button === undefined) throw new Error('The failed setup draws no Settings button.')
-  await (button['onPress'] as () => Promise<void>)()
-  await fake.settle()
-
-  expect(opened).toContainEqual({ to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'permissions' }], isAsked: true } })
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged).toEqual([expect.objectContaining({ mod: 'safe-delete', id: 'cmod:install', isCritical: true, message: expect.stringContaining('Turn it on in Settings.') })])
 })
 
-test('an answer part dropped for a permission the person turned off has a Settings button that opens its Permissions', async () => {
+test('an answer part dropped for a permission the person turned off goes to the Log, and shows no toast', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
-  const opened: unknown[] = []
-  fake.fakes.cmod.call = async (call) => void opened.push(call)
+  const logged = loggingFailures(fake, { showsToast: true })
   const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.beforeSessionStart(() => ({ note: 'Be brief.' })) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true, steps: { permissions: ['prompt'] } }))
   await fake.settle()
 
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   await fake.settle()
-  const button = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Settings')
-  if (button === undefined) throw new Error('The dropped-answer toast draws no Settings button.')
-  await (button['onPress'] as () => Promise<void>)()
+
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged).toEqual([expect.objectContaining({ id: 'dropped:prompt', message: 'Answered additionalContext without your grant to "Add text Claude reads and start turns", so cmod dropped it', details: expect.stringContaining('Turn it on in Settings.') })])
+})
+
+test('a listener failure in an installed mod that is not linked goes to the Log, and shows no toast when cmod answers no toast', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const logged = loggingFailures(fake, { showsToast: false })
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
-  expect(lifecycle.toasts).toContainEqual({ type: 'warning', message: 'Answered additionalContext without your grant to "Add text Claude reads and start turns", so cmod dropped it', description: 'Turn it on in Settings.' })
-  expect(opened).toContainEqual({ to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'permissions' }], isAsked: true } })
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged).toEqual([
+    {
+      mod: 'safe-delete',
+      id: 'session:onSessionStart',
+      message: 'The onSessionStart listener failed',
+      details: expect.stringMatching(/^safe-delete unknown \(.*\), @cmodjs\/core \d+\.\d+\.\d+, at \d{4}-\d\d-\d\dT[\d:.]+Z\nThe onSessionStart listener failed\nthe trash folder is missing\n\nError: the trash folder is missing/),
+      at: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/),
+      isCritical: false,
+      root,
+    },
+  ])
+  expect(fake.shown.debug).toContain('safe-delete: The onSessionStart listener failed: the trash folder is missing')
+})
+
+test('the same listener failure shows its toast as today when cmod refuses cmod:failed as a method it lacks', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  fake.fakes.cmod.call = async (call) => calledAnswer('safe-delete', { deny: `cmod has no method ${call.method}.` })
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The onSessionStart listener failed', description: 'the trash folder is missing' }])
+  const band = await fire(lifecycle, 'ui.render', abovePrompt, prompt)
+  expect(['Report', 'Hide'].map((label) => findElement(band, 'Button', label) !== undefined)).toEqual([true, true])
+})
+
+test("a failure the cmod plugin reports while its own setup still runs waits for its start and reaches its own Log", async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const logged: unknown[] = []
+  let finishSetup: () => void = () => undefined
+  const setupHeld = new Promise<void>((resolve) => (finishSetup = resolve))
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'cmod',
+      async setup(mod) {
+        engineOf(mod).report({ id: 'needs-cmod', message: 'Could not read the plugins' })
+        await setupHeld
+        return { 'cmod:failed': (input: unknown) => (logged.push(input), { showsToast: false }) }
+      },
+    }),
+  )
+  const started = lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
+  await fake.settle()
+  finishSetup()
+  await started
+  await fake.settle()
+
+  expect(logged).toEqual([expect.objectContaining({ mod: 'cmod', id: 'needs-cmod', message: 'Could not read the plugins' })])
+  expect(lifecycle.toasts.filter(({ type }) => type === 'error')).toEqual([])
+})
+
+test('a failure for a permission the person turned off shows its toast as today under a cmod that refuses cmod:failed', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  fake.fakes.cmod.call = async (call) => calledAnswer('safe-delete', { deny: `cmod has no method ${call.method}.` })
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => model.complete({ prompt: 'Green?' } as never)) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true, steps: { permissions: ['model'] } }))
+  await fake.settle()
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The onSessionStart listener failed', description: 'safe-delete calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.' }])
+})
+
+test('an answer to cmod:failed that is not an object with a true or false showsToast shows the toast', async () => {
+  for (const answer of [null, {}, { showsToast: 'no' }]) {
+    const fake = fakeClaude({ name: 'safe-delete', root })
+    fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+    loggingFailures(fake, answer)
+    const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+    await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+    await fake.settle()
+
+    await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+    await fake.settle()
+
+    expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The onSessionStart listener failed', description: 'the trash folder is missing' }])
+  }
+})
+
+test('a failure cmod answers show for, as for a linked mod, shows its toast', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const logged = loggingFailures(fake, { showsToast: true })
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+
+  expect(logged).toHaveLength(1)
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The onSessionStart listener failed', description: 'the trash folder is missing' }])
 })
 
 test('a mod loaded mid-session, which hears no SessionStart, runs its session-start listeners before the next prompt, once', async () => {
@@ -1015,27 +1081,6 @@ test('a mod loaded mid-session, which hears no SessionStart, runs its session-st
   await fake.settle()
 
   expect(starts).toEqual(['resume'])
-})
-
-test('an update with no changelog says what the mod adds now, links its release, and has no Changelog button', async () => {
-  const installed = '/home/.claude/plugins/cache/market/safe-delete/0.2.0'
-  const manifest = JSON.stringify({ name: 'safe-delete', version: '0.2.0', repository: 'https://github.com/owner/safe-delete' })
-  const { lifecycle } = await updatedFrom({ version: '0.1.0', added: ['the Trash pane', 'the Bin pane'] }, { [`${installed}/.claude-plugin/plugin.json`]: manifest }, installed)
-
-  expect(lifecycle.toasts).toEqual([
-    {
-      type: 'success',
-      message: 'Updated to 0.2.0',
-      description: 'No longer adds the Bin pane.\nFrom 0.1.0.\nRelease notes: https://github.com/owner/safe-delete/releases/tag/v0.2.0',
-    },
-  ])
-  expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Changelog')).toBeUndefined()
-})
-
-test('a version this machine already announced shows no toast', async () => {
-  const { lifecycle } = await updatedFrom({ version: '0.2.0', added: [] }, { [`${root}/CHANGELOG.md`]: changelog })
-
-  expect(lifecycle.toasts).toEqual([])
 })
 
 const recordFile = '/home/.local/share/cmod/records/safe-delete.json'
@@ -1954,6 +1999,20 @@ test('a mod with no steps writes its record silently, and retries on the next pr
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.' }])
 })
 
+test('the Installed toast names the combo of each hotkey with a default, and leaves out a hotkey without one', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const hotkeys = { cycle: { title: 'Switch mode', default: 'shift+tab' }, next: { title: 'Open the next item' } }
+  Object.assign(fake.fakes.fs, fakeFiles({ ...manifestOnly, [`${root}/package.json`]: JSON.stringify({ cmod: { hotkeys } }) }))
+  installCmod(fake)
+  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  const lifecycle = createLifecycle(trackedMod().definition)
+
+  await lifecycle.start(fake.claude, readPlugin)
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.\nBinds shift+tab to Switch mode.' }])
+})
+
 test('a folder named in an install command does not stop the mod from starting', async () => {
   const files: Record<string, string> = {
     [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
@@ -2587,6 +2646,7 @@ test("a project whose saved state fails to load leaves the mod in the project it
   isStoreLocked = true
 
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await fake.settle()
 
   expect([sessions.current.project, mod.state.project.expanded]).toEqual(['/work/a', ['src']])
   expect(lifecycle.toasts).toContainEqual({ type: 'error', message: 'Keeps the state of /work/a until the next prompt or folder move', description: 'the store file is locked' })
@@ -2645,10 +2705,12 @@ test('a mod that starts after SessionStart passed runs its SessionStart hooks on
   await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
+  await fake.settle()
 
   expect(sources).toEqual(['startup'])
   expect(appendedNotes(fake)).toEqual([])
-  expect(fake.shown.debug).toEqual([])
+  expect(fake.shown.debug.filter((line) => line.includes('SessionStart'))).toEqual([])
+  expect(lifecycle.toasts).toContainEqual({ type: 'error', message: 'Answered additionalContext without your grant to "Add text Claude reads and start turns", so cmod dropped it', description: 'It needs "permissions": { "prompt": true } in package.json "cmod".' })
 })
 
 test('a mod that started before SessionStart runs its SessionStart hooks once', async () => {

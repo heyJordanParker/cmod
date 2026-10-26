@@ -1089,7 +1089,7 @@ test('commands.beforeRun refuses without a grant, and a change without the promp
 
   expect(await typed('compact')).toEqual({ text: 'No.' })
   expect(await typed('model')).toEqual({ text: 'ran /model' })
-  expect(tested.shown.toasts.find(({ message }) => message === 'The beforeRun listener failed')?.description).toContain('keeper: its answer changes a command, which needs the prompt permission.')
+  expect(tested.shown.toasts.find(({ message }) => message === 'The beforeRun listener failed')?.description).toContain('keeper calls beforeRun with the answer { args }, which needs "permissions": { "prompt": true } in package.json "cmod".')
 })
 
 test('commands.list lists every command, and commands.run runs one and answers its output and note', async () => {
@@ -1884,7 +1884,7 @@ test('a dependency call that never answers fails the slash command at its deadli
   expect(await tested.type('/outline src/a.ts')).toEqual({ text: '/outline failed: /outline passed the 30 s deadline of slashCommand' })
   await tested.raise.onSessionStart({ source: 'startup' })
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'mod.dependencies.tracer.signatures passed its 30 s deadline' })
-  expect(deadlines).toEqual([30000, 30000, 30000])
+  expect(deadlines).toEqual([30000, 30000, 30000, 0, 30000])
 })
 
 test("a dependency's method takes the input and returns the result its contract declares", () => {
@@ -2004,6 +2004,25 @@ test("a mod's hotkey runs its listeners, and a listener removed no longer runs",
   expect(tested.shown.commands).toContain('tree--toggle')
 })
 
+test('a hotkey whose listener throws is critical, so its toast shows even when cmod answers no toast', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'tree',
+      hotkeys: { toggle: { title: 'Show or hide the tree', default: 'ctrl+t' } },
+      setup: (mod) => void mod.hotkeys.toggle.onPress(() => Promise.reject(new Error('the tree pane is gone'))),
+    }),
+  )
+  await tested.start()
+  const logged: unknown[] = []
+  const answerCmod = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (call) => (call.method === 'cmod:failed' ? (logged.push(call.input), { showsToast: false }) : answerCmod?.(call))
+
+  await tested.hotkey('toggle')
+
+  expect(logged).toEqual([expect.objectContaining({ id: 'hotkey:toggle', isCritical: true })])
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The Show or hide the tree hotkey failed', description: 'the tree pane is gone' })
+})
+
 const askedRequests = (calls: readonly TestCall[]) => calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { readonly input: { readonly isAsked?: true } }).input.isAsked === true ? [(input as { readonly input: unknown }).input] : []))
 
 test("a hotkey whose listener drops page.open's promise asks the cmod plugin as the person, which opens the page in the person's frame", async () => {
@@ -2061,9 +2080,37 @@ test("a hotkey's combo is the one keybindings.json binds to it, which a person m
   expect(combos).toEqual(['ctrl+e', undefined])
 })
 
+test('a hotkey without a default registers its command and has no combo, and once the person binds one its press runs the listeners', async () => {
+  const inbox = (keybindings: Readonly<Record<string, string>>) => {
+    const seen: { combo?: string | undefined; presses: number } = { presses: 0 }
+    const tested = testMod(
+      defineMod({
+        name: 'inbox',
+        hotkeys: { next: { title: 'Open the next inbox item' } },
+        setup(mod) {
+          seen.combo = mod.hotkeys.next.combo
+          mod.hotkeys.next.onPress(() => void (seen.presses += 1))
+        },
+      }),
+      { files: { '/test/home/.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: keybindings }] }) } },
+    )
+    return { tested, seen }
+  }
+  const unbound = inbox({})
+  const bound = inbox({ 'ctrl+n': 'command:inbox--next' })
+
+  await unbound.tested.start()
+  await bound.tested.hotkey('next')
+
+  expect(unbound.tested.shown.commands).toContain('inbox--next')
+  expect(unbound.seen).toEqual({ combo: undefined, presses: 0 })
+  expect(bound.seen).toEqual({ combo: 'ctrl+n', presses: 1 })
+})
+
 test('a hotkey default that is not a combo throws in defineMod', () => {
   expect(() => defineMod({ name: 'tree', hotkeys: { toggle: { title: 'Toggle', default: 't' as never } }, setup: () => undefined })).toThrow('tree: hotkeys.toggle defaults to "t", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".')
   expect(() => defineMod({ name: 'tree', hotkeys: { a: { title: 'A', default: 'ctrl+t' }, b: { title: 'B', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('tree: hotkeys.b defaults to ctrl+t, which hotkeys.a has too. Give each hotkey its own combo.')
+  expect(() => defineMod({ name: 'tree', hotkeys: { a: { title: 'A' }, b: { title: 'B', default: 'ctrl+t' }, c: { title: 'C', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('tree: hotkeys.c defaults to ctrl+t, which hotkeys.b has too. Give each hotkey its own combo.')
 })
 
 test('a removed timer stops, and says it stopped', async () => {

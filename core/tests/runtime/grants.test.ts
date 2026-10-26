@@ -136,9 +136,9 @@ test('an answer part without its grant is dropped, and cmod logs once which gran
 
   expect(first['additionalContext']).toBeUndefined()
   expect(first['sessionTitle']).toBe('Nudged')
-  expect(tested.shown.toasts.filter(({ type }) => type === 'warning')).toEqual([
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([
     {
-      type: 'warning',
+      type: 'error',
       message: 'Answered additionalContext without your grant to "Add text Claude reads and start turns", so cmod dropped it',
       description: 'It needs "permissions": { "prompt": true } in package.json "cmod".',
     },
@@ -226,12 +226,13 @@ test("a changed tool input without tools runs the call as Claude asked, and the 
 
   const echoed = await lifecycle.route('tool.call', { tool: 'mcp__rewriter__echo', tool_use_id: 't1' } as never, below)
   await lifecycle.route('tool.call', { tool: 'Bash', tool_use_id: 't2', command: 'ls' } as never, below)
+  await fake.settle()
 
   expect(echoed).toEqual({ result: 'echoed' } as never)
   expect(seen).toEqual([{ tool: 'Bash', tool_use_id: 't2', command: 'ls' }])
-  expect(lifecycle.toasts.filter(({ type }) => type === 'warning')).toEqual([
+  expect(lifecycle.toasts.filter(({ type }) => type === 'error')).toEqual([
     {
-      type: 'warning',
+      type: 'error',
       message: 'Answered a changed tool input without your grant to "Use and change Claude\'s tool calls", so cmod dropped it',
       description: 'It needs "permissions": { "tools": true } in package.json "cmod".',
     },

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { AttachedFile, defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type AttachmentType, type Subscription, type TaskOwner, type Turn } from '../../src/mod.js'
+import { refusal } from '../../src/runtime/grants.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { Message } from '../../src/session/context/turn/message/message.js'
 import { TaskStart } from '../../src/session/goal/task.js'
@@ -178,7 +179,7 @@ test('a note needs the prompt permission, even where the rest of the answer need
   await tested.settle()
 
   expect(await claudeCodeOf(tested).fire('tool.call', { tool: 'Edit', tool_use_id: 'toolu_3', file_path: '/work/a.ts', old_string: 'a', new_string: 'b' } as never, { result: 'edited' } as never)).toEqual({ result: 'edited' })
-  expect(tested.shown.toasts.map(({ message }) => message)).toContain('The beforeToolCall listener failed')
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeToolCall listener failed', description: 'history calls beforeToolCall with the answer { note }, which needs "permissions": { "prompt": true } in package.json "cmod".' })
 })
 
 test('beforeAttachedFile keeps a file out of what Claude reads, or rewrites it, and beforeInstructionFile still answers for a CLAUDE.md', async () => {
@@ -418,7 +419,7 @@ test('a model change or project setup note needs the prompt permission, as every
 
   expect(await code.fire('PostModelSwitch', switched as never)).toEqual({})
   expect(await code.fire('Setup', { session_id: 's1', cwd: '/work/a', trigger: 'init' } as never)).toEqual({})
-  expect(tested.shown.toasts.filter(({ type }) => type === 'warning').map(({ message }) => message)).toEqual([expect.stringContaining('without your grant to "Add text Claude reads and start turns"')])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual([expect.stringContaining('without your grant to "Add text Claude reads and start turns"')])
 })
 
 test("beforePrompt's note reaches Claude beside the prompt, and its title names the session", async () => {
@@ -608,7 +609,7 @@ test('beforeToolCall refuses a call with no permission, and rewrites one only wi
   expect(await claudeCodeOf(unallowed).fire('tool.call', call('rm -rf build'))).toEqual({ deny: 'Use trash instead of rm.' })
   expect(await claudeCodeOf(unallowed).fire('tool.call', call('ls'))).toEqual({} as never)
   await unallowed.settle()
-  expect(unallowed.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The beforeToolCall listener failed'])
+  expect(unallowed.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The beforeToolCall listener failed', description: 'guard calls beforeToolCall with the answer { input }, which needs "permissions": { "tools": true } in package.json "cmod".' }])
 
   const allowed = guard(['tools'])
   await allowed.start()
@@ -728,7 +729,7 @@ test('a task heard starting in another running session is running, and a send re
     called.push(input)
     return { value: null }
   }
-  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true })
+  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true, permissionRefusal: (call, permission) => refusal({ name: 'watcher', declared: [], home: undefined }, call, permission) })
   const owners: TaskOwner[] = []
   client.sessions.onTaskStart((task) => void owners.push(task.owner))
   await fake.settle()
@@ -744,7 +745,7 @@ test('a task heard starting in another running session is running, and a send re
 test("a session of another project reaches a mod's listener on that session, never its listener on every session", async () => {
   const fake = fakeClaude({ name: 'watcher', root: '/plugins/watcher' })
   fake.fakes.cmod.call = async () => ({ value: [] })
-  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true })
+  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true, permissionRefusal: (call, permission) => refusal({ name: 'watcher', declared: [], home: undefined }, call, permission) })
   const heard: string[] = []
   client.sessions.onPrompt((prompt) => void heard.push(`every: ${prompt.text}`))
   await fake.settle()

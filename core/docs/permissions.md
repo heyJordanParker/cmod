@@ -35,7 +35,7 @@ Anthropic's plugin directory does not list a mod that can approve Claude's tool 
 
 ## What the person sees
 
-The install opens the mod's install page in the Sidebar of Claude Code and lists every permission in `permissions`, with the install step, the program, and the hotkeys. An update asks again only when it adds a permission, and lists only the new ones. Removing the mod revokes everything it was granted.
+The install opens the mod's install page in the Sidebar of Claude Code and lists every permission in `permissions`, with the install step, the program, and the hotkeys. An update grants a permission it adds without asking, and the `<mod> updated to <version>` toast names it. With `Ask before an update adds a permission` on, in Settings on cmod's page under Preferences, the update asks instead, and lists only the new permissions ([install-steps.md](install-steps.md#consent)). A permission the person turned off stays off across updates. Removing the mod revokes everything it was granted.
 
 Settings lists the same permissions as toggles, under the mod, Permissions. A toggle runs `cmod permission <mod> <name> [value] on|off`, and the mod sees the change before its next call, with no reload.
 
@@ -76,12 +76,12 @@ if (mod.permissions.run.allows('gh')) mod.every(60_000, refreshRuns)
 The call rejects, and the error names the fix:
 
 - An undeclared call names the line to add: `ci-watch calls http.fetch(https://api.github.com/repos), which needs "permissions": { "network": ["api.github.com"] } in package.json "cmod".`
-- A declared call the person turned off names where to turn it on: `ci-watch calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.` The error toast that shows it has a `Settings` button that opens the mod's Permissions.
+- A declared call the person turned off names where to turn it on: `ci-watch calls model.complete without your grant to "Ask a model, which uses your plan". Turn it on in Settings.` The person chose this, so the failure goes to the Log in Settings and to Claude Code's debug log, with no toast, unless the cmod running it is older than 4.3.0 ([ui.md](ui.md#toasts)).
 - A `program` job without its grant stops at once with the same line, with no restarts.
 
 ## When a before answer has no grant
 
-cmod checks the answer each `before` listener returns, part by part. A part without its grant changes nothing, and cmod shows the error toast `The <method> listener failed` or logs once which part it dropped and the permission to turn on.
+cmod checks the answer each `before` listener returns, part by part. A part without its grant changes nothing, and cmod reports the failure `The <method> listener failed`, or once which part it dropped and the permission to turn on, where errors go ([ui.md](ui.md#toasts)).
 
 | Answer part | Permission |
 | --- | --- |

@@ -31,6 +31,7 @@ import type {
   Settings,
   SettingsReadArgs,
   Timer,
+  ToastOptions,
   ToolSpec,
   UiCopyArgs,
   UiFocusArgs,
@@ -48,6 +49,7 @@ export type Claude = {
   readonly ui: {
     log(text: string, options?: UiLogOptions): void
     notice(toolUseId: string, text: string | undefined): void
+    toast(text: string, options?: ToastOptions): void
     invalidate(event: InvalidatableEventName): void
     ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
     open(pane: PaneOpenArgs): Promise<UiOpenResult>

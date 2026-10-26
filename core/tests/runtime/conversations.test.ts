@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { defineMod, sessions } from '../../src/mod.js'
-import { consentPath, coreVersion, storeFolder } from '../../src/records.js'
+import { consentPath, coreVersion, recordPath, storeFolder } from '../../src/records.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
@@ -37,7 +37,7 @@ test("a mod that listens to its own session before the cmod plugin hears Session
   expect(await call(conversationMethods.watchBefore, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.subscribe, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.watchBefore, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
-  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ deny: 'tracer reads your conversations without your grant. Turn it on in Settings.' })
+  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ deny: 'tracer calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
 })
 
 test('a relayed action from a mod without the permission is refused back to the asking session', async () => {
@@ -46,7 +46,7 @@ test('a relayed action from a mod without the permission is refused back to the 
   await tested.settle()
 
   expect(tested.calls.filter((call) => call.call === 'prompt.submit')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger needs the prompt permission for send. Turn it on in Settings."}</cmod-relay>' }])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger calls send without your grant to \\"Add text Claude reads and start turns\\". Turn it on in Settings."}</cmod-relay>' }])
 })
 
 test('a relayed CronCreate needs the prompt permission, the same as one in the mod’s own session', async () => {
@@ -56,7 +56,49 @@ test('a relayed CronCreate needs the prompt permission, the same as one in the m
   await tested.settle()
 
   expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger needs the prompt permission for callTool. Turn it on in Settings."}</cmod-relay>' }])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger calls callTool without your grant to \\"Add text Claude reads and start turns\\". Turn it on in Settings."}</cmod-relay>' }])
+})
+
+const store = storeFolder({ HOME: '/test/home' })
+
+function installed(name: string, permissions: readonly string[] | null) {
+  return { [recordPath(store, name)]: JSON.stringify({ name, version: '1.0.0', root: `/test/plugins/${name}`, installedAt: '2026-10-26T09:00:00.000Z', scriptsSha256: 'sha', uninstall: null, program: null, keys: {}, permissions, grantedOnUpdate: [] }) }
+}
+
+test('the cmod plugin names the declaration a mod lacks to read another session, and where to turn on the grant a mod declared', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
+    files: {
+      ...installed('tracer', []),
+      ...installed('older', null),
+      '/test/plugins/older/package.json': JSON.stringify({ name: 'older', cmod: { permissions: { prompt: true } } }),
+      ...installed('reader', ['conversation']),
+    },
+  })
+  const subscribe = (caller: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'other-session', subscriptions: [{ event: 'prompt' }] }, caller } as never)
+
+  expect(await subscribe('tracer')).toEqual({ deny: 'tracer calls on, which needs "permissions": { "conversation": true } in package.json "cmod".' })
+  expect(await subscribe('older')).toEqual({ deny: 'older calls on, which needs "permissions": { "conversation": true } in package.json "cmod".' })
+  expect(await subscribe('reader')).toEqual({ deny: 'reader calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
+  expect(await subscribe('unrecorded')).toEqual({ deny: 'unrecorded calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
+})
+
+test('a relayed action from a mod that never declared its permission names the declaration to add', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: installed('pinger', ['conversation']) })
+  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: delivery } as never, { text: delivery } as never)
+  await tested.settle()
+
+  expect(tested.calls.filter((call) => call.call === 'prompt.submit')).toEqual([])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger calls send, which needs \\"permissions\\": { \\"prompt\\": true } in package.json \\"cmod\\"."}</cmod-relay>' }])
+})
+
+test("another session's before question for a mod that never declared conversation is refused back with the declaration to add", async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: installed('guard', ['prompt']) })
+  const text = '<cmod-relay>{"kind":"before","id":"other:1","from":"other","mod":"guard","event":"prompt","change":{"type":"message","message":{"type":"prompt","text":"Deploy"}},"project":"/test/plugins/cmod"}</cmod-relay>'
+  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
+  await tested.settle()
+
+  expect(tested.calls.filter((call) => call.call === 'cmod.call' && (call.args[0] as { method: string }).method === conversationMethods.before)).toEqual([])
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"guard calls before, which needs \\"permissions\\": { \\"conversation\\": true } in package.json \\"cmod\\"."}</cmod-relay>' }])
 })
 
 test('a relay a newer cmod in another session sends, with an action or a kind this cmod lacks, is refused back by name and runs nothing', async () => {
@@ -159,7 +201,7 @@ test('the cmod plugin aborts the engine turn that is running, for a mod with the
   expect(await abort('guard')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-7' } as never)
-  expect(await abort('reader')).toEqual({ deny: 'reader needs the prompt permission for abort. Turn it on in Settings.' })
+  expect(await abort('reader')).toEqual({ deny: 'reader calls abort without your grant to "Add text Claude reads and start turns". Turn it on in Settings.' })
   expect(await abort('guard')).toEqual({ value: null })
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
 })
@@ -331,7 +373,7 @@ test('the notes of one row share one 8 s wait on other sessions, and a session l
 
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
 
-  expect(waits.filter((ms) => ms <= 5000)).toEqual([5000, 3000])
+  expect(waits.filter((ms) => ms > 0 && ms <= 5000)).toEqual([5000, 3000])
   expect(asks()).toBe(2)
 })
 
@@ -344,7 +386,7 @@ test("another session's refusing listener lets the event through when that sessi
   const sent = () => tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0] as { text: string })
   for (let waited = 0; !sent().some((each) => each.text.includes('"kind":"before"')) && waited < 200; waited += 1) await tested.settle()
   const question = JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec(sent().find((each) => each.text.includes('"kind":"before"'))?.text ?? '')?.[1] ?? '{}') as { id: string }
-  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: 'guard needs the conversation permission to change what happens in another session.' })}</cmod-relay>`
+  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: 'guard calls before without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })}</cmod-relay>`
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: denied } as never, { text: denied } as never)
 
   expect(await submitted).toMatchObject({ text: 'Deploy to prod' })
@@ -757,7 +799,11 @@ test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this c
   await tested.settle()
 
   const denials = tested.calls.filter((call) => call.call === 'session.send').map((call) => JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec((call.args[0] as { text: string }).text)?.[1] ?? '{}') as { deny: string })
-  expect(denials.map(({ deny }) => deny.replace(/ for \w+\. .*$/, ''))).toEqual(['prompt', 'tasks', 'tasks', 'tasks', 'tasks', 'tools', 'conversation', 'conversation', 'prompt'].map((permission) => `pinger needs the ${permission} permission`))
+  const prompt = 'Add text Claude reads and start turns'
+  const tasks = 'Start tasks that work beside Claude'
+  const conversation = 'Read your Claude Code conversations'
+  const needs = [prompt, tasks, tasks, tasks, tasks, "Use and change Claude's tool calls", conversation, conversation, prompt]
+  expect(denials.map(({ deny }) => deny)).toEqual(actions.map((action, index) => `pinger calls ${action} without your grant to "${needs[index]}". Turn it on in Settings.`))
 })
 
 test("the cmod plugin tells each mod of its session the color the index holds at the session's start, and each color /color picks", async () => {

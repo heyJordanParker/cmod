@@ -373,6 +373,8 @@ type ShownToast = { readonly type: ToastType; readonly message: string; readonly
 
 What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send` or a `prompt` that follows the state, and the `beforePrompt` notes a subagent reads as it starts from a spawn the test fires, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
+The test kit keeps no Log, as a cmod older than 4.3.0 keeps none, so every error cmod catches for the mod shows in `toasts`, a refusal for a permission the test turned off with `permissions` included ([ui.md](ui.md#toasts)).
+
 ```ts
 test('the Mode prompt follows the mode', async () => {
   const tested = testMod(modes)

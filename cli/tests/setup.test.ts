@@ -105,7 +105,7 @@ test('setup --events with an install step that prints four progress lines emits 
   expect(result.exitCode).toBe(0)
   const store = join(home, '.local/share/cmod')
   const record = JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))
-  expect(record).toEqual({ name: 'demo', version: '0.1.0', root, installedAt: expect.any(String), scriptsSha256: sha256, uninstall: join(store, 'uninstall/demo/uninstall.sh'), program: null, keys: {} })
+  expect(record).toEqual({ name: 'demo', version: '0.1.0', root, installedAt: expect.any(String), scriptsSha256: sha256, uninstall: join(store, 'uninstall/demo/uninstall.sh'), program: null, keys: {}, permissions: [], grantedOnUpdate: [] })
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 
@@ -325,18 +325,84 @@ test('setup --events asks consent for the permissions, and --consent grants each
   expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'network:api.github.com', 'prompt'] })
 })
 
-test('an update that asks for one more permission asks consent for that permission alone', async () => {
+async function updateWatcher(root: string, permissions: object): Promise<void> {
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions } }),
+  })
+}
+
+const watcherRecord = (home: string) => readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch')
+
+test('an update that adds a permission grants it without asking, and the record names it as granted on update', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true } })
+  const installed = await hashOf(root)
+  await cmod(home, 'setup', root, '--events', '--consent', installed)
+  expect((await watcherRecord(home))?.permissions).toEqual(['prompt'])
+  await updateWatcher(root, { prompt: true, conversation: true })
+
+  const updated = await cmod(home, 'setup', root, '--events')
+
+  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [installed, 'prompt', 'conversation'] })
+  expect(await watcherRecord(home)).toMatchObject({ version: '0.3.0', permissions: ['prompt', 'conversation'], grantedOnUpdate: ['conversation'] })
+})
+
+test('an update that adds a permission asks consent for that permission alone when the person asks before an update adds a permission', async () => {
   const home = await temporaryHome()
   const root = await createWatcher(home, { permissions: { prompt: true } })
   await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
-    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions: { prompt: true, network: ['api.github.com'] } } }),
-  })
+  await writeFiles(home, { '.local/share/cmod/preferences.json': JSON.stringify({ asksBeforeUpdatePermissions: true }) })
+  await updateWatcher(root, { prompt: true, conversation: true })
+  const updated = await hashOf(root)
 
   const asked = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\t\tnetwork:api.github.com\n`)
+  expect(asked).toMatchObject({ stdout: `needs-consent ${updated}\t\t\t\tconversation\n`, exitCode: 10 })
+  expect(await cmod(home, 'setup', root, '--events', '--consent', updated)).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
+  expect(await watcherRecord(home)).toMatchObject({ permissions: ['prompt', 'conversation'], grantedOnUpdate: [] })
+})
+
+test('an update keeps off a permission the person turned off, without asking for it again', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true, conversation: true } })
+  const installed = await hashOf(root)
+  await cmod(home, 'setup', root, '--events', '--consent', installed)
+  await cmod(home, 'permission', 'ci-watch', 'conversation', 'off')
+  await updateWatcher(root, { prompt: true, conversation: true })
+
+  const updated = await cmod(home, 'setup', root, '--events')
+
+  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [installed, 'prompt'] })
+  expect(await watcherRecord(home)).toMatchObject({ version: '0.3.0', grantedOnUpdate: [] })
+})
+
+test('an update of a mod recorded before cmod 4.3.0 asks consent for a permission it adds', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true } })
+  const installed = await hashOf(root)
+  await cmod(home, 'setup', root, '--events', '--consent', installed)
+  await writeFiles(home, { '.local/share/cmod/records/ci-watch.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0', root, installedAt: '2026-10-20T00:00:00.000Z', scriptsSha256: installed, uninstall: null, program: null, keys: {} }) })
+  await updateWatcher(root, { prompt: true, conversation: true })
+
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t\t\t\tconversation\n`, exitCode: 10 })
+})
+
+test('an update of a mod whose consent.json the person deleted asks consent for every permission again', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true, conversation: true } })
+  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  expect((await watcherRecord(home))?.permissions).toEqual(['prompt', 'conversation'])
+  await rm(consentFile(home))
+  await updateWatcher(root, { prompt: true, conversation: true })
+
+  const asked = await cmod(home, 'setup', root, '--events')
+
+  expect(asked).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t\t\t\tprompt\tconversation\n`, exitCode: 10 })
 })
 
 test('an update that drops a permission sets the mod up without asking', async () => {
@@ -1475,6 +1541,39 @@ test('the consent question lists the hotkeys it binds', async () => {
   expect(result.stdout).toContain('  It binds hotkeys in ~/.claude/keybindings.json:\n    shift+tab      Switch mode\n')
   expect(result.stdout).not.toContain('It runs these commands')
   expect(result.stdout).toContain('modes is not set up: it needs your consent. Run the command again with --yes after reading what it does.')
+})
+
+const next = { title: 'Open the next item' }
+
+test('setup binds only the hotkeys with a default, and asks consent only for them', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { cycle, next })
+
+  const question = await cmod(home, 'setup', root)
+  const asked = await cmod(home, 'setup', root, '--events')
+  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+
+  expect(question.stdout).toContain('  It binds hotkeys in ~/.claude/keybindings.json:\n    shift+tab      Switch mode\n\n')
+  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\tshift+tab to Switch mode\n`)
+  expect(result.stdout).toBe('done modes 0.1.0\n')
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
+  expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({ modes: [await hashOf(root), 'hotkey:cycle=shift+tab'] })
+})
+
+test('cmod hotkey binds a hotkey without a default, and an update that adds another one keeps it without asking', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { next })
+  const installed = await cmod(home, 'setup', root, '--events')
+
+  const bound = await cmod(home, 'hotkey', 'modes', 'next', 'ctrl+n')
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'modes', cmod: { hotkeys: { next, previous: { title: 'Open the previous item' } } } }) })
+  const updated = await cmod(home, 'setup', root, '--events')
+
+  expect(installed).toMatchObject({ stdout: 'done modes 0.1.0\n', exitCode: 0 })
+  expect(bound.stdout).toBe('Bound ctrl+n to Open the next item for modes.\n')
+  expect(updated).toMatchObject({ stdout: 'done modes 0.2.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+n': 'command:modes--next' } }] })
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'ctrl+n': 'modes--next' })
 })
 
 test('the consent question names the program it installs for Claude to run', async () => {
