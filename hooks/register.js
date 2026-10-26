@@ -120,6 +120,7 @@ var flagPermissions = ["conversation", "prompt", "model", "tasks", "tools", "app
 var permissionNames = [...listPermissions, ...flagPermissions];
 var hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 var programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+var releaseVersion = /^\d+\.\d+\.\d+$/;
 var settingPath = /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9_@-]+)*$/;
 var listItemHint = {
   network: 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"',
@@ -145,6 +146,15 @@ function programPath(store, program, version) {
 }
 function isProgramNewer(record, programModifiedMs) {
   return record.program !== null && (programModifiedMs === undefined || programModifiedMs > Date.parse(record.installedAt));
+}
+async function readCmodVersion(files, store) {
+  if (!await files.exists(`${store}/programs/cmod`))
+    return;
+  const newestFirst = (await files.list(`${store}/bin/cmod`)).filter((name) => releaseVersion.test(name)).toSorted((one, other) => isAtLeast(one, other) ? -1 : 1);
+  for (const version of newestFirst)
+    if (await files.exists(programPath(store, "cmod", version)))
+      return version;
+  return;
 }
 function dataFolder(store, name) {
   return `${store}/data/${checkedName(name)}`;
@@ -389,7 +399,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.3.0";
+var coreVersion = "4.3.1";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -10589,17 +10599,11 @@ async function readJson(read, path) {
 }
 async function cmodVersion(claude) {
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
-  const exists = async (path) => await claude.fs.stat(path).catch(ifMissing(undefined)) !== undefined;
-  if (!await exists(`${store}/programs/cmod`))
-    return;
-  const versions = (await claude.fs.list(`${store}/bin/cmod`).catch(ifMissing([]))).filter((entry) => entry.kind === "dir" && releaseVersion.test(entry.name)).map((entry) => entry.name);
-  const newestFirst = versions.toSorted((one, other) => isAtLeast(one, other) ? -1 : 1);
-  for (const version of newestFirst)
-    if (await exists(`${store}/bin/cmod/${version}/cmod`))
-      return version;
-  return;
+  return readCmodVersion({
+    list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
+    exists: async (path) => await claude.fs.stat(path).catch(ifMissing(undefined)) !== undefined
+  }, store);
 }
-var releaseVersion = /^\d+\.\d+\.\d+$/;
 function createLifecycle(definition, permissionRoutes = () => {
   return;
 }, options = {}, asksPerson = true) {
@@ -11871,7 +11875,7 @@ function changelogSections(markdown2) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-xdZrV5/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12059,7 +12063,8 @@ function settings2(mod) {
       const rows = await claude.config.list();
       const combos = await readCombos(claude, await configRootOf(mod));
       const enabledPlugins = (await claude.settings.read())["enabledPlugins"];
-      const turnedOff = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {}).filter(([, isEnabled]) => isEnabled === false).map(([id]) => id.replace(/@[^@]*$/, ""));
+      const enabled = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {}).map(([id, isEnabled]) => ({ name: id.replace(/@[^@]*$/, ""), isEnabled }));
+      const turnedOff = enabled.filter(({ name, isEnabled }) => isEnabled === false && !enabled.some((each) => each.name === name && each.isEnabled === true)).map(({ name }) => name);
       const names = await fs.exists(`${store}/records`) ? (await fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith(".json")).map((entry) => entry.name.slice(0, -".json".length)) : [];
       const records = (await Promise.all(names.filter((name) => name !== mod.name).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined);
       const own = JSON.parse(await read(`${mod.folder}/.claude-plugin/plugin.json`) ?? "{}");
@@ -12204,7 +12209,7 @@ function settings2(mod) {
             flexDirection: "column",
             children: [
               Text({ children: [Text({ bold: true, children: hotkey.title }), ...hotkey.combo === undefined ? [Text({ dimColor: true, children: " · unbound" })] : []] }),
-              Input({ key: `hotkey:${hotkey.name}`, label: "Combo", value: hotkey.combo ?? "", placeholder: "ctrl+shift+k", submitLabel: "bind", onSubmit: (combo) => bind3(view.name, hotkey, combo) })
+              Input({ key: `hotkey:${hotkey.name}`, label: "Combo", value: hotkey.combo ?? "", placeholder: "none", submitLabel: "bind", onSubmit: (combo) => bind3(view.name, hotkey, combo) })
             ]
           }))
         });
@@ -12349,7 +12354,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-xdZrV5/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12604,7 +12609,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-xdZrV5/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12658,7 +12663,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-xdZrV5/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -13033,7 +13038,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-xdZrV5/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
