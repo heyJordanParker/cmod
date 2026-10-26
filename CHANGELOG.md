@@ -4,6 +4,25 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-10-26
+
+### Added
+- A hotkey can leave out `default`, as `hotkeys: { next: { title: 'Open the next inbox item' } }`. It starts unbound, binds nothing at install and asks no consent, and Settings lists it as unbound until the person binds it there or with `cmod hotkey`.
+- A Log in Settings, on cmod's page, lists the newest 100 errors of your mods from every session, newest first, each with its mod, time, and message, and `Copy` and `Report`. The same error again updates its entry.
+- The switch `Show errors from installed mods`, in Settings on cmod's page under Preferences and off at first, shows every error of an installed mod as a toast again.
+
+### Changed
+- An update that adds a permission no longer stops to ask in the Install tab. cmod grants the new permission, and the update's toast names it. The switch `Ask before an update adds a permission`, in Settings on cmod's page under Preferences and off at first, brings the question back. A permission you turned off stays off across updates, and an update never asks for it again. A changed install step or a new hotkey still asks, as before. A mod set up before 4.3.0 asks as before at its next update, including for a permission you turned off, and from then on follows these rules.
+- Each session reloads its plugins by itself when a plugin is installed, updated, turned on or off, removed, linked, or unlinked, once the changes have stopped for 2 seconds, so an update of many plugins reloads once. The `Plugins changed` toast and its `Reload` button are gone. A session in the middle of a turn reloads when the turn ends, and the prompt you are typing stays.
+- After a reload, each plugin whose version changed shows a short toast in the corner, such as `notes updated to 1.3.0`. An update that granted a permission always has its own toast, followed by each permission it granted. More than 3 others show one toast, such as `5 plugins updated`. An edit to a linked mod keeps its version and shows nothing.
+- A mod no longer shows its own `Updated to <version>` toast, because the corner toast names the new version. Its changelog stays in Settings, and the `Installed` toast stays.
+- An error of a mod you installed from a marketplace goes to the Log in Settings instead of a toast. A mod you run from its checkout, linked with `cmod link` or loaded with `--plugin-dir`, still shows its errors as toasts, and so does any mod whose install or setup failed, whose program stopped, or whose button or hotkey you pressed failed. A toast keeps its form: it stays, with `Copy` and `Report`.
+- An error for a permission you turned off shows no toast, and its toast's `Settings` button is gone. It goes to the Log and to Claude Code's debug log. Under a cmod older than 4.3.0 it still shows its toast.
+
+### Fixed
+- A listener under one of Claude's tasks hears that task's subtasks again after `/clear` moves it to the new session.
+- A mod that uses a permission it never declared is told the declaration to add to its package.json, instead of being told to turn on a grant, so a linked mod's author sees it as a toast.
+
 ## [4.2.0] - 2026-10-26
 
 ### Added

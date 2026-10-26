@@ -16,6 +16,8 @@ function checkHotkeys(name, hotkeys) {
       throw new Error(`${at} is not a hotkey name. Use letters, digits, and _, starting with a letter.`);
     if (declared.title.trim() === "")
       throw new Error(`${at} needs a title, the label Settings shows beside its combo.`);
+    if (declared.default === undefined)
+      continue;
     if (!isCombo(declared.default))
       throw new Error(`${at} defaults to "${String(declared.default)}", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".`);
     const taken = combos.get(declared.default);
@@ -198,6 +200,12 @@ function parseRecord(text, path) {
   const keys = value["keys"] ?? {};
   if (!isObject(keys) || Object.values(keys).some((command) => typeof command !== "string"))
     throw new Error(`${path} has "keys" that are not key bindings. ${fix}`);
+  const permissions = value["permissions"] ?? null;
+  if (permissions !== null && !isTextList(permissions))
+    throw new Error(`${path} has "permissions" that are not a list of permissions. ${fix}`);
+  const grantedOnUpdate = value["grantedOnUpdate"] ?? [];
+  if (!isTextList(grantedOnUpdate))
+    throw new Error(`${path} has a "grantedOnUpdate" that is not a list of permissions. ${fix}`);
   return {
     name: value["name"],
     version: value["version"],
@@ -206,7 +214,9 @@ function parseRecord(text, path) {
     scriptsSha256: value["scriptsSha256"],
     uninstall,
     program,
-    keys
+    keys,
+    permissions,
+    grantedOnUpdate
   };
 }
 function readSteps(pkg) {
@@ -353,10 +363,20 @@ function hasLinkedMods(knownMarketplaces, links) {
 function widgetsPath(store) {
   return `${store}/widgets.json`;
 }
+function preferencesPath(store) {
+  return `${store}/preferences.json`;
+}
+function parsePreferences(value, path) {
+  if (value === undefined)
+    return { asksBeforeUpdatePermissions: false, showsInstalledModErrors: false };
+  if (!isObject(value) || ["asksBeforeUpdatePermissions", "showsInstalledModErrors"].some((key) => value[key] !== undefined && typeof value[key] !== "boolean"))
+    throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`);
+  return { asksBeforeUpdatePermissions: value["asksBeforeUpdatePermissions"] === true, showsInstalledModErrors: value["showsInstalledModErrors"] === true };
+}
 function parseConsent(value, path) {
   if (value === undefined)
     return Object.create(null);
-  if (!isObject(value) || Object.values(value).some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) {
+  if (!isObject(value) || !Object.values(value).every(isTextList)) {
     throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod asks again.`);
   }
   return Object.assign(Object.create(null), value);
@@ -365,11 +385,11 @@ function readHotkeys(hotkeys) {
   if (hotkeys === undefined)
     return {};
   const fix = "cmod check writes it from the hotkeys defineMod declares, so run cmod check.";
-  if (!isObject(hotkeys) || !Object.values(hotkeys).every((each) => isObject(each) && typeof each["title"] === "string" && typeof each["default"] === "string"))
-    throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and default combo. ${fix}`);
+  if (!isObject(hotkeys) || !Object.values(hotkeys).every((each) => isObject(each) && typeof each["title"] === "string" && (each["default"] === undefined || typeof each["default"] === "string")))
+    throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.2.0";
+var coreVersion = "4.3.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -475,6 +495,9 @@ function isAtLeast(version, minimum) {
 }
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isTextList(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 // node_modules/@cmodjs/core/session/goal/task.js
@@ -765,6 +788,9 @@ var fs = {
 var process = {
   run: (argv, init) => bound().process.run(argv, init),
   spawn: (argv, init) => bound().process.spawn(argv, init)
+};
+var clipboard = {
+  write: (text) => bound().clipboard.write(text)
 };
 function defineMod(definition) {
   if (definition.name.trim() === "")
@@ -4046,89 +4072,22 @@ function relativePath(base, path) {
   return path.startsWith(prefix) ? path.slice(prefix.length) : undefined;
 }
 
-// node_modules/@cmodjs/core/utils/changelog.js
-var unreleased = "Unreleased";
-var heading = /^##\s+\[?([^\]\s]+)\]?(?:\s+-\s+(\S+))?\s*$/;
-var linkReference = /^\[[^\]]+\]:\s/;
-function changelogSections(markdown) {
-  const sections = [];
-  for (const line of markdown.split(`
-`)) {
-    const match = heading.exec(line);
-    if (match !== null)
-      sections.push({ version: match[1], date: match[2], lines: [] });
-    else if (!linkReference.test(line))
-      sections.at(-1)?.lines.push(line);
-  }
-  return sections.map(({ version, date: date2, lines }) => ({ version, ...date2 === undefined ? {} : { date: date2 }, text: lines.join(`
-`).trim() }));
-}
-function changeLines(text) {
-  let group;
-  return text.split(`
-`).flatMap((line) => {
-    const trimmed = line.trim();
-    const subheading = /^###\s+(.+)$/.exec(trimmed)?.[1];
-    if (subheading !== undefined) {
-      group = subheading;
-      return [];
-    }
-    const item = /^[-*]\s+(.+)$/.exec(trimmed)?.[1] ?? trimmed;
-    if (item === "")
-      return [];
-    return [group === undefined ? item : `${group}: ${item}`];
-  });
-}
-
 // node_modules/@cmodjs/core/runtime/announce.js
 var announcementMs = 1e4;
-var shownChanges = 3;
-function announcedOf(saved) {
-  if (typeof saved === "string")
-    return { version: saved, added: [] };
-  if (!isObject(saved) || typeof saved["version"] !== "string")
-    return;
-  return { version: saved["version"], added: Array.isArray(saved["added"]) ? saved["added"].map(String) : [] };
-}
-async function announcementOf(claude, plugin, granted, added, previous, openSettings) {
-  const read = (path) => claude.fs.read(`${plugin.root}/${path}`).catch(ifMissing(undefined));
-  const manifest = jsonOf(await read(".claude-plugin/plugin.json"));
-  const field = (key) => isObject(manifest) && typeof manifest[key] === "string" ? manifest[key] : undefined;
-  const open = (tab) => () => openSettings(tab);
-  if (previous === undefined) {
-    const { program, hotkeys } = plugin.steps;
-    const rules = (await claude.fs.list(`${plugin.root}/rules`).catch(ifMissing([]))).filter((entry) => entry.kind === "file" && entry.name.endsWith(".md")).map((entry) => entry.name.slice(0, -".md".length)).toSorted();
-    const lines2 = [
-      field("description"),
-      added.length > 0 ? `Adds ${listed(added)}.` : undefined,
-      rules.length > 0 ? `Adds ${rules.length} ${rules.length === 1 ? "rule" : "rules"}: ${listed(rules)}.` : undefined,
-      program === undefined ? undefined : `Installed the ${program} program.`,
-      ...Object.values(hotkeys ?? {}).map(({ title, default: combo }) => `Binds ${combo} to ${title}.`),
-      ...[...granted].map((item) => `${permissionWords(item)}.`)
-    ];
-    return { message: "Installed", ...described(lines2), action: { label: "Settings", onClick: open() } };
-  }
-  const version = plugin.version ?? "";
-  const isCheckout = marketplaceOf(plugin.root, plugin.name) === undefined;
-  const sections = changelogSections(await read("CHANGELOG.md") ?? "");
-  const section = sections.find((each) => each.version === version) ?? (isCheckout ? sections.find((each) => each.version === unreleased) : undefined);
-  const changes = section === undefined ? [] : changeLines(section.text);
-  const nowAdded = added.filter((each) => !previous.added.includes(each));
-  const gone = previous.added.filter((each) => !added.includes(each));
-  const fallback = previous.added.length === 0 ? [] : [nowAdded.length > 0 ? `Now adds ${listed(nowAdded)}.` : undefined, gone.length > 0 ? `No longer adds ${listed(gone)}.` : undefined];
-  const home = await claude.env.home();
-  const folder = home !== undefined && plugin.root.startsWith(`${home}/`) ? `~${plugin.root.slice(home.length)}` : plugin.root;
-  const repository = field("repository");
+async function announcementOf(claude, plugin, granted, added, openSettings) {
+  const manifest = jsonOf(await claude.fs.read(`${plugin.root}/.claude-plugin/plugin.json`).catch(ifMissing(undefined)));
+  const { program, hotkeys } = plugin.steps;
+  const rules = (await claude.fs.list(`${plugin.root}/rules`).catch(ifMissing([]))).filter((entry) => entry.kind === "file" && entry.name.endsWith(".md")).map((entry) => entry.name.slice(0, -".md".length)).toSorted();
   const lines = [
-    ...changes.length === 0 ? fallback : changes.length > shownChanges ? [...changes.slice(0, shownChanges), "…"] : changes,
-    `From ${previous.version}${isCheckout ? `, loaded from ${folder}` : ""}.`,
-    repository === undefined || isCheckout ? undefined : `Release notes: ${repository.replace(/\/$/, "")}/releases/tag/v${version}`
-  ];
-  return {
-    message: `Updated to ${version}`,
-    ...described(lines),
-    ...sections.length > 0 ? { action: { label: "Changelog", onClick: open("changelog") } } : {}
-  };
+    isObject(manifest) && typeof manifest["description"] === "string" ? manifest["description"] : undefined,
+    added.length > 0 ? `Adds ${listed(added)}.` : undefined,
+    rules.length > 0 ? `Adds ${rules.length} ${rules.length === 1 ? "rule" : "rules"}: ${listed(rules)}.` : undefined,
+    program === undefined ? undefined : `Installed the ${program} program.`,
+    ...Object.values(hotkeys ?? {}).flatMap(({ title, default: combo }) => combo === undefined ? [] : [`Binds ${combo} to ${title}.`]),
+    ...[...granted].map((item) => `${permissionWords(item)}.`)
+  ].filter((line) => line !== undefined);
+  return { message: "Installed", ...lines.length === 0 ? {} : { description: lines.join(`
+`) }, action: { label: "Settings", onClick: () => openSettings() } };
 }
 function jsonOf(text) {
   try {
@@ -4138,11 +4097,6 @@ function jsonOf(text) {
       return;
     throw error;
   }
-}
-function described(lines) {
-  const kept = lines.filter((line) => line !== undefined);
-  return kept.length === 0 ? {} : { description: kept.join(`
-`) };
 }
 
 // node_modules/@cmodjs/core/session/context/turn/message/message.js
@@ -4861,72 +4815,6 @@ async function foldAnswers(method, takes, ends, change, askers, report, applied 
     }
   }
   return result;
-}
-
-// node_modules/@cmodjs/core/runtime/programs.js
-function lastLineOf(text) {
-  const trimmed = text.trim();
-  return trimmed === "" ? undefined : trimmed.slice(trimmed.lastIndexOf(`
-`) + 1).trim();
-}
-function cmodError(stderr, command) {
-  const line = lastLineOf(stderr) ?? "";
-  const prefix = `cmod ${command}: `;
-  return line.startsWith(prefix) ? line.slice(prefix.length) : line;
-}
-async function readLines(stream, onLine) {
-  let pending = "";
-  let lastError = "";
-  let piece = await stream.next();
-  while (piece.done !== true) {
-    if (piece.value.stream === "stderr") {
-      lastError = lastLineOf(piece.value.text) ?? lastError;
-    } else {
-      const lines = `${pending}${piece.value.text}`.split(`
-`);
-      pending = lines.pop() ?? "";
-      for (const text of lines)
-        onLine(text);
-    }
-    piece = await stream.next();
-  }
-  if (pending !== "")
-    onLine(pending);
-  return { code: piece.value.code, lastError };
-}
-function spawnCmod(claude, args, session, env = {}) {
-  return claude.process.spawn({ argv: ["cmod", ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } });
-}
-async function runCmod(claude, args, session) {
-  const lines = [];
-  const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line));
-  if (code !== 0)
-    throw new Error(cmodError(lastError, args[0]) || `cmod ${args.slice(0, 2).join(" ")} ${formatExit(code, "")}.`);
-  return lines.join(`
-`);
-}
-function locatingPrograms(claude) {
-  let folder;
-  let names = new Set;
-  const located = (argv) => {
-    const [name, ...rest] = argv;
-    return folder !== undefined && name !== undefined && (name === "cmod" || names.has(name)) ? [`${folder}/${name}`, ...rest] : argv;
-  };
-  return {
-    claude: {
-      ...claude,
-      process: {
-        run: (argv, init) => claude.process.run(located(argv), init),
-        spawn: (request) => claude.process.spawn({ ...request, argv: located(request.argv) })
-      }
-    },
-    async refresh() {
-      const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()]);
-      const programs = `${storeFolder({ HOME: home, XDG_DATA_HOME: dataHome })}/programs`;
-      names = new Set((await claude.fs.list(programs).catch(ifMissing([]))).map((entry) => entry.name));
-      folder = programs;
-    }
-  };
 }
 
 // node_modules/@cmodjs/core/utils/parse-shell.js
@@ -6217,7 +6105,7 @@ function isInScope(scope, session, change, isUnder) {
 function withoutPermissionCheck(name, hearer) {
   return `${name}: ${hearer} hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.`;
 }
-function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn, permissionRoutes }) {
+function createSessionsClient({ name, claude, report, isGranted, permissionRefusal, hookOn, routeOn, permissionRoutes }) {
   const call = (method, input) => claude.cmod.call({ to: cmodPluginName, method, input });
   const listening = new Map;
   const deciding = new Map;
@@ -6236,6 +6124,8 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       queued.delete(key);
       const heard = (from) => [...from.get(key) ?? []].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...options.onFailure === "refuse" ? { onFailure: "refuse", scope } : {} }));
       const tracksTasks = [...listening.get(key) ?? [], ...deciding.get(key) ?? []].some(({ scope }) => scope.task !== undefined || scope.isGoal === true);
+      if (tracksTasks)
+        learnTasks(key).catch((error) => report(`tasks:${key}`, "Could not read the tasks it listens under", error));
       const subscriptions = [...heard(listening), ...tracksTasks ? [{ event: TaskStart }] : []];
       await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? "the other sessions" : `session ${key}`}`, error));
       await call(conversationMethods.watchBefore, { session: key, subscriptions: heard(deciding) }).catch((error) => report(`before:${key}`, `Changes nothing in ${key === everySession ? "the other sessions" : `session ${key}`}`, error));
@@ -6266,8 +6156,6 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
     const set = into.get(key) ?? new Set;
     set.add(entry);
     into.set(key, set);
-    if (scope.task !== undefined || scope.isGoal === true)
-      learnTasks(scope.session ?? current2.id).catch((error) => report(`tasks:${key}`, "Could not read the tasks it listens under", error));
     onChange(key);
     return {
       remove() {
@@ -6303,7 +6191,7 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       const missing = answerPermissions(event, answer2).find((permission) => !isGranted(permission));
       if (missing === undefined)
         return answer2;
-      throw new Error(`Its ${entry.method} answer changes nothing until you grant ${name} "${permissionWords(missing)}". ${grantFix}`);
+      throw new Error(permissionRefusal(`${entry.method} with the answer { ${Object.keys(answer2).join(", ")} }`, missing));
     });
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf("before", event)}`, `The ${methodOf("before", event)} listener failed`, error));
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) };
@@ -6556,7 +6444,7 @@ function createSessionsClient({ name, claude, report, isGranted, hookOn, routeOn
       return { text: answer["refuse"] };
     const changes = answer !== undefined && isGranted("prompt") ? answer : undefined;
     if (answer !== undefined && changes === undefined)
-      report("session:beforeRun", "The beforeRun listener failed", new Error(`${name}: its answer changes a command, which needs the prompt permission.`));
+      report("session:beforeRun", "The beforeRun listener failed", new Error(permissionRefusal(`beforeRun with the answer { ${Object.keys(answer).join(", ")} }`, "prompt")));
     if (typeof changes?.["result"] === "string")
       return { text: changes["result"], ...typeof changes["exitCode"] === "number" ? { exitCode: changes["exitCode"] } : {} };
     const args = typeof changes?.["args"] === "string" ? changes["args"] : e.args;
@@ -6836,796 +6724,6 @@ function searchOptionsOf({ running, since, everyProject, before }) {
     ...everyProject === undefined ? {} : { everyProject },
     ...before === undefined ? {} : { before: { session: before.session, id: before.id } }
   };
-}
-
-// node_modules/@cmodjs/core/runtime/conversations.js
-var relayKinds = new Set(["act", "before", "answer", "watch", "goal", "taskEnd"]);
-var taskVariable = "CMOD_TASK";
-var isRelay = (value) => isObject(value) && relayKinds.has(value["kind"]);
-var bufferedTaskRows = 200;
-var beforeDeadlineMs = 5000;
-var awayFoldMs = 8000;
-var livenessMs = 5000;
-var keptClosings = 200;
-var keptMessages = 200;
-function serveConversations({ claude, router, store, project, report, clear }) {
-  const folder = dataFolder(store, cmodPluginName);
-  const goals = `${folder}/goals`;
-  const backgroundTasks = `${folder}/tasks`;
-  const watches = `${folder}/before`;
-  const listeners = `${folder}/listeners`;
-  const heard = new Map;
-  const subscribed = new Map;
-  let savingListeners = Promise.resolve();
-  const asked = new Map;
-  const ownWatches = new Map;
-  let watchers = [];
-  let watching = Promise.resolve();
-  let published = new Set;
-  let publishing = Promise.resolve();
-  let session = "";
-  let asks = 0;
-  let conversation = createConversation(emptyConversation(""));
-  let starting = Promise.resolve();
-  let live = [];
-  const liveIds = new Set;
-  const waitingRows = new Map;
-  let follower;
-  const engineTurns = new Map;
-  router.add("turn.start", async (e, next) => {
-    const agent = e.agentId ?? "";
-    engineTurns.set(agent, e.turnId);
-    return next(e);
-  });
-  const endTurn = (ending, task) => (below) => {
-    if (below.block !== undefined)
-      return below;
-    engineTurns.delete(task ?? "");
-    dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task));
-    return below;
-  };
-  router.add("classic.Stop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } })(await next(e)));
-  router.add("classic.StopFailure", async (e, next) => endTurn({ reason: "error", failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)));
-  router.add("classic.SubagentStop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } }, e.agent_id)(await next(e)));
-  router.add("classic.Stop", async (e, next) => {
-    const below = await next(e);
-    if (below.block === undefined)
-      answerTask().catch((error) => report("task", "Could not record that this session answered its task", error));
-    return below;
-  });
-  const json = async (args) => JSON.parse(await runCmod(claude, [...args, "--json", "--project", project()], await claude.session.id()));
-  const isGranted = async (caller, item) => {
-    if (caller === cmodPluginName)
-      return true;
-    if (caller === undefined)
-      return false;
-    const path = consentPath(store);
-    const text = await claude.fs.read(path).catch(ifMissing("{}"));
-    return (parseConsent(JSON.parse(text), path)[caller] ?? []).includes(item);
-  };
-  const ended = (id) => new Error(`session ${id} has ended`);
-  const isRunning = async (id) => (await json(["history", "sessions", "--running", "--all"])).some((each) => each.id === id);
-  let color = { session: "" };
-  let onColor = () => {
-    return;
-  };
-  const recolor = (id, picked) => {
-    if (session !== id)
-      return;
-    color = { session: id, ...picked === undefined ? {} : { color: picked } };
-    onColor(color);
-  };
-  const readColor = (id) => void json(["history", "sessions", "--running", "--all"]).then((running) => recolor(id, running.find((each) => each.id === id)?.color)).catch((error) => report("color", `Could not read the color of session ${id}`, error));
-  router.add("command.run", async (e, next) => {
-    const answer = await next(e);
-    if (e.command !== "color" || session === "")
-      return answer;
-    if (e.args.trim() === "")
-      readColor(session);
-    else
-      recolor(session, pickedColor(e.args));
-    return answer;
-  });
-  let lastTurn;
-  const closings = new Map;
-  const dispatch = (to, changes, isInProject = true) => {
-    for (const change of changes) {
-      if (to === session && (change.type === TurnStart || change.type === TurnEnd2) && change.turn.prompt.task === undefined)
-        lastTurn = change.turn;
-      if (change.type === Message && !liveIds.has(change.message.id) && to === session) {
-        live.push(change.message);
-        liveIds.add(change.message.id);
-        if (live.length > keptMessages)
-          liveIds.delete(live.shift()?.id ?? "");
-      }
-      for (const [mod, sessions2] of heard) {
-        const subscriptions = [...sessions2.get(to) ?? [], ...isInProject ? sessions2.get(everySession) ?? [] : []];
-        if (!subscriptions.some(({ event, matcher }) => isHeardBy(event, matcher, change)))
-          continue;
-        claude.cmod.call({ to: mod, method: conversationMethods.changed, input: { session: to, change, isInProject } }).then(() => clear(`changed:${mod}`), (error) => report(`changed:${mod}`, `Could not tell ${mod} about session ${to}`, error));
-      }
-    }
-  };
-  const restartFollower = async () => {
-    if (session === "")
-      return;
-    const wantsEvery = [...heard.values()].some((sessions2) => (sessions2.get(everySession) ?? []).length > 0);
-    const named = [...heard.values()].flatMap((sessions2) => [...sessions2].filter(([id, list]) => id !== session && id !== everySession && list.length > 0).map(([id]) => id));
-    const others = [...new Set(named)].sort();
-    const args = [...others, ...wantsEvery ? ["--running"] : []];
-    const wanted = [session, project(), ...args].join(" ");
-    if (follower?.sessions === wanted)
-      return;
-    follower?.stop();
-    follower = undefined;
-    if (args.length === 0)
-      return;
-    const stream = spawnCmod(claude, ["history", "follow", ...args, "--json", "--project", project()], session);
-    const started = { sessions: wanted, stop: () => void stream.return(undefined) };
-    follower = started;
-    readLines(stream, (line) => {
-      if (line.trim() === "")
-        return;
-      const parsed = JSON.parse(line);
-      dispatch(parsed.session, [parsed.change], parsed.isInProject);
-    }).then(({ code, lastError }) => {
-      if (follower === started)
-        throw new Error(`cmod history follow ${formatExit(code, lastError)}`);
-    }).catch((error) => {
-      if (follower !== started)
-        return;
-      follower = undefined;
-      report("follow", "Stopped hearing the other sessions", error);
-    });
-  };
-  const follow = () => void restartFollower().catch((error) => report("follow", "Stopped hearing the other sessions", error));
-  const post = async (to, relay) => {
-    const sent = await claude.session.send({ to: { sessionId: to }, text: `<cmod-relay>${JSON.stringify(relay)}</cmod-relay>` });
-    if (sent.isDelivered !== true)
-      throw ended(to);
-  };
-  const waitingOn = new Map;
-  let liveness;
-  let isChecking = false;
-  const checkLiveness = async () => {
-    if (isChecking)
-      return;
-    isChecking = true;
-    try {
-      const waiting = [...waitingOn];
-      const running = new Set((await json(["history", "sessions", "--running", "--all"])).map((each) => each.id));
-      for (const [settle, to] of waiting)
-        if (!running.has(to))
-          settle.reject(ended(to));
-    } finally {
-      isChecking = false;
-    }
-  };
-  const watchLife = (settle, to) => {
-    waitingOn.set(settle, to);
-    liveness ??= claude.clock.every(livenessMs, () => void checkLiveness().catch((error) => report("liveness", "Could not check which sessions still run", error)));
-    return {
-      cancel() {
-        waitingOn.delete(settle);
-        if (waitingOn.size > 0)
-          return;
-        liveness?.cancel();
-        liveness = undefined;
-      }
-    };
-  };
-  const ask = (to, relay, deadlineMs) => new Promise((resolve2, reject) => {
-    const id = `${session}:${asks += 1}`;
-    const settle = {
-      resolve(value) {
-        if (asked.delete(id))
-          timer.cancel();
-        resolve2(value);
-      },
-      reject(error) {
-        if (asked.delete(id))
-          timer.cancel();
-        reject(error);
-      }
-    };
-    const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new PassedTimeout(`session ${to} did not answer within ${deadlineMs / 1000} s`)));
-    asked.set(id, settle);
-    post(to, { ...relay, id, from: session }).catch((error) => settle.reject(error instanceof Error ? error : new Error(messageOf(error))));
-  });
-  const publishWatches = (isEnding = false) => {
-    const next = publishing.then(() => publishNow(isEnding));
-    publishing = next.catch((error) => claude.ui.log(`cmod: publishing before listeners failed: ${messageOf(error)}`, { to: "debug" }));
-    return next;
-  };
-  const publishNow = async (isEnding) => {
-    if (session === "")
-      return;
-    const list = isEnding ? [] : [...ownWatches.values()].filter((watch) => watch.events.length > 0);
-    await claude.fs.write(`${watches}/${session}.json`, JSON.stringify(list));
-    const targets = new Set([...published, ...list.map((watch) => watch.target)]);
-    published = new Set(list.map((watch) => watch.target));
-    const running = targets.has(everySession) ? (await json(["history", "sessions", "--running"])).map((each) => each.id) : [];
-    const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session));
-    await Promise.all([...told].map((id) => post(id, { kind: "watch" }).catch((error) => claude.ui.log(`cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`, { to: "debug" }))));
-  };
-  const hear = (caller, id, list) => {
-    const sessions2 = heard.get(caller) ?? new Map;
-    sessions2.set(id, list.map(({ event, matcher }) => ({ event, matcher: matcher === undefined ? undefined : receivedMatcher(matcher) })));
-    heard.set(caller, sessions2);
-    const lists = subscribed.get(caller) ?? new Map;
-    lists.set(id, list);
-    subscribed.set(caller, lists);
-  };
-  const saveListeners = (isEnding = false) => {
-    const at = session;
-    const kept = isEnding ? {} : Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)]));
-    const next = savingListeners.then(() => at === "" ? undefined : claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(kept)));
-    savingListeners = next.catch((error) => claude.ui.log(`cmod: saving the mods' listeners failed: ${messageOf(error)}`, { to: "debug" }));
-    return next;
-  };
-  const restoreListeners = async () => {
-    const kept = JSON.parse(await claude.fs.read(`${listeners}/${session}.json`).catch(ifMissing("{}")));
-    for (const [caller, lists] of Object.entries(kept))
-      if (!subscribed.has(caller))
-        for (const [id, list] of Object.entries(lists))
-          hear(caller, id, list);
-  };
-  const readWatchers = async () => {
-    const files = await claude.fs.list(watches).catch(ifMissing([]));
-    const found = [];
-    for (const file of files) {
-      const from = file.name.replace(/\.json$/, "");
-      if (!file.name.endsWith(".json"))
-        continue;
-      const list = JSON.parse(await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing("[]")));
-      if (from === session) {
-        for (const watch of list)
-          if (!ownWatches.has(`${watch.mod}
-${watch.target}`))
-            ownWatches.set(`${watch.mod}
-${watch.target}`, watch);
-        continue;
-      }
-      found.push(...list.filter((watch) => watch.target === session || watch.target === everySession && watch.project === project()).map((watch) => ({ ...watch, from })));
-    }
-    watchers = found;
-  };
-  const changeGoal = (task, text) => dispatch(session, task === undefined ? conversation.changeGoal(text) : [{ type: GoalChange, goal: { text, task } }]);
-  const reloadWatchers = () => {
-    watching = readWatchers().catch((error) => report("before", "Kept the other sessions’ before listeners from before", error));
-  };
-  const place = () => {
-    const { context, contextOpenedAt, turn, tasks, taskTurns, openCalls } = conversation.state;
-    return { session, context, contextOpenedAt, ...turn === undefined ? {} : { turn }, tasks, taskTurns, ...openCalls === undefined ? {} : { openCalls } };
-  };
-  const deciders = (event) => {
-    const all = [...[...ownWatches.values()].filter((watch) => watch.target === session || watch.target === everySession).map((watch) => ({ ...watch, from: session })), ...watchers];
-    return [...new Map(all.filter((watcher) => watcher.events.includes(event)).map((watcher) => [`${watcher.from}
-${watcher.mod}`, watcher])).values()];
-  };
-  const askHere = async (mod, event, change, from = session, isInProject = true) => {
-    if (from !== session && !await isGranted(mod, "conversation"))
-      throw new Error(`${mod} needs the conversation permission to change what happens in another session. ${grantFix}`);
-    return claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } });
-  };
-  const isUnderHere = (task, ancestor) => {
-    for (let at = task, steps = 0;at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1)
-      if (at === ancestor)
-        return true;
-    return false;
-  };
-  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard2, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard2, matcher === undefined ? undefined : receivedMatcher(matcher), change));
-  const askAway = async (watcher, event, change, endsAt) => {
-    try {
-      const leftMs = Math.min(beforeDeadlineMs, endsAt - await claude.clock.now());
-      if (leftMs <= 0)
-        throw new PassedTimeout(`the ${awayFoldMs / 1000} s cmod waits on other sessions ran out before session ${watcher.from} was asked`);
-      return await ask(watcher.from, { kind: "before", mod: watcher.mod, event, change, project: project() }, leftMs);
-    } catch (error) {
-      if (await isRunning(watcher.from)) {
-        if (error instanceof PassedTimeout && refuses(watcher, event, change))
-          return { refuse: `${watcher.mod}: ${error.message}` };
-        throw error;
-      }
-      watchers = watchers.filter((each) => each.from !== watcher.from);
-      claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: "debug" });
-      await claude.fs.write(`${watches}/${watcher.from}.json`, "[]");
-      return;
-    }
-  };
-  const wants = async (event) => {
-    await Promise.all([starting, watching]);
-    return deciders(event).length > 0;
-  };
-  const decide = () => {
-    let endsAt;
-    return (event, change) => foldBefore(event, change, deciders(event).map((watcher) => async (latest) => {
-      if (watcher.from === session)
-        return askHere(watcher.mod, event, latest);
-      endsAt ??= claude.clock.now().then((now) => now + awayFoldMs);
-      return askAway(watcher, event, latest, await endsAt);
-    }), (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error));
-  };
-  installBefore({
-    claude,
-    router,
-    hooks: {
-      place: async () => {
-        await starting;
-        return place();
-      },
-      wants,
-      fold: decide
-    }
-  });
-  const start = (id, source) => {
-    if (id === session)
-      return;
-    const previous = session;
-    session = id;
-    live = [];
-    liveIds.clear();
-    waitingRows.clear();
-    conversation = createConversation(emptyConversation(id));
-    const isNew = source === "startup" || source === "clear";
-    if (!isNew)
-      readColor(id);
-    starting = isNew ? Promise.resolve(dispatch(id, conversation.startContext(new Date().toISOString()))) : json(["history", "state", id]).then((state) => {
-      if (session === id)
-        conversation = createConversation({ ...emptyConversation(id), ...state });
-    }, (error) => report("state", `Starts session ${id} without its earlier turns`, error));
-    const restored = restoreListeners().catch((error) => report("listeners", "Could not read back the mods' listeners of this session", error)).then(follow);
-    starting = Promise.all([starting, restored]).then(() => {
-      return;
-    });
-    reloadWatchers();
-    if (subscribed.size > 0)
-      Promise.all([previous === "" ? undefined : claude.fs.write(`${listeners}/${previous}.json`, "{}"), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
-    if (ownWatches.size === 0)
-      return;
-    Promise.all([previous === "" ? undefined : claude.fs.write(`${watches}/${previous}.json`, "[]"), publishWatches()]).catch((error) => report("before", "Kept its before listeners on the session from before", error));
-  };
-  const take = async (row, task) => {
-    await starting;
-    if (task !== undefined && conversation.state.tasks[task] === undefined) {
-      const waiting = waitingRows.get(task) ?? [];
-      waiting.push(row);
-      waitingRows.set(task, waiting);
-      if (waiting.length < bufferedTaskRows)
-        return;
-      waitingRows.delete(task);
-      dispatch(session, conversation.startTask({ id: task, title: "", agentType: "general-purpose", openedBy: "", openedAt: row.at }));
-      for (const each of waiting)
-        dispatch(session, conversation.add(each, task));
-      return;
-    }
-    dispatch(session, conversation.add(row, task));
-    if (task !== undefined || row.type !== "system" || row.name !== "turn_duration" || lastTurn === undefined)
-      return;
-    closings.set(row.id, lastTurn);
-    if (closings.size > keptClosings)
-      closings.delete(closings.keys().next().value);
-  };
-  router.add("classic.SessionStart", async (e, next) => {
-    start(e.session_id, e.source);
-    return next(e);
-  });
-  router.add("classic.SessionEnd", async (e, next) => {
-    if (ownWatches.size > 0)
-      await publishWatches(true).catch((error) => report("before", "Left its before listeners registered", error));
-    if (subscribed.size > 0)
-      await saveListeners(true).catch((error) => report("follow", "Left its listeners registered", error));
-    return next(e);
-  });
-  const recordAppend = async (e, next) => {
-    const kept = await next(e);
-    if (kept.deny !== undefined || session === "")
-      return kept;
-    const cwd2 = e.message.type === "assistant" ? await claude.session.cwd() : "";
-    take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd2), e.agentId).catch((error) => report("append", "Missed a message", error));
-    return kept;
-  };
-  router.add("session.append", recordAppend, (e, _error, next) => recordAppend(e, next));
-  const recordCompaction = async (e, next) => {
-    const compacted = await next(e);
-    if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
-      return compacted;
-    const at = new Date().toISOString();
-    const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
-    take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
-    return compacted;
-  };
-  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
-  router.add("session.measure", async (e, next) => {
-    const measured = await next(e);
-    if (session !== "")
-      dispatch(session, [{ type: UsageChange, usage: await usageOf(claude) }]);
-    return measured;
-  });
-  const recordSpawn = async (e, next) => {
-    const spawned = await next(e);
-    if (spawned.deny !== undefined || spawned.agentId === undefined)
-      return spawned;
-    const id = spawned.agentId;
-    await starting;
-    const opened = { id, title: e.description, ...ownerOfSpawn(e.subagentType, session), model: spawned.model, openedBy: e.tool_use_id, openedAt: new Date().toISOString(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId } };
-    dispatch(session, conversation.startTask(opened));
-    const waiting = waitingRows.get(id) ?? [];
-    waitingRows.delete(id);
-    for (const row of waiting)
-      dispatch(session, conversation.add(row, id));
-    return spawned;
-  };
-  router.add("agent.spawn", recordSpawn, (e, _error, next) => recordSpawn(e, next));
-  router.add("session.receive", async (e, next) => {
-    const sent = relayOf(e);
-    if (sent === undefined)
-      return next(e);
-    const relay = JSON.parse(sent);
-    claude.clock.after(0, () => void (isRelay(relay) ? received(relay) : refuse(relay)).catch((error) => report("relay", "Could not answer another session", error)));
-    return { consumed: "cmod relay" };
-  });
-  const unknownTo = async (what) => new Error(`Session ${await claude.session.id()} runs cmod ${coreVersion}, which has no ${what}.`);
-  const refuse = async (relay) => {
-    if (!isObject(relay) || typeof relay["id"] !== "string" || typeof relay["from"] !== "string")
-      return;
-    await post(relay["from"], { kind: "answer", id: relay["id"], deny: (await unknownTo(`"${String(relay["kind"])}" relay`)).message });
-  };
-  const received = async (relay) => {
-    if (relay.kind === "answer") {
-      const waiting = asked.get(relay.id);
-      if (relay.deny === undefined)
-        waiting?.resolve(relay.value);
-      else
-        waiting?.reject(new Error(relay.deny));
-      return;
-    }
-    if (relay.kind === "watch")
-      return readWatchers();
-    if (relay.kind === "goal") {
-      await starting;
-      changeGoal(relay.task, relay.text);
-      return;
-    }
-    if (relay.kind === "taskEnd") {
-      await starting;
-      dispatch(session, conversation.endTask(relay.task, relay.task.closedAt ?? new Date().toISOString()));
-      return;
-    }
-    const answered = async (run) => {
-      try {
-        await post(relay.from, { kind: "answer", id: relay.id, value: await run() ?? null });
-      } catch (error) {
-        await post(relay.from, { kind: "answer", id: relay.id, deny: messageOf(error) });
-      }
-    };
-    if (relay.kind === "act")
-      return answered(async () => isAct(relay.action) ? perform(relay.caller, relay.action, relay.input, relay.task) : Promise.reject(await unknownTo(`"${String(relay.action)}" action`)));
-    return answered(() => askHere(relay.mod, relay.event, relay.change, relay.from, relay.project === project()));
-  };
-  const checkAct = async (caller, action, input) => {
-    const needed = actPermission(action, input);
-    if (needed !== undefined && !await isGranted(caller, needed))
-      throw new Error(`${caller} needs the ${needed} permission for ${action}. ${grantFix}`);
-  };
-  const perform = async (caller, action, input, task) => {
-    await checkAct(caller, action, input);
-    await starting;
-    if (action === "abort")
-      return abortTurn(input, task);
-    if (task !== undefined)
-      return performInTask(caller, action, input, task);
-    if (action === "usage")
-      return usageOf(claude);
-    if (action === "surfaces")
-      return [...await claude.session.surfaces()];
-    if (action === "send") {
-      const { type, text, as } = input;
-      if (as === Session)
-        throw new Error(`session ${session} cannot send as itself to itself.`);
-      const delivered = type === Note ? await claude.session.append({ message: { type: "user", content: [{ type: "text", text: modNote(caller, text) }] } }) : await claude.prompt.submit({ text, ...as === Person ? { asUser: true } : {} });
-      if ("deny" in delivered && typeof delivered.deny === "string")
-        throw new Error(`Claude Code refused the note: ${delivered.deny}`);
-      if ("drop" in delivered && typeof delivered.drop === "string")
-        throw new Error(`Claude Code dropped the prompt: ${delivered.drop}`);
-      return null;
-    }
-    if (action === "startTask")
-      return spawnTask(claude, input);
-    if (action === "fork")
-      return spawnTask(claude, input, session);
-    if (action === "startBackgroundTask")
-      return startBackground(input);
-    if (action === "clone")
-      return startBackground(input, session);
-    const { name, input: toolInput } = input;
-    return resultOf(place(), { name, input: toolInput, cwd: await claude.session.cwd() }, await claude.tool.call({ ...toolInput, tool: name }));
-  };
-  const abortTurn = async (input, task) => {
-    const turnId = engineTurns.get(task ?? "");
-    if (turnId === undefined)
-      throw new Error(`no turn is running in ${task === undefined ? `session ${session}` : `task ${task}`}.`);
-    const asked2 = isObject(input) ? input["turn"] : undefined;
-    const open = task === undefined ? conversation.state.turn : conversation.state.taskTurns[task];
-    if (open?.prompt.id !== asked2)
-      throw new Error(`turn ${String(asked2)} has ended, so there is nothing to abort.`);
-    await claude.turn.abort({ turnId });
-    return null;
-  };
-  const performInTask = async (caller, action, input, task) => {
-    const running = conversation.state.tasks[task];
-    if (action === "usage")
-      return json(["history", "usage", session, "--task", task]);
-    if (action === "surfaces")
-      return running === undefined || running.closedAt !== undefined ? [] : [...await claude.session.surfaces()];
-    if (action !== "send")
-      throw new Error(`cmod: ${action} runs only on a session's own main loop.`);
-    if (running === undefined || running.closedAt !== undefined)
-      throw ended(task);
-    const { type, text } = input;
-    const sent = await claude.session.send({ to: { agentId: task }, text: type === Note ? modNote(caller, text) : text });
-    if (sent.isDelivered !== true)
-      throw ended(task);
-    return null;
-  };
-  const startBackground = async (task, forkedFrom) => {
-    if (task.title.trim() === "")
-      throw new Error("a task needs a title.");
-    if (task.name !== undefined)
-      throw new Error("a background task takes no name.");
-    const fresh = forkedFrom === undefined ? task : {};
-    const asked2 = { id: "", title: task.title, ...forkedFrom === undefined ? {} : { forkedFrom }, ...fresh.agentType === undefined ? {} : { agentType: fresh.agentType }, ...fresh.model === undefined ? {} : { model: fresh.model }, openedBy: "", openedAt: new Date().toISOString(), isBackground: true };
-    const answer = await wants(TaskStart) ? await decide()(TaskStart, { type: TaskStart, task: { ...asked2, context: conversation.state.context } }) : undefined;
-    if (answer?.refuse !== undefined)
-      throw new Error(`a beforeTaskStart listener refused the task: ${answer.refuse}`);
-    const owner = forkedFrom === undefined ? answer?.owner ?? {} : {};
-    const folder2 = owner.cwd ?? fresh.cwd;
-    const here = await claude.session.cwd();
-    const args = [
-      "task",
-      "start",
-      "--title",
-      answer?.title ?? task.title,
-      ...forkedFrom === undefined ? [] : ["--clone"],
-      ...textArg("--agent", owner.agentType ?? fresh.agentType),
-      ...textArg("--model", owner.model ?? fresh.model),
-      "--cwd",
-      folder2 === undefined ? here : resolve(here, folder2),
-      "--json",
-      "--",
-      answer?.prompt ?? task.prompt
-    ];
-    const started = JSON.parse(await runCmod(claude, args, session));
-    dispatch(session, conversation.startTask(started));
-    return started;
-  };
-  const answerTask = async () => {
-    const { env } = await claude.settings.read();
-    const asked2 = isObject(env) ? env[taskVariable] : undefined;
-    if (typeof asked2 !== "string")
-      return;
-    const answered = `cmod:task-answered:${session}`;
-    if (await claude.store.get(answered) === true)
-      return;
-    await claude.store.set(answered, true);
-    const { session: from, ...task } = JSON.parse(asked2);
-    const ended2 = { ...task, id: session, closedAt: new Date().toISOString() };
-    await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended2));
-    await post(from, { kind: "taskEnd", task: ended2 }).catch((error) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: "debug" }));
-  };
-  const actElsewhere = async (caller, target, action, input, task) => {
-    await checkAct(caller, action, input);
-    const isLive = await isRunning(target);
-    if (!isLive && action === "usage")
-      return json(["history", "usage", target, ...task === undefined ? [] : ["--task", task]]);
-    if (!isLive && action === "surfaces")
-      return [];
-    if (!isLive)
-      throw ended(task ?? target);
-    if (action === "send" && task === undefined && input.as === Session) {
-      const sent = await claude.session.send({ to: { sessionId: target }, text: input.text });
-      if (sent.isDelivered !== true)
-        throw ended(target);
-      return null;
-    }
-    return ask(target, { kind: "act", caller, action, input, ...task === undefined ? {} : { task } });
-  };
-  const merged = (saved, kept, key) => {
-    const keptKeys = new Set(kept.map(key));
-    return [...saved.filter((item) => !keptKeys.has(key(item))), ...kept];
-  };
-  const liveTurns = (task) => {
-    const turn = typeof task === "string" ? conversation.state.taskTurns[task] : conversation.state.turn;
-    return turn === undefined ? [] : [turn];
-  };
-  const liveTasks = () => Object.values(conversation.state.tasks).map((task) => ({
-    id: task.id,
-    title: task.title,
-    ...task.agentType === undefined ? {} : { agentType: task.agentType },
-    ...task.model === undefined ? {} : { model: task.model },
-    openedBy: task.openedBy,
-    openedAt: task.openedAt,
-    ...task.closedAt === undefined ? {} : { closedAt: task.closedAt },
-    ...task.parent === undefined ? {} : { parent: task.parent },
-    ...task.forkedFrom === undefined ? {} : { forkedFrom: task.forkedFrom },
-    ...task.isBackground === true ? { isBackground: true } : {}
-  }));
-  const liveContext = (task) => {
-    if (typeof task === "string") {
-      const running = conversation.state.tasks[task];
-      return running === undefined ? [] : [{ number: running.context, openedAt: running.contextOpenedAt ?? running.openedAt, task, ...running.closedAt === undefined ? {} : { closedAt: running.closedAt } }];
-    }
-    const { context, contextOpenedAt } = conversation.state;
-    return context === 0 ? [] : [{ number: context, openedAt: contextOpenedAt }];
-  };
-  const lastOf = (items, last) => typeof last === "number" ? items.slice(-last) : [...items];
-  const isHeld = (kept, last) => typeof last === "number" && kept.length >= last;
-  const methods = {
-    async[conversationMethods.sessions](request) {
-      const found = await json(["history", "sessions", ...scopeArgs(request), ...request["running"] === true ? ["--running"] : []]);
-      return found.map((each) => each.id === session ? { ...each, isRunning: true } : each);
-    },
-    async[conversationMethods.search](request) {
-      const before = isObject(request["before"]) ? request["before"] : undefined;
-      const record = [...textArg("--session", request["session"]), ...textArg("--task", request["task"]), ...textArg("--turn", request["turn"]), ...countArg("--context", request["context"]), ...request["isAgent"] === true ? ["--agent"] : []];
-      return json(["history", "search", String(request["text"]), ...scopeArgs(request), ...record, ...request["running"] === true ? ["--running"] : [], ...before === undefined ? [] : ["--before", `${String(before["session"])}:${String(before["id"])}`]]);
-    },
-    async[conversationMethods.messages](request) {
-      const id = String(request["session"]);
-      const filters = [...textArg("--turn", request["turn"]), ...textArg("--task", request["task"]), ...textArg("--after", request["after"])];
-      const saved = () => json(["history", "messages", id, ...filters, ...countArg("--last", request["last"])]);
-      if (id !== session)
-        return saved();
-      await starting;
-      const fits = (message) => (request["turn"] === undefined || message.turn === request["turn"]) && message.task === request["task"];
-      const after = typeof request["after"] === "string" ? live.findIndex((message) => message.id === request["after"]) : -1;
-      const kept = live.slice(after + 1).filter(fits);
-      if (after >= 0 || isHeld(kept, request["last"]))
-        return lastOf(kept, request["last"]);
-      return lastOf(merged(await saved(), kept, (message) => message.id), request["last"]);
-    },
-    async[conversationMethods.turns](request) {
-      const id = String(request["session"]);
-      const saved = () => json(["history", "turns", id, ...textArg("--task", request["task"]), ...countArg("--context", request["context"]), ...countArg("--last", request["last"])]);
-      if (id !== session)
-        return saved();
-      await starting;
-      const kept = liveTurns(request["task"]).filter((turn) => request["context"] === undefined || turn.context === request["context"]);
-      if (isHeld(kept, request["last"]))
-        return lastOf(kept, request["last"]);
-      return lastOf(merged(await saved(), kept, (turn) => turn.prompt.id), request["last"]);
-    },
-    async[conversationMethods.contexts](request) {
-      const id = String(request["session"]);
-      const saved = await json(["history", "contexts", id, ...textArg("--task", request["task"])]).catch((error) => {
-        if (id === session && typeof request["task"] === "string")
-          return [];
-        throw error;
-      });
-      if (id !== session)
-        return saved;
-      await starting;
-      return merged(saved, liveContext(request["task"]), (context) => String(context.number));
-    },
-    async[conversationMethods.tasks](request) {
-      const id = String(request["session"]);
-      const isNested = request["all"] === true;
-      const saved = await json(["history", "tasks", id, ...isNested ? ["--nested"] : textArg("--task", request["task"])]);
-      if (id !== session)
-        return saved;
-      await starting;
-      const kept = liveTasks().filter((task) => isNested || task.parent === request["task"]);
-      const running = await claude.agent.list().catch((error) => (claude.ui.log(`cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`, { to: "debug" }), []));
-      const background = saved.flatMap(({ id: id2, status }) => status === undefined ? [] : [{ id: id2, status }]);
-      return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
-    },
-    async[conversationMethods.goal](request) {
-      const id = String(request["session"]);
-      const task = typeof request["task"] === "string" ? request["task"] : undefined;
-      if (id === session && task === undefined) {
-        await starting;
-        const text = conversation.state.goal;
-        if (text !== undefined)
-          return { text };
-      }
-      return json(["history", "goal", id, ...textArg("--task", task)]);
-    },
-    async[conversationMethods.updateGoal](request) {
-      const id = String(request["session"]);
-      const task = typeof request["task"] === "string" ? request["task"] : undefined;
-      const text = String(request["text"]);
-      await claude.fs.write(`${goals}/${task ?? id}.txt`, text);
-      await starting;
-      if (id === session)
-        changeGoal(task, text);
-      else {
-        dispatch(id, [{ type: GoalChange, goal: { text, ...task === undefined ? {} : { task } } }]);
-        await post(id, { kind: "goal", ...task === undefined ? {} : { task }, text }).catch((error) => claude.ui.log(`cmod: session ${id} keeps its goal until it starts again: ${messageOf(error)}`, { to: "debug" }));
-      }
-      return null;
-    },
-    async[conversationMethods.subscribe](request, caller) {
-      if (caller === undefined)
-        throw new Error("cmod hears no caller for this subscription.");
-      const id = String(request["session"]);
-      const list = Array.isArray(request["subscriptions"]) ? request["subscriptions"] : [];
-      hear(caller, id, list);
-      follow();
-      await saveListeners();
-      return null;
-    },
-    async[conversationMethods.watchBefore](request, caller) {
-      if (caller === undefined)
-        throw new Error("cmod hears no caller for this before listener.");
-      const target = String(request["session"]);
-      const list = Array.isArray(request["subscriptions"]) ? request["subscriptions"] : [];
-      ownWatches.set(`${caller}
-${target}`, { mod: caller, target, project: project(), events: [...new Set(list.map(({ event }) => event))], refusing: list.filter((each) => each.onFailure === "refuse") });
-      await publishWatches();
-      return null;
-    },
-    async[conversationMethods.act](request, caller) {
-      if (caller === undefined)
-        throw new Error("cmod hears no caller for this action.");
-      const target = String(request["session"]);
-      const action = String(request["action"]);
-      const task = typeof request["task"] === "string" ? request["task"] : undefined;
-      if (!isAct(action))
-        throw new Error(`cmod takes no action named ${action}.`);
-      if (target === await claude.session.id())
-        return perform(caller, action, request["input"], task);
-      return actElsewhere(caller, target, action, request["input"], task);
-    }
-  };
-  return {
-    turnClosedBy: (rowId) => closings.get(rowId),
-    color: () => color,
-    onColor(listener) {
-      onColor = listener;
-    },
-    moved() {
-      for (const [key, watch] of ownWatches)
-        ownWatches.set(key, { ...watch, project: project() });
-      publishWatches().catch((error) => report("before", "Kept its before listeners on the project from before", error));
-      reloadWatchers();
-      follow();
-    },
-    async answer(e) {
-      const method = methods[e.method];
-      if (method === undefined)
-        return;
-      const input = isObject(e.input) ? e.input : {};
-      const isDropping = (e.method === conversationMethods.subscribe || e.method === conversationMethods.watchBefore) && Array.isArray(input["subscriptions"]) && input["subscriptions"].length === 0;
-      if (e.method !== conversationMethods.act && !isDropping && input["session"] !== await claude.session.id() && !await isGranted(e.caller, "conversation"))
-        return { deny: `${e.caller ?? "A mod"} reads your conversations without your grant. ${grantFix}` };
-      try {
-        return { value: await method(input, e.caller) };
-      } catch (error) {
-        return { deny: messageOf(error) };
-      }
-    }
-  };
-}
-function scopeArgs(request) {
-  return [...typeof request["since"] === "string" ? ["--since", request["since"]] : [], ...request["everyProject"] === true ? ["--all"] : []];
-}
-function countArg(flag, value) {
-  return typeof value === "number" ? [flag, String(value)] : [];
-}
-function textArg(flag, value) {
-  return typeof value === "string" ? [flag, value] : [];
-}
-
-// node_modules/@cmodjs/core/runtime/engine.js
-var engines = new WeakMap;
-function keepEngine(mod, engine) {
-  engines.set(mod, engine);
-}
-function engineOf(mod) {
-  const engine = engines.get(mod);
-  if (engine === undefined)
-    throw new Error("This mod has not started, so it reaches no Claude Code calls yet.");
-  return engine;
 }
 
 // node_modules/@cmodjs/core/runtime/grants.js
@@ -7952,6 +7050,879 @@ function addressOf(url) {
 }
 function expanded(path, home) {
   return path.startsWith("~/") && home !== undefined ? `${home}${path.slice(1)}` : path;
+}
+
+// node_modules/@cmodjs/core/runtime/programs.js
+function lastLineOf(text) {
+  const trimmed = text.trim();
+  return trimmed === "" ? undefined : trimmed.slice(trimmed.lastIndexOf(`
+`) + 1).trim();
+}
+function cmodError(stderr, command) {
+  const line = lastLineOf(stderr) ?? "";
+  const prefix = `cmod ${command}: `;
+  return line.startsWith(prefix) ? line.slice(prefix.length) : line;
+}
+async function readLines(stream, onLine) {
+  let pending = "";
+  let lastError = "";
+  let piece = await stream.next();
+  while (piece.done !== true) {
+    if (piece.value.stream === "stderr") {
+      lastError = lastLineOf(piece.value.text) ?? lastError;
+    } else {
+      const lines = `${pending}${piece.value.text}`.split(`
+`);
+      pending = lines.pop() ?? "";
+      for (const text of lines)
+        onLine(text);
+    }
+    piece = await stream.next();
+  }
+  if (pending !== "")
+    onLine(pending);
+  return { code: piece.value.code, lastError };
+}
+function spawnCmod(claude, args, session, env = {}) {
+  return claude.process.spawn({ argv: ["cmod", ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } });
+}
+async function runCmod(claude, args, session) {
+  const lines = [];
+  const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line));
+  if (code !== 0)
+    throw new Error(cmodError(lastError, args[0]) || `cmod ${args.slice(0, 2).join(" ")} ${formatExit(code, "")}.`);
+  return lines.join(`
+`);
+}
+function locatingPrograms(claude) {
+  let folder;
+  let names = new Set;
+  const located = (argv) => {
+    const [name, ...rest] = argv;
+    return folder !== undefined && name !== undefined && (name === "cmod" || names.has(name)) ? [`${folder}/${name}`, ...rest] : argv;
+  };
+  return {
+    claude: {
+      ...claude,
+      process: {
+        run: (argv, init) => claude.process.run(located(argv), init),
+        spawn: (request) => claude.process.spawn({ ...request, argv: located(request.argv) })
+      }
+    },
+    async refresh() {
+      const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()]);
+      const programs = `${storeFolder({ HOME: home, XDG_DATA_HOME: dataHome })}/programs`;
+      names = new Set((await claude.fs.list(programs).catch(ifMissing([]))).map((entry) => entry.name));
+      folder = programs;
+    }
+  };
+}
+
+// node_modules/@cmodjs/core/runtime/conversations.js
+var relayKinds = new Set(["act", "before", "answer", "watch", "goal", "taskEnd"]);
+var taskVariable = "CMOD_TASK";
+var isRelay = (value) => isObject(value) && relayKinds.has(value["kind"]);
+var bufferedTaskRows = 200;
+var beforeDeadlineMs = 5000;
+var awayFoldMs = 8000;
+var livenessMs = 5000;
+var keptClosings = 200;
+var keptMessages = 200;
+function serveConversations({ claude, router, store, project, report, clear }) {
+  const folder = dataFolder(store, cmodPluginName);
+  const goals = `${folder}/goals`;
+  const backgroundTasks = `${folder}/tasks`;
+  const watches = `${folder}/before`;
+  const listeners = `${folder}/listeners`;
+  const heard = new Map;
+  const subscribed = new Map;
+  let savingListeners = Promise.resolve();
+  const asked = new Map;
+  const ownWatches = new Map;
+  let watchers = [];
+  let watching = Promise.resolve();
+  let published = new Set;
+  let publishing = Promise.resolve();
+  let session = "";
+  let asks = 0;
+  let conversation = createConversation(emptyConversation(""));
+  let starting = Promise.resolve();
+  let live = [];
+  const liveIds = new Set;
+  const waitingRows = new Map;
+  let follower;
+  const engineTurns = new Map;
+  router.add("turn.start", async (e, next) => {
+    const agent = e.agentId ?? "";
+    engineTurns.set(agent, e.turnId);
+    return next(e);
+  });
+  const endTurn = (ending, task) => (below) => {
+    if (below.block !== undefined)
+      return below;
+    engineTurns.delete(task ?? "");
+    dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task));
+    return below;
+  };
+  router.add("classic.Stop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } })(await next(e)));
+  router.add("classic.StopFailure", async (e, next) => endTurn({ reason: "error", failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)));
+  router.add("classic.SubagentStop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } }, e.agent_id)(await next(e)));
+  router.add("classic.Stop", async (e, next) => {
+    const below = await next(e);
+    if (below.block === undefined)
+      answerTask().catch((error) => report("task", "Could not record that this session answered its task", error));
+    return below;
+  });
+  const json = async (args) => JSON.parse(await runCmod(claude, [...args, "--json", "--project", project()], await claude.session.id()));
+  const isGranted = async (caller, item) => {
+    if (caller === cmodPluginName)
+      return true;
+    if (caller === undefined)
+      return false;
+    const path = consentPath(store);
+    const text = await claude.fs.read(path).catch(ifMissing("{}"));
+    return (parseConsent(JSON.parse(text), path)[caller] ?? []).includes(item);
+  };
+  const declaredBy = async (caller) => {
+    const read = (path) => claude.fs.read(path).catch(ifMissing(undefined));
+    const record = await readRecord(read, store, caller);
+    if (record === undefined)
+      return;
+    if (record.permissions !== null)
+      return record.permissions;
+    const pkg = await read(`${record.root}/package.json`);
+    return pkg === undefined ? undefined : readSteps(JSON.parse(pkg))?.permissions ?? [];
+  };
+  const refused = async (caller, call, item) => {
+    const declared = caller === undefined ? undefined : await declaredBy(caller).catch((error) => {
+      claude.ui.log(`cmod: its refusal of ${caller} names the grant, because the permissions ${caller} declares are unreadable: ${messageOf(error)}`, { to: "debug" });
+      return;
+    });
+    return refusal({ name: caller ?? "A mod", declared: declared ?? [item], home: undefined }, call, item);
+  };
+  const ended = (id) => new Error(`session ${id} has ended`);
+  const isRunning = async (id) => (await json(["history", "sessions", "--running", "--all"])).some((each) => each.id === id);
+  let color = { session: "" };
+  let onColor = () => {
+    return;
+  };
+  const recolor = (id, picked) => {
+    if (session !== id)
+      return;
+    color = { session: id, ...picked === undefined ? {} : { color: picked } };
+    onColor(color);
+  };
+  const readColor = (id) => void json(["history", "sessions", "--running", "--all"]).then((running) => recolor(id, running.find((each) => each.id === id)?.color)).catch((error) => report("color", `Could not read the color of session ${id}`, error));
+  router.add("command.run", async (e, next) => {
+    const answer = await next(e);
+    if (e.command !== "color" || session === "")
+      return answer;
+    if (e.args.trim() === "")
+      readColor(session);
+    else
+      recolor(session, pickedColor(e.args));
+    return answer;
+  });
+  let lastTurn;
+  const closings = new Map;
+  const dispatch = (to, changes, isInProject = true) => {
+    for (const change of changes) {
+      if (to === session && (change.type === TurnStart || change.type === TurnEnd2) && change.turn.prompt.task === undefined)
+        lastTurn = change.turn;
+      if (change.type === Message && !liveIds.has(change.message.id) && to === session) {
+        live.push(change.message);
+        liveIds.add(change.message.id);
+        if (live.length > keptMessages)
+          liveIds.delete(live.shift()?.id ?? "");
+      }
+      for (const [mod, sessions2] of heard) {
+        const subscriptions = [...sessions2.get(to) ?? [], ...isInProject ? sessions2.get(everySession) ?? [] : []];
+        if (!subscriptions.some(({ event, matcher }) => isHeardBy(event, matcher, change)))
+          continue;
+        claude.cmod.call({ to: mod, method: conversationMethods.changed, input: { session: to, change, isInProject } }).then(() => clear(`changed:${mod}`), (error) => report(`changed:${mod}`, `Could not tell ${mod} about session ${to}`, error));
+      }
+    }
+  };
+  const restartFollower = async () => {
+    if (session === "")
+      return;
+    const wantsEvery = [...heard.values()].some((sessions2) => (sessions2.get(everySession) ?? []).length > 0);
+    const named = [...heard.values()].flatMap((sessions2) => [...sessions2].filter(([id, list]) => id !== session && id !== everySession && list.length > 0).map(([id]) => id));
+    const others = [...new Set(named)].sort();
+    const args = [...others, ...wantsEvery ? ["--running"] : []];
+    const wanted = [session, project(), ...args].join(" ");
+    if (follower?.sessions === wanted)
+      return;
+    follower?.stop();
+    follower = undefined;
+    if (args.length === 0)
+      return;
+    const stream = spawnCmod(claude, ["history", "follow", ...args, "--json", "--project", project()], session);
+    const started = { sessions: wanted, stop: () => void stream.return(undefined) };
+    follower = started;
+    readLines(stream, (line) => {
+      if (line.trim() === "")
+        return;
+      const parsed = JSON.parse(line);
+      dispatch(parsed.session, [parsed.change], parsed.isInProject);
+    }).then(({ code, lastError }) => {
+      if (follower === started)
+        throw new Error(`cmod history follow ${formatExit(code, lastError)}`);
+    }).catch((error) => {
+      if (follower !== started)
+        return;
+      follower = undefined;
+      report("follow", "Stopped hearing the other sessions", error);
+    });
+  };
+  const follow = () => void restartFollower().catch((error) => report("follow", "Stopped hearing the other sessions", error));
+  const post = async (to, relay) => {
+    const sent = await claude.session.send({ to: { sessionId: to }, text: `<cmod-relay>${JSON.stringify(relay)}</cmod-relay>` });
+    if (sent.isDelivered !== true)
+      throw ended(to);
+  };
+  const waitingOn = new Map;
+  let liveness;
+  let isChecking = false;
+  const checkLiveness = async () => {
+    if (isChecking)
+      return;
+    isChecking = true;
+    try {
+      const waiting = [...waitingOn];
+      const running = new Set((await json(["history", "sessions", "--running", "--all"])).map((each) => each.id));
+      for (const [settle, to] of waiting)
+        if (!running.has(to))
+          settle.reject(ended(to));
+    } finally {
+      isChecking = false;
+    }
+  };
+  const watchLife = (settle, to) => {
+    waitingOn.set(settle, to);
+    liveness ??= claude.clock.every(livenessMs, () => void checkLiveness().catch((error) => report("liveness", "Could not check which sessions still run", error)));
+    return {
+      cancel() {
+        waitingOn.delete(settle);
+        if (waitingOn.size > 0)
+          return;
+        liveness?.cancel();
+        liveness = undefined;
+      }
+    };
+  };
+  const ask = (to, relay, deadlineMs) => new Promise((resolve2, reject) => {
+    const id = `${session}:${asks += 1}`;
+    const settle = {
+      resolve(value) {
+        if (asked.delete(id))
+          timer.cancel();
+        resolve2(value);
+      },
+      reject(error) {
+        if (asked.delete(id))
+          timer.cancel();
+        reject(error);
+      }
+    };
+    const timer = deadlineMs === undefined ? watchLife(settle, to) : claude.clock.after(deadlineMs, () => settle.reject(new PassedTimeout(`session ${to} did not answer within ${deadlineMs / 1000} s`)));
+    asked.set(id, settle);
+    post(to, { ...relay, id, from: session }).catch((error) => settle.reject(error instanceof Error ? error : new Error(messageOf(error))));
+  });
+  const publishWatches = (isEnding = false) => {
+    const next = publishing.then(() => publishNow(isEnding));
+    publishing = next.catch((error) => claude.ui.log(`cmod: publishing before listeners failed: ${messageOf(error)}`, { to: "debug" }));
+    return next;
+  };
+  const publishNow = async (isEnding) => {
+    if (session === "")
+      return;
+    const list = isEnding ? [] : [...ownWatches.values()].filter((watch) => watch.events.length > 0);
+    await claude.fs.write(`${watches}/${session}.json`, JSON.stringify(list));
+    const targets = new Set([...published, ...list.map((watch) => watch.target)]);
+    published = new Set(list.map((watch) => watch.target));
+    const running = targets.has(everySession) ? (await json(["history", "sessions", "--running"])).map((each) => each.id) : [];
+    const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session));
+    await Promise.all([...told].map((id) => post(id, { kind: "watch" }).catch((error) => claude.ui.log(`cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`, { to: "debug" }))));
+  };
+  const hear = (caller, id, list) => {
+    const sessions2 = heard.get(caller) ?? new Map;
+    sessions2.set(id, list.map(({ event, matcher }) => ({ event, matcher: matcher === undefined ? undefined : receivedMatcher(matcher) })));
+    heard.set(caller, sessions2);
+    const lists = subscribed.get(caller) ?? new Map;
+    lists.set(id, list);
+    subscribed.set(caller, lists);
+  };
+  const saveListeners = (isEnding = false) => {
+    const at = session;
+    const kept = isEnding ? {} : Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)]));
+    const next = savingListeners.then(() => at === "" ? undefined : claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(kept)));
+    savingListeners = next.catch((error) => claude.ui.log(`cmod: saving the mods' listeners failed: ${messageOf(error)}`, { to: "debug" }));
+    return next;
+  };
+  const restoreListeners = async () => {
+    const kept = JSON.parse(await claude.fs.read(`${listeners}/${session}.json`).catch(ifMissing("{}")));
+    for (const [caller, lists] of Object.entries(kept))
+      if (!subscribed.has(caller))
+        for (const [id, list] of Object.entries(lists))
+          hear(caller, id, list);
+  };
+  const readWatchers = async () => {
+    const files = await claude.fs.list(watches).catch(ifMissing([]));
+    const found = [];
+    for (const file of files) {
+      const from = file.name.replace(/\.json$/, "");
+      if (!file.name.endsWith(".json"))
+        continue;
+      const list = JSON.parse(await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing("[]")));
+      if (from === session) {
+        for (const watch of list)
+          if (!ownWatches.has(`${watch.mod}
+${watch.target}`))
+            ownWatches.set(`${watch.mod}
+${watch.target}`, watch);
+        continue;
+      }
+      found.push(...list.filter((watch) => watch.target === session || watch.target === everySession && watch.project === project()).map((watch) => ({ ...watch, from })));
+    }
+    watchers = found;
+  };
+  const changeGoal = (task, text) => dispatch(session, task === undefined ? conversation.changeGoal(text) : [{ type: GoalChange, goal: { text, task } }]);
+  const reloadWatchers = () => {
+    watching = readWatchers().catch((error) => report("before", "Kept the other sessions’ before listeners from before", error));
+  };
+  const place = () => {
+    const { context, contextOpenedAt, turn, tasks, taskTurns, openCalls } = conversation.state;
+    return { session, context, contextOpenedAt, ...turn === undefined ? {} : { turn }, tasks, taskTurns, ...openCalls === undefined ? {} : { openCalls } };
+  };
+  const deciders = (event) => {
+    const all = [...[...ownWatches.values()].filter((watch) => watch.target === session || watch.target === everySession).map((watch) => ({ ...watch, from: session })), ...watchers];
+    return [...new Map(all.filter((watcher) => watcher.events.includes(event)).map((watcher) => [`${watcher.from}
+${watcher.mod}`, watcher])).values()];
+  };
+  const askHere = async (mod, event, change, from = session, isInProject = true) => {
+    if (from !== session && !await isGranted(mod, "conversation"))
+      throw new Error(await refused(mod, "before", "conversation"));
+    return claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } });
+  };
+  const isUnderHere = (task, ancestor) => {
+    for (let at = task, steps = 0;at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1)
+      if (at === ancestor)
+        return true;
+    return false;
+  };
+  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard2, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard2, matcher === undefined ? undefined : receivedMatcher(matcher), change));
+  const askAway = async (watcher, event, change, endsAt) => {
+    try {
+      const leftMs = Math.min(beforeDeadlineMs, endsAt - await claude.clock.now());
+      if (leftMs <= 0)
+        throw new PassedTimeout(`the ${awayFoldMs / 1000} s cmod waits on other sessions ran out before session ${watcher.from} was asked`);
+      return await ask(watcher.from, { kind: "before", mod: watcher.mod, event, change, project: project() }, leftMs);
+    } catch (error) {
+      if (await isRunning(watcher.from)) {
+        if (error instanceof PassedTimeout && refuses(watcher, event, change))
+          return { refuse: `${watcher.mod}: ${error.message}` };
+        throw error;
+      }
+      watchers = watchers.filter((each) => each.from !== watcher.from);
+      claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: "debug" });
+      await claude.fs.write(`${watches}/${watcher.from}.json`, "[]");
+      return;
+    }
+  };
+  const wants = async (event) => {
+    await Promise.all([starting, watching]);
+    return deciders(event).length > 0;
+  };
+  const decide = () => {
+    let endsAt;
+    return (event, change) => foldBefore(event, change, deciders(event).map((watcher) => async (latest) => {
+      if (watcher.from === session)
+        return askHere(watcher.mod, event, latest);
+      endsAt ??= claude.clock.now().then((now) => now + awayFoldMs);
+      return askAway(watcher, event, latest, await endsAt);
+    }), (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error));
+  };
+  installBefore({
+    claude,
+    router,
+    hooks: {
+      place: async () => {
+        await starting;
+        return place();
+      },
+      wants,
+      fold: decide
+    }
+  });
+  const start = (id, source) => {
+    if (id === session)
+      return;
+    const previous = session;
+    session = id;
+    live = [];
+    liveIds.clear();
+    waitingRows.clear();
+    conversation = createConversation(emptyConversation(id));
+    const isNew = source === "startup" || source === "clear";
+    if (!isNew)
+      readColor(id);
+    starting = isNew ? Promise.resolve(dispatch(id, conversation.startContext(new Date().toISOString()))) : json(["history", "state", id]).then((state) => {
+      if (session === id)
+        conversation = createConversation({ ...emptyConversation(id), ...state });
+    }, (error) => report("state", `Starts session ${id} without its earlier turns`, error));
+    const restored = restoreListeners().catch((error) => report("listeners", "Could not read back the mods' listeners of this session", error)).then(follow);
+    starting = Promise.all([starting, restored]).then(() => {
+      return;
+    });
+    reloadWatchers();
+    if (subscribed.size > 0)
+      Promise.all([previous === "" ? undefined : claude.fs.write(`${listeners}/${previous}.json`, "{}"), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
+    if (ownWatches.size === 0)
+      return;
+    Promise.all([previous === "" ? undefined : claude.fs.write(`${watches}/${previous}.json`, "[]"), publishWatches()]).catch((error) => report("before", "Kept its before listeners on the session from before", error));
+  };
+  const take = async (row, task) => {
+    await starting;
+    if (task !== undefined && conversation.state.tasks[task] === undefined) {
+      const waiting = waitingRows.get(task) ?? [];
+      waiting.push(row);
+      waitingRows.set(task, waiting);
+      if (waiting.length < bufferedTaskRows)
+        return;
+      waitingRows.delete(task);
+      dispatch(session, conversation.startTask({ id: task, title: "", agentType: "general-purpose", openedBy: "", openedAt: row.at }));
+      for (const each of waiting)
+        dispatch(session, conversation.add(each, task));
+      return;
+    }
+    dispatch(session, conversation.add(row, task));
+    if (task !== undefined || row.type !== "system" || row.name !== "turn_duration" || lastTurn === undefined)
+      return;
+    closings.set(row.id, lastTurn);
+    if (closings.size > keptClosings)
+      closings.delete(closings.keys().next().value);
+  };
+  router.add("classic.SessionStart", async (e, next) => {
+    start(e.session_id, e.source);
+    return next(e);
+  });
+  router.add("classic.SessionEnd", async (e, next) => {
+    if (ownWatches.size > 0)
+      await publishWatches(true).catch((error) => report("before", "Left its before listeners registered", error));
+    if (subscribed.size > 0)
+      await saveListeners(true).catch((error) => report("follow", "Left its listeners registered", error));
+    return next(e);
+  });
+  const recordAppend = async (e, next) => {
+    const kept = await next(e);
+    if (kept.deny !== undefined || session === "")
+      return kept;
+    const cwd2 = e.message.type === "assistant" ? await claude.session.cwd() : "";
+    take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd2), e.agentId).catch((error) => report("append", "Missed a message", error));
+    return kept;
+  };
+  router.add("session.append", recordAppend, (e, _error, next) => recordAppend(e, next));
+  const recordCompaction = async (e, next) => {
+    const compacted = await next(e);
+    if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
+      return compacted;
+    const at = new Date().toISOString();
+    const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
+    take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
+    return compacted;
+  };
+  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
+  router.add("session.measure", async (e, next) => {
+    const measured = await next(e);
+    if (session !== "")
+      dispatch(session, [{ type: UsageChange, usage: await usageOf(claude) }]);
+    return measured;
+  });
+  const recordSpawn = async (e, next) => {
+    const spawned2 = await next(e);
+    if (spawned2.deny !== undefined || spawned2.agentId === undefined)
+      return spawned2;
+    const id = spawned2.agentId;
+    await starting;
+    const opened = { id, title: e.description, ...ownerOfSpawn(e.subagentType, session), model: spawned2.model, openedBy: e.tool_use_id, openedAt: new Date().toISOString(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId } };
+    dispatch(session, conversation.startTask(opened));
+    const waiting = waitingRows.get(id) ?? [];
+    waitingRows.delete(id);
+    for (const row of waiting)
+      dispatch(session, conversation.add(row, id));
+    return spawned2;
+  };
+  router.add("agent.spawn", recordSpawn, (e, _error, next) => recordSpawn(e, next));
+  router.add("session.receive", async (e, next) => {
+    const sent = relayOf(e);
+    if (sent === undefined)
+      return next(e);
+    const relay = JSON.parse(sent);
+    claude.clock.after(0, () => void (isRelay(relay) ? received(relay) : refuse(relay)).catch((error) => report("relay", "Could not answer another session", error)));
+    return { consumed: "cmod relay" };
+  });
+  const unknownTo = async (what) => new Error(`Session ${await claude.session.id()} runs cmod ${coreVersion}, which has no ${what}.`);
+  const refuse = async (relay) => {
+    if (!isObject(relay) || typeof relay["id"] !== "string" || typeof relay["from"] !== "string")
+      return;
+    await post(relay["from"], { kind: "answer", id: relay["id"], deny: (await unknownTo(`"${String(relay["kind"])}" relay`)).message });
+  };
+  const received = async (relay) => {
+    if (relay.kind === "answer") {
+      const waiting = asked.get(relay.id);
+      if (relay.deny === undefined)
+        waiting?.resolve(relay.value);
+      else
+        waiting?.reject(new Error(relay.deny));
+      return;
+    }
+    if (relay.kind === "watch")
+      return readWatchers();
+    if (relay.kind === "goal") {
+      await starting;
+      changeGoal(relay.task, relay.text);
+      return;
+    }
+    if (relay.kind === "taskEnd") {
+      await starting;
+      dispatch(session, conversation.endTask(relay.task, relay.task.closedAt ?? new Date().toISOString()));
+      return;
+    }
+    const answered = async (run) => {
+      try {
+        await post(relay.from, { kind: "answer", id: relay.id, value: await run() ?? null });
+      } catch (error) {
+        await post(relay.from, { kind: "answer", id: relay.id, deny: messageOf(error) });
+      }
+    };
+    if (relay.kind === "act")
+      return answered(async () => isAct(relay.action) ? perform(relay.caller, relay.action, relay.input, relay.task) : Promise.reject(await unknownTo(`"${String(relay.action)}" action`)));
+    return answered(() => askHere(relay.mod, relay.event, relay.change, relay.from, relay.project === project()));
+  };
+  const checkAct = async (caller, action, input) => {
+    const needed = actPermission(action, input);
+    if (needed !== undefined && !await isGranted(caller, needed))
+      throw new Error(await refused(caller, action, needed));
+  };
+  const perform = async (caller, action, input, task) => {
+    await checkAct(caller, action, input);
+    await starting;
+    if (action === "abort")
+      return abortTurn(input, task);
+    if (task !== undefined)
+      return performInTask(caller, action, input, task);
+    if (action === "usage")
+      return usageOf(claude);
+    if (action === "surfaces")
+      return [...await claude.session.surfaces()];
+    if (action === "send") {
+      const { type, text, as } = input;
+      if (as === Session)
+        throw new Error(`session ${session} cannot send as itself to itself.`);
+      const delivered = type === Note ? await claude.session.append({ message: { type: "user", content: [{ type: "text", text: modNote(caller, text) }] } }) : await claude.prompt.submit({ text, ...as === Person ? { asUser: true } : {} });
+      if ("deny" in delivered && typeof delivered.deny === "string")
+        throw new Error(`Claude Code refused the note: ${delivered.deny}`);
+      if ("drop" in delivered && typeof delivered.drop === "string")
+        throw new Error(`Claude Code dropped the prompt: ${delivered.drop}`);
+      return null;
+    }
+    if (action === "startTask")
+      return spawnTask(claude, input);
+    if (action === "fork")
+      return spawnTask(claude, input, session);
+    if (action === "startBackgroundTask")
+      return startBackground(input);
+    if (action === "clone")
+      return startBackground(input, session);
+    const { name, input: toolInput } = input;
+    return resultOf(place(), { name, input: toolInput, cwd: await claude.session.cwd() }, await claude.tool.call({ ...toolInput, tool: name }));
+  };
+  const abortTurn = async (input, task) => {
+    const turnId = engineTurns.get(task ?? "");
+    if (turnId === undefined)
+      throw new Error(`no turn is running in ${task === undefined ? `session ${session}` : `task ${task}`}.`);
+    const asked2 = isObject(input) ? input["turn"] : undefined;
+    const open = task === undefined ? conversation.state.turn : conversation.state.taskTurns[task];
+    if (open?.prompt.id !== asked2)
+      throw new Error(`turn ${String(asked2)} has ended, so there is nothing to abort.`);
+    await claude.turn.abort({ turnId });
+    return null;
+  };
+  const performInTask = async (caller, action, input, task) => {
+    const running = conversation.state.tasks[task];
+    if (action === "usage")
+      return json(["history", "usage", session, "--task", task]);
+    if (action === "surfaces")
+      return running === undefined || running.closedAt !== undefined ? [] : [...await claude.session.surfaces()];
+    if (action !== "send")
+      throw new Error(`cmod: ${action} runs only on a session's own main loop.`);
+    if (running === undefined || running.closedAt !== undefined)
+      throw ended(task);
+    const { type, text } = input;
+    const sent = await claude.session.send({ to: { agentId: task }, text: type === Note ? modNote(caller, text) : text });
+    if (sent.isDelivered !== true)
+      throw ended(task);
+    return null;
+  };
+  const startBackground = async (task, forkedFrom) => {
+    if (task.title.trim() === "")
+      throw new Error("a task needs a title.");
+    if (task.name !== undefined)
+      throw new Error("a background task takes no name.");
+    const fresh = forkedFrom === undefined ? task : {};
+    const asked2 = { id: "", title: task.title, ...forkedFrom === undefined ? {} : { forkedFrom }, ...fresh.agentType === undefined ? {} : { agentType: fresh.agentType }, ...fresh.model === undefined ? {} : { model: fresh.model }, openedBy: "", openedAt: new Date().toISOString(), isBackground: true };
+    const answer = await wants(TaskStart) ? await decide()(TaskStart, { type: TaskStart, task: { ...asked2, context: conversation.state.context } }) : undefined;
+    if (answer?.refuse !== undefined)
+      throw new Error(`a beforeTaskStart listener refused the task: ${answer.refuse}`);
+    const owner = forkedFrom === undefined ? answer?.owner ?? {} : {};
+    const folder2 = owner.cwd ?? fresh.cwd;
+    const here = await claude.session.cwd();
+    const args = [
+      "task",
+      "start",
+      "--title",
+      answer?.title ?? task.title,
+      ...forkedFrom === undefined ? [] : ["--clone"],
+      ...textArg("--agent", owner.agentType ?? fresh.agentType),
+      ...textArg("--model", owner.model ?? fresh.model),
+      "--cwd",
+      folder2 === undefined ? here : resolve(here, folder2),
+      "--json",
+      "--",
+      answer?.prompt ?? task.prompt
+    ];
+    const started = JSON.parse(await runCmod(claude, args, session));
+    dispatch(session, conversation.startTask(started));
+    return started;
+  };
+  const answerTask = async () => {
+    const { env } = await claude.settings.read();
+    const asked2 = isObject(env) ? env[taskVariable] : undefined;
+    if (typeof asked2 !== "string")
+      return;
+    const answered = `cmod:task-answered:${session}`;
+    if (await claude.store.get(answered) === true)
+      return;
+    await claude.store.set(answered, true);
+    const { session: from, ...task } = JSON.parse(asked2);
+    const ended2 = { ...task, id: session, closedAt: new Date().toISOString() };
+    await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended2));
+    await post(from, { kind: "taskEnd", task: ended2 }).catch((error) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: "debug" }));
+  };
+  const actElsewhere = async (caller, target, action, input, task) => {
+    await checkAct(caller, action, input);
+    const isLive = await isRunning(target);
+    if (!isLive && action === "usage")
+      return json(["history", "usage", target, ...task === undefined ? [] : ["--task", task]]);
+    if (!isLive && action === "surfaces")
+      return [];
+    if (!isLive)
+      throw ended(task ?? target);
+    if (action === "send" && task === undefined && input.as === Session) {
+      const sent = await claude.session.send({ to: { sessionId: target }, text: input.text });
+      if (sent.isDelivered !== true)
+        throw ended(target);
+      return null;
+    }
+    return ask(target, { kind: "act", caller, action, input, ...task === undefined ? {} : { task } });
+  };
+  const merged = (saved, kept, key) => {
+    const keptKeys = new Set(kept.map(key));
+    return [...saved.filter((item) => !keptKeys.has(key(item))), ...kept];
+  };
+  const liveTurns = (task) => {
+    const turn = typeof task === "string" ? conversation.state.taskTurns[task] : conversation.state.turn;
+    return turn === undefined ? [] : [turn];
+  };
+  const liveTasks = () => Object.values(conversation.state.tasks).map((task) => ({
+    id: task.id,
+    title: task.title,
+    ...task.agentType === undefined ? {} : { agentType: task.agentType },
+    ...task.model === undefined ? {} : { model: task.model },
+    openedBy: task.openedBy,
+    openedAt: task.openedAt,
+    ...task.closedAt === undefined ? {} : { closedAt: task.closedAt },
+    ...task.parent === undefined ? {} : { parent: task.parent },
+    ...task.forkedFrom === undefined ? {} : { forkedFrom: task.forkedFrom },
+    ...task.isBackground === true ? { isBackground: true } : {}
+  }));
+  const liveContext = (task) => {
+    if (typeof task === "string") {
+      const running = conversation.state.tasks[task];
+      return running === undefined ? [] : [{ number: running.context, openedAt: running.contextOpenedAt ?? running.openedAt, task, ...running.closedAt === undefined ? {} : { closedAt: running.closedAt } }];
+    }
+    const { context, contextOpenedAt } = conversation.state;
+    return context === 0 ? [] : [{ number: context, openedAt: contextOpenedAt }];
+  };
+  const lastOf = (items, last) => typeof last === "number" ? items.slice(-last) : [...items];
+  const isHeld = (kept, last) => typeof last === "number" && kept.length >= last;
+  const methods = {
+    async[conversationMethods.sessions](request) {
+      const found = await json(["history", "sessions", ...scopeArgs(request), ...request["running"] === true ? ["--running"] : []]);
+      return found.map((each) => each.id === session ? { ...each, isRunning: true } : each);
+    },
+    async[conversationMethods.search](request) {
+      const before = isObject(request["before"]) ? request["before"] : undefined;
+      const record = [...textArg("--session", request["session"]), ...textArg("--task", request["task"]), ...textArg("--turn", request["turn"]), ...countArg("--context", request["context"]), ...request["isAgent"] === true ? ["--agent"] : []];
+      return json(["history", "search", String(request["text"]), ...scopeArgs(request), ...record, ...request["running"] === true ? ["--running"] : [], ...before === undefined ? [] : ["--before", `${String(before["session"])}:${String(before["id"])}`]]);
+    },
+    async[conversationMethods.messages](request) {
+      const id = String(request["session"]);
+      const filters = [...textArg("--turn", request["turn"]), ...textArg("--task", request["task"]), ...textArg("--after", request["after"])];
+      const saved = () => json(["history", "messages", id, ...filters, ...countArg("--last", request["last"])]);
+      if (id !== session)
+        return saved();
+      await starting;
+      const fits = (message) => (request["turn"] === undefined || message.turn === request["turn"]) && message.task === request["task"];
+      const after = typeof request["after"] === "string" ? live.findIndex((message) => message.id === request["after"]) : -1;
+      const kept = live.slice(after + 1).filter(fits);
+      if (after >= 0 || isHeld(kept, request["last"]))
+        return lastOf(kept, request["last"]);
+      return lastOf(merged(await saved(), kept, (message) => message.id), request["last"]);
+    },
+    async[conversationMethods.turns](request) {
+      const id = String(request["session"]);
+      const saved = () => json(["history", "turns", id, ...textArg("--task", request["task"]), ...countArg("--context", request["context"]), ...countArg("--last", request["last"])]);
+      if (id !== session)
+        return saved();
+      await starting;
+      const kept = liveTurns(request["task"]).filter((turn) => request["context"] === undefined || turn.context === request["context"]);
+      if (isHeld(kept, request["last"]))
+        return lastOf(kept, request["last"]);
+      return lastOf(merged(await saved(), kept, (turn) => turn.prompt.id), request["last"]);
+    },
+    async[conversationMethods.contexts](request) {
+      const id = String(request["session"]);
+      const saved = await json(["history", "contexts", id, ...textArg("--task", request["task"])]).catch((error) => {
+        if (id === session && typeof request["task"] === "string")
+          return [];
+        throw error;
+      });
+      if (id !== session)
+        return saved;
+      await starting;
+      return merged(saved, liveContext(request["task"]), (context) => String(context.number));
+    },
+    async[conversationMethods.tasks](request) {
+      const id = String(request["session"]);
+      const isNested = request["all"] === true;
+      const saved = await json(["history", "tasks", id, ...isNested ? ["--nested"] : textArg("--task", request["task"])]);
+      if (id !== session)
+        return saved;
+      await starting;
+      const kept = liveTasks().filter((task) => isNested || task.parent === request["task"]);
+      const running = await claude.agent.list().catch((error) => (claude.ui.log(`cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`, { to: "debug" }), []));
+      const background = saved.flatMap(({ id: id2, status }) => status === undefined ? [] : [{ id: id2, status }]);
+      return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
+    },
+    async[conversationMethods.goal](request) {
+      const id = String(request["session"]);
+      const task = typeof request["task"] === "string" ? request["task"] : undefined;
+      if (id === session && task === undefined) {
+        await starting;
+        const text = conversation.state.goal;
+        if (text !== undefined)
+          return { text };
+      }
+      return json(["history", "goal", id, ...textArg("--task", task)]);
+    },
+    async[conversationMethods.updateGoal](request) {
+      const id = String(request["session"]);
+      const task = typeof request["task"] === "string" ? request["task"] : undefined;
+      const text = String(request["text"]);
+      await claude.fs.write(`${goals}/${task ?? id}.txt`, text);
+      await starting;
+      if (id === session)
+        changeGoal(task, text);
+      else {
+        dispatch(id, [{ type: GoalChange, goal: { text, ...task === undefined ? {} : { task } } }]);
+        await post(id, { kind: "goal", ...task === undefined ? {} : { task }, text }).catch((error) => claude.ui.log(`cmod: session ${id} keeps its goal until it starts again: ${messageOf(error)}`, { to: "debug" }));
+      }
+      return null;
+    },
+    async[conversationMethods.subscribe](request, caller) {
+      if (caller === undefined)
+        throw new Error("cmod hears no caller for this subscription.");
+      const id = String(request["session"]);
+      const list = Array.isArray(request["subscriptions"]) ? request["subscriptions"] : [];
+      hear(caller, id, list);
+      follow();
+      await saveListeners();
+      return null;
+    },
+    async[conversationMethods.watchBefore](request, caller) {
+      if (caller === undefined)
+        throw new Error("cmod hears no caller for this before listener.");
+      const target = String(request["session"]);
+      const list = Array.isArray(request["subscriptions"]) ? request["subscriptions"] : [];
+      ownWatches.set(`${caller}
+${target}`, { mod: caller, target, project: project(), events: [...new Set(list.map(({ event }) => event))], refusing: list.filter((each) => each.onFailure === "refuse") });
+      await publishWatches();
+      return null;
+    },
+    async[conversationMethods.act](request, caller) {
+      if (caller === undefined)
+        throw new Error("cmod hears no caller for this action.");
+      const target = String(request["session"]);
+      const action = String(request["action"]);
+      const task = typeof request["task"] === "string" ? request["task"] : undefined;
+      if (!isAct(action))
+        throw new Error(`cmod takes no action named ${action}.`);
+      if (target === await claude.session.id())
+        return perform(caller, action, request["input"], task);
+      return actElsewhere(caller, target, action, request["input"], task);
+    }
+  };
+  return {
+    turnClosedBy: (rowId) => closings.get(rowId),
+    color: () => color,
+    onColor(listener) {
+      onColor = listener;
+    },
+    moved() {
+      for (const [key, watch] of ownWatches)
+        ownWatches.set(key, { ...watch, project: project() });
+      publishWatches().catch((error) => report("before", "Kept its before listeners on the project from before", error));
+      reloadWatchers();
+      follow();
+    },
+    async answer(e) {
+      const method = methods[e.method];
+      if (method === undefined)
+        return;
+      const input = isObject(e.input) ? e.input : {};
+      const isDropping = (e.method === conversationMethods.subscribe || e.method === conversationMethods.watchBefore) && Array.isArray(input["subscriptions"]) && input["subscriptions"].length === 0;
+      if (e.method !== conversationMethods.act && !isDropping && input["session"] !== await claude.session.id() && !await isGranted(e.caller, "conversation"))
+        return { deny: await refused(e.caller, conversationCalls[e.method] ?? e.method, "conversation") };
+      try {
+        return { value: await method(input, e.caller) };
+      } catch (error) {
+        return { deny: messageOf(error) };
+      }
+    }
+  };
+}
+function scopeArgs(request) {
+  return [...typeof request["since"] === "string" ? ["--since", request["since"]] : [], ...request["everyProject"] === true ? ["--all"] : []];
+}
+function countArg(flag, value) {
+  return typeof value === "number" ? [flag, String(value)] : [];
+}
+function textArg(flag, value) {
+  return typeof value === "string" ? [flag, value] : [];
+}
+
+// node_modules/@cmodjs/core/runtime/engine.js
+var engines = new WeakMap;
+function keepEngine(mod, engine) {
+  engines.set(mod, engine);
+}
+function engineOf(mod) {
+  const engine = engines.get(mod);
+  if (engine === undefined)
+    throw new Error("This mod has not started, so it reaches no Claude Code calls yet.");
+  return engine;
 }
 
 // node_modules/@cmodjs/core/utils/metadata.js
@@ -9069,7 +9040,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       try {
         await run(...args);
       } catch (error) {
-        report({ id: known.id, message: "Its button failed", error });
+        report({ id: known.id, message: "Its button failed", error, isCritical: true });
       }
     };
     if (caller === cmodPluginName)
@@ -9197,7 +9168,7 @@ function createInstaller(name, claude, waiting, nextDraw) {
   const actions = (...buttons) => Box({ gap: 2, flexShrink: 0, children: buttons });
   const dialog = (title, ...children) => Box({ flexDirection: "column", gap: 1, children: [title, ...children] });
   const bullet2 = (text) => Box({ gap: 1, children: [Text({ dimColor: true, children: "•" }), Text({ wrap: "wrap", children: text })] });
-  const group = (heading2, items) => Box({ flexDirection: "column", children: [Text({ bold: true, children: heading2 }), ...items.map(bullet2)] });
+  const group = (heading, items) => Box({ flexDirection: "column", children: [Text({ bold: true, children: heading }), ...items.map(bullet2)] });
   const draw = (columns, isFocused) => {
     if (question === undefined && !isOpen)
       claude().clock.after(0, () => void send({ requests: [{ close: installPage }] }).catch(log("a leftover install page stayed open")));
@@ -9621,9 +9592,11 @@ function isPlainObject(value) {
 }
 
 // node_modules/@cmodjs/core/runtime/toaster.js
+var failedMethod = "cmod:failed";
 var githubRepository = /^https:\/\/github\.com\/([^/]+\/[^/#?]+?)(?:\.git)?(?:\/issues)?\/?$/;
 var linkLimit = 2048;
 var hiddenKey = "cmod:hidden-failures";
+var failedCallMs = 30000;
 var defaultDuration = 4000;
 var visibleToasts = 3;
 var spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -9637,9 +9610,10 @@ var icons = {
   warning: { glyph: "⚠", color: "warning" },
   error: { glyph: "✗", color: "error" }
 };
-function createToaster(claude, name, version, openPermissions) {
+function createToaster(claude, name, version) {
   const entries = new Map;
   const hidden = new Map;
+  const sent = new Map;
   claude.store.get(hiddenKey).then((saved) => {
     if (typeof saved !== "object" || saved === null)
       return;
@@ -9690,6 +9664,10 @@ function createToaster(claude, name, version, openPermissions) {
     });
   };
   const dismiss = (id) => {
+    if (id === undefined)
+      sent.clear();
+    else
+      sent.delete(String(id));
     for (const entry of entries.values()) {
       if (id !== undefined && entry.id !== id)
         continue;
@@ -9751,37 +9729,75 @@ function createToaster(claude, name, version, openPermissions) {
     if (!copied2.isCopied)
       throw new Error(copied2.reason);
   };
-  const press = (entry, run) => () => void Promise.resolve().then(run).catch((error) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error }));
-  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry }) => {
+  const press = (entry, run) => () => void Promise.resolve().then(run).catch((error) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error, isCritical: true }));
+  const logFailure = (failure) => claude.cmod.call({ to: cmodPluginName, method: failedMethod, input: failure });
+  const showsToast = async (failure, isShown) => {
+    try {
+      const logged = logFailure(failure);
+      const answer = await (isShown ? logged : beforeDeadline(claude, { ms: failedCallMs }, failedMethod, logged));
+      if (isObject(answer) && typeof answer["showsToast"] === "boolean")
+        return answer["showsToast"];
+      throw new Error(`cmod answered ${answer === undefined ? "nothing" : JSON.stringify(answer)}, not { showsToast: true or false }`);
+    } catch (error) {
+      claude.ui.log(`${name}: cmod kept no Log of ${failure.id}, so it shows the toast: ${messageOf(error)}`, { to: "debug" });
+      return;
+    }
+  };
+  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry, isCritical = false }) => {
     const hides = `${version() ?? ""}
 ${message}
 ${error === undefined ? "" : describe(error)}`;
-    if (hidden.get(id) === hides)
+    const at = new Date;
+    const repeat = `${hides}
+${description ?? ""}
+${at.toISOString().slice(0, 16)}`;
+    if (sent.get(id) === repeat)
       return id;
-    hidden.delete(id);
-    const shown = entries.get(id);
-    if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) {
-      const previous = clockTime(shown.at);
-      shown.at = new Date;
-      if (clockTime(shown.at) !== previous)
-        changed();
-      return id;
-    }
+    sent.set(id, repeat);
     const stack = error instanceof Error && error.stack !== undefined ? `
 
 ${error.stack}` : "";
-    const details = async () => {
+    const details = async (failedAt) => {
       const modVersion = await claude.fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text2) => String(JSON.parse(text2).version)).catch((failure) => `unknown (${messageOf(failure)})`);
-      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${(entries.get(id)?.at ?? new Date).toISOString()}
+      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${failedAt.toISOString()}
 ${message}${description === undefined ? "" : `
 ${description}`}${stack}`;
     };
-    const startReporting = async () => {
-      const shown2 = entries.get(id);
-      if (shown2 === undefined)
+    const text = `${message}
+${description ?? ""}`;
+    const isGrantRefusal = text.includes(grantFix);
+    const isShownAtOnce = isCritical && !isGrantRefusal;
+    const logged = async () => {
+      const contact = await contactOf(claude);
+      const failure = { mod: name, id, message, details: await details(at), at: at.toISOString(), isCritical, root: claude.plugin.root, ...contact === undefined ? {} : { contact } };
+      const shows = await showsToast(failure, isShownAtOnce);
+      if (isShownAtOnce)
         return;
-      shown2.reporting = { contact: await contactOf(claude), details: await details() };
-      disarm(shown2);
+      if (shows === undefined || shows && !isGrantRefusal)
+        return show2();
+      claude.ui.log(`${name}: ${message}${description === undefined ? "" : `: ${description}`}`, { to: "debug" });
+    };
+    const show2 = () => {
+      if (hidden.get(id) === hides)
+        return;
+      hidden.delete(id);
+      const shown = entries.get(id);
+      if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) {
+        const previous = clockTime(shown.at);
+        shown.at = new Date;
+        if (clockTime(shown.at) !== previous)
+          changed();
+        return;
+      }
+      const actions = [...fixes, ...retry === undefined ? [] : [{ label: "Retry", onClick: tryAgain }], { label: "Report", onClick: startReporting }];
+      put("error", message, { id, ...description === undefined ? {} : { description }, duration: Infinity }, actions, hides);
+    };
+    const startReporting = async () => {
+      const shown = entries.get(id);
+      if (shown === undefined)
+        return;
+      shown.reporting = { contact: await contactOf(claude), details: await details(shown.at) };
+      disarm(shown);
       changed();
       if (bandId === undefined)
         return;
@@ -9790,29 +9806,28 @@ ${description}`}${stack}`;
         claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: "debug" });
     };
     const tryAgain = async () => {
-      const shown2 = entries.get(id);
-      if (shown2 === undefined || retry === undefined || shown2.trying !== undefined)
+      const shown = entries.get(id);
+      if (shown === undefined || retry === undefined || shown.trying !== undefined)
         return;
-      shown2.trying = "Starting";
+      shown.trying = "Starting";
       changed();
       try {
         await retry();
       } finally {
-        if (entries.get(id) === shown2) {
-          shown2.trying = undefined;
+        if (entries.get(id) === shown) {
+          shown.trying = undefined;
           changed();
         }
       }
     };
-    const text = `${message}
-${description ?? ""}`;
     const fixes = [
-      { sentence: grantFix, label: "Settings", onClick: openPermissions },
       { sentence: installFix, label: "Plugins", onClick: () => claude.command.run({ command: "plugin" }) },
       { sentence: secretFix, label: "Open /config", onClick: () => claude.command.run({ command: "config" }) }
     ].filter(({ sentence }) => text.includes(sentence));
-    const actions = [...fixes, ...retry === undefined ? [] : [{ label: "Retry", onClick: tryAgain }], { label: "Report", onClick: startReporting }];
-    return put("error", message, { id, ...description === undefined ? {} : { description }, duration: Infinity }, actions, hides);
+    if (isShownAtOnce)
+      show2();
+    claude.clock.after(0, () => void logged());
+    return id;
   };
   const toggle = (entry) => () => {
     entry.isOpen = !entry.isOpen;
@@ -9859,7 +9874,7 @@ ${description ?? ""}`;
       const copied2 = await claude.ui.copy({ text: details });
       say(copied2.isCopied ? "Copied the error." : `Could not copy it: ${copied2.reason}`);
     };
-    const report = contact === undefined ? [] : [Link({ href: reportLink(contact, name, entry.message, details), label: contact.kind === "github" ? "Report it on GitHub (opens your browser)" : "Email the author (opens your mail app)" })];
+    const report = contact === undefined ? [] : [reportLink(contact, name, entry.message, details)];
     return [
       Text({ dimColor: true, children: "Claude writes up the problem and files it with your tools. You approve each step before anything is posted." }),
       Box({
@@ -9934,7 +9949,7 @@ function reportLink(contact, name, message, details) {
   let body = details;
   while (linkOf(body).length > linkLimit && body.length > 0)
     body = `${body.slice(0, Math.floor(body.length * 0.8))}…`;
-  return linkOf(body);
+  return Link({ href: linkOf(body), label: contact.kind === "github" ? "Report it on GitHub (opens your browser)" : "Email the author (opens your mail app)" });
 }
 function reportPrompt(name, contact, details) {
   const where = contact === undefined ? `${name} names no place to report it, so find its author from its plugin.json or its marketplace.` : contact.kind === "github" ? `Report it as an issue on https://github.com/${contact.repository}.` : `Email it to ${contact.address}.`;
@@ -9961,8 +9976,8 @@ async function readCombos(claude, configRoot) {
 async function createHotkeys({ name, declared, configRoot, claude, router, answerInput, report }) {
   if (name === cmodPluginName) {
     router.add("command.describe", async (e, next) => {
-      const described2 = await next(e);
-      return e.command.startsWith(hotkeyCommand(e.provider.plugin.replace(/@[^@]*$/, ""), "")) ? { ...described2, isHidden: true } : described2;
+      const described = await next(e);
+      return e.command.startsWith(hotkeyCommand(e.provider.plugin.replace(/@[^@]*$/, ""), "")) ? { ...described, isHidden: true } : described;
     });
   }
   const entries = Object.entries(declared);
@@ -9984,7 +9999,7 @@ async function createHotkeys({ name, declared, configRoot, claude, router, answe
         try {
           await listener();
         } catch (error) {
-          report({ id: `hotkey:${hotkey}`, message: `The ${declared[hotkey]?.title ?? hotkey} hotkey failed`, error });
+          report({ id: `hotkey:${hotkey}`, message: `The ${declared[hotkey]?.title ?? hotkey} hotkey failed`, error, isCritical: true });
         }
       }
       return {};
@@ -10596,8 +10611,8 @@ function createLifecycle(definition, permissionRoutes = () => {
   const granted = new Set;
   let activation;
   let mod;
-  const openSettings = async (tab) => {
-    await claude().cmod.call({ to: cmodPluginName, method: partMethods.changed, input: { requests: [{ settings: true, ...tab === undefined ? {} : { tab } }], isAsked: true } });
+  const openSettings = async () => {
+    await claude().cmod.call({ to: cmodPluginName, method: partMethods.changed, input: { requests: [{ settings: true }], isAsked: true } });
   };
   let imports;
   let raise;
@@ -10632,7 +10647,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     phase = "failed";
     failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? "" : "."}${fix === undefined ? "" : ` ${fix}`}`, { cause: error });
     const again = retry === undefined ? {} : { retry: () => (failure = undefined, stopRetrying(), retry().catch(report)) };
-    toastFailure({ id: installId, message: reason, ...fix === undefined ? {} : { description: fix }, ...error === undefined ? {} : { error }, ...again });
+    toastFailure({ id: installId, message: reason, ...fix === undefined ? {} : { description: fix }, ...error === undefined ? {} : { error }, ...again, isCritical: true });
     watchRecord();
   };
   let consented;
@@ -10688,7 +10703,7 @@ function createLifecycle(definition, permissionRoutes = () => {
       return programs?.refresh();
     }
     if (failed !== undefined)
-      return void toastFailure({ id: recordId, message: failed, retry: record });
+      return void toastFailure({ id: recordId, message: failed, retry: record, isCritical: true });
     throw new Error(`cmod setup ${formatExit(code, lastError)}`);
   };
   const record = () => {
@@ -10781,20 +10796,18 @@ function createLifecycle(definition, permissionRoutes = () => {
     runtime.claude.ui.invalidate("ui.render");
     if (definition.name === cmodPluginName)
       runtime.claude.ui.invalidate("command.describe");
-    runSteps(active.mod).catch((error) => toastFailure({ id: "cmod:steps", message: "Its installer stopped", error }));
+    runSteps(active.mod).catch((error) => toastFailure({ id: "cmod:steps", message: "Its installer stopped", error, isCritical: true }));
     const missed = missedSessionStart;
     missedSessionStart = undefined;
     if (missed !== undefined)
       await replaySessionStart(missed);
-    const version = plugin.version ?? "";
-    const announced = announcedOf(await runtime.claude.store.get(announcedKey));
-    if (announced?.version === version) {
+    if (await runtime.claude.store.get(announcedKey) !== undefined) {
       runtime.toaster.toast.dismiss(installId);
       return;
     }
-    await runtime.claude.store.set(announcedKey, { version, added });
+    await runtime.claude.store.set(announcedKey, { version: plugin.version ?? "" });
     const { toaster } = runtime;
-    announcementOf(runtime.claude, plugin, granted, added, announced, openSettings).then(({ message, ...options2 }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options2 })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
+    announcementOf(runtime.claude, plugin, granted, added, openSettings).then(({ message, ...options2 }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options2 })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
   };
   const replaySessionStart = async (e) => {
     hasHeardSessionStart = true;
@@ -11038,13 +11051,11 @@ function createLifecycle(definition, permissionRoutes = () => {
       if (droppedParts.has(item))
         return;
       droppedParts.add(item);
-      const declared = plugin?.steps.permissions ?? [];
-      const isDeclared = declared.includes(item);
-      runtime?.toaster.toast.warning(`Answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it`, {
+      const isDeclared = (plugin?.steps.permissions ?? []).includes(item);
+      toastFailure({
         id: `dropped:${item}`,
-        description: isDeclared ? grantFix : `It needs "permissions": { "${item}": true } in package.json "cmod".`,
-        duration: Infinity,
-        ...isDeclared ? { action: { label: "Settings", onClick: () => openSettings("permissions") } } : {}
+        message: `Answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it`,
+        description: isDeclared ? grantFix : `It needs "permissions": { "${item}": true } in package.json "cmod".`
       });
     }
   };
@@ -11090,7 +11101,17 @@ function createLifecycle(definition, permissionRoutes = () => {
       if (runtime !== undefined)
         return;
       programs = locatingPrograms(claudeCalls);
-      runtime = { claude: programs.claude, toaster: createToaster(claudeCalls, definition.name, () => plugin?.version, () => openSettings("permissions")) };
+      const callingCmod = {
+        ...claudeCalls,
+        cmod: {
+          async call(input) {
+            if (input.to === definition.name)
+              await holdUntilStarted();
+            return answeringOwnCalls(claudeCalls, router).cmod.call(input);
+          }
+        }
+      };
+      runtime = { claude: programs.claude, toaster: createToaster(callingCmod, definition.name, () => plugin?.version) };
       readStarted = read;
       try {
         drawCount = await claudeCalls.clock.now() * drawsPerMs;
@@ -11144,7 +11165,7 @@ function createLifecycle(definition, permissionRoutes = () => {
           return { value: await pendingSteps(mod) };
         if (call.method === finishStepsMethod) {
           const active = mod;
-          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error) => void toastFailure({ id: "cmod:steps", message: "Could not finish the setup", error })), installer.shown()]));
+          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error) => void toastFailure({ id: "cmod:steps", message: "Could not finish the setup", error, isCritical: true })), installer.shown()]));
           return { value: opened };
         }
       }
@@ -11198,7 +11219,7 @@ async function createMod(definition, runtime) {
     home,
     configRoot,
     projectRoot: () => modState.root,
-    freeFolders: () => [modState.root, runtime.dataFolder],
+    freeFolders: () => [modState.root, definition.name === cmodPluginName ? runtime.store : runtime.dataFolder],
     freeAddresses: () => programAddresses(mod)
   };
   const checked = checkingGrants(claude, grants);
@@ -11255,6 +11276,7 @@ async function createMod(definition, runtime) {
     claude: checked,
     report: (id, message, error) => report({ id, message, error }),
     isGranted: (permission) => flag(permission),
+    permissionRefusal: (call, permission) => refusal(grants, call, permission),
     hookOn: (hook, listener, failed) => hookOn(hook, listener, failed),
     routeOn: (event, hook, failed) => router.add(event, hook, failed),
     permissionRoutes: runtime.permissionRoutes
@@ -11629,6 +11651,7 @@ async function startMod($, eventInput, passOn) {
     ui: {
       log: (text, options) => $.ui.log(text, options),
       notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
+      toast: (text, options) => $.ui.toast(text, options),
       invalidate: (event) => $.ui.invalidate(event),
       ask: (question, options) => $.ui.ask(question, options),
       open: (pane) => $.ui.open(pane),
@@ -11830,8 +11853,26 @@ function oneLine(error) {
   return messageOf(error).replace(/\s*\n\s*/g, " ");
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-joUWLy/release/src/settings.ts
-var settingsMemory = { removing: null, views: [] };
+// node_modules/@cmodjs/core/utils/changelog.js
+var unreleased = "Unreleased";
+var heading = /^##\s+\[?([^\]\s]+)\]?(?:\s+-\s+(\S+))?\s*$/;
+var linkReference = /^\[[^\]]+\]:\s/;
+function changelogSections(markdown2) {
+  const sections = [];
+  for (const line of markdown2.split(`
+`)) {
+    const match = heading.exec(line);
+    if (match !== null)
+      sections.push({ version: match[1], date: match[2], lines: [] });
+    else if (!linkReference.test(line))
+      sections.at(-1)?.lines.push(line);
+  }
+  return sections.map(({ version, date: date2, lines }) => ({ version, ...date2 === undefined ? {} : { date: date2 }, text: lines.join(`
+`).trim() }));
+}
+
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/settings.ts
+var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
   [AbovePrompt]: "Above the prompt",
@@ -11846,6 +11887,11 @@ var moves = [
   { move: "up", hotkey: "k", label: "↑ up" },
   { move: "right", hotkey: "l", label: "→ right" }
 ];
+var loggedFailures = 100;
+var preferenceTitles = {
+  asksBeforeUpdatePermissions: "Ask before an update adds a permission",
+  showsInstalledModErrors: "Show errors from installed mods"
+};
 var pageSection = "page:";
 var selectedColor = "userMessageBackground";
 var statusColumns = 2;
@@ -11864,6 +11910,86 @@ async function configRootOf(mod) {
   const { claude } = engineOf(mod);
   const [configHome, home] = await Promise.all([claude.env.configHome(), claude.env.home()]);
   return configHome ?? (home === undefined ? undefined : `${home}/.claude`);
+}
+async function readJson2(path) {
+  const text = await fs.read(path).catch(ifMissing(undefined));
+  return text === undefined ? undefined : JSON.parse(text);
+}
+var isText = (value) => typeof value === "string";
+var isLogEntry = (value) => isObject(value) && ["mod", "id", "message", "details", "at"].every((key) => isText(value[key]));
+var sameFailure = (left) => (right) => left.mod === right.mod && left.id === right.id;
+async function readEntries(path) {
+  const value = await readJson2(path).catch((error) => {
+    throw new Error(`${path} is not JSON (${messageOf(error)}). Delete it, and cmod starts it again.`);
+  });
+  if (value === undefined)
+    return [];
+  if (!Array.isArray(value) || !value.every(isLogEntry))
+    throw new Error(`${path} is not a list of mod failures. Delete it, and cmod starts it again.`);
+  return value;
+}
+var logFolder = (mod) => `${mod.dataFolder}/log`;
+async function readLog(mod) {
+  const folder = logFolder(mod);
+  const files = (await fs.list(folder).catch(ifMissing([]))).filter((file) => file.isFile && file.name.endsWith(".json")).toSorted((left, right) => right.modifiedAt - left.modifiedAt);
+  const newest = new Map;
+  const newestFirst = () => [...newest.values()].toSorted((left, right) => right.at.localeCompare(left.at));
+  for (const file of files) {
+    const oldestKept = newestFirst()[loggedFailures - 1];
+    if (oldestKept !== undefined && Date.parse(oldestKept.at) > file.modifiedAt)
+      break;
+    const entries = await readEntries(`${folder}/${file.name}`).catch((error) => {
+      mod.log(`the Log skips a file: ${messageOf(error)}`);
+      return [];
+    });
+    for (const entry of entries) {
+      const key = `${entry.mod}
+${entry.id}`;
+      if ((newest.get(key)?.at ?? "") < entry.at)
+        newest.set(key, entry);
+    }
+  }
+  return newestFirst().slice(0, loggedFailures);
+}
+async function readPreferences(mod) {
+  const path = preferencesPath(await storeOf(mod));
+  return parsePreferences(await readJson2(path), path);
+}
+async function refreshPreferences(mod) {
+  mod.state.memory.preferences = await readPreferences(mod);
+}
+function failureLog(mod) {
+  let writing = Promise.resolve();
+  const add = async (entry) => {
+    const path = `${logFolder(mod)}/${await engineOf(mod).claude.session.id()}.json`;
+    const kept = [entry, ...(await readEntries(path)).filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures);
+    await fs.write(path, `${JSON.stringify(kept, null, 2)}
+`);
+    mod.state.memory.log = [entry, ...mod.state.memory.log.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures);
+  };
+  return async (failure) => {
+    if (!isLogEntry(failure) || !isText(failure.root) || typeof failure.isCritical !== "boolean")
+      throw new Error(`${failedMethod} takes the failure's mod, id, message, details, at, and root as text, and isCritical as true or false.`);
+    const { mod: name, id, message, details, at, contact } = failure;
+    const added = writing.then(() => add({ mod: name, id, message, details, at, ...contact === undefined ? {} : { contact } }));
+    writing = Promise.allSettled([added]);
+    await added;
+    return { showsToast: failure.isCritical || marketplaceOf(failure.root, failure.mod) === undefined || (await readPreferences(mod)).showsInstalledModErrors };
+  };
+}
+async function writePreference(mod, key, isOn) {
+  const store = await storeOf(mod);
+  const path = preferencesPath(store);
+  const saved = await readJson2(path);
+  parsePreferences(saved, path);
+  await fs.write(path, `${JSON.stringify({ ...isObject(saved) ? saved : {}, [key]: isOn }, null, 2)}
+`);
+  await fs.write(storeChangedPath(store), "");
+}
+function timeOf(at) {
+  const date2 = new Date(at);
+  const two = (value) => String(value).padStart(2, "0");
+  return `${date2.getFullYear()}-${two(date2.getMonth() + 1)}-${two(date2.getDate())} ${two(date2.getHours())}:${two(date2.getMinutes())}`;
 }
 function widgetsLayout(current2, widgets) {
   const widgetFor = (key, area2) => widgets.widgets().find((widget) => widget.key === key) ?? { key, mod: key.slice(0, key.indexOf("/")), title: key, areas: [area2] };
@@ -11944,11 +12070,10 @@ function settings2(mod) {
     let hasLoaded = false;
     const refresh = async () => {
       hasLoaded = true;
-      try {
-        mod.state.memory.views = await load();
-      } catch (error) {
-        mod.state.session.notice = `The mods did not load: ${messageOf(error)}`;
-      }
+      const failed = (what) => (error) => void (mod.state.session.notice = `${what} did not load: ${messageOf(error)}`);
+      await load().then((views) => void (mod.state.memory.views = views), failed("The mods"));
+      await readLog(mod).then((log) => void (mod.state.memory.log = log), failed("The Log"));
+      await readPreferences(mod).then((preferences) => void (mod.state.memory.preferences = preferences), failed("The preferences"));
     };
     const act = (task) => void task().then((notice) => {
       mod.state.session.notice = notice ?? null;
@@ -11977,7 +12102,11 @@ function settings2(mod) {
         ...own.map((page) => ({ key: `${pageSection}${page.id}`, label: page.title })),
         ...view.name === mod.name ? [] : [{ key: "options", label: "Options" }, { key: "permissions", label: "Permissions" }],
         { key: "hotkeys", label: "Hotkeys" },
-        ...view.name === mod.name ? [{ key: "widgets", label: "Widgets" }] : [],
+        ...view.name === mod.name ? [
+          { key: "widgets", label: "Widgets" },
+          { key: "log", label: "Log" },
+          { key: "preferences", label: "Preferences" }
+        ] : [],
         ...view.changelog.length === 0 ? [] : [{ key: "changelog", label: "Changelog" }]
       ];
     };
@@ -11987,11 +12116,64 @@ function settings2(mod) {
       const sections = view === undefined ? [] : sectionsOf(view);
       return { view, section: sections.some(({ key }) => key === section) ? section : sections[0]?.key ?? "hotkeys" };
     };
+    const failuresLog = () => {
+      const { log, reporting } = mod.state.memory;
+      if (log.length === 0)
+        return Text({ dimColor: true, children: "No mod has failed." });
+      const copy = (entry) => act(async () => {
+        await clipboard.write(entry.details);
+        return "Copied the error.";
+      });
+      const askClaude = (entry) => act(async () => {
+        mod.state.memory.reporting = null;
+        await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, entry.details), asUser: true });
+        return;
+      });
+      return Box({
+        flexDirection: "column",
+        gap: 1,
+        children: log.map((entry) => {
+          const key = `${entry.mod}/${entry.id}`;
+          const choices = reporting === key ? [
+            Button({ plain: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
+            ...entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, entry.details)],
+            Button({ plain: true, dimColor: true, key: `back:${key}`, label: "Back", onPress: () => void (mod.state.memory.reporting = null) })
+          ] : [
+            Button({ plain: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
+            Button({ plain: true, key: `report:${key}`, label: "Report", onPress: () => void (mod.state.memory.reporting = key) })
+          ];
+          return Box({
+            key: `log:${key}`,
+            flexDirection: "column",
+            children: [
+              Text({ wrap: "truncate-end", children: [Text({ bold: true, children: entry.mod }), Text({ dimColor: true, children: ` · ${timeOf(entry.at)}` })] }),
+              Text({ wrap: "wrap", children: entry.message }),
+              Box({ gap: 2, flexWrap: "wrap", children: choices })
+            ]
+          });
+        })
+      });
+    };
     const drawSection = (view, section, columns, isFocused) => {
       if (section.startsWith(pageSection))
         return pages.element(view.name, section.slice(pageSection.length), mod.state.session.pageParams, columns, isFocused) ?? Text({ dimColor: true, children: "Drawing…" });
       if (section === "widgets")
         return widgetsLayout(mod, widgets);
+      if (section === "log")
+        return failuresLog();
+      if (section === "preferences") {
+        return Box({
+          flexDirection: "column",
+          children: Object.entries(preferenceTitles).map(([key, title]) => {
+            const isOn = mod.state.memory.preferences[key];
+            const turn2 = async () => {
+              await writePreference(mod, key, !isOn);
+              return;
+            };
+            return Button({ plain: true, key: `preference:${key}`, label: `${isOn ? "[x]" : "[ ]"} ${title}`, onPress: () => act(turn2) });
+          })
+        });
+      }
       if (section === "options") {
         if (view.options.length === 0)
           return Text({ dimColor: true, children: `${view.name} has no options.` });
@@ -12021,7 +12203,7 @@ function settings2(mod) {
           children: view.hotkeys.map((hotkey) => Box({
             flexDirection: "column",
             children: [
-              Text({ bold: true, children: hotkey.title }),
+              Text({ children: [Text({ bold: true, children: hotkey.title }), ...hotkey.combo === undefined ? [Text({ dimColor: true, children: " · unbound" })] : []] }),
               Input({ key: `hotkey:${hotkey.name}`, label: "Combo", value: hotkey.combo ?? "", placeholder: "ctrl+shift+k", submitLabel: "bind", onSubmit: (combo) => bind3(view.name, hotkey, combo) })
             ]
           }))
@@ -12167,7 +12349,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-joUWLy/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12422,7 +12604,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-joUWLy/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12476,16 +12658,20 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-joUWLy/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
 var reloadDelayMs = 500;
+var changesQuietMs = 2000;
 var watchCheckMs = 1e4;
 var watchStaleMs = 15000;
 var reloadEcho = "<command-name>/reload-plugins</command-name>";
 var reloadNote = "<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>";
 var reloadToast = "reload";
+var shownUpdates = 3;
+var setupWaitMs = 1e4;
+var recordCheckMs2 = 500;
 async function tipOf(mod) {
   const messages = await engineOf(mod).claude.session.messages();
   if (messages.length === 0)
@@ -12540,8 +12726,72 @@ var cmodPlugin = defineMod({
       pluginsFile === undefined ? "" : await fs.read(pluginsFile).catch(ifMissing("")),
       (await settings.user.read())["enabledPlugins"] ?? null
     ]);
-    const hidingReload = `cmod:hiding-reload:${await claude.session.id()}`;
+    const sessionKey = async (name) => `cmod:${name}:${await claude.session.id()}`;
+    const loadedVersions = async () => {
+      if (pluginsFile === undefined)
+        return {};
+      const installed = JSON.parse(await fs.read(pluginsFile).catch(ifMissing("{}")));
+      const enabled = (await claude.settings.read())["enabledPlugins"];
+      const root = await claude.session.root();
+      return Object.fromEntries(Object.entries(installed.plugins ?? {}).flatMap(([id, copies]) => {
+        const loaded2 = copies.find((copy) => copy.projectPath === root) ?? copies.find((copy) => copy.projectPath === undefined);
+        return enabled?.[id] === true && loaded2 !== undefined ? [[id, loaded2.version]] : [];
+      }));
+    };
+    const grantedWords = async (name, version) => {
+      for (let waitedMs = 0;; waitedMs += recordCheckMs2) {
+        const record = await readRecord((path) => fs.read(path).catch(ifMissing(undefined)), store, name);
+        if (record?.version === version)
+          return record.grantedOnUpdate.map(permissionWords);
+        if (record === undefined || waitedMs >= setupWaitMs)
+          return [];
+        await new Promise((resolve2) => mod.after(recordCheckMs2, resolve2));
+      }
+    };
+    let loaded = {};
+    const takeVersionsBeforeReload = async () => {
+      const key = await sessionKey("versions-before-reload");
+      const before = await claude.store.get(key);
+      await claude.store.delete(key);
+      return before;
+    };
+    const showUpdates = async (isAfterOwnReload) => {
+      const before = await takeVersionsBeforeReload();
+      loaded = await loadedVersions();
+      if (!isAfterOwnReload || before === undefined)
+        return;
+      const updates = await Promise.all(Object.entries(loaded).filter(([id, version]) => before[id] !== undefined && before[id] !== version).map(async ([id, version]) => {
+        const name = id.replace(/@[^@]*$/, "");
+        return { line: `${name} updated to ${version}`, words: await grantedWords(name, version) };
+      }));
+      const rest = updates.filter(({ words }) => words.length === 0);
+      for (const { line, words } of updates)
+        if (words.length > 0)
+          claude.ui.toast([line, ...words].join(" · "));
+      if (rest.length > shownUpdates)
+        claude.ui.toast(`${rest.length} plugins updated`);
+      else
+        for (const { line } of rest)
+          claude.ui.toast(line);
+    };
+    const announceUpdates = (isAfterOwnReload) => void showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
+    announceUpdates(await claude.store.get(await sessionKey("hiding-reload")) === true);
     let seenChange = await pluginsState();
+    let isReloadDue = false;
+    let quietWait;
+    const reloadAfter = (ms) => {
+      quietWait?.stop();
+      quietWait = mod.after(ms, reloadWhenIdle);
+    };
+    let reloading = Promise.resolve();
+    const reloadWhenIdle = () => {
+      reloading = reloading.then(async () => {
+        if (!isReloadDue || await sessions.current.turn() !== undefined)
+          return;
+        isReloadDue = false;
+        await reload();
+      }).catch((error) => report({ id: reloadToast, message: "Could not tell whether a turn runs, so the plugins did not reload", error, retry: reload, isCritical: true }));
+    };
     const reloadIfChanged = async () => {
       const change = await pluginsState();
       if (change === seenChange)
@@ -12549,22 +12799,33 @@ var cmodPlugin = defineMod({
       seenChange = change;
       if ((await claude.session.surfaces()).length === 0)
         return;
-      mod.toast.info("Plugins changed", { id: reloadToast, description: "Reload to use them in this session.", action: { label: "Reload", onClick: () => void mod.after(1, reload) }, duration: Infinity });
+      isReloadDue = true;
+      reloadAfter(changesQuietMs);
     };
     const reload = async () => {
       mod.toast.dismiss(reloadToast);
       try {
         seenChange = await pluginsState();
-        await claude.store.set(hidingReload, true);
+        await claude.store.set(await sessionKey("versions-before-reload"), loaded);
+        await claude.store.set(await sessionKey("hiding-reload"), true);
         await claude.command.run({ command: "reload-plugins" });
         await widgets.recheck();
+        announceUpdates(true);
       } catch (error) {
-        await claude.store.delete(hidingReload);
-        report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload });
+        await claude.store.delete(await sessionKey("hiding-reload"));
+        await takeVersionsBeforeReload();
+        report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true });
       }
     };
+    sessions.current.onTurnEnd(() => {
+      if (isReloadDue && quietWait?.isRunning !== true)
+        reloadAfter(reloadDelayMs);
+    });
     router.add("session.append", async (e, next) => {
-      if (e.door !== "command" || e.message.isMeta === true || await claude.store.get(hidingReload) !== true)
+      if (e.door !== "command" || e.message.isMeta === true)
+        return next(e);
+      const hidingReload = await sessionKey("hiding-reload");
+      if (await claude.store.get(hidingReload) !== true)
         return next(e);
       const isOwnReload = e.origin.kind === "plugin" && "name" in e.origin && e.origin.name === mod.name && JSON.stringify(e.message.content).includes(reloadEcho);
       if (!isOwnReload) {
@@ -12604,7 +12865,7 @@ var cmodPlugin = defineMod({
           await claude.store.delete(updatedFor);
         if (off.length > 0)
           report({ id: "needs-cmod", message: `${off.map((row) => row.name).join(", ")} ${off.length === 1 ? "is" : "are"} off`, description: off.map((row) => row.state).join(`
-`), retry: updateAgain });
+`), retry: updateAgain, isCritical: true });
         else
           mod.toast.dismiss("needs-cmod");
         mod.state.global.pluginsCheckedAt = checked;
@@ -12614,7 +12875,7 @@ var cmodPlugin = defineMod({
       if (await modifiedAt(pluginsFile) !== checked)
         await keepCmodCurrent();
     };
-    const checkPlugins = () => void keepCmodCurrent().catch((error) => report({ id: "needs-cmod", message: "Could not update cmod for the mods that need a newer one", error, retry: updateAgain }));
+    const checkPlugins = () => void keepCmodCurrent().catch((error) => report({ id: "needs-cmod", message: "Could not update cmod for the mods that need a newer one", error, retry: updateAgain, isCritical: true }));
     const updateAgain = async () => {
       await claude.store.delete(updatedFor);
       mod.state.global.pluginsCheckedAt = null;
@@ -12629,10 +12890,10 @@ var cmodPlugin = defineMod({
         if (!Object.hasOwn(failures, name))
           mod.toast.dismiss(`build:${name}`);
       for (const [name, error] of Object.entries(failures))
-        report({ id: `build:${name}`, message: `${name} does not build`, description: error });
+        report({ id: `build:${name}`, message: `${name} does not build`, description: error, isCritical: true });
       shownFailures = Object.keys(failures);
     };
-    const followBuildFailures = () => showBuildFailures().catch((error) => report({ id: "build-failures", message: "Could not read which linked mods fail to build", error }));
+    const followBuildFailures = () => showBuildFailures().catch((error) => report({ id: "build-failures", message: "Could not read which linked mods fail to build", error, isCritical: true }));
     followBuildFailures();
     const watchLock = `${store}/watch.lock`;
     let isWatchRunning = false;
@@ -12645,19 +12906,15 @@ var cmodPlugin = defineMod({
       if (touched.some((at) => now - at < watchStaleMs))
         return;
       isWatchRunning = true;
-      runCmod(claude, ["watch"], await claude.session.id()).catch((error) => report({ id: "watch", message: "Stopped reloading the linked mods", error })).finally(() => void (isWatchRunning = false));
+      runCmod(claude, ["watch"], await claude.session.id()).catch((error) => report({ id: "watch", message: "Stopped reloading the linked mods", error, isCritical: true })).finally(() => void (isWatchRunning = false));
     };
     const linksFile = linksPath(store);
     const knownMarketplaces = configRoot === undefined ? undefined : `${configRoot}/plugins/known_marketplaces.json`;
-    const readJsonFile = async (path) => {
-      const text = await fs.read(path).catch(ifMissing(undefined));
-      return text === undefined ? undefined : JSON.parse(text);
-    };
     let isWatching = false;
     const watchIfLinked = async () => {
       if (isWatching || knownMarketplaces === undefined || (await claude.session.surfaces()).length === 0)
         return;
-      if (!hasLinkedMods(await readJsonFile(knownMarketplaces), parseLinks(await readJsonFile(linksFile), linksFile)))
+      if (!hasLinkedMods(await readJson2(knownMarketplaces), parseLinks(await readJson2(linksFile), linksFile)))
         return;
       isWatching = true;
       const watchAgain = () => void keepWatching().catch((error) => report({ id: "watch", message: "Could not check that a cmod watch runs", error }));
@@ -12673,7 +12930,7 @@ var cmodPlugin = defineMod({
         return reloadIfChanged();
       }
       followBuildFailures();
-      return Promise.all([widgets.reload(), reloadIfChanged()]);
+      return Promise.all([widgets.reload(), reloadIfChanged(), refreshPreferences(mod)]);
     });
     settings.beforeFileChange({ source: "user" }, () => void mod.after(reloadDelayMs, reloadIfChanged));
     sessions.current.onPrompt(() => reloadIfChanged());
@@ -12688,9 +12945,9 @@ var cmodPlugin = defineMod({
       if (outcome.type === "done")
         mod.toast.success(`${name} is uninstalled`);
       else if (outcome.type === "failed")
-        report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message });
+        report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message, isCritical: true });
       else if (exitCode !== 0)
-        report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, "teardown"))}` });
+        report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, "teardown"))}`, isCritical: true });
     };
     const watchRemovals = async () => {
       const enabledPlugins = (await settings.user.read())["enabledPlugins"];
@@ -12704,7 +12961,7 @@ var cmodPlugin = defineMod({
         if (triedRemovals.has(name))
           continue;
         triedRemovals.add(name);
-        tearDown(name).catch((error) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error }));
+        tearDown(name).catch((error) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error, isCritical: true }));
       }
     };
     sessions.current.onSessionStart(watchRemovals);
@@ -12770,12 +13027,13 @@ var cmodPlugin = defineMod({
       async updateSettings(input) {
         await runCmod(claude, ["settings", input.mod, input.source, JSON.stringify(input.values), "--project", input.project], await claude.session.id());
         return null;
-      }
+      },
+      [failedMethod]: failureLog(mod)
     };
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-joUWLy/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-c2uTY4/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
