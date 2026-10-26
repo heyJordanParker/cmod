@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Allowed, Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { consentPath, dataFolder, finishStepsMethod, grantFix, coreVersion, isAtLeast, isProgramNewer, marketplaceOf, parseConsent, pendingStepsMethod, parseEvent, permissionWords, programPath, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { consentPath, dataFolder, finishStepsMethod, grantFix, coreVersion, isAtLeast, isProgramNewer, marketplaceOf, parseConsent, pendingStepsMethod, parseEvent, permissionWords, programPath, readCmodVersion, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, updatesToTurnOn, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -168,15 +168,14 @@ async function readJson(read: ReadFile, path: string): Promise<unknown> {
 
 async function cmodVersion(claude: Claude): Promise<string | undefined> {
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
-  const exists = async (path: string) => (await claude.fs.stat(path).catch(ifMissing(undefined))) !== undefined
-  if (!(await exists(`${store}/programs/cmod`))) return undefined
-  const versions = (await claude.fs.list(`${store}/bin/cmod`).catch(ifMissing([]))).filter((entry) => entry.kind === 'dir' && releaseVersion.test(entry.name)).map((entry) => entry.name)
-  const newestFirst = versions.toSorted((one, other) => (isAtLeast(one, other) ? -1 : 1))
-  for (const version of newestFirst) if (await exists(`${store}/bin/cmod/${version}/cmod`)) return version
-  return undefined
+  return readCmodVersion(
+    {
+      list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
+      exists: async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined))) !== undefined,
+    },
+    store,
+  )
 }
-
-const releaseVersion = /^\d+\.\d+\.\d+$/
 
 export function createLifecycle<State extends object, Declared extends Options = Options>(
   definition: ModDefinition<State, string, Declared>,

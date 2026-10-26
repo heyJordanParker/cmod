@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-10-26
+
+### Fixed
+- Settings shows a linked mod as on while it runs. The copy `cmod link` turned off no longer marks it off.
+- An unbound hotkey's combo in Settings reads `none`, instead of a sample combo that looked bound.
+- After a cmod update, the `cmod watch` an older cmod started stops within seconds and the new cmod's watcher takes over, so a linked mod is no longer reported as `<mod> does not build` by an older cmod's rules. A build failure an older watcher left is checked again and goes once the mod builds.
+
 ## [4.3.0] - 2026-10-26
 
 ### Added

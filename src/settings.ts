@@ -249,9 +249,8 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       const rows = await claude.config.list()
       const combos = await readCombos(claude, await configRootOf(mod))
       const enabledPlugins = (await claude.settings.read())['enabledPlugins']
-      const turnedOff = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {})
-        .filter(([, isEnabled]) => isEnabled === false)
-        .map(([id]) => id.replace(/@[^@]*$/, ''))
+      const enabled = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {}).map(([id, isEnabled]) => ({ name: id.replace(/@[^@]*$/, ''), isEnabled }))
+      const turnedOff = enabled.filter(({ name, isEnabled }) => isEnabled === false && !enabled.some((each) => each.name === name && each.isEnabled === true)).map(({ name }) => name)
       const names = (await fs.exists(`${store}/records`)) ? (await fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)) : []
       const records = (await Promise.all(names.filter((name) => name !== mod.name).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
       const own = JSON.parse((await read(`${mod.folder}/.claude-plugin/plugin.json`)) ?? '{}') as { readonly version?: string }
@@ -415,7 +414,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
               flexDirection: 'column',
               children: [
                 Text({ children: [Text({ bold: true, children: hotkey.title }), ...(hotkey.combo === undefined ? [Text({ dimColor: true, children: ' · unbound' })] : [])] }),
-                Input({ key: `hotkey:${hotkey.name}`, label: 'Combo', value: hotkey.combo ?? '', placeholder: 'ctrl+shift+k', submitLabel: 'bind', onSubmit: (combo: string) => bind(view.name, hotkey, combo) }),
+                Input({ key: `hotkey:${hotkey.name}`, label: 'Combo', value: hotkey.combo ?? '', placeholder: 'none', submitLabel: 'bind', onSubmit: (combo: string) => bind(view.name, hotkey, combo) }),
               ],
             }),
           ),

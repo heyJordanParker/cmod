@@ -394,6 +394,18 @@ test('Settings marks a mod turned off in Claude Code, and Turn on runs cmod enab
   expect((await shown()).replace(/\s+/g, ' ')).toContain('Turned ci-watch on.')
 })
 
+test('Settings shows a linked mod on while the copy cmod link turned off stays off', async () => {
+  const { tested, shown } = testSettings()
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@inline': false, 'ci-watch@Developer-linked': true } })
+
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+  const lines = await shown()
+
+  expect(lines).not.toContain('ci-watch (off)')
+  expect(lines).not.toContain('Off: Claude Code does not load it.')
+})
+
 test('Turn off runs cmod disable on a mod that is on', async () => {
   const { tested, ran } = testSettings()
   await tested.type('/mods ci-watch')

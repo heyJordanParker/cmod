@@ -1,10 +1,11 @@
-import { watch, type FSWatcher } from 'node:fs'
-import { rm, utimes } from 'node:fs/promises'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { readdir, rm, utimes } from 'node:fs/promises'
 import { join, sep } from 'node:path'
-import { buildFailuresPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { buildFailuresPath, isAtLeast, readCmodVersion, storeFolder } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
+import { version } from '../../package.json'
 import { relinkPluginFolders } from '../claude.js'
-import { readJson, writeAtomically } from '../files.js'
+import { ifMissing, readJson, writeAtomically } from '../files.js'
 import { capture } from '../process.js'
 import { linkedFolders } from '../settings.js'
 import { markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
@@ -20,10 +21,14 @@ Watches each folder cmod link linked. Once a folder has had no change for 2
 seconds and its hooks module builds, every session reloads its mods once. A
 change only to files git ignores, such as the .claude-plugin/types/ Claude Code
 writes each time it loads the mod, reloads nothing. A build that still fails after 10 seconds without a change shows its error in
-every session. One cmod watch watches per machine: another one exits at once
-while it runs. It touches its file in watch.lock every 5 seconds, and the cmod
-plugin of each session with a linked mod starts cmod watch again once that file
-is 15 seconds old. At its start it links each folder still in
+every session. At its start it builds again each mod an earlier cmod watch
+left failing, so a failure an older cmod wrote goes once the mod builds. One cmod
+watch watches per machine: another one exits at once while it runs. It touches
+its file in watch.lock every 5 seconds, and the cmod plugin of each session
+with a linked mod starts cmod watch again once that file is gone or 15 seconds
+old. Before each touch it reads the newest cmod installed in the cmod store,
+and a cmod watch older than that exits and lets go of watch.lock, so the newer
+cmod watches with its own rules. At its start it links each folder still in
 CLAUDE_CODE_PLUGIN_DIRS, which a cmod before 4.1.0 linked, as cmod link does
 now, and takes it out of that list.`
 
@@ -49,7 +54,8 @@ async function isAnySource(folder: string, files: readonly string[]): Promise<bo
 export async function run(argv: string[]): Promise<number> {
   if (argv.length > 0) throw new Error(`cmod watch takes no arguments.\n\n${help}`)
   const lock = storePath('watch.lock')
-  if ((await takeLock(lock, AbortSignal.abort())) === undefined) return 0
+  await using held = await takeLock(lock, AbortSignal.abort())
+  if (held === undefined) return 0
   const heartbeat = join(lock, String(process.pid))
   await relinkPluginFolders()
   const watchers = new Map<string, FSWatcher>()
@@ -64,11 +70,18 @@ export async function run(argv: string[]): Promise<number> {
     await markStoreChanged()
   }
 
+  const nameOf = async (folder: string) => ((await readJson(join(folder, '.claude-plugin', 'plugin.json'))) as { readonly name: string }).name
+
+  const isOutdated = async () => {
+    const installed = await readCmodVersion({ list: (folder) => readdir(folder).catch(ifMissing([])), exists: async (path) => existsSync(path) }, storeFolder(process.env))
+    return installed !== undefined && !isAtLeast(version, installed)
+  }
+
   const settle = async (folder: string) => {
     const files = [...(changedFiles.get(folder) ?? [])]
     changedFiles.delete(folder)
     if (!(await isAnySource(folder, files))) return
-    const { name } = (await readJson(join(folder, '.claude-plugin', 'plugin.json'))) as { readonly name: string }
+    const name = await nameOf(folder)
     try {
       await bundledHooks(folder)
     } catch (error) {
@@ -105,14 +118,19 @@ export async function run(argv: string[]): Promise<number> {
         watchers.set(folder, watch(folder, { recursive: true }, (_event, file) => changed(folder, file)))
       } catch (error) {
         process.stderr.write(`cmod watch: ${folder} is not watched: ${messageOf(error)}\n`)
+        continue
       }
+      if (failures.has(await nameOf(folder))) changed(folder, null)
     }
   }
 
-  for (;;) {
+  while (!(await isOutdated())) {
     await follow().catch((error: unknown) => process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`))
     const now = new Date()
     await utimes(heartbeat, now, now)
     await Bun.sleep(pollMs)
   }
+  for (const watcher of watchers.values()) watcher.close()
+  for (const timer of timers.values()) clearTimeout(timer)
+  return 0
 }

@@ -2,7 +2,8 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { deleteTemporaryHomes, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { version } from '../package.json'
+import { cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -100,4 +101,53 @@ test('a second cmod watch exits at once while the first one watches, and the fir
   expect(existsSync(lockFile(second.child.pid))).toBe(false)
   await until(() => statSync(lockFile(first.child.pid)).mtimeMs > touchedAt)
   first.child.kill()
+}, 60000)
+
+test('a cmod watch older than the newest cmod installed exits within one touch and lets go of watch.lock, so the cmod plugin starts the newer one', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { '.local/share/cmod/records/.keep': '' })
+  const watching = startCmod(home, 'watch')
+  await until(() => existsSync(store(home, `watch.lock/${watching.child.pid}`)))
+
+  const newer = `${Number(version.split('.')[0]) + 1}.0.0`
+  await writeFiles(home, { '.local/share/cmod/programs/cmod': cmodFromSource, [`.local/share/cmod/bin/cmod/${newer}/cmod`]: cmodFromSource })
+  expect(await Promise.race([watching.child.exited, Bun.sleep(8000).then(() => 'still watching')])).toBe(0)
+  expect(existsSync(store(home, 'watch.lock'))).toBe(false)
+}, 60000)
+
+test('a cmod watch as new as the newest cmod installed keeps watching and touching its lock file', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, {
+    '.local/share/cmod/records/.keep': '',
+    '.local/share/cmod/programs/cmod': cmodFromSource,
+    '.local/share/cmod/bin/cmod/0.1.0/cmod': cmodFromSource,
+    [`.local/share/cmod/bin/cmod/${version}/cmod`]: cmodFromSource,
+  })
+  const watching = startCmod(home, 'watch')
+  const lockFile = store(home, `watch.lock/${watching.child.pid}`)
+  await until(() => existsSync(lockFile))
+  const touchedAt = statSync(lockFile).mtimeMs
+
+  await until(() => statSync(lockFile).mtimeMs > touchedAt)
+  await Bun.sleep(500)
+  expect(watching.child.exitCode).toBeNull()
+  expect(existsSync(lockFile)).toBe(true)
+  watching.child.kill()
+}, 60000)
+
+test('a cmod watch checks each build failure it finds at its start again, so a failure an older cmod wrote goes once the mod builds', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'Developer/demo-checkout')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'hooks/hooks.json': JSON.stringify({ modules: ['./register.js'] }),
+    'hooks/register.js': 'export function register() {}\n',
+  })
+  await writeLinked(home, root)
+  await writeFiles(home, { '.local/share/cmod/build-failures.json': JSON.stringify({ demo: 'a rule of an older cmod' }) })
+  const watching = startCmod(home, 'watch')
+
+  await until(() => existsSync(store(home, 'plugins-changed')))
+  expect(existsSync(store(home, 'build-failures.json'))).toBe(false)
+  watching.child.kill()
 }, 60000)

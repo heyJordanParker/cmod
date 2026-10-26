@@ -29,6 +29,7 @@ export type FlagPermission = (typeof flagPermissions)[number]
 const permissionNames: readonly string[] = [...listPermissions, ...flagPermissions]
 const hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/
 const programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
+const releaseVersion = /^\d+\.\d+\.\d+$/
 const settingPath = /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9_@-]+)*$/
 const listItemHint: Readonly<Record<ListPermission, string>> = {
   network: 'a host alone, such as "api.github.com", or a socket path, such as "/var/run/docker.sock"',
@@ -68,6 +69,13 @@ export function programPath(store: string, program: string, version: string): st
 
 export function isProgramNewer(record: InstallRecord, programModifiedMs: number | undefined): boolean {
   return record.program !== null && (programModifiedMs === undefined || programModifiedMs > Date.parse(record.installedAt))
+}
+
+export async function readCmodVersion(files: { list: (folder: string) => Promise<readonly string[]>; exists: (path: string) => Promise<boolean> }, store: string): Promise<string | undefined> {
+  if (!(await files.exists(`${store}/programs/cmod`))) return undefined
+  const newestFirst = (await files.list(`${store}/bin/cmod`)).filter((name) => releaseVersion.test(name)).toSorted((one, other) => (isAtLeast(one, other) ? -1 : 1))
+  for (const version of newestFirst) if (await files.exists(programPath(store, 'cmod', version))) return version
+  return undefined
 }
 
 export function dataFolder(store: string, name: string): string {
@@ -331,7 +339,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '4.3.0'
+export const coreVersion = '4.3.1'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`
