@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.3.2] - 2026-10-28
+
+### Fixed
+- `cmod check` builds the release as `cmod publish` builds it, with your `"files"` list and the bundled hooks module, and validates that release with `claude plugin validate --strict`. So a path `plugin.json` names that `"files"` leaves out, such as `"types": "./types/index.d.ts"` without `types` in `"files"`, fails `cmod check` instead of the release workflow. A `"files"` path that matches no file in the mod fails it too. The `Bundling the hooks` and `Validating with Claude Code` checks are now one check, `Building and validating the release`.
+- `cmod publish` and `cmod check` print every line Claude Code's validator writes when it refuses the release, instead of only its last lines, such as `✘ Validation failed`.
+- `cmod publish --dry-run` builds from the working tree, uncommitted changes included, instead of from the last commit.
+
 ## [4.3.1] - 2026-10-26
 
 ### Fixed
