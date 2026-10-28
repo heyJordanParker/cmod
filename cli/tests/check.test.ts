@@ -296,10 +296,52 @@ test('cmod check bundles the hooks module as cmod publish does, and names each r
 
   const result = await cmod(home, 'check', root)
 
-  expect(result.stdout).toContain('Bundling the hooks…\n✘ Bundling hooks/./register.ts failed: ')
+  expect(result.stdout).toContain('Building and validating the release…\n✘ Bundling hooks/./register.ts failed: ')
   expect(result.stdout).toContain('Could not resolve: "./gone.js"')
   expect(result.stdout).toContain('Could not resolve: "not-installed-anywhere"')
   expect(result.stdout).not.toContain('Bundle failed')
+})
+
+test('cmod check validates the release cmod publish builds, so a path plugin.json names that "files" leaves out fails with the validator\'s own error', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', types: './types/index.d.ts' }),
+    'package.json': JSON.stringify({ name: 'demo', files: ['src'] }),
+    'src/count.ts': 'export const count = 1\n',
+    'types/index.d.ts': 'export type Count = number\n',
+  })
+
+  const leftOut = await cmod(home, 'check', root)
+
+  expect(leftOut.stdout).toContain('Building and validating the release…\n✘ The release cmod publish would build fails claude plugin validate --strict:\n')
+  expect(leftOut.stdout).toContain('      ✘ Found 1 error:\n      \n        ❯ types: Path not found: ./types/index.d.ts. The runtime loader will report this as a load failure.\n')
+  expect(leftOut.exitCode).toBe(1)
+
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'demo', files: ['src', 'types'] }) })
+  const listed = await cmod(home, 'check', root)
+
+  expect(listed.stdout).toContain('Building and validating the release…\n✔ Built the release as cmod publish builds it, and claude plugin validate --strict passed on it\n')
+  expect(listed.exitCode).toBe(0)
+})
+
+test('cmod check fails a "files" entry that matches no file in the mod', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', files: ['src', 'skills'] }),
+    'src/count.ts': 'export const count = 1\n',
+  })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain(
+    'Building and validating the release…\n✘ package.json "files" lists skills, which matches no file in the mod. Add the file or remove it from "files", then run the command again.\n    fix: Fix each error, then run cmod check again.\n',
+  )
+  expect(result.exitCode).toBe(1)
 })
 
 test('cmod check runs only the tests under the folder bunfig.toml names as the test root, as bun test does', async () => {

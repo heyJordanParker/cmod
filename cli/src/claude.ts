@@ -190,8 +190,14 @@ export async function configurePlugin(id: string, values: Readonly<Record<string
   if (result.exitCode !== 0) throw new Error(`claude plugin configure ${id} failed: ${(result.stderr.trim() || result.stdout.trim()).split('\n').slice(-3).join('\n')}`)
 }
 
-export function validatePlugin(path: string): Promise<Captured> {
-  return capture([claudeCode(), 'plugin', 'validate', path, '--strict'])
+export async function validatePlugin(root: string): Promise<string | undefined> {
+  const marketplace = join(root, '.claude-plugin', 'marketplace.json')
+  const failures: string[] = []
+  for (const manifest of [join(root, '.claude-plugin', 'plugin.json'), ...(existsSync(marketplace) ? [marketplace] : [])]) {
+    const { exitCode, stdout, stderr } = await capture([claudeCode(), 'plugin', 'validate', manifest, '--strict'])
+    if (exitCode !== 0) failures.push(`claude plugin validate ${manifest} --strict exited ${exitCode}:\n${[stdout.trimEnd(), stderr.trimEnd()].filter((text) => text !== '').join('\n')}`)
+  }
+  return failures.length === 0 ? undefined : failures.join('\n\n')
 }
 
 export function testPlugin(root: string): Promise<Captured> {

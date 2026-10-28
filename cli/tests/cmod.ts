@@ -23,6 +23,17 @@ else delete known[value]
 fs.mkdirSync(require("node:path").dirname(file), { recursive: true })
 fs.writeFileSync(file, JSON.stringify(known))`
 
+const validates = `const fs = require("node:fs")
+const path = require("node:path")
+const manifest = process.argv[1]
+const root = path.dirname(path.dirname(manifest))
+const named = manifest.endsWith("plugin.json") ? Object.entries(JSON.parse(fs.readFileSync(manifest, "utf8"))) : []
+const missing = named.filter(([, value]) => typeof value === "string" && value.startsWith("./") && !fs.existsSync(path.join(root, value)))
+console.log("Validating plugin manifest: " + manifest + "\\n")
+if (missing.length === 0) console.log("✔ Validation passed")
+else console.log("✘ Found " + missing.length + " error" + (missing.length === 1 ? "" : "s") + ":\\n\\n" + missing.map(([key, value]) => "  ❯ " + key + ": Path not found: " + value + ". The runtime loader will report this as a load failure.").join("\\n") + "\\n\\n✘ Validation failed")
+process.exit(missing.length === 0 ? 0 : 1)`
+
 export const claudeAnswering = (listed: unknown[], session = 'exit 1') => `#!/bin/sh
 echo "$*" >> "$HOME/claude-calls"
 case "$*" in
@@ -33,7 +44,7 @@ case "$*" in
   "plugin marketplace remove "*"-linked") "${process.execPath}" -e '${knownMarketplaces}' remove "$4" ;;
   "plugin marketplace update "*"-linked") ;;
   "plugin install cmod@"*" --json"|"plugin install "*"-linked --json"|"plugin uninstall "*"-linked --json") echo '{"outcome":"ok","message":"Installed '"$3"'"}' ;;
-  "plugin validate "*" --strict") echo 'Validation passed' ;;
+  "plugin validate "*" --strict") "${process.execPath}" -e '${validates}' "$3" ;;
   "plugin "*) exit 1 ;;
   *)
     echo "$*" >> "$HOME/claude-sessions"

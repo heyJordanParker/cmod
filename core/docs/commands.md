@@ -65,13 +65,12 @@ Runs every check this machine can run on the mod at `path` (default: the current
 8. Writes the `cmod` dependency in `.claude-plugin/plugin.json` as `>=` the version of the `@cmodjs/core` the mod installed, such as `>=4.0.0`, so every newer cmod runs the mod. A mod still on `@cmodjs/core` 3 keeps its own range ([dependencies.md](dependencies.md#call-the-methods-mod-dependencies)).
 9. Checks its imports.
 10. Looks for prebuilt binaries outside `cli/`.
-11. Bundles the hooks module as `cmod publish` does, and names each reason a bundle fails.
-12. Validates it with Claude Code, `claude plugin validate --strict`.
-13. Compiles it against Claude Code's API with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
-14. Lints it with `oxlint`.
-15. Runs, with `bun test`, every test file that does not import `claude-code/testing`. When `bunfig.toml` names a `[test]` `root`, it runs only the test files under that folder, as `bun test` does.
-16. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
-17. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
+11. Builds the release in a temporary folder as `cmod publish` builds it, with its `"files"` list and its bundled hooks module, and validates the release with Claude Code, `claude plugin validate --strict`. So it fails on a path `plugin.json` names that `"files"` leaves out, a `"files"` path that matches no file in the mod, and each reason a bundle fails, and prints every line the validator writes. Then it deletes the folder.
+12. Compiles it against Claude Code's API with `tsc`, with `tsconfig.json`, and then with `tests/tsconfig.json` when it exists. `cmod new` writes both: the root config leaves Bun out of `src/`, which runs inside Claude Code, and the tests config adds `bun-types`, so a test can run a real program with `Bun.spawn` or read files with `node:fs`. When `.claude-plugin/types/` is missing, as in a fresh clone or in CI, Claude Code writes it first: cmod loads the mod in one `claude -p` run with a config folder of its own and no model to reach, so the run sends nothing.
+13. Lints it with `oxlint`.
+14. Runs, with `bun test`, every test file that does not import `claude-code/testing`. When `bunfig.toml` names a `[test]` `root`, it runs only the test files under that folder, as `bun test` does.
+15. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
+16. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
 
 `cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the cmod store the first time. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
 
@@ -105,9 +104,9 @@ cmod publish [path] [--dry-run]
 
 Releases the mod at `path` (default: the current folder) at the version in its `plugin.json`. It refuses a `plugin.json` whose `userConfig` differs from the options `defineMod` declares, and says to run `cmod check` and commit `.claude-plugin/plugin.json`.
 
-1. Builds the release from the committed files, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, `tsconfig.json`, the README, the license, and `CHANGELOG.md`, the way `npm publish` reads it. `tsconfig.json` holds the JSX settings the bundle in step 2 needs. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
+1. Builds the release from the files git does not ignore, leaving out `cli/`, `.github/`, and `.claude/`. A `"files"` list in `package.json` limits the release to the paths it lists, plus the folders of the install and uninstall steps, `.claude-plugin/`, `package.json`, `tsconfig.json`, the README, the license, and `CHANGELOG.md`, the way `npm publish` reads it. `tsconfig.json` holds the JSX settings the bundle in step 2 needs. List every folder the hooks module imports from, such as `"files": ["hooks", "src", "skills"]`, because the bundle in step 2 is built from the release.
 2. Bundles the hooks module that `hooks/hooks.json` names, with the mod's source and packages, into one readable `.js` file, writes each control character in it as a `\u` escape, and points `hooks/hooks.json` at it. Anthropic's plugin directory reads a repository without installing its packages, so it can follow a mod only when all its code is in one file. Without `"approve": true` in `package.json` `"cmod".permissions`, the bundle leaves out the code that allows and asks on Claude Code's permission check ([permissions.md](permissions.md)).
-3. Checks the release with `claude plugin validate --strict`, and stops with the validator's message when it fails.
+3. Checks the release's `.claude-plugin/plugin.json`, and its `.claude-plugin/marketplace.json` when it has one, with `claude plugin validate --strict`, and stops with every line the validator writes when it fails. `cmod check` builds and validates the release the same way, so it fails first.
 4. Commits the release as the `release` branch, and builds the release archive from that commit.
 5. Builds the program `cli/` declares, and writes `SHA256SUMS` for every file of the release.
 6. Writes `.claude-plugin/marketplace.json`, listing the archive and the cmod plugin. The cmod entry points at the `release` branch of `heyJordanParker/cmod`, so the mod's `"cmod"` dependency resolves in this marketplace and follows each cmod release with no new publish of the mod.
@@ -118,19 +117,19 @@ The release keeps `package.json`, so Claude Code still installs the mod's packag
 
 It needs, and refuses to start without:
 
-- the mod's folder as the root of a git repository with at least one commit, because `git archive` builds from `HEAD`
+- the mod's folder as the root of a git repository with at least one commit, because the release is committed as the `release` branch
 - a `## [<version>]` section with notes in the committed `CHANGELOG.md`
 - `node_modules` in the mod's folder, from `bun install`, when the hooks module imports a package
 - a `register` declared as a function in the hooks module, as `cmod new` writes it, because the validator refuses a bundled `register` that is not one
 - the `claude` command, which validates the release
 - an `origin` remote on GitHub
 - a `package.json` with no dependency on a `file:` or `link:` path, which no user has
-- a `"files"` list, when `package.json` has one, whose every path matches a committed file
+- a `"files"` list, when `package.json` has one, whose every path matches a file in the mod
 - a `"program"` in the `cmod` key of `package.json` that names the program `cli/` declares, when `cli/` declares one
 - a `cmod` dependency in `.claude-plugin/plugin.json` of `>=` the `@cmodjs/core` the mod bundles, which `cmod check` writes
 - for a real publish, a working tree with no uncommitted changes, no `v<version>` or `<name>--v<version>` tag yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
-`--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the last commit. It prints the folder that holds the release, so you can read what the directory will read.
+`--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the working tree, uncommitted changes included. It prints the folder that holds the release, so you can read what the directory will read.
 
 ## Install mods
 

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { builtinModules } from 'node:module'
+import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { isObject, permissionWords, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
@@ -12,7 +13,7 @@ import { cmodFloor, installPackages, readDeclared, readPlugin, writeCmodFloor, w
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
 import { startProgress } from '../progress.js'
-import { bundledHooks } from './publish.js'
+import { buildRelease } from './publish.js'
 import { linkedFolders } from '../settings.js'
 import { storePath } from '../store.js'
 
@@ -27,8 +28,9 @@ folder): installs its packages, checks its layout and that each step runs a
 script, checks each download covers the machines its "os" and "cpu" list,
 writes the options defineMod declares into plugin.json userConfig and its
 hotkeys into package.json "cmod.hotkeys",
-bundles its hooks module as cmod publish does, validates it with Claude
-Code, compiles it against Claude Code's API with tsconfig.json and, when it
+builds its release as cmod publish does and validates the release with
+claude plugin validate --strict, compiles it against Claude Code's API with
+tsconfig.json and, when it
 exists, tests/tsconfig.json,
 lints it, runs its tests with bun test and with claude plugin test, and checks
 its name. Each failure names its fix.`
@@ -53,8 +55,7 @@ const checks: Check[] = [
   { heading: 'Pinning the cmod plugin', run: checkCmodFloor },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
-  { heading: 'Bundling the hooks', run: checkBundle },
-  { heading: 'Validating with Claude Code', run: checkValidate },
+  { heading: 'Building and validating the release', run: checkRelease },
   { heading: "Compiling against Claude Code's API", run: checkCompiles },
   { heading: 'Linting', run: checkLint },
   { heading: 'Running tests', run: checkTests },
@@ -282,26 +283,17 @@ async function checkBinaries(plugin: Plugin): Promise<Result> {
   return { status: 'pass', text: 'No prebuilt binaries outside cli/' }
 }
 
-async function checkBundle(plugin: Plugin): Promise<Result> {
+async function checkRelease(plugin: Plugin): Promise<Result> {
+  const output = await mkdtemp(join(tmpdir(), `cmod-check-${plugin.name}-`))
   try {
-    const bundled = await bundledHooks(plugin.root)
-    if (bundled === undefined) return { status: 'skip', text: 'No hooks module in hooks/hooks.json, so nothing to bundle' }
-    return { status: 'pass', text: `hooks/${bundled.module} bundles with its packages, as cmod publish bundles it` }
-  } catch (error) {
-    return { status: 'fail', text: messageOf(error), fix: 'Fix each error, then run cmod check again.' }
+    const release = await buildRelease(plugin, output).catch((error: unknown) => messageOf(error))
+    if (typeof release === 'string') return { status: 'fail', text: release, fix: 'Fix each error, then run cmod check again.' }
+    const failure = await validatePlugin(release.tree)
+    if (failure !== undefined) return { status: 'fail', text: `The release cmod publish would build fails claude plugin validate --strict:\n${failure.split('\n').map((line) => `      ${line}`).join('\n')}`, fix: 'Fix each error and warning it names, then run cmod check again.' }
+    return { status: 'pass', text: `Built the release as cmod publish builds it${release.bundle === undefined ? '' : `, with the hooks module and its packages bundled into hooks/${release.bundle}`}, and claude plugin validate --strict passed on it` }
+  } finally {
+    await rm(output, { recursive: true, force: true })
   }
-}
-
-async function checkValidate(plugin: Plugin): Promise<Result> {
-  const targets = [join(plugin.root, '.claude-plugin', 'plugin.json')]
-  if (existsSync(join(plugin.root, '.claude-plugin', 'marketplace.json'))) targets.push(join(plugin.root, '.claude-plugin', 'marketplace.json'))
-  const failures: string[] = []
-  for (const target of targets) {
-    const result = await validatePlugin(target)
-    if (result.exitCode !== 0) failures.push(`${relative(plugin.root, target)}:\n${(result.stdout + result.stderr).trim().split('\n').map((line) => `      ${line}`).join('\n')}`)
-  }
-  if (failures.length > 0) return { status: 'fail', text: `claude plugin validate --strict failed on ${failures.join('\n')}`, fix: 'Fix each error and warning it names, then run cmod check again.' }
-  return { status: 'pass', text: `claude plugin validate --strict passed on ${targets.map((target) => relative(plugin.root, target)).join(' and ')}` }
 }
 
 async function checkCompiles(plugin: Plugin): Promise<Result> {

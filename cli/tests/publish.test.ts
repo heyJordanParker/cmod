@@ -207,7 +207,7 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   expect(bundle).toContain('function register(on)')
   expect(bundle).not.toContain('import ')
   const tree = join(dirname(archive), 'release')
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(`plugin validate ${tree} --strict\n`)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(`plugin validate ${tree}/.claude-plugin/plugin.json --strict\n`)
   expect(result.stdout).toContain(`and ${tree} to its release branch. Nothing was pushed:`)
 })
 
@@ -276,14 +276,26 @@ test('publish refuses a plugin.json whose userConfig differs from the options de
   )
 })
 
-test('publish refuses a "files" path that matches no committed file', async () => {
+test('publish refuses a "files" path that matches no file in the mod', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, { 'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'skills'] }) })
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(1)
-  expect(result.stderr).toBe('cmod publish: package.json "files" lists skills, which matches no committed file. Commit it or remove it from "files", then run cmod publish again.\n')
+  expect(result.stderr).toBe('cmod publish: package.json "files" lists skills, which matches no file in the mod. Add the file or remove it from "files", then run the command again.\n')
+})
+
+test('publish prints every line claude plugin validate writes when it refuses the release', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home)
+  const lines = ['Validating plugin manifest', '✘ Found 6 errors:', '  ❯ types: Path not found: ./types/index.d.ts', '  ❯ icon: Path not found: ./icon.png', '  ❯ commands: Path not found: ./commands', '  ❯ agents: Path not found: ./agents', '  ❯ skills: Path not found: ./skills', '  ❯ hooks: Path not found: ./hooks.json', '✘ Validation failed']
+  await writeFiles(home, { 'bin/claude': `#!/bin/sh\nprintf '%s\\n' ${lines.slice(0, 2).map((line) => `'${line}'`).join(' ')}\nprintf '%s\\n' ${lines.slice(2).map((line) => `'${line}'`).join(' ')} >&2\nexit 1\n` })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toContain(`--strict exited 1:\n${lines.join('\n')}\n`)
 })
 
 test('publish stops when claude plugin validate refuses the release', async () => {

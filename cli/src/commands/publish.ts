@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, symlink, unlink } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, readdir, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, posix } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -9,7 +9,7 @@ import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { cmodPluginEntry, validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
-import { cmodFloor, cmodRangeOf, readDeclared, readPlugin } from '../plugin.js'
+import { cmodFloor, cmodRangeOf, readDeclared, readPlugin, type Plugin } from '../plugin.js'
 import { capture, run as runCommand } from '../process.js'
 import { buildProgram, declaredMachines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
@@ -21,8 +21,8 @@ export const help = `Usage: cmod publish [path] [--dry-run]
 ${summary}
 
 Releases the mod at path (default: the current folder) at the version in its
-plugin.json. Builds the release from the committed files, leaving out cli/,
-.github/, and .claude/. A "files" list in package.json limits the release to
+plugin.json. Builds the release from the files git does not ignore, leaving
+out cli/, .github/, and .claude/. A "files" list in package.json limits the release to
 those paths, plus the folders of the install and uninstall steps,
 .claude-plugin/, package.json, tsconfig.json, the README, and the license, the
 way npm does. Bundles the hooks module with its packages into one file, writing each
@@ -43,7 +43,8 @@ path, which no user has.
 
 Options:
   --dry-run  Build everything into a temporary folder, marketplace.json
-             included, and push nothing`
+             included, from the working tree with its uncommitted changes,
+             and push nothing`
 
 const dependencyGroups = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
 
@@ -96,25 +97,17 @@ export async function run(argv: string[]): Promise<number> {
     throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.slice(2)}, so it needs "${floor}", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
   }
 
-  const listed = plugin.packageJson?.['files']
-  if (listed !== undefined && !(Array.isArray(listed) && listed.every((path) => typeof path === 'string'))) {
-    throw new Error(`${tilde(plugin.root)}/package.json has a "files" key that is not a list of paths. Write it as "files": ["hooks", "src", "skills"], or remove it to release every committed file.`)
-  }
-  const stepFolders = [plugin.steps.install, plugin.steps.uninstall].flatMap((command) => (command === undefined ? [] : scriptPaths(command))).map((path) => posix.dirname(posix.normalize(path)))
-  const released = listed === undefined ? ['.'] : await releasedPaths(listed, [...alwaysReleased, ...stepFolders], git)
-
   const progress = startProgress()
   const output = await mkdtemp(join(tmpdir(), `cmod-publish-${plugin.name}-`))
-  const tree = join(output, releaseBranch)
   progress.step('Building the release')
-  const bundle = await buildReleaseTree(plugin.root, output, tree, released, git)
+  const { tree, bundle } = await buildRelease(plugin, output)
   const leftOutFolders = leftOut.map((folder) => `${folder}/`).join(', ')
-  const contents = listed === undefined ? `without ${leftOutFolders}` : `with only the paths package.json "files" lists, the folders of its install steps, and ${alwaysReleased.join(', ')}`
-  progress.succeed(`Built ${tree} from ${isDirty ? 'the last commit, without the uncommitted changes' : 'HEAD'}, ${contents}${bundle === undefined ? '' : `, and the hooks module and its packages bundled into hooks/${bundle}`}`)
+  const contents = plugin.packageJson?.['files'] === undefined ? `without ${leftOutFolders}` : `with only the paths package.json "files" lists, the folders of its install steps, and ${alwaysReleased.join(', ')}`
+  progress.succeed(`Built ${tree} from ${isDirty ? 'the working tree, with its uncommitted changes' : 'HEAD'}, ${contents}${bundle === undefined ? '' : `, and the hooks module and its packages bundled into hooks/${bundle}`}`)
 
   progress.step('Checking the release with claude plugin validate --strict')
-  const validated = await validatePlugin(tree)
-  if (validated.exitCode !== 0) throw new Error(`claude plugin validate ${tree} --strict exited ${validated.exitCode}:\n${(validated.stderr.trim() || validated.stdout.trim()).split('\n').slice(-5).join('\n')}`)
+  const failure = await validatePlugin(tree)
+  if (failure !== undefined) throw new Error(failure)
   progress.succeed('claude plugin validate --strict passed on the release')
 
   if (!dryRun) await answer('fetch', 'origin', releaseBranch)
@@ -173,27 +166,50 @@ async function gitAnswer(root: string, args: readonly string[]): Promise<string>
   return exitCode === 0 ? stdout : ''
 }
 
-async function releasedPaths(listed: readonly string[], needed: readonly string[], git: (...args: string[]) => Promise<string>): Promise<string[]> {
-  const committed = async (path: string) => (await git('ls-files', '--', `:(glob)${path}`)).trim() !== ''
-  for (const path of listed) {
-    if (!(await committed(path))) throw new Error(`package.json "files" lists ${path}, which matches no committed file. Commit it or remove it from "files", then run cmod publish again.`)
+export async function buildRelease(plugin: Plugin, output: string): Promise<{ tree: string; bundle: string | undefined }> {
+  const listed = plugin.packageJson?.['files']
+  if (listed !== undefined && !(Array.isArray(listed) && listed.every((path) => typeof path === 'string'))) {
+    throw new Error(`${tilde(plugin.root)}/package.json has a "files" key that is not a list of paths. Write it as "files": ["hooks", "src", "skills"], or remove it to release every file of the mod.`)
   }
-  const always: string[] = []
-  for (const path of new Set(needed)) if (!listed.includes(path) && (await committed(path))) always.push(path)
-  return [...listed, ...always].map((path) => `:(glob)${path}`)
-}
-
-async function buildReleaseTree(root: string, output: string, tree: string, released: readonly string[], git: (...args: string[]) => Promise<string>): Promise<string | undefined> {
-  const tar = join(output, `${releaseBranch}.tar`)
-  await git('archive', '--format=tar', '--output', tar, 'HEAD', '--', ...released, ...leftOut.map((folder) => `:(exclude)${folder}`))
+  const files = await filesOf(plugin.root)
+  for (const path of listed ?? []) {
+    if (!files.some((file) => isUnder(file, [path]))) throw new Error(`package.json "files" lists ${path}, which matches no file in the mod. Add the file or remove it from "files", then run the command again.`)
+  }
+  const stepFolders = [plugin.steps.install, plugin.steps.uninstall].flatMap((command) => (command === undefined ? [] : scriptPaths(command))).map((path) => posix.dirname(posix.normalize(path)))
+  const released = files.filter((file) => (listed === undefined || isUnder(file, [...listed, ...alwaysReleased, ...stepFolders])) && !isUnder(file, leftOut))
+  const tree = join(output, releaseBranch)
   await mkdir(tree)
-  await runCommand(['tar', '-xf', tar, '-C', tree])
-  const borrowed = ['node_modules', '.claude-plugin/types'].filter((path) => existsSync(join(root, path)) && existsSync(join(tree, posix.dirname(path))))
-  for (const path of borrowed) await symlink(join(root, path), join(tree, path))
+  for (const file of released) await cp(join(plugin.root, file), join(tree, file), { verbatimSymlinks: true })
+  const borrowed = ['node_modules', '.claude-plugin/types'].filter((path) => existsSync(join(plugin.root, path)) && existsSync(join(tree, posix.dirname(path))) && !existsSync(join(tree, path)))
+  for (const path of borrowed) await symlink(join(plugin.root, path), join(tree, path))
   try {
-    return await bundleHooks(root, tree)
+    return { tree, bundle: await bundleHooks(plugin.root, tree) }
   } finally {
     for (const path of borrowed) await unlink(join(tree, path))
+  }
+}
+
+async function filesOf(root: string): Promise<string[]> {
+  if ((await gitAnswer(root, ['rev-parse', '--show-toplevel'])).trim() !== root) return filesUnder(root)
+  const listed = await runCommand(['git', '-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'])
+  return listed.split('\0').filter((path) => path !== '' && existsSync(join(root, path)))
+}
+
+async function filesUnder(root: string, folder = '.'): Promise<string[]> {
+  const files: string[] = []
+  for (const entry of await readdir(join(root, folder), { withFileTypes: true })) {
+    const path = posix.join(folder, entry.name)
+    if (!entry.isDirectory()) files.push(path)
+    else if (entry.name !== '.git' && entry.name !== 'node_modules') files.push(...(await filesUnder(root, path)))
+  }
+  return files
+}
+
+function isUnder(path: string, globs: readonly string[]): boolean {
+  const patterns = globs.map((glob) => new Bun.Glob(posix.normalize(glob).replace(/\/$/, '')))
+  for (let folder = path; ; folder = posix.dirname(folder)) {
+    if (patterns.some((pattern) => pattern.match(folder))) return true
+    if (folder === '.') return false
   }
 }
 
