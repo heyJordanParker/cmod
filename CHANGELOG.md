@@ -4,6 +4,15 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.3.3] - 2026-10-28
+
+### Fixed
+- The test kit refuses a page, pane, widget area, or style that draws two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements with one key, as Claude Code 2.1.312 does, with Claude Code's own text, such as `cmod: returned a tree Pane refuses: Markdown "notes/all:item-text:0" is drawn twice; each takes its own key`. Such a test passed before, while Claude Code drew the whole Sidebar blank.
+- Two blocks drawn by one markdown style, such as two lists in one note, drew that style's keys twice, such as two `item-text:0`, and Claude Code refused the whole Sidebar, pane, or reply. Now cmod puts each block's place in front of every key its style draws: `<mod>/markdown:<scope>:<block>:<key>` in a page, a widget, or another mod's pane, `<scope>:<block>:<key>` in the mod's own pane, and `<block>:<key>` in a reply. `<block>` is the block's number in its markdown, and `<scope>` is the `key` of the `Markdown` element that holds it, or its number among the ones without a key. So a style's keys need be unique only within the one block it draws, and stay the same each time the block draws there, so an `Input` keeps what the person typed.
+- The test kit draws a page's keys and a markdown style's keys with the prefixes the cmod plugin gives them, `<mod>/<page>:` and `<mod>/markdown:<scope>:<block>:`, so one key in a page and in its markdown style draws, as it does in a session. A `Button` press on a page gets that full key in `e.element`, as in a session. `press`, `input`, and `select` still take the key the mod wrote.
+- A markdown style may call `Default` once per part, such as once per list item. In a mod's pane, each `Default` drew Claude Code's `Markdown` with the key of the `Markdown` element the pane drew, so a second `Default`, or a block with text around it, drew one key twice, and Claude Code refused the whole pane. Now the first `Default` takes that key and each later one takes it with `:1`, `:2`, and so on. A style that calls `Default` once in a block of its own draws the same tree as before.
+- When a mod does not answer a draw of its page, its widget, or its markdown style, cmod reports `<what> drew nothing` to the Log, such as `The markdown style of diagrams drew nothing` with the reason. Before, the reason reached only Claude Code's debug log, while the page showed an error, the widget disappeared, or Claude Code's own markdown showed in place of the style.
+
 ## [4.3.2] - 2026-10-28
 
 ### Fixed

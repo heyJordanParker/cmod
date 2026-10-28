@@ -399,7 +399,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.3.2";
+var coreVersion = "4.3.3";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -8378,6 +8378,24 @@ function built(current2, value) {
   const { name, props } = value[unbuilt];
   return build(current2, name, props);
 }
+function drawKeyed(keyPrefix, draw) {
+  const outer = drawing;
+  drawing = undefined;
+  try {
+    return keyed(draw(), keyPrefix);
+  } finally {
+    drawing = outer;
+  }
+}
+function keyed(value, keyPrefix) {
+  if (Array.isArray(value))
+    return value.map((each) => keyed(each, keyPrefix));
+  if (typeof value !== "object" || value === null || !(unbuilt in value))
+    return value;
+  const { name, props } = value[unbuilt];
+  const prefixed = Object.fromEntries(Object.entries(props).map(([field, each]) => [field, field === "key" && typeof each === "string" ? `${keyPrefix}${each}` : keyed(each, keyPrefix)]));
+  return { [unbuilt]: { name, props: prefixed } };
+}
 var elementKey = "$cmodElement";
 var handlerKey = "$cmodHandler";
 function elementData(value, handlers) {
@@ -8506,7 +8524,7 @@ async function drawComponent(table, draw, drawDefault) {
   let first;
   try {
     first = drawWith(table, () => draw(({ children, ...props }) => {
-      const drawing2 = Box({});
+      const drawing2 = table.Box({});
       calls.push({ given: props, drawing: drawing2 });
       return drawing2;
     }));
@@ -8691,11 +8709,11 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     };
   };
   const renderOf = (type) => markdownRenders.get(type);
-  const drawnBlock = (piece, at, drawClaudes, table) => {
+  const drawnBlock = (piece, at, drawClaudes, keyPrefix, table) => {
     if ("text" in piece)
       return drawClaudes(piece.text);
     const { render, props: block } = piece;
-    const draw2 = () => render.Component({ ...block, ...at, Default: ({ source = block.source }) => drawClaudes(source) });
+    const draw2 = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }) => drawClaudes(source) }));
     try {
       return table === undefined ? draw2() : drawWith(table, draw2);
     } catch (error) {
@@ -8703,12 +8721,15 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       return drawClaudes(block.source);
     }
   };
-  const othersFrom = (table, at, from) => (props) => {
+  const othersFrom = (table, at, from, unkeyedScope) => (props) => {
+    if (from >= stylers.length)
+      return table.Markdown(props);
+    const scope = props.key ?? unkeyedScope();
     for (const [index, styler] of stylers.entries()) {
       if (index < from)
         continue;
       const cached = `${stylersSeen}\x00${at.surface}\x00${at.columns}\x00${props.text}`;
-      const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }), othersFrom(table, at, index + 1));
+      const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }, scope), othersFrom(table, at, index + 1, unkeyedScope));
       if (drawn !== undefined)
         return drawn;
     }
@@ -8716,14 +8737,22 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
   };
   const markdownIn = (table, at) => {
     const reader = read;
-    const others = othersFrom(table, at, 0);
+    let unkeyed = 0;
+    const unkeyedScope = () => String(unkeyed++);
+    const others = othersFrom(table, at, 0, unkeyedScope);
     if (reader === undefined)
       return stylers.length === 0 ? undefined : others;
     return (props) => {
       const pieces = reader(props.text, renderOf);
       if (pieces.every((piece) => ("text" in piece)))
         return others(props);
-      const drawings = pieces.map((piece) => drawnBlock(piece, at, (text) => others({ ...props, text }), table));
+      const scope = props.key ?? unkeyedScope();
+      let drawn = 0;
+      const drawClaudes = (text) => {
+        const index = drawn++;
+        return others(index === 0 || props.key === undefined ? { ...props, text } : { ...props, text, key: `${props.key}:${index}` });
+      };
+      const drawings = pieces.map((piece, index) => drawnBlock(piece, at, drawClaudes, `${scope}:${index}:`, table));
       return drawPieces(drawings.map((drawing2) => ({ drawing: drawing2, isClaudesRow: false })), "pane");
     };
   };
@@ -8731,7 +8760,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     const pieces = read === undefined ? [] : read(text, renderOf);
     if (pieces.every((piece) => ("text" in piece)))
       return Markdown({ text });
-    return drawPieces(pieces.map((piece) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source })), isClaudesRow: false })), "pane");
+    return drawPieces(pieces.map((piece, index) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source }), `${index}:`), isClaudesRow: false })), "pane");
   };
   const routeMarkdown = (createReader) => {
     if (read !== undefined)
@@ -8750,7 +8779,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
         if ("text" in piece)
           return { drawing: await drawClaudes(piece.text, index === 0), isClaudesRow: true };
         const { render, props: block } = piece;
-        const component = await drawComponent(table, (Default) => render.Component({ ...block, ...styledAt(e), id: e.requestId, Default }), ({ source = block.source }, isClaudesRow) => drawClaudes(source, index === 0 && isClaudesRow));
+        const component = await drawComponent(table, (Default) => drawKeyed(`${index}:`, () => render.Component({ ...block, ...styledAt(e), id: e.requestId, Default })), ({ source = block.source }, isClaudesRow) => drawClaudes(source, index === 0 && isClaudesRow));
         if (!("failure" in component))
           return component;
         render.log(component.failure);
@@ -10175,7 +10204,7 @@ function drawnParts({ claude, report, press }) {
           claude.ui.invalidate("ui.render");
       };
       const pending = drawing2.get(key) ?? claude.cmod.call({ to: mod, method: partMethods.draw, input }).then((data) => keep(data ?? null), (error) => {
-        claude.ui.log(`cmod: ${name} drew nothing: ${messageOf(error)}`, { to: "debug" });
+        report(`draw:${mod}`, `${name} drew nothing`, error);
         keep(drawn.get(key)?.data ?? null, messageOf(error));
       }).finally(() => drawing2.delete(key));
       drawing2.set(key, pending);
@@ -11243,10 +11272,10 @@ async function createMod(definition, runtime) {
   let hasEarlierPrompts = true;
   let agentType;
   let parts;
-  const borrowed = (styler, cached, input) => {
+  const borrowed = (styler, cached, input, scope) => {
     const name = `The markdown style of ${styler}`;
     parts?.fill(styler, cached, input, name)?.then(() => claude.ui.invalidate("ui.render"));
-    return parts?.element(styler, cached, `${styler}/markdown:`, name, `markdown:${styler}`);
+    return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`);
   };
   const area = createUi({ name: definition.name, claude, router, report, announce, mod: () => mod, borrowed, nextDraw: runtime.nextDraw });
   const askParent = async () => {
@@ -11875,7 +11904,7 @@ function changelogSections(markdown2) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-45oBmT/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12354,7 +12383,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-45oBmT/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12609,7 +12638,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-45oBmT/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12663,7 +12692,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-45oBmT/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -13038,7 +13067,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-45oBmT/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
