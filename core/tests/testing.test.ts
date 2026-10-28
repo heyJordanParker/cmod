@@ -10,7 +10,7 @@ import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type TestOptions } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
 import { Box, Button, Image, Input, Markdown, Select, Text } from '../src/ui/elements.js'
-import { Heading } from '../src/ui/markdown.js'
+import { Heading, List } from '../src/ui/markdown.js'
 
 const tickets = defineMod({
   name: 'tickets',
@@ -357,6 +357,52 @@ test('tested.lines draws a widget in its area, and tested.press presses its butt
 
   expect(await tested.lines(BelowPrompt, { columns: 40 })).toEqual(['1 of 40 [ Add ]'])
   expect(await tested.lines(Dashboard)).toEqual([])
+})
+
+const ideas = defineMod({
+  name: 'ideas',
+  setup(mod) {
+    const render = () => Box({ flexDirection: 'column', children: [Markdown({ key: 'item-text:0', text: 'Ship it' }), Markdown({ key: 'item-text:0', text: 'Rest' })] })
+    mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
+    void mod.sidebar.add({ id: 'all', title: 'Ideas', render }).open()
+  },
+})
+
+test('a page that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses the Sidebar', async () => {
+  const tested = testMod(ideas)
+
+  await expect(tested.shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Markdown "ideas/all:item-text:0" is drawn twice; each takes its own key')
+})
+
+test('a widget that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses its row', async () => {
+  const tested = testMod(ideas)
+
+  await expect(tested.lines(BelowPrompt)).rejects.toThrow('cmod: returned a tree PromptHint refuses: Markdown "ideas/next:item-text:0" is drawn twice; each takes its own key')
+})
+
+test('a page draws Markdown elements of different keys, and a Box and a Markdown of one key, as Claude Code 2.1.312 does', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'ideas',
+      setup(mod) {
+        mod.styles.add({ kind: List, render: (_mod, { source }) => Markdown({ key: 'item-text:0', text: source.slice(2) }) })
+        void mod.sidebar
+          .add({ id: 'all', title: 'Ideas', render: () => Box({ key: 'item-text:0', flexDirection: 'column', children: [Markdown({ key: 'item-text:0', text: 'Ship it' }), Markdown({ key: 'item-text:1', text: 'Tell the team' }), Markdown({ text: '- Rest' })] }) })
+          .open()
+      },
+    }),
+  )
+
+  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
+})
+
+test("a press on a page's Button takes the mod's key and gets the key the cmod plugin draws", async () => {
+  const pressed: string[] = []
+  const tested = testMod(defineMod({ name: 'ideas', setup: (mod) => void mod.sidebar.add({ id: 'all', title: 'Ideas', render: () => Button({ key: 'ship', label: 'Ship', onPress: (e) => void pressed.push(e.element) }) }).open() }))
+
+  await tested.shown.page.press('ship')
+
+  expect(pressed).toEqual(['ideas/all:ship'])
 })
 
 const journal = defineMod({

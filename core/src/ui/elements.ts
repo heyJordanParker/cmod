@@ -41,6 +41,24 @@ function built(current: Drawing, value: unknown): unknown {
   return build(current, name, props)
 }
 
+export function drawKeyed<Drawn>(keyPrefix: string, draw: () => Drawn): Drawn {
+  const outer = drawing
+  drawing = undefined
+  try {
+    return keyed(draw(), keyPrefix) as Drawn
+  } finally {
+    drawing = outer
+  }
+}
+
+function keyed(value: unknown, keyPrefix: string): unknown {
+  if (Array.isArray(value)) return value.map((each: unknown) => keyed(each, keyPrefix))
+  if (typeof value !== 'object' || value === null || !(unbuilt in value)) return value
+  const { name, props } = (value as Unbuilt)[unbuilt]
+  const prefixed = Object.fromEntries(Object.entries(props).map(([field, each]) => [field, field === 'key' && typeof each === 'string' ? `${keyPrefix}${each}` : keyed(each, keyPrefix)]))
+  return { [unbuilt]: { name, props: prefixed } } satisfies Unbuilt
+}
+
 const elementKey = '$cmodElement'
 
 const handlerKey = '$cmodHandler'

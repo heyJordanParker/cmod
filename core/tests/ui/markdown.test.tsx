@@ -5,9 +5,9 @@ import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { partMethods } from '../../src/runtime/ui.js'
 import { testMod } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
-import { textOf } from '../../src/testing/fake-elements.js'
+import { checkKeys, findElement, textOf } from '../../src/testing/fake-elements.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
-import { Box, Markdown, Text } from '../../src/ui/elements.js'
+import { Box, Button, Input, Markdown, Text } from '../../src/ui/elements.js'
 import { BlockQuote, CodeBlock, Heading, HtmlBlock, List, markdownBlocks, Paragraph, Table, ThematicBreak } from '../../src/ui/markdown.js'
 
 const markdownPlaces = { Heading, Paragraph, CodeBlock, BlockQuote, List, Table, ThematicBreak, HtmlBlock } as const
@@ -414,6 +414,27 @@ test("a pane of one mod draws another mod's markdown style once that mod draws i
   expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toContain('diagram: graph TD')
 })
 
+test("a pane whose other mod's markdown style fails to draw draws Claude Code's markdown and reports it to the Log", async () => {
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  const logged: unknown[] = []
+  fake.fakes.cmod.call = async (call) => {
+    if (call.method === 'cmod:failed') return (logged.push(call.input), { showsToast: false })
+    if (call.to === 'diagrams') throw new Error('diagrams: $.cmod.call: diagrams is not running')
+    return null
+  }
+  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+
+  await notes.route('ui.render', pane, drawsLikeClaude)
+  await fake.settle()
+
+  expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toBe('Done.')
+  expect(logged).toEqual([expect.objectContaining({ mod: 'notes', id: 'draw:diagrams', message: 'The markdown style of diagrams drew nothing', details: expect.stringContaining('diagrams: $.cmod.call: diagrams is not running') })])
+})
+
 test('hearing which mods style markdown redraws only a mod with a pane, because the cmod plugin draws every widget and page', async () => {
   const redrawsOf = async (definition: ModDefinition) => {
     const fake = fakeClaude({ name: definition.name, root: `/test/plugins/${definition.name}` })
@@ -469,6 +490,252 @@ test("a mod's markdown style draws in its own Sidebar page and widget under test
 
   expect(await tested.shown.page.lines()).toEqual(['diagram: graph TD'])
   expect(await tested.lines(BelowPrompt)).toEqual(['diagram: graph LR'])
+})
+
+const bulletItems = (source: string) => source.split(/\n(?=- )/).map((item) => item.slice(2))
+
+const bullets = defineMod({
+  name: 'bullets',
+  setup(mod) {
+    mod.styles.add({
+      kind: List,
+      render: (_mod, { source, Default }) => (
+        <Box flexDirection="column">
+          {bulletItems(source).map((item) => (
+            <Box>
+              <Text>• </Text>
+              <Default source={item} />
+            </Box>
+          ))}
+        </Box>
+      ),
+    })
+    mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render: () => <Markdown key="list" text={'- you\n- me'} /> })
+    void mod.panes.add({ id: 'notes', title: 'Notes', render: () => <Markdown key="list" text={'Intro\n\n- you\n- me'} /> }).open()
+    void mod.sidebar.add({ id: 'all', title: 'Bullets', render: () => <Markdown key="list" text={'- you\n- me'} /> }).open()
+  },
+})
+
+test('a style that draws each list item with Default draws every item through Claude Code in a pane, each with its own key', async () => {
+  const tested = testMod(bullets)
+  await tested.start()
+
+  expect(await tested.shown.pane.lines()).toEqual(['Intro', '', '• you', '• me'])
+})
+
+test('a style that draws each list item with Default draws every item through Claude Code in a Sidebar page and a widget', async () => {
+  const tested = testMod(bullets)
+
+  expect(await tested.shown.page.lines()).toEqual(['• you', '• me'])
+  expect(await tested.lines(BelowPrompt)).toEqual(['• you', '• me'])
+})
+
+test('a style that draws each list item with Default draws every item through Claude Code in a reply', async () => {
+  const tested = testMod(bullets)
+
+  expect(await tested.lines(Reply, { text: '- you\n- me', isFirstOfReply: true })).toEqual([
+    '⏺ • AssistantMessage',
+    '      text: "you"',
+    '      isFirstOfReply: false',
+    '  • AssistantMessage',
+    '      text: "me"',
+    '      isFirstOfReply: false',
+  ])
+})
+
+const indexKeyed = ({ source }: StyleProps<typeof List>) => (
+  <Box flexDirection="column">
+    {bulletItems(source).map((item, index) => (
+      <Markdown key={`item-text:${index}`} text={item} />
+    ))}
+  </Box>
+)
+
+const ideasDrawing = (render: () => RenderElement) =>
+  defineMod({
+    name: 'ideas',
+    setup(mod) {
+      mod.styles.add({ kind: List, render: (_mod, props) => indexKeyed(props) })
+      mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
+      void mod.sidebar.add({ id: 'all', title: 'Ideas', render }).open()
+    },
+  })
+
+test('two keyed Markdown elements on a page, each holding a list its style keys by index, draw both lists', async () => {
+  const tested = testMod(
+    ideasDrawing(() => (
+      <Box flexDirection="column">
+        <Markdown key="first" text={'- Ship it\n- Tell the team'} />
+        <Markdown key="second" text="- Rest" />
+      </Box>
+    )),
+  )
+
+  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
+})
+
+test('two keyed Markdown elements in a widget, each holding a list its style keys by index, draw both lists', async () => {
+  const tested = testMod(
+    ideasDrawing(() => (
+      <Box flexDirection="column">
+        <Markdown key="first" text={'- Ship it\n- Tell the team'} />
+        <Markdown key="second" text="- Rest" />
+      </Box>
+    )),
+  )
+
+  expect(await tested.lines(BelowPrompt)).toEqual(['Ship it', 'Tell the team', 'Rest'])
+})
+
+test('two Markdown elements without a key on a page, each holding a list its style keys by index, draw both lists', async () => {
+  const tested = testMod(
+    ideasDrawing(() => (
+      <Box flexDirection="column">
+        <Markdown text={'- Ship it\n- Tell the team'} />
+        <Markdown text="- Rest" />
+      </Box>
+    )),
+  )
+
+  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', 'Rest'])
+})
+
+const twoLists = '- Ship it\n- Tell the team\n\nThen:\n\n- Rest'
+
+test('one Markdown element on a page holding two lists its style keys by index draws both lists', async () => {
+  const tested = testMod(ideasDrawing(() => <Markdown key="idea" text={twoLists} />))
+
+  expect(await tested.shown.page.lines()).toEqual(['Ship it', 'Tell the team', '', 'Then:', '', 'Rest'])
+})
+
+test("one Markdown element in the mod's own pane holding two lists its style keys by index draws both lists, beside a keyless one of the same text", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'ideas',
+      setup(mod) {
+        mod.styles.add({ kind: List, render: (_mod, props) => indexKeyed(props) })
+        void mod.panes
+          .add({
+            id: 'ideas',
+            title: 'Ideas',
+            render: () => (
+              <Box flexDirection="column">
+                <Markdown key="idea" text={twoLists} />
+                <Markdown text={twoLists} />
+              </Box>
+            ),
+          })
+          .open()
+      },
+    }),
+  )
+  await tested.start()
+
+  expect(await tested.shown.pane.lines()).toEqual(['Ship it', 'Tell the team', '', 'Then:', '', 'Rest', 'Ship it', 'Tell the team', '', 'Then:', '', 'Rest'])
+})
+
+test('a reply holding two lists its style keys by index draws both lists', async () => {
+  const tested = testMod(ideasDrawing(() => <Box />))
+
+  expect(await tested.lines(Reply, { text: twoLists, isFirstOfReply: true })).toEqual(['⏺ Ship it', '  Tell the team', '  AssistantMessage', '    text: "Then:"', '    isFirstOfReply: false', '', '  Rest'])
+})
+
+test("the test kit presses and types into a markdown style's elements by the keys the style wrote, in a page, a widget, and the mod's own pane", async () => {
+  const done: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'ideas',
+      setup(mod) {
+        mod.styles.add({
+          kind: List,
+          render: (_mod, { source }) => (
+            <Box flexDirection="column">
+              {bulletItems(source).map((item, index) => (
+                <Box>
+                  <Button key={`done:${index}`} label="Done" onPress={() => void done.push(item)} />
+                  <Input key={`note:${index}`} onSubmit={(value) => void done.push(`${item}: ${value}`)} />
+                </Box>
+              ))}
+            </Box>
+          ),
+        })
+        const render = () => (
+          <Box flexDirection="column">
+            <Markdown key="first" text="- Ship it" />
+            <Markdown text="- Rest" />
+          </Box>
+        )
+        mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
+        void mod.panes.add({ id: 'ideas', title: 'Ideas', render }).open()
+        void mod.sidebar.add({ id: 'all', title: 'Ideas', render }).open()
+      },
+    }),
+  )
+  await tested.start()
+
+  await tested.shown.page.press('done:0')
+  await tested.shown.page.input('note:0', 'today')
+  await tested.press(BelowPrompt, 'done:0')
+  await tested.shown.pane.press('done:0')
+  await tested.shown.pane.input('note:0', 'now')
+
+  expect(done).toEqual(['Ship it', 'Ship it: today', 'Ship it', 'Ship it', 'Ship it: now'])
+})
+
+test("a pane draws three blocks of another mod's style that keys by index, each Button pressing its own block and each Input keeping its key across draws", async () => {
+  const done: string[] = []
+  const lists = await started(
+    defineMod({
+      name: 'lists',
+      setup: (mod) =>
+        void mod.styles.add({
+          kind: List,
+          render: (_mod, { source }) =>
+            Box({
+              flexDirection: 'column',
+              children: bulletItems(source).map((item, index) =>
+                Box({ children: [Button({ key: `done:${index}`, label: 'Done', onPress: () => void done.push(item) }), Input({ key: `note:${index}`, onSubmit: (value) => void done.push(`${item}: ${value}`) })] }),
+              ),
+            }),
+        }),
+    }),
+  )
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  const notes = createLifecycle(
+    defineMod({
+      name: 'notes',
+      setup: (mod) =>
+        void mod.panes.add({
+          id: 'notes',
+          title: 'Notes',
+          render: () => Box({ flexDirection: 'column', children: [Markdown({ text: '- Ship it' }), Markdown({ key: 'later', text: '- Rest' }), Markdown({ text: '- Tell the team' })] }),
+        }),
+    }),
+  )
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('ui.render', pane, drawsLikeClaude)
+  await fake.settle()
+  const scopes = ['lists/markdown:0:0:', 'lists/markdown:later:0:', 'lists/markdown:1:0:']
+  const inputKeys = (drawn: RenderElement) => scopes.map((scope) => findElement(drawn, 'Input', `${scope}note:0`)?.['key'])
+
+  const first = await notes.route('ui.render', pane, drawsLikeClaude)
+  const second = await notes.route('ui.render', pane, drawsLikeClaude)
+  checkKeys(second, 'notes', 'Pane')
+  for (const scope of scopes) {
+    const press = findElement(second, 'Button', `${scope}done:0`)?.['onPress'] as () => unknown
+    const submit = findElement(second, 'Input', `${scope}note:0`)?.['onSubmit'] as (value: string) => unknown
+    await press()
+    await submit('later')
+  }
+  await fake.settle()
+
+  expect(inputKeys(first)).toEqual(['lists/markdown:0:0:note:0', 'lists/markdown:later:0:note:0', 'lists/markdown:1:0:note:0'])
+  expect(inputKeys(second)).toEqual(inputKeys(first))
+  expect(done).toEqual(['Ship it', 'Ship it: later', 'Rest', 'Rest: later', 'Tell the team', 'Tell the team: later'])
 })
 
 test("a mod's markdown style under test draws at the terminal and at the width of each page and widget, as the cmod plugin asks it", async () => {

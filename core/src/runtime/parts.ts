@@ -41,7 +41,7 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
           .then(
             (data) => keep((data ?? null) as DrawnPart | null),
             (error: unknown) => {
-              claude.ui.log(`cmod: ${name} drew nothing: ${messageOf(error)}`, { to: 'debug' })
+              report(`draw:${mod}`, `${name} drew nothing`, error)
               keep(drawn.get(key)?.data ?? null, messageOf(error))
             },
           )

@@ -804,10 +804,10 @@ async function createMod<State extends object, Declared extends Options>(definit
   let hasEarlierPrompts = true
   let agentType: string | undefined
   let parts: DrawnParts | undefined
-  const borrowed: BorrowedMarkdown = (styler, cached, input) => {
+  const borrowed: BorrowedMarkdown = (styler, cached, input, scope) => {
     const name = `The markdown style of ${styler}`
     void parts?.fill(styler, cached, input, name)?.then(() => claude.ui.invalidate('ui.render'))
-    return parts?.element(styler, cached, `${styler}/markdown:`, name, `markdown:${styler}`)
+    return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`)
   }
   const area = createUi<State>({ name: definition.name, claude, router, report, announce, mod: () => mod, borrowed, nextDraw: runtime.nextDraw })
   const askParent = async (): Promise<string | undefined> => {

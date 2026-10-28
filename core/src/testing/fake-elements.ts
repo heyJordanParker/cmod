@@ -6,6 +6,8 @@ const boxInsides = new WeakMap<object, Drawn>()
 
 const measuredProps = ['width', 'height', 'minWidth', 'minHeight'] as const
 
+const oncePerKey: ReadonlySet<string> = new Set(['Input', 'Select', 'Markdown', 'Client', 'Raster', 'Image'])
+
 function element(type: string) {
   return (props: Record<string, unknown>): RenderElement => {
     const { children, ...rest } = props
@@ -38,15 +40,32 @@ export const elements: ElementTable = {
   Client: element('Client'),
 }
 
-export function findElement(node: RenderNode, type: string, key: string): Drawn['props'] | undefined {
-  if (typeof node === 'string') return undefined
-  const drawn = insideOf(node)
-  if (drawn.type === type && (drawn.props['key'] === key || (type === 'Button' && drawn.props['label'] === key))) return drawn.props
-  for (const child of drawn.children ?? []) {
-    const found = findElement(child, type, key)
-    if (found !== undefined) return found
+export function findElement(node: RenderNode, type: string, key: string | ((drawnKey: string) => boolean)): Drawn['props'] | undefined {
+  const matches = (drawn: Drawn) => {
+    const drawnKey = drawn.props['key']
+    if (typeof key !== 'string') return typeof drawnKey === 'string' && key(drawnKey)
+    return drawnKey === key || (type === 'Button' && drawn.props['label'] === key)
   }
+  for (const drawn of drawnIn(node)) if (drawn.type === type && matches(drawn)) return drawn.props
   return undefined
+}
+
+export function checkKeys(tree: RenderNode, plugin: string, component: string): void {
+  const seen = new Set<string>()
+  for (const { type, props } of drawnIn(tree)) {
+    const key = props['key']
+    if (!oncePerKey.has(type) || typeof key !== 'string') continue
+    const drawn = `${type}\u0000${key}`
+    if (seen.has(drawn)) throw new Error(`${plugin}: returned a tree ${component} refuses: ${type} "${key}" is drawn twice; each takes its own key`)
+    seen.add(drawn)
+  }
+}
+
+function* drawnIn(node: RenderNode): Generator<Drawn> {
+  if (typeof node === 'string') return
+  const drawn = insideOf(node)
+  yield drawn
+  for (const child of drawn.children ?? []) yield* drawnIn(child)
 }
 
 export function rowsOf(node: RenderNode, width: number): string[] {

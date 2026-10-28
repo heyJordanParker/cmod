@@ -2,7 +2,7 @@ import type { Args, ElementTable, Frozen, MarkdownProps, PaneOpenArgs, RenderEle
 import type { Mod, Turn } from '../mod.js'
 import { isObject } from '../records.js'
 import { TurnEnd, type Area, type Widget, type WidgetContext, type WidgetInit } from '../ui/areas.js'
-import { Box, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
+import { Box, drawKeyed, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
 import type { Block, MarkdownPiece, MarkdownReader } from '../ui/markdown.js'
 import { checkPane, checkPart, sizeKeys, type OpenOptions, type Page, type PageInit, type Pane, type PaneInit, type ScrollOptions, type ScrollTarget } from '../ui/panes.js'
 import { componentOf, nameOf, type Kind, type Style, type StyledAt, type StyleInit } from '../ui/styles.js'
@@ -37,7 +37,7 @@ export type PartDraw =
   | { readonly page: string; readonly params: unknown; readonly columns: number; readonly isFocused: boolean }
   | ({ readonly markdown: string } & StyledAt)
 
-export type BorrowedMarkdown = (mod: string, cached: string, input: { readonly markdown: string } & StyledAt) => RenderElement | undefined
+export type BorrowedMarkdown = (mod: string, cached: string, input: { readonly markdown: string } & StyledAt, scope: string) => RenderElement | undefined
 
 const unmeasuredColumns = 80
 
@@ -109,7 +109,7 @@ async function drawComponent<Given extends object>(
   try {
     first = drawWith(table, () =>
       draw(({ children, ...props }) => {
-        const drawing = Box({})
+        const drawing = table.Box({})
         calls.push({ given: props as Given, drawing })
         return drawing
       }),
@@ -324,10 +324,10 @@ export function createUi<State extends object>({ name, claude, router, report, a
 
   const renderOf = (type: string) => markdownRenders.get(type)
 
-  const drawnBlock = (piece: MarkdownPiece<MarkdownRender>, at: StyledAt, drawClaudes: (text: string) => RenderElement, table?: ElementTable): RenderElement => {
+  const drawnBlock = (piece: MarkdownPiece<MarkdownRender>, at: StyledAt, drawClaudes: (text: string) => RenderElement, keyPrefix: string, table?: ElementTable): RenderElement => {
     if ('text' in piece) return drawClaudes(piece.text)
     const { render, props: block } = piece
-    const draw = () => render.Component({ ...block, ...at, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) })
+    const draw = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) }))
     try {
       return table === undefined ? draw() : drawWith(table, draw)
     } catch (error) {
@@ -337,12 +337,14 @@ export function createUi<State extends object>({ name, claude, router, report, a
   }
 
   const othersFrom =
-    (table: ElementTable, at: StyledAt, from: number) =>
+    (table: ElementTable, at: StyledAt, from: number, unkeyedScope: () => string) =>
     (props: MarkdownProps): RenderElement => {
+      if (from >= stylers.length) return table.Markdown(props)
+      const scope = props.key ?? unkeyedScope()
       for (const [index, styler] of stylers.entries()) {
         if (index < from) continue
         const cached = `${stylersSeen}\u0000${at.surface}\u0000${at.columns}\u0000${props.text}`
-        const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }), othersFrom(table, at, index + 1))
+        const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }, scope), othersFrom(table, at, index + 1, unkeyedScope))
         if (drawn !== undefined) return drawn
       }
       return table.Markdown(props)
@@ -350,12 +352,20 @@ export function createUi<State extends object>({ name, claude, router, report, a
 
   const markdownIn = (table: ElementTable, at: StyledAt) => {
     const reader = read
-    const others = othersFrom(table, at, 0)
+    let unkeyed = 0
+    const unkeyedScope = () => String(unkeyed++)
+    const others = othersFrom(table, at, 0, unkeyedScope)
     if (reader === undefined) return stylers.length === 0 ? undefined : others
     return (props: MarkdownProps) => {
       const pieces = reader(props.text, renderOf)
       if (pieces.every((piece) => 'text' in piece)) return others(props)
-      const drawings = pieces.map((piece) => drawnBlock(piece, at, (text) => others({ ...props, text }), table))
+      const scope = props.key ?? unkeyedScope()
+      let drawn = 0
+      const drawClaudes = (text: string) => {
+        const index = drawn++
+        return others(index === 0 || props.key === undefined ? { ...props, text } : { ...props, text, key: `${props.key}:${index}` })
+      }
+      const drawings = pieces.map((piece, index) => drawnBlock(piece, at, drawClaudes, `${scope}:${index}:`, table))
       return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })), 'pane')
     }
   }
@@ -363,7 +373,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
   const markdownDrawing = (text: string, at: StyledAt): RenderElement => {
     const pieces = read === undefined ? [] : read(text, renderOf)
     if (pieces.every((piece) => 'text' in piece)) return Markdown({ text })
-    return drawPieces(pieces.map((piece) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source })), isClaudesRow: false })), 'pane')
+    return drawPieces(pieces.map((piece, index) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source }), `${index}:`), isClaudesRow: false })), 'pane')
   }
 
   const routeMarkdown = (createReader: () => MarkdownReader) => {
@@ -382,7 +392,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
           const { render, props: block } = piece
           const component = await drawComponent<{ readonly source?: string }>(
             table,
-            (Default) => render.Component({ ...block, ...styledAt(e), id: e.requestId, Default }),
+            (Default) => drawKeyed(`${index}:`, () => render.Component({ ...block, ...styledAt(e), id: e.requestId, Default })),
             ({ source = block.source }, isClaudesRow) => drawClaudes(source, index === 0 && isClaudesRow),
           )
           if (!('failure' in component)) return component

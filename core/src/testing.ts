@@ -45,12 +45,12 @@ import { beforeEvents, processEvents, sessionEvents, type AnswerOf, type BeforeE
 import { ContextEnd } from './session/context/context.js'
 import { TaskStart } from './session/goal/task.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
-import { elements, findElement, rowsOf } from './testing/fake-elements.js'
+import { checkKeys, elements, findElement, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
 import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft, type StartedTask } from './testing/fake-sessions.js'
 import { listed, messageOf } from './utils/text.js'
 import { componentOf, type KindProps, type Row, type StyledAt } from './ui/styles.js'
-import { areas, TurnEnd as TurnEndArea, type Area } from './ui/areas.js'
+import { AbovePrompt, areas, BelowPrompt, Dashboard, TurnEnd as TurnEndArea, Working, type Area } from './ui/areas.js'
 import { drawWith, elementOf } from './ui/elements.js'
 import { drawnParts } from './runtime/parts.js'
 import { serveWidgets, type Widgets } from './runtime/widgets.js'
@@ -144,6 +144,17 @@ const presentation: CommandPresentation = { isFullscreen: false, columns: defaul
 
 const toolUseEvents: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied']
 
+const areaComponents = { [AbovePrompt]: 'AbovePrompt', [BelowPrompt]: 'PromptHint', [Working]: 'Spinner', [TurnEndArea]: 'TurnDuration', [Dashboard]: 'Pane' } as const satisfies Readonly<Record<Area, RenderComponent>>
+
+function drawnByStyle(key: string): (drawnKey: string) => boolean {
+  return (drawnKey) => {
+    if (!drawnKey.endsWith(`:${key}`)) return false
+    const scoped = drawnKey.slice(0, -key.length - 1)
+    const block = scoped.slice(scoped.lastIndexOf(':') + 1)
+    return block !== scoped && /^\d+$/.test(block)
+  }
+}
+
 export function testMod<State extends object, Declared extends Options = Options>(definition: ModDefinition<State, string, Declared>, options: TestOptions<State, Declared> = {}): TestedMod<State> {
   installJsx()
   const name = definition.name
@@ -215,13 +226,18 @@ export function testMod<State extends object, Declared extends Options = Options
     if (requests !== undefined && requests.length > 0) await applyRequests(requests)
   }
   const pressPart = (input: PartPress) => callMod(partMethods.press, input).then((update) => updated((update ?? {}) as PartsUpdate))
-  const markdownIn = (table: ElementTable, at: StyledAt) => (props: MarkdownProps): RenderElement => {
-    const drawnAt = `${at.surface}\u0000${at.columns}\u0000${props.text}`
-    const drawn = stylesMarkdown ? ownMarkdown.get(drawnAt) : null
-    if (drawn === undefined) missedMarkdown.set(drawnAt, { markdown: props.text, ...at })
-    if (drawn === undefined || drawn === null || drawn.tree === null) return table.Markdown(props)
-    const { draw, tree } = drawn
-    return drawWith(table, () => elementOf(tree, '', (handler, args) => void pressPart({ draw, handler, args }))) as RenderElement
+  const markdownIn = (table: ElementTable, at: StyledAt) => {
+    let unkeyed = 0
+    return (props: MarkdownProps): RenderElement => {
+      if (!stylesMarkdown) return table.Markdown(props)
+      const keyPrefix = `${name}/markdown:${props.key ?? unkeyed++}:`
+      const drawnAt = `${at.surface}\u0000${at.columns}\u0000${props.text}`
+      const drawn = ownMarkdown.get(drawnAt)
+      if (drawn === undefined) missedMarkdown.set(drawnAt, { markdown: props.text, ...at })
+      if (drawn === undefined || drawn === null || drawn.tree === null) return table.Markdown(props)
+      const { draw, tree } = drawn
+      return drawWith(table, () => elementOf(tree, keyPrefix, (handler, args) => void pressPart({ draw, handler, args }))) as RenderElement
+    }
   }
   const withOwnMarkdown = async <Drawn>(draw: () => Promise<Drawn>): Promise<Drawn> => {
     const first = await draw()
@@ -338,6 +354,7 @@ export function testMod<State extends object, Declared extends Options = Options
     }
     const answer = await cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (await claudeCodeRuns(event, e, below)) as EventResult<N>))
     await fake.settle()
+    if (event === 'ui.render') checkKeys(answer as RenderElement, name, (input as Args<'ui.render'>).component)
     return answer
   }
 
@@ -395,7 +412,8 @@ export function testMod<State extends object, Declared extends Options = Options
     const drawn = (await callMod(partMethods.draw, { page: pageId, params: page.params, columns, isFocused: page.isFocused })) as DrawnPart | null
     await fake.settle()
     const tree = drawn?.tree ?? null
-    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(elements, () => elementOf(tree, '', (handler, args) => void pressPart({ draw: drawn.draw, handler, args })), markdownIn(elements, { surface: 'terminal', columns })) as RenderElement)
+    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(elements, () => elementOf(tree, `${name}/${pageId}:`, (handler, args) => void pressPart({ draw: drawn.draw, handler, args })), markdownIn(elements, { surface: 'terminal', columns })) as RenderElement)
+    checkKeys(drawing, cmodPluginName, 'Pane')
     return { drawing, columns }
   }
 
@@ -418,7 +436,8 @@ export function testMod<State extends object, Declared extends Options = Options
     }
     const drawnElement = async (type: 'Button' | 'Input' | 'Select' | 'Markdown', key: string) => {
       const { id, drawing } = await draw()
-      const props = findElement(drawing, type, key)
+      const keys = isPane ? [key] : [key, `${name}/${id}:${key}`]
+      const props = keys.map((each) => findElement(drawing, type, each)).find((found) => found !== undefined) ?? findElement(drawing, type, drawnByStyle(key))
       if (props === undefined) throw new Error(`The ${kind} "${id}" of ${name} draws no ${type} with the ${type === 'Button' ? 'key or label' : 'key'} "${key}".`)
       return { id, props }
     }
@@ -474,7 +493,9 @@ export function testMod<State extends object, Declared extends Options = Options
     if (area === TurnEndArea && turn?.closedAt === undefined) throw new Error(`${name} has no ended turn, so TurnEnd draws nothing. End one with tested.add({ type: Prompt, text: '…' }), then tested.endTurn().`)
     const drawn = await withOwnMarkdown(() => served.draw(area, elements, { surface: 'terminal', columns }, turn))
     await fake.settle()
-    return { drawing: elements.Box({ flexDirection: 'column', children: [...drawn] }), columns }
+    const drawing = elements.Box({ flexDirection: 'column', children: [...drawn] })
+    checkKeys(drawing, cmodPluginName, areaComponents[area])
+    return { drawing, columns }
   }
 
   const drawSlot = async (component: RenderComponent, props: object, requestId = `${component}_${(slotDraws += 1)}`) => {
@@ -482,6 +503,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const input = { surface: 'terminal', component, requestId, props } as Frozen<Args<'ui.render'>>
     const drawing = await lifecycle.route('ui.render', input, async (e) => plainOutput(e as Args<'ui.render'>))
     await fake.settle()
+    checkKeys(drawing, name, component)
     return { drawing, columns: defaultColumns }
   }
 
@@ -634,7 +656,7 @@ export function testMod<State extends object, Declared extends Options = Options
     async press(area: Area, key: string) {
       const { drawing } = await drawWidgets(area)
       const keys = [key, ...(await widgetsOf()).widgets().filter((widget) => widget.mod === name).map((widget) => `${widget.key}:${key}`)]
-      const button = keys.map((each) => findElement(drawing, 'Button', each)).find((found) => found !== undefined)
+      const button = keys.map((each) => findElement(drawing, 'Button', each)).find((found) => found !== undefined) ?? findElement(drawing, 'Button', drawnByStyle(key))
       if (button === undefined) throw new Error(`The widgets of ${name} in ${area} draw no Button with the key or label "${key}".`)
       await (button['onPress'] as () => unknown)()
       await fake.settle()
