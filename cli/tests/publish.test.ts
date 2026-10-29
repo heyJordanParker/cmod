@@ -136,12 +136,12 @@ test("a mod's marketplace lists the cmod plugin from cmod's release branch, so i
   expect(result.exitCode).toBe(0)
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   const listed = JSON.parse(await readFile(join(dirname(archive), 'marketplace.json'), 'utf8')).plugins
-  expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' } })
+  expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' } })
 })
 
 const dependsOnOneclaude = { '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'oneclaude', version: '>=0.9.0' }] }), 'package.json': JSON.stringify({ name: 'greeter' }) }
 
-const oneclaudeEntry = { name: 'oneclaude', description: 'One Claude across every session', source: { source: 'github', repo: 'heyJordanParker/oneclaude', ref: 'release' } }
+const oneclaudeEntry = { name: 'oneclaude', description: 'One Claude across every session', source: { source: 'url', url: 'https://github.com/heyJordanParker/oneclaude.git', ref: 'release' } }
 
 const oneclaudeManifest = JSON.stringify({ name: 'oneclaude', version: '0.9.0', description: 'One Claude across every session', repository: 'https://github.com/heyJordanParker/oneclaude' })
 

@@ -157,7 +157,7 @@ export async function run(argv: string[]): Promise<number> {
     progress.succeed(`Listed the cmod plugin from the ${releaseBranch} branch of heyJordanParker/cmod, so the cmod dependency resolves in this marketplace and follows each cmod release`)
   }
   for (const { name, repo, description } of dependencies) {
-    plugins.push({ name, description: description ?? `${name}, a Claude Code mod`, source: { source: 'github', repo, ref: releaseBranch } })
+    plugins.push({ name, description: description ?? `${name}, a Claude Code mod`, source: { source: 'url', url: `https://github.com/${repo}.git`, ref: releaseBranch } })
     progress.succeed(`Listed ${name} from the ${releaseBranch} branch of ${repo}, so the ${name} dependency resolves in this marketplace and follows each ${name} release`)
   }
   const marketplacePath = dryRun ? join(output, 'marketplace.json') : join(plugin.root, '.claude-plugin', 'marketplace.json')

@@ -52,7 +52,7 @@ test("link lists the checkout in a marketplace in its parent folder beside the c
     owner: { name: 'cmod link' },
     plugins: [
       { name: 'demo', source: './demo', description: 'demo' },
-      { name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' } },
+      { name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' } },
     ],
   })
   expect(await readFile(excludes, 'utf8')).toBe(`${excludedBefore}/.claude-plugin/marketplace.json\n`)
@@ -86,7 +86,7 @@ test('two checkouts in one folder share its marketplace, and unlinking one keeps
   const listed = JSON.parse(await readFile(linkedMarketplace(home), 'utf8')) as { plugins: { name: string; source: unknown }[] }
   expect(listed.plugins.map((plugin) => [plugin.name, plugin.source])).toEqual([
     ['notes', './notes'],
-    ['cmod', { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' }],
+    ['cmod', { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' }],
   ])
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin uninstall demo@Developer-linked --json\nplugin marketplace update Developer-linked\n')
   expect((await cmod(home, 'unlink', join(home, 'Developer/demo'))).stderr).toBe('cmod unlink: ~/Developer/demo is not linked. cmod link links it.\n')

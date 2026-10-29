@@ -19,7 +19,7 @@ export type Marketplace = { name: string; source: string; repo?: string; path?: 
 export const cmodPluginEntry = {
   name: 'cmod',
   description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes',
-  source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' },
+  source: { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' },
 }
 
 const claudeApiMs = 60_000
