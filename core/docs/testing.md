@@ -94,7 +94,7 @@ Starts the mod: loads its state, runs `setup`, and adds its listeners, pages, pa
 - `raise.beforeToolResult({ callId, output })` passes `output` to the listener as given, so a test gives what the tool answered Claude Code: `{ stdout: 'ok', stderr: '' }` for Bash, or Edit's `{ filePath, structuredPatch }`. A `ToolResult` that `tested.add` adds holds the text Claude read, as a transcript does.
 - `raise.beforeTaskStart({ title, agentType?, model? })` asks about a task about to start.
 - `raise.beforeTurnEnd({ answer?, failure? })` asks about the open turn ending. It rejects when no turn is open: add a `Prompt` first.
-- `raise.beforeContextEnd()` asks about a compaction of the open context. `{ task }` asks about the compaction of a task's context, a task `tested.startTask` started.
+- `raise.beforeContextEnd()` asks about a compaction of the open context, and resolves with the mod's answer, such as `{ summary }`. `{ task }` asks about the compaction of a task's context, a task `tested.startTask` started.
 - `raise.beforeSessionStart({ source: 'compact' })` asks about the main agent's compaction. `{ source: 'compact', task }` asks about a subagent's, which only `sessions.current.goal.beforeSessionStart` hears.
 - A `note` that `raise` returns is the mod's own text. What Claude Code receives, as `claudeCodeOf(tested).fire` shows it, holds the note inside the mod's tag, such as `<guard_mod>…</guard_mod>`.
 

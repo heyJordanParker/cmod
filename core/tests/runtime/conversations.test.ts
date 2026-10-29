@@ -622,6 +622,26 @@ test("one compaction of a task moves its context once, and one of the session mo
   expect([(await contexts('task-1')).map((each) => each.number), (await contexts()).map((each) => each.number)]).toEqual([[2], [2]])
 })
 
+test("a compaction a mod's summary answers, where no model runs, still moves the session's context", async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.process.spawn = () => printed('[]')
+  fake.fakes.cmod.call = async ({ method }) => (method === conversationMethods.before ? { summary: 'The tree pane is drawn in src/tree.tsx.' } : null)
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
+  await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'mine', subscriptions: [{ event: 'contextEnd' }] }, caller: 'totalrecall' })
+
+  const compacted = await router.dispatch('session.compact', { trigger: 'manual', messages: [] } as never, async () => {
+    throw new Error('Claude Code compacted although a mod answered with its summary')
+  })
+  await fake.settle()
+
+  expect(compacted).toEqual({ messages: [{ role: 'user', text: 'The tree pane is drawn in src/tree.tsx.', toolUses: [] }] })
+  const contexts = (await served.answer({ to: 'cmod', method: conversationMethods.contexts, input: { session: 'mine' }, caller: 'history' }))?.value as { number: number }[]
+  expect(contexts.map((each) => each.number)).toEqual([2])
+})
+
 test("a running task of the cmod plugin's session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()

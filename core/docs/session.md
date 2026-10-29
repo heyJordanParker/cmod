@@ -194,7 +194,7 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 | `beforeToolCall` | `{ input?, note? }`, `{ result, note? }`, or `{ refuse }` | A tool call. `result` answers it without running the tool, and `note` reaches Claude with the call's result |
 | `beforeTaskStart` | `{ prompt?, title?, owner?: { agentType?, model?, cwd? }, isAsync? }` or `{ refuse }` | A task about to start. `prompt` and `title` replace what Claude wrote, `owner` picks the agent that does it, its model, and its folder, and `isAsync` runs a subagent while Claude goes on. A background task takes `prompt`, `title`, `owner`, and `refuse`, a fork and a clone take `prompt`, `title`, and `refuse`, and a workflow's agent takes only `refuse` |
 | `beforeTurnEnd` | `{ note }` or `{ refuse }` | The agent about to stop. `refuse` tells it it may not stop yet, and it reads the reason as an error. `note` gives it new information, which it reads at once and keeps working. On `task.owner`, it is the task about to hand back its answer |
-| `beforeContextEnd` | `{ refuse }` | A compaction about to start. `refuse` keeps the context |
+| `beforeContextEnd` | `{ summary }` or `{ refuse }` | A compaction about to start. `summary` is the text the new context starts with, which Claude reads as one prompt, in place of the summary Claude Code's model would write, so no model runs. `refuse` keeps the context, whatever another mod answered. When several mods answer `summary`, the last one asked stands |
 
 ```ts
 sessions.current.beforeToolCall({ name: 'Bash', input: { command: /\brm -rf\b/ } }, () => ({ refuse: 'Delete files one at a time.' }))

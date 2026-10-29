@@ -38,6 +38,7 @@ export type Answers = {
   readonly prompt: string
   readonly owner: { readonly agentType?: string; readonly model?: string; readonly cwd?: string }
   readonly isAsync: boolean
+  readonly summary: string
 }
 
 export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly fold: () => Decide }
@@ -247,7 +248,8 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const task = e.agentId === undefined ? undefined : where.tasks[e.agentId]
       if (e.agentId !== undefined && task === undefined) return next(e)
       const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) })
-      return answer.refuse === undefined ? next(e) : { skip: answer.refuse }
+      if (answer.refuse !== undefined) return { skip: answer.refuse }
+      return answer.summary === undefined ? next(e) : { messages: [{ role: 'user', text: answer.summary, toolUses: [] }] }
     }),
   ]
   return { remove: () => added.forEach((each) => each.remove()) }
@@ -282,7 +284,7 @@ export const beforeAnswerKeys: Readonly<Record<BeforeEvent, readonly (keyof Answ
   notice: ['text'],
   taskStart: ['prompt', 'title', 'owner', 'isAsync', 'refuse'],
   turnEnd: ['refuse', 'note'],
-  contextEnd: ['refuse'],
+  contextEnd: ['refuse', 'summary'],
 }
 
 export function foldBefore(event: BeforeEvent, change: SessionChange, askers: readonly ((change: SessionChange) => Promise<unknown>)[], report: (error: unknown) => void): Promise<Partial<Answers> | undefined> {

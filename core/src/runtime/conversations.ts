@@ -375,6 +375,16 @@ export function serveConversations({
       )
   }
 
+  const recordCompaction: RoutedHook<'session.compact'> = async (e, next) => {
+    const compacted = await next(e)
+    if (e.trigger === 'precompute' || compacted.skip !== undefined || session === '') return compacted
+    const at = new Date().toISOString()
+    const boundary: Row = { id: `compact:${e.agentId ?? session}:${at}`, at, type: 'system', name: 'compact_boundary', isMeta: false, isSummary: false, content: [] }
+    void take(boundary, e.agentId).catch((error: unknown) => report('compact', 'Missed a compaction', error))
+    return compacted
+  }
+  router.add('session.compact', recordCompaction, (e, _error, next) => recordCompaction(e, next))
+
   installBefore({
     claude,
     router,
@@ -453,16 +463,6 @@ export function serveConversations({
     return kept
   }
   router.add('session.append', recordAppend, (e, _error, next) => recordAppend(e, next))
-
-  const recordCompaction: RoutedHook<'session.compact'> = async (e, next) => {
-    const compacted = await next(e)
-    if (e.trigger === 'precompute' || compacted.skip !== undefined || session === '') return compacted
-    const at = new Date().toISOString()
-    const boundary: Row = { id: `compact:${e.agentId ?? session}:${at}`, at, type: 'system', name: 'compact_boundary', isMeta: false, isSummary: false, content: [] }
-    void take(boundary, e.agentId).catch((error: unknown) => report('compact', 'Missed a compaction', error))
-    return compacted
-  }
-  router.add('session.compact', recordCompaction, (e, _error, next) => recordCompaction(e, next))
 
   router.add('session.measure', async (e, next) => {
     const measured = await next(e)

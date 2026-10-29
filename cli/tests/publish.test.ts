@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test'
-import { chmod, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
 import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles, writeLinked } from './cmod.js'
@@ -87,13 +87,13 @@ test('publish uploads the release files before it pushes the marketplace, so no 
   await Bun.spawn(['git', 'init', '-q', '--bare', remote]).exited
   await Bun.spawn(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
   for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await Bun.spawn(['git', '-C', root, 'config', key as string, value as string]).exited
-  await writeFiles(home, { 'bin/gh': `#!/bin/sh\ngit --git-dir="${remote}" for-each-ref --format='%(refname)' > "${home}/refs-at-release"\n` })
-  await chmod(join(home, 'bin/gh'), 0o755)
+  await answerAsGitHub(home, remote, 'main')
 
   const result = await cmod(home, 'publish', root)
 
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
+  expect(await Bun.file(join(home, 'gh-edits')).exists()).toBe(false)
   const atRelease = (await readFile(join(home, 'refs-at-release'), 'utf8')).trim().split('\n')
   const after = (await new Response(Bun.spawn(['git', '--git-dir', remote, 'for-each-ref', '--format=%(refname)'], { stdout: 'pipe' }).stdout).text()).trim().split('\n')
   const branch = (await new Response(Bun.spawn(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
@@ -104,6 +104,35 @@ test('publish uploads the release files before it pushes the marketplace, so no 
   expect(atRelease).not.toContain(`refs/heads/${branch}`)
   expect(after).toContain(`refs/heads/${branch}`)
 })
+
+test("a first publish into an empty repository, where GitHub made the release branch the default, makes the mod's branch the default, where Claude Code reads marketplace.json", async () => {
+  const home = await temporaryHome()
+  const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)
+  const remote = join(home, 'remote.git')
+  await Bun.spawn(['git', 'init', '-q', '--bare', remote]).exited
+  await Bun.spawn(['git', '-C', root, 'config', `url.${remote}.pushInsteadOf`, 'https://github.com/owner/cmod.git']).exited
+  for (const [key, value] of [['protocol.https.allow', 'never'], ['user.name', 'Test'], ['user.email', 'test@example.com']]) await Bun.spawn(['git', '-C', root, 'config', key as string, value as string]).exited
+  await answerAsGitHub(home, remote, 'release')
+
+  const result = await cmod(home, 'publish', root)
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  const branch = (await new Response(Bun.spawn(['git', '-C', root, 'branch', '--show-current'], { stdout: 'pipe' }).stdout).text()).trim()
+  expect(await readFile(join(home, 'gh-edits'), 'utf8')).toBe(`repo edit owner/cmod --default-branch ${branch}\n`)
+})
+
+async function answerAsGitHub(home: string, remote: string, defaultBranch: string): Promise<void> {
+  await writeFiles(home, {
+    'bin/gh': `#!/bin/sh
+case "$1 $2" in
+  "release create") git --git-dir="${remote}" for-each-ref --format='%(refname)' > "${home}/refs-at-release" ;;
+  "repo view") echo ${defaultBranch} ;;
+  "repo edit") echo "$*" >> "${home}/gh-edits" ;;
+esac
+`,
+  })
+}
 
 test("publish writes the version's CHANGELOG.md section as the release notes, and ships the changelog in the release", async () => {
   const home = await temporaryHome()

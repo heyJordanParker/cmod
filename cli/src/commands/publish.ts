@@ -40,7 +40,10 @@ commits that file, tags v<version>, tags the release commit
 <name>--v<version>, which Claude Code installs a version range from when a
 marketplace lists the mod from git, pushes both tags and the release branch,
 creates the GitHub release with every file, then pushes the branch with
-marketplace.json, so no update reaches a release without its files. Its notes
+marketplace.json, so no update reaches a release without its files. When
+GitHub made the release branch the default, as it does for the first branch
+pushed to an empty repository, it makes that branch the default instead, where
+Claude Code reads marketplace.json. Its notes
 are the "## [<version>]" section of the committed CHANGELOG.md, which every
 release ships, and it refuses a version with no section. It refuses a package.json that depends on a file: or link:
 path, which no user has.
@@ -180,6 +183,8 @@ export async function run(argv: string[]): Promise<number> {
   await git('push', '--atomic', 'origin', tag, dependencyTag, `${release}:refs/heads/${releaseBranch}`)
   await runCommand(['gh', 'release', 'create', tag, ...assets, '--repo', repository, '--title', `${plugin.name} ${plugin.version}`, '--generate-notes', '--notes', notes])
   await git('push', 'origin', 'HEAD')
+  const defaultBranch = (await runCommand(['gh', 'repo', 'view', repository, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'])).trim()
+  if (defaultBranch === releaseBranch) await runCommand(['gh', 'repo', 'edit', repository, '--default-branch', (await answer('branch', '--show-current')).trim()])
   progress.succeed(`Released ${tag}: https://github.com/${repository}/releases/tag/${tag}`)
   process.stdout.write(`\nTo list ${plugin.name} in Anthropic's plugin directory, open https://claude.ai/directory/manage, select Submit new, and paste this as the Repository:\n  ${directoryLink}\n`)
   return 0

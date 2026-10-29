@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-10-30
+
+### Added
+- A mod can answer a compaction with the summary itself, and no model runs. `sessions.current.beforeContextEnd(() => ({ summary }))` starts the new context with that text, which Claude reads as one prompt, in place of the summary Claude Code's model would write by rereading the whole conversation. A `refuse` from any mod still keeps the context. A mod that answers `summary` needs cmod 5.1.0, which `cmod check` writes as its dependency.
+
+### Fixed
+- A mod's first `cmod publish` into an empty GitHub repository leaves the mod's own branch as the default. GitHub made the `release` branch the default, because `cmod publish` pushes it first, so `claude plugin marketplace add` on the repository failed with `Marketplace file not found`. `cmod publish` now sets the default back to the branch that holds `marketplace.json`.
+
 ## [5.0.1] - 2026-10-29
 
 ### Fixed

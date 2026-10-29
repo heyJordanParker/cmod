@@ -58,7 +58,7 @@ export type BeforeAnswer = {
   readonly notice: { readonly text: string }
   readonly taskStart: { readonly prompt?: string; readonly title?: string; readonly owner?: { readonly agentType?: string; readonly model?: string; readonly cwd?: string }; readonly isAsync?: boolean } | Refusal
   readonly turnEnd: { readonly note: string } | Refusal
-  readonly contextEnd: Refusal
+  readonly contextEnd: { readonly summary: string } | Refusal
 }
 
 export type BeforeEvent = keyof BeforeAnswer

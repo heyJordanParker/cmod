@@ -10,7 +10,7 @@ A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmo
 
 ```text
 my-mod/
-├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=5.0.0" }]
+├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=5.1.0" }]
 ├── .claude/CLAUDE.md                   facts for coding agents, starting with these docs
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint

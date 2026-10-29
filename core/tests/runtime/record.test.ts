@@ -148,6 +148,22 @@ test("a task's owner keeps its context through a compaction and its turn through
   expect(await claudeCodeOf(tested).fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ block: 'Name the file first' })
 })
 
+test("a summary answer to a compaction becomes the conversation that replaces it, so no model writes one, and a refusal still keeps the context", async () => {
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  const summarizing = sessions.current.beforeContextEnd(() => ({ summary: 'The tree pane is drawn in src/tree.tsx.' }))
+  await tested.settle()
+
+  expect(await tested.raise.beforeContextEnd()).toEqual({ summary: 'The tree pane is drawn in src/tree.tsx.' })
+  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'manual', messages: [] } as never)).toEqual({ messages: [{ role: 'user', text: 'The tree pane is drawn in src/tree.tsx.', toolUses: [] }] })
+
+  sessions.current.beforeContextEnd(() => ({ refuse: 'Keep the findings' }))
+  await tested.settle()
+  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'manual', messages: [] } as never)).toEqual({ skip: 'Keep the findings' })
+  summarizing.remove()
+})
+
 test("a note at the session's turn end, at a task owner's turn end, and on a tool call reaches Claude in the mod's tag", async () => {
   const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
