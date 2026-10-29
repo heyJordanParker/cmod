@@ -242,12 +242,16 @@ function readSteps(pkg) {
   const program = steps["program"];
   if (program !== undefined && (typeof program !== "string" || !pluginName.test(program)))
     throw new Error(`package.json "cmod.program" must be the program's command, such as "hello".`);
+  const approve = steps["approve"];
+  if (approve !== undefined && approve !== true)
+    throw new Error(`package.json "cmod.approve" is ${JSON.stringify(approve)}. Write "approve": true, or leave it out.`);
   const permissions = readPermissions(steps);
   return {
     ...readCommand(steps, "install"),
     ...readCommand(steps, "uninstall"),
     ...program === undefined ? {} : { program },
     ...readHotkeys(steps["hotkeys"]),
+    ...approve === true || permissions.includes("approve") ? { approve: true } : {},
     ...permissions.length === 0 ? {} : { permissions }
   };
 }
@@ -285,61 +289,13 @@ function readPermissions(steps) {
   }
   return items;
 }
-var grantFix = "Turn it on in Settings.";
 var installFix = "Install it in Plugins.";
 var secretFix = "Set it in /config, where Claude Code keeps it in your keychain.";
-function permissionWords(item) {
-  const split = item.indexOf(":");
-  const target = item.slice(split + 1);
-  switch (split === -1 ? item : item.slice(0, split)) {
-    case "network":
-      return `Connect to ${target}`;
-    case "run":
-      return target === "*" ? "Run any program on your computer" : `Run ${target} on your computer`;
-    case "files":
-      return `Change ${target}`;
-    case "conversation":
-      return "Read your Claude Code conversations";
-    case "prompt":
-      return "Add text Claude reads and start turns";
-    case "model":
-      return "Ask a model, which uses your plan";
-    case "tasks":
-      return "Start tasks that work beside Claude";
-    case "tools":
-      return "Use and change Claude's tool calls";
-    case "config":
-      return `Change ${target} in your Claude Code settings`;
-    case "approve":
-      return "Approve Claude's tool calls for you";
-    default:
-      return item;
-  }
-}
-function settingPaths(values) {
-  return Object.entries(values).flatMap(([key, value]) => isObject(value) && Object.keys(value).length > 0 ? settingPaths(value).map((path) => [key, ...path]) : [[key]]);
-}
-function isSettingCovered(granted, path) {
-  const item = `config:${path}`;
-  return [...granted].some((each) => item === each || item.startsWith(`${each}.`));
-}
 var pendingStepsMethod = "cmod:pendingSteps";
 var finishStepsMethod = "cmod:finishSteps";
 function marketplaceOf(root, name) {
   const installed = /\/cache\/([^/]+)\/([^/]+)\/[^/]+\/?$/.exec(root);
   return installed?.[2] === name ? installed[1] : undefined;
-}
-function updatesToTurnOn(marketplace, settings, known) {
-  if (marketplace === undefined)
-    return;
-  const declared = isObject(settings) && isObject(settings["extraKnownMarketplaces"]) ? settings["extraKnownMarketplaces"][marketplace] : undefined;
-  const fetched = isObject(known) ? known[marketplace] : undefined;
-  const isDecided = [declared, fetched].some((entry) => isObject(entry) && typeof entry["autoUpdate"] === "boolean");
-  const hasSource = [declared, fetched].some((entry) => isObject(entry) && isObject(entry["source"]));
-  return isDecided || !hasSource ? undefined : marketplace;
-}
-function consentPath(store) {
-  return `${store}/consent.json`;
 }
 function pluginsChangedPath(store) {
   return `${store}/plugins-changed`;
@@ -378,18 +334,10 @@ function preferencesPath(store) {
 }
 function parsePreferences(value, path) {
   if (value === undefined)
-    return { asksBeforeUpdatePermissions: false, showsInstalledModErrors: false };
-  if (!isObject(value) || ["asksBeforeUpdatePermissions", "showsInstalledModErrors"].some((key) => value[key] !== undefined && typeof value[key] !== "boolean"))
+    return { showsInstalledModErrors: false };
+  if (!isObject(value) || value["showsInstalledModErrors"] !== undefined && typeof value["showsInstalledModErrors"] !== "boolean")
     throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`);
-  return { asksBeforeUpdatePermissions: value["asksBeforeUpdatePermissions"] === true, showsInstalledModErrors: value["showsInstalledModErrors"] === true };
-}
-function parseConsent(value, path) {
-  if (value === undefined)
-    return Object.create(null);
-  if (!isObject(value) || !Object.values(value).every(isTextList)) {
-    throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod asks again.`);
-  }
-  return Object.assign(Object.create(null), value);
+  return { showsInstalledModErrors: value["showsInstalledModErrors"] === true };
 }
 function readHotkeys(hotkeys) {
   if (hotkeys === undefined)
@@ -399,7 +347,8 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.3.4";
+var coreVersion = "5.0.0";
+var oldestCmodVersion = "5.0.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -425,7 +374,7 @@ function readCommand(steps, key) {
     throw new Error(`package.json "cmod.${key}" holds a line break or a tab. Write one command, such as "./setup/${key}.sh".`);
   const atRoot = scriptPaths(command).find((path) => folderOf(path) === ".");
   if (atRoot !== undefined)
-    throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: cmod asks consent for the whole folder of each script.`);
+    throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: cmod runs the steps again whenever anything in a script's folder changes.`);
   return { [key]: command };
 }
 function scriptPaths(command) {
@@ -447,7 +396,7 @@ async function scriptsSha256(steps, files) {
         scriptFolders.push(folderOf(path));
     }
     if (scriptFolders.length === 0)
-      throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/${key}.sh.`);
+      throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so cmod cannot tell when what it runs changes. Put the commands in a script, such as ./setup/${key}.sh.`);
     for (const folder of scriptFolders)
       folders.add(folder);
   }
@@ -463,7 +412,7 @@ async function scriptsSha256(steps, files) {
       const path = `${folder}/${name}`;
       const content = await files.read(path);
       if (content === undefined)
-        throw new Error(`${path} links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.`);
+        throw new Error(`${path} links to a folder or to nothing, so cmod cannot tell when it changes. Point the link at a file, or delete it.`);
       text += `\x00${path}\x00${content}`;
     }
   }
@@ -4084,7 +4033,7 @@ function relativePath(base, path) {
 
 // node_modules/@cmodjs/core/runtime/announce.js
 var announcementMs = 1e4;
-async function announcementOf(claude, plugin, granted, added, openSettings) {
+async function announcementOf(claude, plugin, added, openSettings) {
   const manifest = jsonOf(await claude.fs.read(`${plugin.root}/.claude-plugin/plugin.json`).catch(ifMissing(undefined)));
   const { program, hotkeys } = plugin.steps;
   const rules = (await claude.fs.list(`${plugin.root}/rules`).catch(ifMissing([]))).filter((entry) => entry.kind === "file" && entry.name.endsWith(".md")).map((entry) => entry.name.slice(0, -".md".length)).toSorted();
@@ -4093,8 +4042,7 @@ async function announcementOf(claude, plugin, granted, added, openSettings) {
     added.length > 0 ? `Adds ${listed(added)}.` : undefined,
     rules.length > 0 ? `Adds ${rules.length} ${rules.length === 1 ? "rule" : "rules"}: ${listed(rules)}.` : undefined,
     program === undefined ? undefined : `Installed the ${program} program.`,
-    ...Object.values(hotkeys ?? {}).flatMap(({ title, default: combo }) => combo === undefined ? [] : [`Binds ${combo} to ${title}.`]),
-    ...[...granted].map((item) => `${permissionWords(item)}.`)
+    ...Object.values(hotkeys ?? {}).flatMap(({ title, default: combo }) => combo === undefined ? [] : [`Binds ${combo} to ${title}.`])
   ].filter((line) => line !== undefined);
   return { message: "Installed", ...lines.length === 0 ? {} : { description: lines.join(`
 `) }, action: { label: "Settings", onClick: () => openSettings() } };
@@ -4825,6 +4773,72 @@ async function foldAnswers(method, takes, ends, change, askers, report, applied 
     }
   }
   return result;
+}
+
+// node_modules/@cmodjs/core/runtime/programs.js
+function lastLineOf(text) {
+  const trimmed = text.trim();
+  return trimmed === "" ? undefined : trimmed.slice(trimmed.lastIndexOf(`
+`) + 1).trim();
+}
+function cmodError(stderr, command) {
+  const line = lastLineOf(stderr) ?? "";
+  const prefix = `cmod ${command}: `;
+  return line.startsWith(prefix) ? line.slice(prefix.length) : line;
+}
+async function readLines(stream, onLine) {
+  let pending = "";
+  let lastError = "";
+  let piece = await stream.next();
+  while (piece.done !== true) {
+    if (piece.value.stream === "stderr") {
+      lastError = lastLineOf(piece.value.text) ?? lastError;
+    } else {
+      const lines = `${pending}${piece.value.text}`.split(`
+`);
+      pending = lines.pop() ?? "";
+      for (const text of lines)
+        onLine(text);
+    }
+    piece = await stream.next();
+  }
+  if (pending !== "")
+    onLine(pending);
+  return { code: piece.value.code, lastError };
+}
+function spawnCmod(claude, args, session, env = {}) {
+  return claude.process.spawn({ argv: ["cmod", ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } });
+}
+async function runCmod(claude, args, session) {
+  const lines = [];
+  const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line));
+  if (code !== 0)
+    throw new Error(cmodError(lastError, args[0]) || `cmod ${args.slice(0, 2).join(" ")} ${formatExit(code, "")}.`);
+  return lines.join(`
+`);
+}
+function locatingPrograms(claude) {
+  let folder;
+  let names = new Set;
+  const located = (argv) => {
+    const [name, ...rest] = argv;
+    return folder !== undefined && name !== undefined && (name === "cmod" || names.has(name)) ? [`${folder}/${name}`, ...rest] : argv;
+  };
+  return {
+    claude: {
+      ...claude,
+      process: {
+        run: (argv, init) => claude.process.run(located(argv), init),
+        spawn: (request) => claude.process.spawn({ ...request, argv: located(request.argv) })
+      }
+    },
+    async refresh() {
+      const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()]);
+      const programs = `${storeFolder({ HOME: home, XDG_DATA_HOME: dataHome })}/programs`;
+      names = new Set((await claude.fs.list(programs).catch(ifMissing([]))).map((entry) => entry.name));
+      folder = programs;
+    }
+  };
 }
 
 // node_modules/@cmodjs/core/utils/parse-shell.js
@@ -6026,21 +6040,8 @@ function pickedColor(args) {
   const picked = args.trim().toLowerCase();
   return resetColors.includes(picked) ? undefined : picked;
 }
-var actPermissions = { send: "prompt", startTask: "tasks", fork: "tasks", clone: "tasks", startBackgroundTask: "tasks", usage: "conversation", surfaces: "conversation", abort: "prompt" };
-var startsTurns = ["CronCreate"];
-var ownSchedule = ["CronDelete", "CronList"];
-var beforePermission = (event) => event === "toolCall" ? "tools" : event === TaskStart ? "tasks" : "prompt";
-var answerPermissions = (event, answer) => [
-  ...Object.keys(answer).some((key) => key !== "note") ? [beforePermission(event)] : [],
-  ...answer.note === undefined ? [] : ["prompt"]
-];
-var isAct = (action) => action === "callTool" || (action in actPermissions);
-function toolPermission(tool) {
-  return startsTurns.includes(tool) ? "prompt" : ownSchedule.includes(tool) ? undefined : "tools";
-}
-function actPermission(action, input) {
-  return action === "callTool" ? toolPermission(String(input?.name)) ?? "tools" : actPermissions[action];
-}
+var acts = ["send", "startTask", "fork", "clone", "startBackgroundTask", "callTool", "usage", "surfaces", "abort"];
+var isAct = (action) => acts.includes(action);
 async function usageOf(claude) {
   const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()]);
   const { tokens, window, percent } = usage.context;
@@ -6115,7 +6116,7 @@ function isInScope(scope, session, change, isUnder) {
 function withoutPermissionCheck(name, hearer) {
   return `${name}: ${hearer} hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.`;
 }
-function createSessionsClient({ name, claude, report, isGranted, permissionRefusal, hookOn, routeOn, permissionRoutes }) {
+function createSessionsClient({ name, claude, report, hookOn, routeOn, permissionRoutes }) {
   const call = (method, input) => claude.cmod.call({ to: cmodPluginName, method, input });
   const listening = new Map;
   const deciding = new Map;
@@ -6189,19 +6190,12 @@ function createSessionsClient({ name, claude, report, isGranted, permissionRefus
   });
   const decidersOf = (session, event, isInProject) => [...deciding.get(session) ?? [], ...isInProject ? deciding.get(everySession) ?? [] : []].filter((entry) => entry.event === event);
   const decides = (entry, session, change) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher));
-  const mayDecide = (session) => session === current2.id || isGranted("conversation");
   const combined = async (session, event, change, isInProject) => {
     const askers = decidersOf(session, event, isInProject).map((entry) => async (latest) => {
       if (!decides(entry, session, latest))
         return;
       const payload = await payloadFor(session, latest);
-      const answer2 = await invoke(entry.method, entry.options, async (time2) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time2)), beforeAnswerKeys[event]);
-      if (answer2 === undefined || answer2 === null || typeof answer2 === "object" && "refuse" in answer2)
-        return answer2;
-      const missing = answerPermissions(event, answer2).find((permission) => !isGranted(permission));
-      if (missing === undefined)
-        return answer2;
-      throw new Error(permissionRefusal(`${entry.method} with the answer { ${Object.keys(answer2).join(", ")} }`, missing));
+      return invoke(entry.method, entry.options, async (time2) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time2)), beforeAnswerKeys[event]);
     });
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf("before", event)}`, `The ${methodOf("before", event)} listener failed`, error));
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) };
@@ -6452,15 +6446,12 @@ function createSessionsClient({ name, claude, report, isGranted, permissionRefus
     const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise("beforeRun", run);
     if (typeof answer?.["refuse"] === "string")
       return { text: answer["refuse"] };
-    const changes = answer !== undefined && isGranted("prompt") ? answer : undefined;
-    if (answer !== undefined && changes === undefined)
-      report("session:beforeRun", "The beforeRun listener failed", new Error(permissionRefusal(`beforeRun with the answer { ${Object.keys(answer).join(", ")} }`, "prompt")));
-    if (typeof changes?.["result"] === "string")
-      return { text: changes["result"], ...typeof changes["exitCode"] === "number" ? { exitCode: changes["exitCode"] } : {} };
-    const args = typeof changes?.["args"] === "string" ? changes["args"] : e.args;
+    if (typeof answer?.["result"] === "string")
+      return { text: answer["result"], ...typeof answer["exitCode"] === "number" ? { exitCode: answer["exitCode"] } : {} };
+    const args = typeof answer?.["args"] === "string" ? answer["args"] : e.args;
     const ran = await next(args === e.args ? e : { ...e, args });
     raise("onRun", { ...run, args });
-    return typeof changes?.["note"] === "string" ? { ...ran, context: [...ran.context ?? [], modNote(name, changes["note"])] } : ran;
+    return typeof answer?.["note"] === "string" ? { ...ran, context: [...ran.context ?? [], modNote(name, answer["note"])] } : ran;
   }, async (e, error) => {
     const refusal = commandListeners.beforeRun.size === 0 ? undefined : refusalFor("beforeRun", await commandRun(e), error);
     return refusal === undefined ? undefined : { text: refusal.refuse };
@@ -6548,9 +6539,8 @@ function createSessionsClient({ name, claude, report, isGranted, permissionRefus
     caption: (toolCall, text) => claude.ui.notice(toolCall.callId, text)
   });
   const every = eventMethods(() => ({}), false);
-  const answerBefore = async (session, event, change, isInProject) => mayDecide(session) ? combined(session, event, change, isInProject) : undefined;
   const failedBefore = (session, event, change, isInProject, error) => {
-    const asked = mayDecide(session) ? decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change)) : [];
+    const asked = decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change));
     return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined);
   };
   return {
@@ -6582,7 +6572,7 @@ function createSessionsClient({ name, claude, report, isGranted, permissionRefus
         }
       }
     },
-    answerBefore,
+    answerBefore: combined,
     failedBefore,
     raise,
     listen,
@@ -6736,398 +6726,6 @@ function searchOptionsOf({ running, since, everyProject, before }) {
   };
 }
 
-// node_modules/@cmodjs/core/runtime/grants.js
-class PermissionRefused extends Error {
-}
-var addressesOfPrograms = new WeakMap;
-function programAddresses(mod) {
-  const known = addressesOfPrograms.get(mod) ?? new Set;
-  addressesOfPrograms.set(mod, known);
-  return known;
-}
-var projectSettingsFiles = [".claude/settings.json", ".claude/settings.local.json", ".mcp.json"];
-var conversationCalls = {
-  [conversationMethods.sessions]: "sessions.list",
-  [conversationMethods.search]: "sessions.search",
-  [conversationMethods.messages]: "messages",
-  [conversationMethods.turns]: "turns",
-  [conversationMethods.contexts]: "contexts",
-  [conversationMethods.tasks]: "tasks",
-  [conversationMethods.goal]: "goal",
-  [conversationMethods.updateGoal]: "goal.update",
-  [conversationMethods.subscribe]: "on",
-  [conversationMethods.watchBefore]: "before",
-  [conversationMethods.act]: "act"
-};
-async function checkGrant(grants, call, item) {
-  if (item === undefined)
-    return;
-  await grants.refresh();
-  if (!isCovered(grants.granted(), item, grants.home))
-    throw new PermissionRefused(refusal(grants, call, item));
-}
-async function checkRun(grants, call, argv) {
-  await checkGrant(grants, `${call}(${argv.join(" ")})`, `run:${programOf(argv)}`);
-}
-async function checkWrite(grants, call, path) {
-  await checkGrant(grants, call, writeItem(grants, path));
-}
-async function checkSettings(grants, source, values) {
-  for (const path of settingPaths(values).map((each) => each.join(".")))
-    await checkGrant(grants, `settings.${source}.update(${path})`, `config:${path}`);
-}
-function checkingGrants(claude, grants) {
-  const gate = (call, item) => checkGrant(grants, call, item);
-  return {
-    ...claude,
-    process: {
-      async run(argv, init) {
-        await checkRun(grants, "process.run", argv);
-        return claude.process.run(argv, init);
-      },
-      spawn(request) {
-        const started = checkRun(grants, "process.spawn", request.argv).then(() => claude.process.spawn(request));
-        return spawned(started);
-      }
-    },
-    fs: {
-      ...claude.fs,
-      async read(path) {
-        await gate(`fs.read(${path})`, readItem(grants, path));
-        return claude.fs.read(path);
-      },
-      async write(path, text) {
-        await gate(`fs.write(${path})`, writeItem(grants, path));
-        return claude.fs.write(path, text);
-      }
-    },
-    http: {
-      async fetch(url, init) {
-        if (!grants.freeAddresses().has(init?.socketPath ?? addressOf(url)))
-          await gate(`http.fetch(${url})`, `network:${init?.socketPath ?? hostOf(url)}`);
-        return claude.http.fetch(url, init);
-      }
-    },
-    session: {
-      ...claude.session,
-      append: async (args) => {
-        await gate("send", "prompt");
-        return claude.session.append(args);
-      },
-      send: async (args) => {
-        await gate("send", "prompt");
-        return claude.session.send(args);
-      }
-    },
-    prompt: {
-      submit: async (args) => {
-        await gate("send", "prompt");
-        return claude.prompt.submit(args);
-      }
-    },
-    command: {
-      ...claude.command,
-      run: async (args) => {
-        await gate(`commands.run(${args.command})`, "prompt");
-        return claude.command.run(args);
-      }
-    },
-    cmod: {
-      async call(args) {
-        const named = args.to === cmodPluginName ? conversationCalls[args.method] : undefined;
-        const given = args.method === conversationMethods.act && isObject(args.input) ? String(args.input["action"]) : undefined;
-        const action = given !== undefined && isAct(given) ? given : undefined;
-        const isThisSession = isObject(args.input) && args.input["session"] === await claude.session.id();
-        const isDropping = (args.method === conversationMethods.subscribe || args.method === conversationMethods.watchBefore) && isObject(args.input) && Array.isArray(args.input["subscriptions"]) && args.input["subscriptions"].length === 0;
-        if (named !== undefined && action !== undefined)
-          await gate(action, actPermission(action, isObject(args.input) ? args.input["input"] : undefined));
-        else if (named !== undefined && !isThisSession && !isDropping)
-          await gate(named, "conversation");
-        return claude.cmod.call(args);
-      }
-    },
-    model: {
-      complete: async (...args) => {
-        await gate("model.complete", "model");
-        return claude.model.complete(...args);
-      }
-    },
-    agent: {
-      ...claude.agent,
-      async spawn(args) {
-        await gate("startTask", "tasks");
-        return claude.agent.spawn(args);
-      }
-    },
-    tool: {
-      ...claude.tool,
-      call: async (input) => {
-        await gate(`tool.call(${input.tool})`, toolPermission(input.tool));
-        return claude.tool.call(input);
-      }
-    }
-  };
-}
-function spawned(started) {
-  const result = started.then((stream2) => stream2.result);
-  result.catch(() => {
-    return;
-  });
-  const stream = {
-    next: async () => (await started).next(),
-    async return(value) {
-      const [start] = await Promise.allSettled([started]);
-      return start.status === "fulfilled" ? start.value.return(value) : { done: true, value };
-    },
-    [Symbol.asyncIterator]: () => stream,
-    result
-  };
-  return stream;
-}
-function itemOf(name, value) {
-  return value === undefined ? name : `${name}:${value}`;
-}
-function isCovered(granted, item, home) {
-  if (granted.has(item))
-    return true;
-  const split = item.indexOf(":");
-  if (split === -1)
-    return false;
-  const name = item.slice(0, split);
-  if (name === "config")
-    return isSettingCovered(granted, item.slice(split + 1));
-  const target = expanded(item.slice(split + 1), home);
-  const values = [...granted].filter((each) => each.startsWith(`${name}:`)).map((each) => expanded(each.slice(name.length + 1), home));
-  if (name === "run")
-    return values.includes("*") || values.includes(target);
-  if (name === "files")
-    return values.some((each) => relativePath(each, target) !== undefined);
-  return values.includes(target);
-}
-function readItem(grants, path) {
-  if (grants.configRoot === undefined)
-    return;
-  return relativePath(`${grants.configRoot}/projects`, path) === undefined ? undefined : "conversation";
-}
-function writeItem(grants, path) {
-  const root = grants.projectRoot();
-  const settingsFiles = [...projectSettingsFiles.map((file) => `${root}/${file}`), ...grants.configRoot === undefined ? [] : [`${grants.configRoot}/settings.json`]];
-  if (settingsFiles.includes(path)) {
-    throw new PermissionRefused(`${grants.name} writes ${path} by hand. Change Claude Code's settings with settings.user.update, settings.project.update, or settings.local.update, which keep the person's own edits and take the mod's values out when it is removed.`);
-  }
-  if (grants.freeFolders().some((folder) => relativePath(folder, path) !== undefined))
-    return;
-  return `files:${path}`;
-}
-function refusal(grants, call, item) {
-  const { name } = grants;
-  if (isCovered(new Set(grants.declared), item, grants.home))
-    return `${name} calls ${call} without your grant to "${permissionWords(item)}". ${grantFix}`;
-  return `${name} calls ${call}, which needs ${declaration(item, grants.home)} in package.json "cmod".`;
-}
-function declaration(item, home) {
-  const split = item.indexOf(":");
-  if (split === -1)
-    return `"permissions": { "${item}": true }`;
-  const name = item.slice(0, split);
-  const target = item.slice(split + 1);
-  const fromHome = home === undefined ? undefined : relativePath(home, target);
-  const shown = name !== "run" && fromHome !== undefined ? `~/${fromHome}` : target;
-  return `"permissions": { "${name}": ["${shown}"] }`;
-}
-var classicParts = {
-  additionalContext: "prompt",
-  initialUserMessage: "prompt",
-  updatedToolOutput: "prompt",
-  updatedMCPToolOutput: "prompt",
-  retry: "approve"
-};
-var blocksKeepWorking = ["classic.Stop", "classic.PostToolUse"];
-var reservedToolKeys = ["tool", "tool_use_id"];
-function checksAnswers(event) {
-  return event.startsWith("classic.") || event === "tool.check" || event === "tool.call" || event === "prompt.context" || event === "prompt.submit";
-}
-function passedDown(event, original, passed, check) {
-  if (passed === original)
-    return passed;
-  if (event === "tool.call") {
-    if (sameExcept(original, passed, reservedToolKeys) || check.isGranted("tools"))
-      return passed;
-    check.dropped("tools", "a changed tool input");
-    return original;
-  }
-  if (event === "prompt.context" || event === "prompt.submit") {
-    if (same(original, passed) || check.isGranted("prompt"))
-      return passed;
-    check.dropped("prompt", event === "prompt.submit" ? "a rewritten prompt" : "changed context");
-    return original;
-  }
-  return passed;
-}
-async function checkedAnswer(event, e, answer, below, check) {
-  if (!isFields(answer))
-    return answer;
-  if (event === "tool.check")
-    return decided(answer["decision"], answer, below, check);
-  if (event === "classic.PermissionRequest") {
-    const decision = isFields(answer["decision"]) ? answer["decision"]["behavior"] : undefined;
-    return decided(decision, answer, below, check);
-  }
-  if (event.startsWith("classic."))
-    return classicAnswer(event, answer, below, check);
-  if (event === "tool.call") {
-    if (answer["deny"] !== undefined || check.isGranted("prompt"))
-      return answer;
-    const tool = isFields(e) ? e["tool"] : undefined;
-    if (typeof tool === "string" && tool.startsWith(`mcp__${check.plugin}__`)) {
-      if (answer["context"] === undefined)
-        return answer;
-      check.dropped("prompt", "context after a tool call");
-      const { context: _context, ...rest } = answer;
-      return rest;
-    }
-    const theirs = await below();
-    if (same(answer, theirs))
-      return answer;
-    check.dropped("prompt", same(contextOf(answer), contextOf(theirs)) ? "a changed tool result" : "context after a tool call");
-    return theirs;
-  }
-  if (event === "prompt.submit" && answer["drop"] !== undefined)
-    return answer;
-  if (event === "prompt.context" || event === "prompt.submit") {
-    if (check.isGranted("prompt"))
-      return answer;
-    const theirs = await below();
-    if (same(answer, theirs))
-      return answer;
-    check.dropped("prompt", event === "prompt.submit" ? "a rewritten prompt" : "changed context");
-    return theirs;
-  }
-  return answer;
-}
-async function decided(decision, answer, below, check) {
-  if (decision !== "allow" && decision !== "ask" || check.isGranted("approve"))
-    return answer;
-  const theirs = await below();
-  if (same(answer, theirs))
-    return answer;
-  check.dropped("approve", `${decision} on a tool call`);
-  return theirs;
-}
-async function classicAnswer(event, answer, below, check) {
-  const blocks = blocksKeepWorking.includes(event) ? [["block", "prompt"]] : [];
-  const parts = [...Object.entries(classicParts), ...blocks].filter(([part, item]) => answer[part] !== undefined && !check.isGranted(item));
-  if (parts.length === 0)
-    return answer;
-  const theirs = await below();
-  const kept = { ...answer };
-  const theirFields = isFields(theirs) ? theirs : {};
-  for (const [part, item] of parts) {
-    if (same(answer[part], theirFields[part]))
-      continue;
-    check.dropped(item, part);
-    if (theirFields[part] === undefined)
-      delete kept[part];
-    else
-      kept[part] = theirFields[part];
-  }
-  return kept;
-}
-function contextOf(answer) {
-  return isFields(answer) ? answer["context"] : undefined;
-}
-function same(left, right) {
-  return left === right || JSON.stringify(left) === JSON.stringify(right);
-}
-function sameExcept(left, right, keys) {
-  if (!isFields(left) || !isFields(right))
-    return same(left, right);
-  const without = (fields) => Object.fromEntries(Object.entries(fields).filter(([key]) => !keys.includes(key)));
-  return same(without(left), without(right));
-}
-function isFields(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function programOf(argv) {
-  const command = argv[0] ?? "";
-  return command.slice(command.lastIndexOf("/") + 1);
-}
-function hostOf(url) {
-  return URL.canParse(url) ? new URL(url).hostname : url;
-}
-function addressOf(url) {
-  return URL.canParse(url) ? new URL(url).host : url;
-}
-function expanded(path, home) {
-  return path.startsWith("~/") && home !== undefined ? `${home}${path.slice(1)}` : path;
-}
-
-// node_modules/@cmodjs/core/runtime/programs.js
-function lastLineOf(text) {
-  const trimmed = text.trim();
-  return trimmed === "" ? undefined : trimmed.slice(trimmed.lastIndexOf(`
-`) + 1).trim();
-}
-function cmodError(stderr, command) {
-  const line = lastLineOf(stderr) ?? "";
-  const prefix = `cmod ${command}: `;
-  return line.startsWith(prefix) ? line.slice(prefix.length) : line;
-}
-async function readLines(stream, onLine) {
-  let pending = "";
-  let lastError = "";
-  let piece = await stream.next();
-  while (piece.done !== true) {
-    if (piece.value.stream === "stderr") {
-      lastError = lastLineOf(piece.value.text) ?? lastError;
-    } else {
-      const lines = `${pending}${piece.value.text}`.split(`
-`);
-      pending = lines.pop() ?? "";
-      for (const text of lines)
-        onLine(text);
-    }
-    piece = await stream.next();
-  }
-  if (pending !== "")
-    onLine(pending);
-  return { code: piece.value.code, lastError };
-}
-function spawnCmod(claude, args, session, env = {}) {
-  return claude.process.spawn({ argv: ["cmod", ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } });
-}
-async function runCmod(claude, args, session) {
-  const lines = [];
-  const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line));
-  if (code !== 0)
-    throw new Error(cmodError(lastError, args[0]) || `cmod ${args.slice(0, 2).join(" ")} ${formatExit(code, "")}.`);
-  return lines.join(`
-`);
-}
-function locatingPrograms(claude) {
-  let folder;
-  let names = new Set;
-  const located = (argv) => {
-    const [name, ...rest] = argv;
-    return folder !== undefined && name !== undefined && (name === "cmod" || names.has(name)) ? [`${folder}/${name}`, ...rest] : argv;
-  };
-  return {
-    claude: {
-      ...claude,
-      process: {
-        run: (argv, init) => claude.process.run(located(argv), init),
-        spawn: (request) => claude.process.spawn({ ...request, argv: located(request.argv) })
-      }
-    },
-    async refresh() {
-      const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()]);
-      const programs = `${storeFolder({ HOME: home, XDG_DATA_HOME: dataHome })}/programs`;
-      names = new Set((await claude.fs.list(programs).catch(ifMissing([]))).map((entry) => entry.name));
-      folder = programs;
-    }
-  };
-}
-
 // node_modules/@cmodjs/core/runtime/conversations.js
 var relayKinds = new Set(["act", "before", "answer", "watch", "goal", "taskEnd"]);
 var taskVariable = "CMOD_TASK";
@@ -7184,32 +6782,6 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     return below;
   });
   const json = async (args) => JSON.parse(await runCmod(claude, [...args, "--json", "--project", project()], await claude.session.id()));
-  const isGranted = async (caller, item) => {
-    if (caller === cmodPluginName)
-      return true;
-    if (caller === undefined)
-      return false;
-    const path = consentPath(store);
-    const text = await claude.fs.read(path).catch(ifMissing("{}"));
-    return (parseConsent(JSON.parse(text), path)[caller] ?? []).includes(item);
-  };
-  const declaredBy = async (caller) => {
-    const read = (path) => claude.fs.read(path).catch(ifMissing(undefined));
-    const record = await readRecord(read, store, caller);
-    if (record === undefined)
-      return;
-    if (record.permissions !== null)
-      return record.permissions;
-    const pkg = await read(`${record.root}/package.json`);
-    return pkg === undefined ? undefined : readSteps(JSON.parse(pkg))?.permissions ?? [];
-  };
-  const refused = async (caller, call, item) => {
-    const declared = caller === undefined ? undefined : await declaredBy(caller).catch((error) => {
-      claude.ui.log(`cmod: its refusal of ${caller} names the grant, because the permissions ${caller} declares are unreadable: ${messageOf(error)}`, { to: "debug" });
-      return;
-    });
-    return refusal({ name: caller ?? "A mod", declared: declared ?? [item], home: undefined }, call, item);
-  };
   const ended = (id) => new Error(`session ${id} has ended`);
   const isRunning = async (id) => (await json(["history", "sessions", "--running", "--all"])).some((each) => each.id === id);
   let color = { session: "" };
@@ -7410,11 +6982,7 @@ ${watch.target}`, watch);
     return [...new Map(all.filter((watcher) => watcher.events.includes(event)).map((watcher) => [`${watcher.from}
 ${watcher.mod}`, watcher])).values()];
   };
-  const askHere = async (mod, event, change, from = session, isInProject = true) => {
-    if (from !== session && !await isGranted(mod, "conversation"))
-      throw new Error(await refused(mod, "before", "conversation"));
-    return claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } });
-  };
+  const askHere = async (mod, event, change, from = session, isInProject = true) => claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } });
   const isUnderHere = (task, ancestor) => {
     for (let at = task, steps = 0;at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1)
       if (at === ancestor)
@@ -7550,18 +7118,18 @@ ${watcher.mod}`, watcher])).values()];
     return measured;
   });
   const recordSpawn = async (e, next) => {
-    const spawned2 = await next(e);
-    if (spawned2.deny !== undefined || spawned2.agentId === undefined)
-      return spawned2;
-    const id = spawned2.agentId;
+    const spawned = await next(e);
+    if (spawned.deny !== undefined || spawned.agentId === undefined)
+      return spawned;
+    const id = spawned.agentId;
     await starting;
-    const opened = { id, title: e.description, ...ownerOfSpawn(e.subagentType, session), model: spawned2.model, openedBy: e.tool_use_id, openedAt: new Date().toISOString(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId } };
+    const opened = { id, title: e.description, ...ownerOfSpawn(e.subagentType, session), model: spawned.model, openedBy: e.tool_use_id, openedAt: new Date().toISOString(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId } };
     dispatch(session, conversation.startTask(opened));
     const waiting = waitingRows.get(id) ?? [];
     waitingRows.delete(id);
     for (const row of waiting)
       dispatch(session, conversation.add(row, id));
-    return spawned2;
+    return spawned;
   };
   router.add("agent.spawn", recordSpawn, (e, _error, next) => recordSpawn(e, next));
   router.add("session.receive", async (e, next) => {
@@ -7610,13 +7178,7 @@ ${watcher.mod}`, watcher])).values()];
       return answered(async () => isAct(relay.action) ? perform(relay.caller, relay.action, relay.input, relay.task) : Promise.reject(await unknownTo(`"${String(relay.action)}" action`)));
     return answered(() => askHere(relay.mod, relay.event, relay.change, relay.from, relay.project === project()));
   };
-  const checkAct = async (caller, action, input) => {
-    const needed = actPermission(action, input);
-    if (needed !== undefined && !await isGranted(caller, needed))
-      throw new Error(await refused(caller, action, needed));
-  };
   const perform = async (caller, action, input, task) => {
-    await checkAct(caller, action, input);
     await starting;
     if (action === "abort")
       return abortTurn(input, task);
@@ -7721,7 +7283,6 @@ ${watcher.mod}`, watcher])).values()];
     await post(from, { kind: "taskEnd", task: ended2 }).catch((error) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: "debug" }));
   };
   const actElsewhere = async (caller, target, action, input, task) => {
-    await checkAct(caller, action, input);
     const isLive = await isRunning(target);
     if (!isLive && action === "usage")
       return json(["history", "usage", target, ...task === undefined ? [] : ["--task", task]]);
@@ -7902,9 +7463,6 @@ ${target}`, { mod: caller, target, project: project(), events: [...new Set(list.
       if (method === undefined)
         return;
       const input = isObject(e.input) ? e.input : {};
-      const isDropping = (e.method === conversationMethods.subscribe || e.method === conversationMethods.watchBefore) && Array.isArray(input["subscriptions"]) && input["subscriptions"].length === 0;
-      if (e.method !== conversationMethods.act && !isDropping && input["session"] !== await claude.session.id() && !await isGranted(e.caller, "conversation"))
-        return { deny: await refused(e.caller, conversationCalls[e.method] ?? e.method, "conversation") };
       try {
         return { value: await method(input, e.caller) };
       } catch (error) {
@@ -8210,7 +7768,7 @@ function resolvedPath(path, places) {
   }
   return path.startsWith("/") ? resolve(path) : resolve(places.projectRoot(), path);
 }
-function createModFiles({ name, claude, places, checkWrite: checkWrite2, report }) {
+function createModFiles({ name, claude, places, report }) {
   const prefix = `${name}.`;
   const cache = new Map;
   const logged = new Set;
@@ -8310,7 +7868,6 @@ function createModFiles({ name, claude, places, checkWrite: checkWrite2, report 
     },
     async update(path, change) {
       const given = resolvedPath(path, places);
-      await checkWrite2(given);
       const located = await locate(given);
       const text = await textOf2(located.holder);
       let all;
@@ -9225,8 +8782,6 @@ function createInstaller(name, claude, waiting, nextDraw) {
   const redraw = () => void send({ redraw: true }).catch(log("the installer did not redraw"));
   const actions = (...buttons) => Box({ gap: 2, flexShrink: 0, children: buttons });
   const dialog = (title, ...children) => Box({ flexDirection: "column", gap: 1, children: [title, ...children] });
-  const bullet2 = (text) => Box({ gap: 1, children: [Text({ dimColor: true, children: "•" }), Text({ wrap: "wrap", children: text })] });
-  const group = (heading, items) => Box({ flexDirection: "column", children: [Text({ bold: true, children: heading }), ...items.map(bullet2)] });
   const draw = (columns, isFocused) => {
     if (question === undefined && !isOpen)
       claude().clock.after(0, () => void send({ requests: [{ close: installPage }] }).catch(log("a leftover install page stayed open")));
@@ -9274,18 +8829,6 @@ function createInstaller(name, claude, waiting, nextDraw) {
       isOpen = false;
       isSeen = false;
       question?.cancel();
-    },
-    consent({ install, uninstall, program, hotkeys, permissions, updates }) {
-      const changes = [
-        ...install === "" ? [] : [`Run ${install} now${uninstall === "" ? "" : `, and ${uninstall} when you remove it`}`],
-        ...install === "" && uninstall !== "" ? [`Run ${uninstall} when you remove it`] : [],
-        ...program === "" ? [] : [`Install ${program}, which Claude runs by its name`],
-        ...hotkeys === "" ? [] : [`Bind ${hotkeys}`],
-        ...updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]
-      ];
-      return show((answer) => ({
-        draw: () => dialog(Text({ bold: true, children: `Install ${name}?` }), ...permissions.length === 0 ? [] : [group(`${name} wants to:`, permissions.map(permissionWords))], ...changes.length === 0 ? [] : [group(permissions.length === 0 ? `${name} wants to change your computer:` : "and change your computer:", changes)], Text({ dimColor: true, wrap: "wrap", children: "You can turn each permission off later in Settings." }), actions(filledButton({ key: "accept", hotkey: "a", variant: "primary", label: "Accept", onPress: () => answer(true) }), filledButton({ key: "not-now", hotkey: "n", label: "Not now", onPress: () => answer(false) })))
-      }), false);
     },
     options(missing, save) {
       const saved = new Map;
@@ -9816,22 +9359,18 @@ ${at.toISOString().slice(0, 16)}`;
 
 ${error.stack}` : "";
     const details = async (failedAt) => {
-      const modVersion = await claude.fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text2) => String(JSON.parse(text2).version)).catch((failure) => `unknown (${messageOf(failure)})`);
+      const modVersion = await claude.fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text) => String(JSON.parse(text).version)).catch((failure) => `unknown (${messageOf(failure)})`);
       return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${failedAt.toISOString()}
 ${message}${description === undefined ? "" : `
 ${description}`}${stack}`;
     };
-    const text = `${message}
-${description ?? ""}`;
-    const isGrantRefusal = text.includes(grantFix);
-    const isShownAtOnce = isCritical && !isGrantRefusal;
     const logged = async () => {
       const contact = await contactOf(claude);
       const failure = { mod: name, id, message, details: await details(at), at: at.toISOString(), isCritical, root: claude.plugin.root, ...contact === undefined ? {} : { contact } };
-      const shows = await showsToast(failure, isShownAtOnce);
-      if (isShownAtOnce)
+      const shows = await showsToast(failure, isCritical);
+      if (isCritical)
         return;
-      if (shows === undefined || shows && !isGrantRefusal)
+      if (shows !== false)
         return show2();
       claude.ui.log(`${name}: ${message}${description === undefined ? "" : `: ${description}`}`, { to: "debug" });
     };
@@ -9881,8 +9420,9 @@ ${description ?? ""}`;
     const fixes = [
       { sentence: installFix, label: "Plugins", onClick: () => claude.command.run({ command: "plugin" }) },
       { sentence: secretFix, label: "Open /config", onClick: () => claude.command.run({ command: "config" }) }
-    ].filter(({ sentence }) => text.includes(sentence));
-    if (isShownAtOnce)
+    ].filter(({ sentence }) => `${message}
+${description ?? ""}`.includes(sentence));
+    if (isCritical)
       show2();
     claude.clock.after(0, () => void logged());
     return id;
@@ -10604,13 +10144,11 @@ async function readPlugin(claude) {
   const version = typeof manifest?.version === "string" ? manifest.version : undefined;
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {};
-  const declared = steps.permissions ?? [];
   if (name === cmodPluginName) {
     const installed = await cmodVersion(claude);
-    return { name, root, version, store, steps, granted: declared, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
+    return { name, root, version, store, steps, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
   }
-  const approved = parseConsent(await readJson(read, consentPath(store)), consentPath(store))[name] ?? [];
-  const plugin = { name, root, version, store, steps, granted: declared.filter((item) => approved.includes(item)) };
+  const plugin = { name, root, version, store, steps };
   const record = await readRecord(read, store, name);
   if (Object.keys(steps).length === 0)
     return { ...plugin, isInstalled: true, shouldRecord: record?.version !== version };
@@ -10660,7 +10198,6 @@ function createLifecycle(definition, permissionRoutes = () => {
   let runtime;
   let programs;
   let plugin;
-  const granted = new Set;
   let activation;
   let mod;
   const openSettings = async () => {
@@ -10702,8 +10239,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     toastFailure({ id: installId, message: reason, ...fix === undefined ? {} : { description: fix }, ...error === undefined ? {} : { error }, ...again, isCritical: true });
     watchRecord();
   };
-  let consented;
-  const installAgain = () => install(consented);
+  const installAgain = () => install();
   const updateAgain = () => claude().store.delete(cmodUpdatedKey).then(installAgain);
   let retrying;
   const retryLater = (next) => {
@@ -10730,7 +10266,7 @@ function createLifecycle(definition, permissionRoutes = () => {
       stopRetrying();
       return whenActive();
     }
-    await install(consented, true);
+    await install(true);
     await whenActive();
   };
   const finish2 = async () => {
@@ -10829,7 +10365,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (runtime === undefined || plugin === undefined)
       return;
     const activeRouter = createRouter();
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, steps: plugin.steps, granted, refreshGrants, permissionRoutes, options: pluginOptions, nextDraw }).catch(async (error) => {
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw }).catch(async (error) => {
       if (error instanceof MissingOptions && await askOptions(error))
         return;
       await installer.close();
@@ -10859,12 +10395,11 @@ function createLifecycle(definition, permissionRoutes = () => {
     }
     await runtime.claude.store.set(announcedKey, { version: plugin.version ?? "" });
     const { toaster } = runtime;
-    announcementOf(runtime.claude, plugin, granted, added, openSettings).then(({ message, ...options2 }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options2 })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
+    announcementOf(runtime.claude, plugin, added, openSettings).then(({ message, ...options2 }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options2 })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
   };
   const replaySessionStart = async (e) => {
     hasHeardSessionStart = true;
-    const ran = definition.name === cmodPluginName ? router.dispatch("classic.SessionStart", e, async () => ({})) : checkedRoute("classic.SessionStart", e, async () => ({}));
-    const answer = await ran.catch((error) => {
+    const answer = await router.dispatch("classic.SessionStart", e, async () => ({})).catch((error) => {
       toastFailure({ id: "classic.SessionStart", message: "The SessionStart hook failed", error });
       return {};
     });
@@ -10878,38 +10413,7 @@ function createLifecycle(definition, permissionRoutes = () => {
       claude().ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read ${Object.keys(unread).join(", ")} from its SessionStart hooks.`, { to: "debug" });
     }
   };
-  const updatesToShow = async () => {
-    const [home, configHome] = await Promise.all([claude().env.home(), claude().env.configHome()]);
-    const configRoot = configHome ?? `${home ?? ""}/.claude`;
-    const known = await claude().fs.read(`${configRoot}/plugins/known_marketplaces.json`).then((text) => JSON.parse(text)).catch(ifMissing(undefined));
-    return updatesToTurnOn(marketplaceOf(claude().plugin.root, claude().plugin.name), await claude().settings.read({ source: "user" }), known);
-  };
-  const askConsent = async (event) => {
-    const name = definition.name;
-    if ((await claude().session.surfaces()).length === 0) {
-      claude().ui.log(`${name} waits for consent to run ${event.install}. Run cmod install ${name} in a terminal.`);
-      return;
-    }
-    const updates = await updatesToShow().catch((error) => {
-      toastFailure({ id: "cmod:updates", message: "Could not read whether its marketplace updates automatically", error });
-      return;
-    });
-    const installedElsewhere = new Promise((resolve2) => settleAsked = () => resolve2("installed"));
-    watchRecord();
-    const answer = await Promise.race([installer.consent({ ...event, program: plugin?.steps.program ?? "", updates }), installedElsewhere]).finally(() => {
-      settleAsked = undefined;
-    });
-    await installer.close();
-    if (answer === "installed")
-      return startInstalled();
-    if (answer) {
-      consented = event.sha256;
-      return install(consented);
-    }
-    phase = "declined";
-    runtime?.toaster.toast("Not installed", { id: installId, description: "Install it whenever you like.", duration: Infinity, action: { label: "Install", onClick: () => install().catch(report) } });
-  };
-  const install = async (consent, isQuiet = false) => {
+  const install = async (isQuiet = false) => {
     if (plugin === undefined)
       return;
     if (plugin.name === cmodPluginName)
@@ -10922,27 +10426,22 @@ function createLifecycle(definition, permissionRoutes = () => {
       installing();
     let outcome;
     let retries;
-    const argv = ["cmod", "setup", plugin.root, "--events", ...consent === undefined ? [] : ["--consent", consent]];
-    const { code, lastError } = await readLines(claude().process.spawn({ argv }), (text) => {
+    const { code, lastError } = await readLines(claude().process.spawn({ argv: ["cmod", "setup", plugin.root, "--events"] }), (text) => {
       const event = parseEvent(text);
       if (event.type === "progress" && !isQuiet)
         installing(progressOf(event));
       if (event.type === "retries")
         retries = event.when;
-      if (event.type === "done" || event.type === "failed" || event.type === "needs-consent")
+      if (event.type === "done" || event.type === "failed")
         outcome = event;
     });
     if (outcome?.type === "done") {
       stopRetrying();
-      for (const item of plugin.steps.permissions ?? [])
-        granted.add(item);
       return finish2();
     }
-    if (outcome?.type === "needs-consent")
-      return askConsent(outcome);
     return failInstall(outcome?.type === "failed" ? outcome.message : `cmod setup ${formatExit(code, lastError)}`, retries);
   };
-  const fits = (found) => found !== undefined && isAtLeast(found, coreVersion);
+  const fits = (found) => found !== undefined && isAtLeast(found, oldestCmodVersion);
   const waitForcmod = (found) => {
     phase = "waiting";
     installing("Waiting for cmod");
@@ -10972,21 +10471,21 @@ function createLifecycle(definition, permissionRoutes = () => {
       if (latest === undefined)
         return installing("Still waiting for cmod to download cmod. See cmod's own line.");
       const found2 = latest;
-      const tried = `${found2} to ${coreVersion}`;
+      const tried = `${found2} to ${oldestCmodVersion}`;
       return claude().store.get(cmodUpdatedKey).then(async (updated) => {
         if (updated === tried) {
           stop();
-          return fail(`${definition.name} needs cmod ${coreVersion} or later, and the newest cmod is ${found2}.`, undefined, updateAgain);
+          return fail(`${definition.name} needs cmod ${oldestCmodVersion} or later, and the newest cmod is ${found2}.`, undefined, updateAgain);
         }
         await claude().store.set(cmodUpdatedKey, tried);
-        installing(`${definition.name} needs cmod ${coreVersion} or later, and this computer has cmod ${found2}, so cmod is updating itself.`);
+        installing(`${definition.name} needs cmod ${oldestCmodVersion} or later, and this computer has cmod ${found2}, so cmod is updating itself.`);
         const { code, lastError } = await readLines(claude().process.spawn({ argv: ["cmod", "update", "cmod"] }), () => {
           return;
         });
         if (code === 0)
           return;
         stop();
-        fail(`${definition.name} needs cmod ${coreVersion} or later, and updating cmod ${found2} ${formatExit(code, lastError)}`, undefined, updateAgain);
+        fail(`${definition.name} needs cmod ${oldestCmodVersion} or later, and updating cmod ${found2} ${formatExit(code, lastError)}`, undefined, updateAgain);
       }).catch(report);
     });
   };
@@ -11007,9 +10506,6 @@ function createLifecycle(definition, permissionRoutes = () => {
       return;
     const started = await readStarted(claude());
     plugin = started;
-    for (const item of started.granted)
-      granted.add(item);
-    consentMs = await stampOf(consentPath(started.store));
     recordMs = await stampOf(recordPath(started.store, started.name));
     if (started.isInstalled) {
       shouldRecord = started.shouldRecord;
@@ -11027,7 +10523,6 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (phase !== "failed")
       fail(messageOf(error), undefined, begin, error);
   };
-  let consentMs = 0;
   const stampOf = async (path) => {
     const stat = await claude().fs.stat(path).catch(ifMissing(undefined));
     return stat?.kind === "file" ? stat.mtimeMs : 0;
@@ -11047,20 +10542,12 @@ function createLifecycle(definition, permissionRoutes = () => {
     plugin = current2;
     return true;
   };
-  const startInstalled = async () => {
+  const recover = async () => {
+    if (phase !== "failed" || !await isNewlyInstalled())
+      return false;
     failure = undefined;
     activation = undefined;
-    await refreshGrants();
     await finish2();
-  };
-  let settleAsked;
-  const recover = async () => {
-    if (settleAsked === undefined && phase !== "failed" && phase !== "declined" || !await isNewlyInstalled())
-      return false;
-    if (settleAsked === undefined)
-      await startInstalled();
-    else
-      settleAsked();
     return true;
   };
   let recordCheck;
@@ -11077,45 +10564,6 @@ function createLifecycle(definition, permissionRoutes = () => {
   const stopWatchingRecord = () => {
     recordCheck?.cancel();
     recordCheck = undefined;
-  };
-  const refreshGrants = async () => {
-    if (plugin === undefined || plugin.name === cmodPluginName)
-      return;
-    const path = consentPath(plugin.store);
-    const modifiedMs = await stampOf(path);
-    if (modifiedMs === consentMs)
-      return;
-    consentMs = modifiedMs;
-    const approved = modifiedMs === 0 ? [] : parseConsent(JSON.parse(await claude().fs.read(path)), path)[plugin.name] ?? [];
-    granted.clear();
-    for (const item of plugin.steps.permissions ?? []) {
-      if (approved.includes(item))
-        granted.add(item);
-    }
-  };
-  const droppedParts = new Set;
-  const answerCheck = {
-    get plugin() {
-      return plugin?.name ?? definition.name;
-    },
-    isGranted: (item) => isCovered(granted, item, undefined),
-    dropped(item, part) {
-      if (droppedParts.has(item))
-        return;
-      droppedParts.add(item);
-      const isDeclared = (plugin?.steps.permissions ?? []).includes(item);
-      toastFailure({
-        id: `dropped:${item}`,
-        message: `Answered ${part} without your grant to "${permissionWords(item)}", so cmod dropped it`,
-        description: isDeclared ? grantFix : `It needs "permissions": { "${item}": true } in package.json "cmod".`
-      });
-    }
-  };
-  const checkedRoute = async (event, e, next) => {
-    let below;
-    const passOn = (passed) => below ??= next(passedDown(event, e, passed, answerCheck));
-    const answer = await router.dispatch(event, e, passOn);
-    return await checkedAnswer(event, e, answer, () => passOn(e), answerCheck);
   };
   const whenActive = async () => {
     if (phase === "ready")
@@ -11208,8 +10656,7 @@ function createLifecycle(definition, permissionRoutes = () => {
         return next(e);
       }
       if (isCallToThisMod && phase !== "active") {
-        const isStopped = phase === "declined" || phase === "failed";
-        return { deny: isStopped ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` };
+        return { deny: phase === "failed" ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` };
       }
       const call = e;
       if (event === "cmod.call" && call.to === definition.name && mod !== undefined) {
@@ -11221,14 +10668,10 @@ function createLifecycle(definition, permissionRoutes = () => {
           return { value: opened };
         }
       }
-      if (event === "classic.UserPromptSubmit" || event === "classic.SessionStart")
-        await refreshGrants().catch((error) => claude().ui.log(`${definition.name} keeps its grants from before: ${messageOf(error)}`, { to: "debug" }));
       if (event === "classic.UserPromptSubmit" && phase === "active" && !hasHeardSessionStart) {
         const { session_id, transcript_path, cwd: cwd2 } = e;
         await replaySessionStart({ session_id, transcript_path, cwd: cwd2, hook_event_name: "SessionStart", source: "resume" });
       }
-      if (checksAnswers(event) && phase === "active" && definition.name !== cmodPluginName)
-        return checkedRoute(event, e, next);
       const answer = router.dispatch(event, e, next);
       const render = e;
       if (event !== "ui.render" || render.component !== "AbovePrompt" || runtime === undefined)
@@ -11261,28 +10704,9 @@ async function createMod(definition, runtime) {
     added.push(feature);
   };
   const [session, root, startCwd, home, configHome] = await Promise.all([claude.session.id(), claude.session.root(), claude.session.cwd(), claude.env.home(), claude.env.configHome()]);
-  const { granted } = runtime;
   const configRoot = configHome ?? (home === undefined ? undefined : `${home}/.claude`);
-  const grants = {
-    name: definition.name,
-    declared: runtime.steps.permissions ?? [],
-    granted: () => granted,
-    refresh: runtime.refreshGrants,
-    home,
-    configRoot,
-    projectRoot: () => modState.root,
-    freeFolders: () => [modState.root, definition.name === cmodPluginName ? runtime.store : runtime.dataFolder],
-    freeAddresses: () => programAddresses(mod)
-  };
-  const checked = checkingGrants(claude, grants);
   const places = { home, configRoot, projectRoot: () => modState.root };
-  const files = createModFiles({
-    name: definition.name,
-    claude,
-    places,
-    checkWrite: (path) => checkWrite(grants, `metadata.update(${path})`, path),
-    report
-  });
+  const files = createModFiles({ name: definition.name, claude, places, report });
   let cwd2 = startCwd;
   let loadedCwd = startCwd;
   let staleCwd;
@@ -11317,18 +10741,15 @@ async function createMod(definition, runtime) {
   const hookOn = (hook, listener, failed) => router.add(`classic.${hook}`, classicHook(hook, listener, report), failed === undefined ? undefined : classicFailure(failed));
   const expand = (path) => homePrefix.test(path) ? resolvedPath(path, places) : path;
   const settingsFile = (source) => ({
-    read: () => checked.settings.read({ source }),
+    read: () => claude.settings.read({ source }),
     async update(values) {
-      await checkSettings(grants, source, values);
       await claude.cmod.call({ to: cmodPluginName, method: "updateSettings", input: { mod: definition.name, source, project: modState.root, values } });
     }
   });
   const client = createSessionsClient({
     name: definition.name,
-    claude: checked,
+    claude,
     report: (id, message, error) => report({ id, message, error }),
-    isGranted: (permission) => flag(permission),
-    permissionRefusal: (call, permission) => refusal(grants, call, permission),
     hookOn: (hook, listener, failed) => hookOn(hook, listener, failed),
     routeOn: (event, hook, failed) => router.add(event, hook, failed),
     permissionRoutes: runtime.permissionRoutes
@@ -11344,9 +10765,9 @@ async function createMod(definition, runtime) {
   const imports = {
     sessions: client.sessions,
     commands: {
-      list: async () => (await checked.command.list()).map(({ name, description, source, plugin }) => ({ name, description, source, ...plugin === undefined ? {} : { plugin } })),
+      list: async () => (await claude.command.list()).map(({ name, description, source, plugin }) => ({ name, description, source, ...plugin === undefined ? {} : { plugin } })),
       run: async (command, args) => {
-        const { text, context } = await checked.command.run({ command, ...args === undefined ? {} : { args } });
+        const { text, context } = await claude.command.run({ command, ...args === undefined ? {} : { args } });
         return { ...text === undefined ? {} : { text }, ...context === undefined || context.length === 0 ? {} : { note: context.join(`
 `) } };
       },
@@ -11354,7 +10775,7 @@ async function createMod(definition, runtime) {
       onRun: (...args) => client.listen("onRun", args)
     },
     config: {
-      list: async () => (await checked.config.list()).map(({ key, label, description, kind, value, options, provider, isLocked }) => ({
+      list: async () => (await claude.config.list()).map(({ key, label, description, kind, value, options, provider, isLocked }) => ({
         key,
         label,
         kind,
@@ -11381,15 +10802,15 @@ async function createMod(definition, runtime) {
         });
       }
     },
-    model: { complete: (completion, options) => checked.model.complete(completion, options) },
+    model: { complete: (completion, options) => claude.model.complete(completion, options) },
     fs: {
-      read: (path) => checked.fs.read(expand(path)),
-      write: (path, text) => checked.fs.write(expand(path), text),
-      exists: (path) => checked.fs.exists(expand(path)),
+      read: (path) => claude.fs.read(expand(path)),
+      write: (path, text) => claude.fs.write(expand(path), text),
+      exists: (path) => claude.fs.exists(expand(path)),
       find: (glob) => files.find(glob),
-      list: async (path) => (await checked.fs.list(path === undefined ? undefined : expand(path))).map(({ name, kind, size, mtimeMs, isLink }) => ({ name, isFile: kind === "file", isFolder: kind === "dir", isLink, size, modifiedAt: mtimeMs })),
+      list: async (path) => (await claude.fs.list(path === undefined ? undefined : expand(path))).map(({ name, kind, size, mtimeMs, isLink }) => ({ name, isFile: kind === "file", isFolder: kind === "dir", isLink, size, modifiedAt: mtimeMs })),
       async stat(path, options) {
-        const { kind, size, mtimeMs, isLink, realPath } = await checked.fs.stat(expand(path), options);
+        const { kind, size, mtimeMs, isLink, realPath } = await claude.fs.stat(expand(path), options);
         return { isFile: kind === "file", isFolder: kind === "dir", isLink, size, modifiedAt: mtimeMs, ...realPath === undefined ? {} : { realPath } };
       },
       onChange: ({ path }, listener) => watches.add([path].flat().map((each) => resolvedPath(each, places)), (change) => {
@@ -11402,18 +10823,16 @@ async function createMod(definition, runtime) {
       update: (path, change) => files.update(path, change)
     },
     process: {
-      run: (argv, init) => checked.process.run(argv, init),
-      spawn: (argv, init) => checked.process.spawn({ ...init, argv })
+      run: (argv, init) => claude.process.run(argv, init),
+      spawn: (argv, init) => claude.process.spawn({ ...init, argv })
     },
-    http: { fetch: (url, init) => checked.http.fetch(url, init) },
+    http: { fetch: (url, init) => claude.http.fetch(url, init) },
     clipboard: {
       async write(text) {
         await toaster.copy(text);
       }
     }
   };
-  const allowed = (permission) => ({ allows: (value) => isCovered(granted, itemOf(permission, value), home) });
-  const flag = (permission) => isCovered(granted, permission, home);
   const timer = (ms, subject, repeats, listener) => {
     let isFiring = false;
     let isRunning = true;
@@ -11430,8 +10849,8 @@ async function createMod(definition, runtime) {
         isFiring = false;
       });
     };
-    const checked2 = checkedMs(definition.name, `mod.${subject}`, ms);
-    const started = repeats ? claude.clock.every(checked2, fire) : claude.clock.after(checked2, fire);
+    const checked = checkedMs(definition.name, `mod.${subject}`, ms);
+    const started = repeats ? claude.clock.every(checked, fire) : claude.clock.after(checked, fire);
     return {
       get isRunning() {
         return isRunning;
@@ -11450,30 +10869,6 @@ async function createMod(definition, runtime) {
     state: modState.state,
     get options() {
       return modOptions.values;
-    },
-    permissions: {
-      get conversation() {
-        return flag("conversation");
-      },
-      get prompt() {
-        return flag("prompt");
-      },
-      get model() {
-        return flag("model");
-      },
-      get tasks() {
-        return flag("tasks");
-      },
-      get tools() {
-        return flag("tools");
-      },
-      get approve() {
-        return flag("approve");
-      },
-      network: allowed("network"),
-      run: allowed("run"),
-      files: allowed("files"),
-      config: allowed("config")
     },
     hotkeys,
     every: (ms, listener) => timer(ms, "every", true, listener),
@@ -11596,8 +10991,6 @@ async function createMod(definition, runtime) {
     const call = e;
     if (e.method === conversationMethods.changed && call.caller === cmodPluginName) {
       const { session: changedSession, change, isInProject } = e.input;
-      if (changedSession !== client.sessions.current.id && !flag("conversation"))
-        return { value: null };
       client.changed(changedSession, change, isInProject !== false);
       return { value: null };
     }
@@ -11630,16 +11023,13 @@ async function createMod(definition, runtime) {
   });
   const agents = toolCalls(claude, router);
   keepEngine(mod, {
-    claude: checked,
+    claude,
     router,
     toolCalls: agents,
     report,
     hasPermissionCheck: () => runtime.permissionRoutes() !== undefined,
     answerInput: area.answerInput,
-    spawnCmod: async (args, program) => {
-      await checkRun(grants, "process.spawn", program.argv);
-      return spawnCmod(claude, args, session, program.env);
-    },
+    spawnCmod: (args, env) => spawnCmod(claude, args, session, env),
     ...widgets === undefined ? {} : { widgets },
     ...pages === undefined ? {} : { pages }
   });
@@ -11923,7 +11313,7 @@ function changelogSections(markdown2) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-Ss6pwD/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11941,7 +11331,6 @@ var moves = [
 ];
 var loggedFailures = 100;
 var preferenceTitles = {
-  asksBeforeUpdatePermissions: "Ask before an update adds a permission",
   showsInstalledModErrors: "Show errors from installed mods"
 };
 var pageSection = "page:";
@@ -11954,9 +11343,9 @@ async function storeOf(mod) {
   const { claude } = engineOf(mod);
   return storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
 }
-async function readConsent(mod) {
-  const path = consentPath(await storeOf(mod));
-  return await fs.exists(path) ? parseConsent(JSON.parse(await fs.read(path)), path) : {};
+async function setUpMods(mod) {
+  const records = await fs.list(`${await storeOf(mod)}/records`).catch(ifMissing([]));
+  return records.filter((entry) => entry.name.endsWith(".json")).map((entry) => entry.name.slice(0, -".json".length)).filter((name) => name !== mod.name);
 }
 async function configRootOf(mod) {
   const { claude } = engineOf(mod);
@@ -12080,7 +11469,7 @@ function settings2(mod) {
     if (pages === undefined || widgets === undefined)
       throw new Error("cmod draws no Settings, because the cmod plugin started without its pages and widgets.");
     const read = (path) => fs.read(path).catch(ifMissing(undefined));
-    const viewOf = async (name, root, version, isOn, granted, rows, combos) => {
+    const viewOf = async (name, root, version, isOn, rows, combos) => {
       const manifest = await read(`${root}/package.json`).then((text) => text === undefined ? undefined : JSON.parse(text));
       const plugin = await read(`${root}/.claude-plugin/plugin.json`).then((text) => text === undefined ? undefined : JSON.parse(text));
       const steps = isObject(manifest) ? readSteps(manifest) : undefined;
@@ -12098,7 +11487,6 @@ function settings2(mod) {
         version,
         description: isObject(plugin) && typeof plugin["description"] === "string" ? plugin["description"] : undefined,
         isOn,
-        permissions: (steps?.permissions ?? []).map((item) => ({ item, isOn: granted.includes(item) })),
         hotkeys: Object.entries(steps?.hotkeys ?? {}).map(([hotkey, { title }]) => ({ name: hotkey, title, combo: combos.get(hotkeyCommand(name, hotkey)) })),
         options: rows.filter((row) => row.key.startsWith(`${name}.`)),
         pendingSteps: await ask(pendingStepsMethod),
@@ -12107,17 +11495,15 @@ function settings2(mod) {
     };
     const load = async () => {
       const store = await storeOf(mod);
-      const consent = await readConsent(mod);
       const rows = await claude.config.list();
       const combos = await readCombos(claude, await configRootOf(mod));
       const enabledPlugins = (await claude.settings.read())["enabledPlugins"];
       const enabled = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {}).map(([id, isEnabled]) => ({ name: id.replace(/@[^@]*$/, ""), isEnabled }));
       const turnedOff = enabled.filter(({ name, isEnabled }) => isEnabled === false && !enabled.some((each) => each.name === name && each.isEnabled === true)).map(({ name }) => name);
-      const names = await fs.exists(`${store}/records`) ? (await fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith(".json")).map((entry) => entry.name.slice(0, -".json".length)) : [];
-      const records = (await Promise.all(names.filter((name) => name !== mod.name).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined);
+      const records = (await Promise.all((await setUpMods(mod)).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined);
       const own = JSON.parse(await read(`${mod.folder}/.claude-plugin/plugin.json`) ?? "{}");
-      const cmod = await viewOf(mod.name, mod.folder, own.version ?? "", true, [], [], combos);
-      const views = await Promise.all(records.map((record) => viewOf(record.name, record.root, record.version, !turnedOff.includes(record.name), consent[record.name] ?? [], rows, combos)));
+      const cmod = await viewOf(mod.name, mod.folder, own.version ?? "", true, [], combos);
+      const views = await Promise.all(records.map((record) => viewOf(record.name, record.root, record.version, !turnedOff.includes(record.name), rows, combos)));
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))];
     };
     let hasLoaded = false;
@@ -12136,11 +11522,6 @@ function settings2(mod) {
       const { exitCode, stdout, stderr } = await process.run(["cmod", ...argv], timeoutMs === undefined ? {} : { timeoutMs });
       return exitCode === 0 ? done || stdout.trim() : `cmod ${argv.slice(0, 2).join(" ")} ${formatExit(exitCode, cmodError(stderr, argv[0]))}`;
     };
-    const toggle = (name, { item, isOn }) => {
-      const split = item.indexOf(":");
-      const words = split === -1 ? [item] : [item.slice(0, split), item.slice(split + 1)];
-      act(() => runCmod2(["permission", name, ...words, isOn ? "off" : "on"], ""));
-    };
     const remove = (name) => act(async () => {
       mod.state.memory.removing = null;
       mod.state.session.notice = `Removing ${name}…`;
@@ -12153,7 +11534,7 @@ function settings2(mod) {
       const own = pages.declared().find((each) => each.mod === view.name)?.pages.filter((page) => page.place === "settings") ?? [];
       return [
         ...own.map((page) => ({ key: `${pageSection}${page.id}`, label: page.title })),
-        ...view.name === mod.name ? [] : [{ key: "options", label: "Options" }, { key: "permissions", label: "Permissions" }],
+        ...view.name === mod.name ? [] : [{ key: "options", label: "Options" }],
         { key: "hotkeys", label: "Hotkeys" },
         ...view.name === mod.name ? [
           { key: "widgets", label: "Widgets" },
@@ -12241,11 +11622,6 @@ function settings2(mod) {
             ]
           }))
         });
-      }
-      if (section === "permissions") {
-        if (view.permissions.length === 0)
-          return Text({ dimColor: true, children: `${view.name} asks for no permissions.` });
-        return Box({ flexDirection: "column", children: view.permissions.map((permission) => Button({ plain: true, key: `permission:${permission.item}`, label: `${permission.isOn ? "[x]" : "[ ]"} ${permissionWords(permission.item)}`, onPress: () => toggle(view.name, permission) })) });
       }
       if (section === "hotkeys") {
         if (view.hotkeys.length === 0)
@@ -12402,7 +11778,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-Ss6pwD/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12657,7 +12033,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-Ss6pwD/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12711,7 +12087,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-Ss6pwD/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -12723,8 +12099,6 @@ var reloadEcho = "<command-name>/reload-plugins</command-name>";
 var reloadNote = "<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>";
 var reloadToast = "reload";
 var shownUpdates = 3;
-var setupWaitMs = 1e4;
-var recordCheckMs2 = 500;
 async function tipOf(mod) {
   const messages = await engineOf(mod).claude.session.messages();
   if (messages.length === 0)
@@ -12750,7 +12124,7 @@ var cmodPlugin = defineMod({
     mod.hotkeys.settings.onPress(() => shown.toggleSettings());
     mod.use(slashCommand({
       name: "mods",
-      description: "Open Settings, where you turn your mods off or remove them, and change their options, permissions, hotkeys, pages, and widgets",
+      description: "Open Settings, where you turn your mods off or remove them, and change their options, hotkeys, pages, and widgets",
       argumentHint: "[mod]",
       immediate: true,
       reply: ({ positionals }) => shown.openSettings(positionals[0])
@@ -12795,16 +12169,6 @@ var cmodPlugin = defineMod({
       }));
       return Object.fromEntries(versions.flat());
     };
-    const grantedWords = async (name, version) => {
-      for (let waitedMs = 0;; waitedMs += recordCheckMs2) {
-        const record = await readRecord((path) => fs.read(path).catch(ifMissing(undefined)), store, name);
-        if (record?.version === version)
-          return record.grantedOnUpdate.map(permissionWords);
-        if (record === undefined || waitedMs >= setupWaitMs)
-          return [];
-        await new Promise((resolve2) => mod.after(recordCheckMs2, resolve2));
-      }
-    };
     let loaded = {};
     const takeVersionsBeforeReload = async () => {
       const key = await sessionKey("versions-before-reload");
@@ -12817,19 +12181,12 @@ var cmodPlugin = defineMod({
       loaded = await loadedVersions();
       if (!isAfterOwnReload || before === undefined)
         return;
-      const updates = await Promise.all(Object.entries(loaded).filter(([id, version]) => before[id] !== undefined && before[id] !== version).map(async ([id, version]) => {
-        const name = id.replace(/@[^@]*$/, "");
-        return { line: `${name} updated to ${version}`, words: await grantedWords(name, version) };
-      }));
-      const rest = updates.filter(({ words }) => words.length === 0);
-      for (const { line, words } of updates)
-        if (words.length > 0)
-          claude.ui.toast([line, ...words].join(" · "));
-      if (rest.length > shownUpdates)
-        claude.ui.toast(`${rest.length} plugins updated`);
+      const updates = Object.entries(loaded).filter(([id, version]) => before[id] !== undefined && before[id] !== version).map(([id, version]) => `${id.replace(/@[^@]*$/, "")} updated to ${version}`);
+      if (updates.length > shownUpdates)
+        claude.ui.toast(`${updates.length} plugins updated`);
       else
-        for (const { line } of rest)
-          claude.ui.toast(line);
+        for (const update of updates)
+          claude.ui.toast(update);
     };
     const announceUpdates = (isAfterOwnReload) => void showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
     announceUpdates(await claude.store.get(await sessionKey("hiding-reload")) === true);
@@ -12892,12 +12249,13 @@ var cmodPlugin = defineMod({
       }
       return next({ ...e, message: { ...e.message, content: [{ type: "text", text: reloadNote }] } });
     });
-    const isCmod = (id) => id.replace(/@[^@]*$/, "") === mod.name;
+    const nameOf2 = (id) => id.replace(/@[^@]*$/, "");
+    const isCmod = (id) => nameOf2(id) === mod.name;
     const updatedFor = "cmod:cmod-updated-for";
     let isCheckingPlugins = false;
     const modifiedAt = async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? null;
     const pluginsChangedAt = async (file) => [await modifiedAt(file), await modifiedAt(changed)];
-    const keepCmodCurrent = async ({ isForced }) => {
+    const keepPluginsCurrent = async ({ isForced }) => {
       if (pluginsFile === undefined || isCheckingPlugins)
         return;
       isCheckingPlugins = true;
@@ -12910,12 +12268,16 @@ var cmodPlugin = defineMod({
         const listed2 = async () => JSON.parse(await runCmod(claude, ["list", "--json"], session));
         const needing = (rows) => rows.filter((row) => row.unsatisfied.some(isCmod));
         const before = await listed2();
-        const copies = new Set(before.filter((row) => isCmod(row.name)).map((row) => row.version));
+        const versionsOf = (name) => [...new Set(before.filter((row) => nameOf2(row.name) === name).map((row) => row.version))].toSorted();
+        const hasDifferingCopies = (name) => versionsOf(name).length > 1;
         let off = needing(before);
-        const reason = off.length > 0 || copies.size > 1 ? JSON.stringify([off.map((row) => row.name).toSorted(), [...copies].toSorted()]) : "";
+        const others = [...new Set(before.map((row) => nameOf2(row.name)))].filter((name) => name !== mod.name && hasDifferingCopies(name)).toSorted();
+        const outdated = [...off.length > 0 || hasDifferingCopies(mod.name) ? [mod.name] : [], ...others];
+        const reason = outdated.length > 0 ? JSON.stringify([off.map((row) => row.name).toSorted(), outdated.map((name) => [name, versionsOf(name)])]) : "";
         if (reason !== "" && reason !== await claude.store.get(updatedFor)) {
           await claude.store.set(updatedFor, reason);
-          await runCmod(claude, ["update", mod.name], session);
+          for (const name of outdated)
+            await runCmod(claude, ["update", name], session);
           checked = await pluginsChangedAt(pluginsFile);
           off = needing(await listed2());
         }
@@ -12931,9 +12293,9 @@ var cmodPlugin = defineMod({
         isCheckingPlugins = false;
       }
       if (JSON.stringify(await pluginsChangedAt(pluginsFile)) !== JSON.stringify(checked))
-        await keepCmodCurrent({ isForced: false });
+        await keepPluginsCurrent({ isForced: false });
     };
-    const checkPlugins = (asked) => void keepCmodCurrent(asked).catch((error) => report({ id: "needs-cmod", message: "Could not update cmod for the mods that need a newer one", error, retry: updateAgain, isCritical: true }));
+    const checkPlugins = (asked) => void keepPluginsCurrent(asked).catch((error) => report({ id: "needs-cmod", message: "Could not update cmod for the mods that need a newer one", error, retry: updateAgain, isCritical: true }));
     const updateAgain = async () => {
       await claude.store.delete(updatedFor);
       checkPlugins({ isForced: true });
@@ -12990,7 +12352,7 @@ var cmodPlugin = defineMod({
     });
     settings.beforeFileChange({ source: "user" }, () => void mod.after(reloadDelayMs, reloadIfChanged));
     sessions.current.onPrompt(() => reloadIfChanged());
-    readConsent(mod).then(async (consent) => Object.entries(consent).some(([name, granted]) => name !== mod.name && granted.includes("conversation")) ? runCmod(claude, ["history", "index"], await claude.session.id()) : undefined).catch((error) => mod.log(messageOf(error)));
+    setUpMods(mod).then(async (mods) => mods.length > 0 ? runCmod(claude, ["history", "index"], await claude.session.id()) : undefined).catch((error) => mod.log(messageOf(error)));
     const tearDown = async (name) => {
       const { exitCode, stdout, stderr } = await process.run(["cmod", "teardown", name, "--events"], { timeoutMs: longestMs });
       const outcome = parseEvent(stdout.trim().split(`
@@ -13089,7 +12451,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-Ss6pwD/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);

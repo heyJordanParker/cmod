@@ -4,7 +4,6 @@
   "type": "module",
   "cmod": {
     "program": "cmod",
-    "permissions": { "run": ["cmod"], "conversation": true, "prompt": true, "tasks": true },
     "hotkeys": {
       "sidebar": { "title": "Show or hide the Sidebar", "default": "meta+0" },
       "settings": { "title": "Show or hide Settings", "default": "meta+m" }
@@ -12,7 +11,7 @@
   },
   "files": ["bun.lock", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^4.3.4",
-    "@cmodjs/core": "^4.3.4"
+    "@cmodjs/cli": "^5.0.0",
+    "@cmodjs/core": "^5.0.0"
   }
 }
