@@ -347,8 +347,8 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.0.1";
-var oldestCmodVersion = "5.0.0";
+var coreVersion = "5.1.0";
+var oldestCmodVersion = "5.1.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -4703,7 +4703,9 @@ function installBefore({ claude, router, hooks }) {
       if (e.agentId !== undefined && task === undefined)
         return next(e);
       const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) });
-      return answer.refuse === undefined ? next(e) : { skip: answer.refuse };
+      if (answer.refuse !== undefined)
+        return { skip: answer.refuse };
+      return answer.summary === undefined ? next(e) : { messages: [{ role: "user", text: answer.summary, toolUses: [] }] };
     })
   ];
   return { remove: () => added.forEach((each) => each.remove()) };
@@ -4737,7 +4739,7 @@ var beforeAnswerKeys = {
   notice: ["text"],
   taskStart: ["prompt", "title", "owner", "isAsync", "refuse"],
   turnEnd: ["refuse", "note"],
-  contextEnd: ["refuse"]
+  contextEnd: ["refuse", "summary"]
 };
 function foldBefore(event, change, askers, report) {
   return foldAnswers(methodOf("before", event), beforeAnswerKeys[event], ["refuse", "result"], change, askers, report, withAnswer);
@@ -7021,6 +7023,16 @@ ${watcher.mod}`, watcher])).values()];
       return askAway(watcher, event, latest, await endsAt);
     }), (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error));
   };
+  const recordCompaction = async (e, next) => {
+    const compacted = await next(e);
+    if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
+      return compacted;
+    const at = new Date().toISOString();
+    const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
+    take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
+    return compacted;
+  };
+  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
   installBefore({
     claude,
     router,
@@ -7101,16 +7113,6 @@ ${watcher.mod}`, watcher])).values()];
     return kept;
   };
   router.add("session.append", recordAppend, (e, _error, next) => recordAppend(e, next));
-  const recordCompaction = async (e, next) => {
-    const compacted = await next(e);
-    if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
-      return compacted;
-    const at = new Date().toISOString();
-    const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
-    take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
-    return compacted;
-  };
-  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
   router.add("session.measure", async (e, next) => {
     const measured = await next(e);
     if (session !== "")
@@ -11313,7 +11315,7 @@ function changelogSections(markdown2) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-DJ5Ern/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11778,7 +11780,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-DJ5Ern/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12033,7 +12035,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-DJ5Ern/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12087,7 +12089,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-DJ5Ern/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -12451,7 +12453,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-DJ5Ern/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
