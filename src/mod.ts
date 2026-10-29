@@ -12,7 +12,7 @@ import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
 
 export type CmodPluginState = {
-  readonly global: { installedPlugins: readonly string[] | null; areHotkeysBound: boolean; pluginsCheckedAt: number | null }
+  readonly global: { installedPlugins: readonly string[] | null; areHotkeysBound: boolean; pluginsCheckedAt: readonly [number | null, number | null] | null }
   readonly session: { tip: string | null } & SidebarState['session'] & SettingsState['session']
   readonly memory: SettingsState['memory']
 }
@@ -23,7 +23,7 @@ type Listed = { readonly name: string; readonly version: string; readonly state:
 
 const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, ...settingsSession }
 
-type InstalledCopy = { readonly version: string; readonly projectPath?: string }
+type InstalledCopy = { readonly version: string; readonly installPath: string; readonly projectPath?: string }
 
 type Versions = Readonly<Record<string, string>>
 
@@ -120,12 +120,15 @@ export const cmodPlugin = defineMod({
       const installed = JSON.parse(await fs.read(pluginsFile).catch(ifMissing('{}'))) as { readonly plugins?: Readonly<Record<string, readonly InstalledCopy[]>> }
       const enabled = (await claude.settings.read())['enabledPlugins'] as Readonly<Record<string, unknown>> | undefined
       const root = await claude.session.root()
-      return Object.fromEntries(
-        Object.entries(installed.plugins ?? {}).flatMap(([id, copies]) => {
+      const versions = await Promise.all(
+        Object.entries(installed.plugins ?? {}).map(async ([id, copies]) => {
           const loaded = copies.find((copy) => copy.projectPath === root) ?? copies.find((copy) => copy.projectPath === undefined)
-          return enabled?.[id] === true && loaded !== undefined ? [[id, loaded.version]] : []
+          if (enabled?.[id] !== true || loaded === undefined) return []
+          const manifest = JSON.parse(await fs.read(`${loaded.installPath}/.claude-plugin/plugin.json`).catch(ifMissing('{}'))) as { readonly version?: unknown }
+          return [[id, typeof manifest.version === 'string' ? manifest.version : loaded.version] as const]
         }),
       )
+      return Object.fromEntries(versions.flat())
     }
     const grantedWords = async (name: string, version: string): Promise<string[]> => {
       for (let waitedMs = 0; ; waitedMs += recordCheckMs) {
@@ -221,13 +224,14 @@ export const cmodPlugin = defineMod({
     const updatedFor = 'cmod:cmod-updated-for'
     let isCheckingPlugins = false
     const modifiedAt = async (path: string) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? null
-    const keepCmodCurrent = async (): Promise<void> => {
+    const pluginsChangedAt = async (file: string) => [await modifiedAt(file), await modifiedAt(changed)] as const
+    const keepCmodCurrent = async ({ isForced }: { readonly isForced: boolean }): Promise<void> => {
       if (pluginsFile === undefined || isCheckingPlugins) return
-      const at = await modifiedAt(pluginsFile)
-      if (at === null || at === mod.state.global.pluginsCheckedAt) return
       isCheckingPlugins = true
-      let checked: number | null = at
+      let checked: CmodPluginState['global']['pluginsCheckedAt']
       try {
+        checked = await pluginsChangedAt(pluginsFile)
+        if (checked[0] === null || (!isForced && JSON.stringify(checked) === JSON.stringify(mod.state.global.pluginsCheckedAt))) return
         const session = await claude.session.id()
         const listed = async () => JSON.parse(await runCmod(claude, ['list', '--json'], session)) as readonly Listed[]
         const needing = (rows: readonly Listed[]) => rows.filter((row) => row.unsatisfied.some(isCmod))
@@ -238,7 +242,7 @@ export const cmodPlugin = defineMod({
         if (reason !== '' && reason !== (await claude.store.get(updatedFor))) {
           await claude.store.set(updatedFor, reason)
           await runCmod(claude, ['update', mod.name], session)
-          checked = await modifiedAt(pluginsFile)
+          checked = await pluginsChangedAt(pluginsFile)
           off = needing(await listed())
         }
         if (reason === '') await claude.store.delete(updatedFor)
@@ -248,15 +252,14 @@ export const cmodPlugin = defineMod({
       } finally {
         isCheckingPlugins = false
       }
-      if ((await modifiedAt(pluginsFile)) !== checked) await keepCmodCurrent()
+      if (JSON.stringify(await pluginsChangedAt(pluginsFile)) !== JSON.stringify(checked)) await keepCmodCurrent({ isForced: false })
     }
-    const checkPlugins = () => void keepCmodCurrent().catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain, isCritical: true }))
+    const checkPlugins = (asked: { readonly isForced: boolean }) => void keepCmodCurrent(asked).catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain, isCritical: true }))
     const updateAgain = async () => {
       await claude.store.delete(updatedFor)
-      mod.state.global.pluginsCheckedAt = null
-      checkPlugins()
+      checkPlugins({ isForced: true })
     }
-    checkPlugins()
+    checkPlugins({ isForced: (await claude.session.surfaces()).length > 0 })
 
     const failuresFile = buildFailuresPath(store)
     let shownFailures: readonly string[] = []
@@ -297,10 +300,8 @@ export const cmodPlugin = defineMod({
 
     fs.onChange({ path: [storeChangedPath(store), ...(pluginsFile === undefined ? [] : [pluginsFile])] }, ({ path }) => {
       startWatching()
-      if (path === pluginsFile) {
-        checkPlugins()
-        return reloadIfChanged()
-      }
+      checkPlugins({ isForced: false })
+      if (path === pluginsFile) return reloadIfChanged()
       void followBuildFailures()
       return Promise.all([widgets.reload(), reloadIfChanged(), refreshPreferences(mod)])
     })

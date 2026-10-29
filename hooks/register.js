@@ -399,7 +399,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "4.3.3";
+var coreVersion = "4.3.4";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -8516,6 +8516,27 @@ function pieceProps(props, given, isFirst) {
   const merged = { ...props, ...given };
   return isFirst || !("isFirstOfReply" in merged) ? merged : { ...merged, isFirstOfReply: false };
 }
+function laterKeys(key) {
+  let used = 0;
+  return () => key === undefined ? undefined : `${key}:${used += 1}`;
+}
+function inheriting(props, draw, laterKey = laterKeys(props.key)) {
+  const { dimColor, onLinkPress, pressableLinks } = props;
+  const inherited = { ...dimColor === undefined ? {} : { dimColor }, ...onLinkPress === undefined ? {} : { onLinkPress }, ...pressableLinks === undefined ? {} : { pressableLinks } };
+  let isKeyTaken = false;
+  const keyOf = (left) => {
+    if (left.key !== undefined)
+      return left.key;
+    if (isKeyTaken)
+      return laterKey();
+    isKeyTaken = true;
+    return props.key;
+  };
+  return (left) => {
+    const key = keyOf(left);
+    return draw({ ...inherited, ...key === undefined ? {} : { key }, ...left });
+  };
+}
 function threw(error) {
   return `threw, so Claude Code draws its own: ${messageOf(error)}`;
 }
@@ -8711,17 +8732,17 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
   const renderOf = (type) => markdownRenders.get(type);
   const drawnBlock = (piece, at, drawClaudes, keyPrefix, table) => {
     if ("text" in piece)
-      return drawClaudes(piece.text);
+      return drawClaudes({ text: piece.text });
     const { render, props: block } = piece;
-    const draw2 = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }) => drawClaudes(source) }));
+    const draw2 = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }) => drawClaudes({ text: source }) }));
     try {
-      return table === undefined ? draw2() : drawWith(table, draw2);
+      return table === undefined ? draw2() : drawWith(table, draw2, drawClaudes);
     } catch (error) {
       render.log(threw(error));
-      return drawClaudes(block.source);
+      return drawClaudes({ text: block.source });
     }
   };
-  const othersFrom = (table, at, from, unkeyedScope) => (props) => {
+  const othersFrom = (table, at, from, unkeyedScope) => (props, laterKey = laterKeys(props.key)) => {
     if (from >= stylers.length)
       return table.Markdown(props);
     const scope = props.key ?? unkeyedScope();
@@ -8729,7 +8750,8 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       if (index < from)
         continue;
       const cached = `${stylersSeen}\x00${at.surface}\x00${at.columns}\x00${props.text}`;
-      const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }, scope), othersFrom(table, at, index + 1, unkeyedScope));
+      const next = othersFrom(table, at, index + 1, unkeyedScope);
+      const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }, scope), inheriting(props, (part) => next(part, laterKey), laterKey));
       if (drawn !== undefined)
         return drawn;
     }
@@ -8747,11 +8769,8 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       if (pieces.every((piece) => ("text" in piece)))
         return others(props);
       const scope = props.key ?? unkeyedScope();
-      let drawn = 0;
-      const drawClaudes = (text) => {
-        const index = drawn++;
-        return others(index === 0 || props.key === undefined ? { ...props, text } : { ...props, text, key: `${props.key}:${index}` });
-      };
+      const laterKey = laterKeys(props.key);
+      const drawClaudes = inheriting(props, (part) => others(part, laterKey), laterKey);
       const drawings = pieces.map((piece, index) => drawnBlock(piece, at, drawClaudes, `${scope}:${index}:`, table));
       return drawPieces(drawings.map((drawing2) => ({ drawing: drawing2, isClaudesRow: false })), "pane");
     };
@@ -8760,7 +8779,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     const pieces = read === undefined ? [] : read(text, renderOf);
     if (pieces.every((piece) => ("text" in piece)))
       return Markdown({ text });
-    return drawPieces(pieces.map((piece, index) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source }), `${index}:`), isClaudesRow: false })), "pane");
+    return drawPieces(pieces.map((piece, index) => ({ drawing: drawnBlock(piece, at, Markdown, `${index}:`), isClaudesRow: false })), "pane");
   };
   const routeMarkdown = (createReader) => {
     if (read !== undefined)
@@ -11904,7 +11923,7 @@ function changelogSections(markdown2) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12383,7 +12402,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12638,7 +12657,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12692,7 +12711,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -12767,10 +12786,14 @@ var cmodPlugin = defineMod({
       const installed = JSON.parse(await fs.read(pluginsFile).catch(ifMissing("{}")));
       const enabled = (await claude.settings.read())["enabledPlugins"];
       const root = await claude.session.root();
-      return Object.fromEntries(Object.entries(installed.plugins ?? {}).flatMap(([id, copies]) => {
+      const versions = await Promise.all(Object.entries(installed.plugins ?? {}).map(async ([id, copies]) => {
         const loaded2 = copies.find((copy) => copy.projectPath === root) ?? copies.find((copy) => copy.projectPath === undefined);
-        return enabled?.[id] === true && loaded2 !== undefined ? [[id, loaded2.version]] : [];
+        if (enabled?.[id] !== true || loaded2 === undefined)
+          return [];
+        const manifest = JSON.parse(await fs.read(`${loaded2.installPath}/.claude-plugin/plugin.json`).catch(ifMissing("{}")));
+        return [[id, typeof manifest.version === "string" ? manifest.version : loaded2.version]];
       }));
+      return Object.fromEntries(versions.flat());
     };
     const grantedWords = async (name, version) => {
       for (let waitedMs = 0;; waitedMs += recordCheckMs2) {
@@ -12873,15 +12896,16 @@ var cmodPlugin = defineMod({
     const updatedFor = "cmod:cmod-updated-for";
     let isCheckingPlugins = false;
     const modifiedAt = async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? null;
-    const keepCmodCurrent = async () => {
+    const pluginsChangedAt = async (file) => [await modifiedAt(file), await modifiedAt(changed)];
+    const keepCmodCurrent = async ({ isForced }) => {
       if (pluginsFile === undefined || isCheckingPlugins)
         return;
-      const at = await modifiedAt(pluginsFile);
-      if (at === null || at === mod.state.global.pluginsCheckedAt)
-        return;
       isCheckingPlugins = true;
-      let checked = at;
+      let checked;
       try {
+        checked = await pluginsChangedAt(pluginsFile);
+        if (checked[0] === null || !isForced && JSON.stringify(checked) === JSON.stringify(mod.state.global.pluginsCheckedAt))
+          return;
         const session = await claude.session.id();
         const listed2 = async () => JSON.parse(await runCmod(claude, ["list", "--json"], session));
         const needing = (rows) => rows.filter((row) => row.unsatisfied.some(isCmod));
@@ -12892,7 +12916,7 @@ var cmodPlugin = defineMod({
         if (reason !== "" && reason !== await claude.store.get(updatedFor)) {
           await claude.store.set(updatedFor, reason);
           await runCmod(claude, ["update", mod.name], session);
-          checked = await modifiedAt(pluginsFile);
+          checked = await pluginsChangedAt(pluginsFile);
           off = needing(await listed2());
         }
         if (reason === "")
@@ -12906,16 +12930,15 @@ var cmodPlugin = defineMod({
       } finally {
         isCheckingPlugins = false;
       }
-      if (await modifiedAt(pluginsFile) !== checked)
-        await keepCmodCurrent();
+      if (JSON.stringify(await pluginsChangedAt(pluginsFile)) !== JSON.stringify(checked))
+        await keepCmodCurrent({ isForced: false });
     };
-    const checkPlugins = () => void keepCmodCurrent().catch((error) => report({ id: "needs-cmod", message: "Could not update cmod for the mods that need a newer one", error, retry: updateAgain, isCritical: true }));
+    const checkPlugins = (asked) => void keepCmodCurrent(asked).catch((error) => report({ id: "needs-cmod", message: "Could not update cmod for the mods that need a newer one", error, retry: updateAgain, isCritical: true }));
     const updateAgain = async () => {
       await claude.store.delete(updatedFor);
-      mod.state.global.pluginsCheckedAt = null;
-      checkPlugins();
+      checkPlugins({ isForced: true });
     };
-    checkPlugins();
+    checkPlugins({ isForced: (await claude.session.surfaces()).length > 0 });
     const failuresFile = buildFailuresPath(store);
     let shownFailures = [];
     const showBuildFailures = async () => {
@@ -12959,10 +12982,9 @@ var cmodPlugin = defineMod({
     startWatching();
     fs.onChange({ path: [storeChangedPath(store), ...pluginsFile === undefined ? [] : [pluginsFile]] }, ({ path }) => {
       startWatching();
-      if (path === pluginsFile) {
-        checkPlugins();
+      checkPlugins({ isForced: false });
+      if (path === pluginsFile)
         return reloadIfChanged();
-      }
       followBuildFailures();
       return Promise.all([widgets.reload(), reloadIfChanged(), refreshPreferences(mod)]);
     });
@@ -13067,7 +13089,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-SyqPlN/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-2AkK0J/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
