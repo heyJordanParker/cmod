@@ -83,6 +83,9 @@ test('cmod watch links a folder an older cmod put in CLAUDE_CODE_PLUGIN_DIRS as 
 
   expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({})
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`plugin marketplace add ${join(home, 'Developer')}\nplugin install demo@Developer-linked --json\n`)
+  const heartbeat = store(home, `watch.lock/${watching.child.pid}`)
+  const linkedAt = statSync(heartbeat).mtimeMs
+  await until(() => statSync(heartbeat).mtimeMs > linkedAt)
   await writeFiles(home, { 'Developer/demo/hooks/hooks.json': JSON.stringify({ modules: ['./register.js'] }), 'Developer/demo/hooks/register.js': 'export function register() {}\n' })
   await until(() => existsSync(store(home, 'plugins-changed')))
   watching.child.kill()
