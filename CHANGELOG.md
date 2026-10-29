@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-10-29
+
+### Fixed
+- A mod that depends on cmod, or on another mod, installs on a computer without a GitHub SSH key. Claude Code looked up the dependency's version tags over SSH, failed, and stopped with `Dependency "cmod@<mod>" has no git tag satisfying >=5.0.0`. `cmod publish` and `cmod link` now list each dependency by its HTTPS address, which Claude Code reads without a key. A mod published before this release gets the fix at its next `cmod publish`.
+
 ## [5.0.0] - 2026-10-29
 
 ### Removed
