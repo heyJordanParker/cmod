@@ -404,7 +404,7 @@ test("a pane of one mod draws another mod's markdown style once that mod draws i
   const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
   fake.fakes.cmod.call = async (call) => calledAnswer('notes', await diagrams.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
   const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
@@ -423,7 +423,7 @@ test("a pane whose other mod's markdown style fails to draw draws Claude Code's 
     return null
   }
   const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
@@ -439,7 +439,7 @@ test('hearing which mods style markdown redraws only a mod with a pane, because 
   const redrawsOf = async (definition: ModDefinition) => {
     const fake = fakeClaude({ name: definition.name, root: `/test/plugins/${definition.name}` })
     const lifecycle = createLifecycle(definition)
-    await lifecycle.start(fake.claude, async () => ({ name: definition.name, root: `/test/plugins/${definition.name}`, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+    await lifecycle.start(fake.claude, async () => ({ name: definition.name, root: `/test/plugins/${definition.name}`, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
     await fake.settle()
     const before = fake.calls.filter(({ call }) => call === 'ui.invalidate').length
     await lifecycle.route('cmod.call', { to: definition.name, method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
@@ -462,7 +462,7 @@ test("another mod's markdown drawing stays while this mod's own parts change and
     return calledAnswer('notes', await diagrams.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
   }
   const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
@@ -603,7 +603,7 @@ test("a pane's Markdown keeps its dim color and links in each part another mod's
   const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
   fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
   const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
@@ -630,7 +630,7 @@ test("a pane's Markdown keeps its dim color and links in each keyless Markdown i
       },
     }),
   )
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
 
@@ -655,7 +655,7 @@ test("a pane's Markdown that its own style and another mod's style both split th
       },
     }),
   )
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
@@ -839,7 +839,7 @@ test("a pane draws three blocks of another mod's style that keys by index, each 
         }),
     }),
   )
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
@@ -928,7 +928,7 @@ test('a markdown place component takes the props its block carries', () => {
 async function started(definition: ModDefinition) {
   const root = `/test/plugins/${definition.name}`
   const lifecycle = createLifecycle(definition)
-  await lifecycle.start(fakeClaude({ name: definition.name, root }).claude, async () => ({ name: definition.name, root, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await lifecycle.start(fakeClaude({ name: definition.name, root }).claude, async () => ({ name: definition.name, root, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   return lifecycle
 }
 

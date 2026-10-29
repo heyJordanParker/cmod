@@ -41,13 +41,11 @@ export function createModFiles({
   name,
   claude,
   places,
-  checkWrite,
   report,
 }: {
   readonly name: string
   readonly claude: Claude
   readonly places: Places
-  readonly checkWrite: (path: string) => Promise<void>
   readonly report: (failure: Failure) => void
 }): ModFiles {
   const prefix = `${name}.`
@@ -146,7 +144,6 @@ export function createModFiles({
     },
     async update(path, change) {
       const given = resolvedPath(path, places)
-      await checkWrite(given)
       const located = await locate(given)
       const text = await textOf(located.holder)
       let all: Metadata

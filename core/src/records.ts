@@ -19,13 +19,13 @@ export type Steps = {
   uninstall?: string
   program?: string
   hotkeys?: Hotkeys
+  approve?: true
   permissions?: readonly string[]
 }
 
-export const listPermissions = ['network', 'run', 'files', 'config'] as const
-export const flagPermissions = ['conversation', 'prompt', 'model', 'tasks', 'tools', 'approve'] as const
-export type ListPermission = (typeof listPermissions)[number]
-export type FlagPermission = (typeof flagPermissions)[number]
+const listPermissions = ['network', 'run', 'files', 'config'] as const
+const flagPermissions = ['conversation', 'prompt', 'model', 'tasks', 'tools', 'approve'] as const
+type ListPermission = (typeof listPermissions)[number]
 const permissionNames: readonly string[] = [...listPermissions, ...flagPermissions]
 const hostName = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/
 const programName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
@@ -159,12 +159,15 @@ export function readSteps(pkg: unknown): Steps | undefined {
   if (!isObject(steps)) throw new Error('package.json has a "cmod" key that is not an object. Write "cmod": { "install": "./setup/install.sh", "uninstall": "./setup/uninstall.sh" }.')
   const program = steps['program']
   if (program !== undefined && (typeof program !== 'string' || !pluginName.test(program))) throw new Error('package.json "cmod.program" must be the program\'s command, such as "hello".')
+  const approve = steps['approve']
+  if (approve !== undefined && approve !== true) throw new Error(`package.json "cmod.approve" is ${JSON.stringify(approve)}. Write "approve": true, or leave it out.`)
   const permissions = readPermissions(steps)
   return {
     ...readCommand(steps, 'install'),
     ...readCommand(steps, 'uninstall'),
     ...(program === undefined ? {} : { program }),
     ...readHotkeys(steps['hotkeys']),
+    ...(approve === true || permissions.includes('approve') ? { approve: true as const } : {}),
     ...(permissions.length === 0 ? {} : { permissions }),
   }
 }
@@ -198,48 +201,12 @@ function readPermissions(steps: Record<string, unknown>): string[] {
   return items
 }
 
-export const grantFix = 'Turn it on in Settings.'
-
 export const installFix = 'Install it in Plugins.'
 
 export const secretFix = 'Set it in /config, where Claude Code keeps it in your keychain.'
 
-export function permissionWords(item: string): string {
-  const split = item.indexOf(':')
-  const target = item.slice(split + 1)
-  switch (split === -1 ? item : item.slice(0, split)) {
-    case 'network':
-      return `Connect to ${target}`
-    case 'run':
-      return target === '*' ? 'Run any program on your computer' : `Run ${target} on your computer`
-    case 'files':
-      return `Change ${target}`
-    case 'conversation':
-      return 'Read your Claude Code conversations'
-    case 'prompt':
-      return 'Add text Claude reads and start turns'
-    case 'model':
-      return 'Ask a model, which uses your plan'
-    case 'tasks':
-      return 'Start tasks that work beside Claude'
-    case 'tools':
-      return "Use and change Claude's tool calls"
-    case 'config':
-      return `Change ${target} in your Claude Code settings`
-    case 'approve':
-      return "Approve Claude's tool calls for you"
-    default:
-      return item
-  }
-}
-
 export function settingPaths(values: Readonly<Record<string, unknown>>): string[][] {
   return Object.entries(values).flatMap(([key, value]) => (isObject(value) && Object.keys(value).length > 0 ? settingPaths(value).map((path) => [key, ...path]) : [[key]]))
-}
-
-export function isSettingCovered(granted: Iterable<string>, path: string): boolean {
-  const item = `config:${path}`
-  return [...granted].some((each) => item === each || item.startsWith(`${each}.`))
 }
 
 export const pendingStepsMethod = 'cmod:pendingSteps'
@@ -316,18 +283,18 @@ export function preferencesPath(store: string): string {
   return `${store}/preferences.json`
 }
 
-export type Preferences = { readonly asksBeforeUpdatePermissions: boolean; readonly showsInstalledModErrors: boolean }
+export type Preferences = { readonly showsInstalledModErrors: boolean }
 
 export function parsePreferences(value: unknown, path: string): Preferences {
-  if (value === undefined) return { asksBeforeUpdatePermissions: false, showsInstalledModErrors: false }
-  if (!isObject(value) || ['asksBeforeUpdatePermissions', 'showsInstalledModErrors'].some((key) => value[key] !== undefined && typeof value[key] !== 'boolean')) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
-  return { asksBeforeUpdatePermissions: value['asksBeforeUpdatePermissions'] === true, showsInstalledModErrors: value['showsInstalledModErrors'] === true }
+  if (value === undefined) return { showsInstalledModErrors: false }
+  if (!isObject(value) || (value['showsInstalledModErrors'] !== undefined && typeof value['showsInstalledModErrors'] !== 'boolean')) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
+  return { showsInstalledModErrors: value['showsInstalledModErrors'] === true }
 }
 
 export function parseConsent(value: unknown, path: string): Record<string, string[]> {
   if (value === undefined) return Object.create(null)
   if (!isObject(value) || !Object.values(value).every(isTextList)) {
-    throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod asks again.`)
+    throw new Error(`${path} is not a map of plugin names to what each was approved for. Delete it, and cmod writes it again at each mod's next setup.`)
   }
   return Object.assign(Object.create(null), value) as Record<string, string[]>
 }
@@ -339,7 +306,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '4.3.4'
+export const coreVersion = '5.0.0'
+
+export const oldestCmodVersion = '5.0.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`
@@ -359,22 +328,18 @@ export function boundCombos(keybindings: unknown): Map<string, string> {
   return combos
 }
 
-export function hotkeyWords(hotkeys: Hotkeys | undefined): string {
-  return listed(Object.values(hotkeys ?? {}).flatMap(({ title, default: combo }) => (combo === undefined ? [] : [`${combo} to ${title}`])))
-}
-
 function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall'): Steps {
   const command = steps[key]
   if (command === undefined) return {}
   if (typeof command !== 'string' || command.trim() === '') throw new Error(`package.json "cmod.${key}" must be a command, such as "./setup/${key}.sh".`)
   if (/[\n\t]/.test(command)) throw new Error(`package.json "cmod.${key}" holds a line break or a tab. Write one command, such as "./setup/${key}.sh".`)
   const atRoot = scriptPaths(command).find((path) => folderOf(path) === '.')
-  if (atRoot !== undefined) throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: cmod asks consent for the whole folder of each script.`)
+  if (atRoot !== undefined) throw new Error(`package.json "cmod.${key}" names ${atRoot}, a script at the plugin root. Move it into a folder, such as ./setup/${key}.sh: cmod runs the steps again whenever anything in a script's folder changes.`)
   return { [key]: command }
 }
 
-export function bundleDefines(permissions: readonly string[]): Record<string, string> {
-  return permissions.includes('approve') ? {} : { 'globalThis.cmodWithoutApprove': 'true' }
+export function bundleDefines(steps: Steps): Record<string, string> {
+  return steps.approve === true ? {} : { 'globalThis.cmodWithoutApprove': 'true' }
 }
 
 export function scriptPaths(command: string): string[] {
@@ -398,7 +363,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
     for (const path of scriptPaths(command)) {
       if ((await files.read(path)) !== undefined) scriptFolders.push(folderOf(path))
     }
-    if (scriptFolders.length === 0) throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/${key}.sh.`)
+    if (scriptFolders.length === 0) throw new Error(`package.json "cmod.${key}" runs "${command}", which names no script file in the mod, so cmod cannot tell when what it runs changes. Put the commands in a script, such as ./setup/${key}.sh.`)
     for (const folder of scriptFolders) folders.add(folder)
   }
   let text = [
@@ -412,7 +377,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
     for (const name of (await files.list(folder)).sort()) {
       const path = `${folder}/${name}`
       const content = await files.read(path)
-      if (content === undefined) throw new Error(`${path} links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.`)
+      if (content === undefined) throw new Error(`${path} links to a folder or to nothing, so cmod cannot tell when it changes. Point the link at a file, or delete it.`)
       text += `\0${path}\0${content}`
     }
   }

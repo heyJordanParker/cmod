@@ -4,7 +4,7 @@
 
 # @cmodjs/core
 
-The library every Claude Mod Manager mod imports. Claude Mod Manager (cmod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step that runs with your consent.
+The library every Claude Mod Manager mod imports. Claude Mod Manager (cmod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step.
 
 ```sh
 npm i -g @cmodjs/cli

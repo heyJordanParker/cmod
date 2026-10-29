@@ -116,10 +116,14 @@ export async function writeUserConfig(root: string, userConfig: Record<string, u
   return true
 }
 
-export async function cmodFloor({ name, root }: Pick<Plugin, 'name' | 'root'>): Promise<string | undefined> {
+export async function cmodFloor({ name, root }: Pick<Plugin, 'name' | 'root'>): Promise<{ readonly core: string; readonly cmod: string } | undefined> {
   if (name === 'cmod') return undefined
-  const core = await readJson(`${root}/node_modules/@cmodjs/core/package.json`)
-  return isObject(core) && typeof core['version'] === 'string' && isAtLeast(core['version'], '4.0.0') ? `>=${core['version']}` : undefined
+  const folder = `${root}/node_modules/@cmodjs/core`
+  const manifest = await readJson(`${folder}/package.json`)
+  if (!isObject(manifest) || typeof manifest['version'] !== 'string' || !isAtLeast(manifest['version'], '4.0.0')) return undefined
+  const core = manifest['version']
+  const { oldestCmodVersion } = (await import(`${folder}/records.js`)) as { readonly oldestCmodVersion?: unknown }
+  return { core, cmod: typeof oldestCmodVersion === 'string' ? oldestCmodVersion : core }
 }
 
 export function cmodRangeOf(manifest: unknown): string | undefined {

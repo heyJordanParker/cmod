@@ -20,7 +20,7 @@ test('cmod check refuses an install command that names no script', async () => {
   const result = await cmod(home, 'check', root)
 
   expect(result.stdout).toContain(
-    'Checking the steps…\n✘ The steps have a problem\n    fix: package.json "cmod.install" runs "npm run setup", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/install.sh.\n',
+    'Checking the steps…\n✘ The steps have a problem\n    fix: package.json "cmod.install" runs "npm run setup", which names no script file in the mod, so cmod cannot tell when what it runs changes. Put the commands in a script, such as ./setup/install.sh.\n',
   )
   expect(result.exitCode).toBe(1)
 })
@@ -106,12 +106,13 @@ test('cmod check writes the options defineMod declares into plugin.json userConf
 
 const cmodAt = (version: string, id = 'cmod@cmod', scope = 'user') => ({ id, version, scope, enabled: true, installPath: '/cmod' })
 
-test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod installed, keeping the rest of the entry', async () => {
+test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod installed when that core names no oldest cmod, keeping the rest of the entry', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
   await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.2.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
     'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.2.0' }),
+    'node_modules/@cmodjs/core/records.js': "export const coreVersion = '4.2.0'\n",
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', marketplace: 'cmod', version: '^4.0.0' }, 'tracer'] }),
     'package.json': JSON.stringify({ name: 'demo' }),
   })
@@ -119,9 +120,27 @@ test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod insta
   const result = await cmod(home, 'check', root)
   const again = await cmod(home, 'check', root)
 
-  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.2.0", the @cmodjs/core this mod bundles, so every newer cmod runs it\n')
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.2.0", the oldest cmod the @cmodjs/core 4.2.0 this mod bundles runs on, so every newer cmod runs it\n')
   expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', marketplace: 'cmod', version: '>=4.2.0' }, 'tracer'])
   expect(again.stdout).toContain('✔ plugin.json holds the cmod dependency ">=4.2.0"')
+})
+
+test("cmod check writes the cmod dependency as >= the oldest cmod the mod's @cmodjs/core names, not its own version", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('5.1.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.1.0' }),
+    'node_modules/@cmodjs/core/records.js': "export const coreVersion = '5.1.0'\nexport const oldestCmodVersion = '5.0.0'\n",
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', version: '>=4.3.4' }] }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+  })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=5.0.0", the oldest cmod the @cmodjs/core 5.1.0 this mod bundles runs on, so every newer cmod runs it\n')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=5.0.0' }])
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
 })
 
 test('cmod check keeps the cmod range of a mod on @cmodjs/core 3, which cmod 4 does not run', async () => {
@@ -146,6 +165,7 @@ test('cmod check adds the cmod dependency to a plugin.json that names none', asy
   await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.0.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
     'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.0.0' }),
+    'node_modules/@cmodjs/core/records.js': '',
     '.claude-plugin/plugin.json': '{\n  "name": "demo",\n  "version": "0.1.0"\n}\n',
     'package.json': JSON.stringify({ name: 'demo' }),
   })
@@ -157,6 +177,7 @@ test('cmod check adds the cmod dependency to a plugin.json that names none', asy
 
 const newerCoreMod = {
   'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.3.3' }),
+  'node_modules/@cmodjs/core/records.js': '',
   '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', version: '>=4.3.2' }] }),
   'package.json': JSON.stringify({ name: 'demo' }),
 }
@@ -176,7 +197,7 @@ test('cmod check updates each older cmod plugin through Claude Code before it wr
   const result = await cmod(home, 'check', root)
 
   expect(result.stdout).toContain(
-    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\nUpdating cmod@Developer-linked…\n✔ Updated cmod@Developer-linked through Claude Code\n✔ Updated cmod to 4.3.3 through Claude Code, so it runs the @cmodjs/core this mod bundles\n    Wrote the cmod dependency ">=4.3.3", the @cmodjs/core this mod bundles, so every newer cmod runs it\n',
+    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\nUpdating cmod@Developer-linked…\n✔ Updated cmod@Developer-linked through Claude Code\n✔ Updated cmod to 4.3.3 through Claude Code, so it runs the @cmodjs/core this mod bundles\n    Wrote the cmod dependency ">=4.3.3", the oldest cmod the @cmodjs/core 4.3.3 this mod bundles runs on, so every newer cmod runs it\n',
   )
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toStartWith('plugin list --json\nplugin list --json\nplugin update cmod@cmod --json\nplugin update cmod@Developer-linked --json\nplugin list --json\nplugin list --json\nplugin validate ')
   expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
@@ -205,7 +226,7 @@ test('cmod check writes the cmod dependency without an update on a machine where
 
   const result = await cmod(home, 'check', root)
 
-  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3", the @cmodjs/core this mod bundles, so every newer cmod runs it\n')
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3", the oldest cmod the @cmodjs/core 4.3.3 this mod bundles runs on, so every newer cmod runs it\n')
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
   expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
 })
@@ -223,7 +244,7 @@ test('cmod check compares a cmod installed from git by the version its plugin.js
 
   const result = await cmod(home, 'check', root)
 
-  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3", the @cmodjs/core this mod bundles, so every newer cmod runs it\n')
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3", the oldest cmod the @cmodjs/core 4.3.3 this mod bundles runs on, so every newer cmod runs it\n')
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
   expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
 })
@@ -288,38 +309,63 @@ test('cmod check names each machine package.json "os" and "cpu" allow that a cmo
   )
 })
 
-test('cmod check shows what the person grants at install, and adds approve only for a mod that answers the permission check', async () => {
+test('cmod check adds "approve": true to package.json "cmod" only for a mod that allows or asks on the permission check', async () => {
   const home = await temporaryHome()
   const root = join(home, 'guard')
+  const approvesNone = "Checking the permission check hooks…\n– The mod approves none of Claude's tool calls\n"
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'guard', cmod: { permissions: { network: ['api.github.com'] } } }),
+    'package.json': JSON.stringify({ name: 'guard', cmod: { install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\n',
   })
 
-  const shown = await cmod(home, 'check', root)
-
-  expect(shown.stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
+  expect((await cmod(home, 'check', root)).stdout).toContain(approvesNone)
 
   await writeFiles(root, {
     'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n  registerPermissionCheck(addHook)\n}\n',
     'src/mod.ts': 'sessions.current.onPermissionCheck((check) => mod.log(check.name))\n',
   })
 
-  expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
+  expect((await cmod(home, 'check', root)).stdout).toContain(approvesNone)
 
   await writeFiles(root, { 'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ refuse: 'No deploys.' }))\n" })
 
-  expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n✔ At install the person grants: Connect to api.github.com\n')
+  expect((await cmod(home, 'check', root)).stdout).toContain(approvesNone)
 
   await writeFiles(root, { 'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ ask: 'Check first.' }))\n" })
 
   const added = await cmod(home, 'check', root)
+  const again = await cmod(home, 'check', root)
 
   expect(added.stdout).toContain(
-    '✔ Added "approve": true to package.json "cmod", because the mod allows or asks on Claude Code\'s permission check\n    At install the person grants: Connect to api.github.com; Approve Claude\'s tool calls for you\n    Anthropic\'s plugin directory does not list a mod that approves Claude\'s tool calls\n',
+    "Checking the permission check hooks…\n✔ Added \"approve\": true to package.json \"cmod\", because the mod allows or asks on Claude Code's permission check\n    The mod approves Claude's tool calls, so its release keeps its allow and ask answers\n    Anthropic's plugin directory does not list a mod that approves Claude's tool calls\n",
   )
-  expect(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).cmod).toEqual({ permissions: { network: ['api.github.com'], approve: true } })
+  expect(JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).cmod).toEqual({ install: './setup/install.sh', approve: true })
+  expect(again.stdout).toContain("Checking the permission check hooks…\n✔ The mod approves Claude's tool calls, so its release keeps its allow and ask answers\n")
+})
+
+test('cmod check fails a mod on @cmodjs/core 5.0.0 or later that still declares "permissions", and passes one on @cmodjs/core 4', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'guard')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.0.0' }),
+    'node_modules/@cmodjs/core/records.js': "export const oldestCmodVersion = '5.0.0'\n",
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'guard', cmod: { permissions: { network: ['api.github.com'], approve: true } } }),
+  })
+
+  const refused = await cmod(home, 'check', root)
+
+  expect(refused.stdout).toContain(
+    'Checking the permission check hooks…\n✘ package.json "cmod" still declares "permissions", which @cmodjs/core 5.0.0 no longer has\n    fix: Delete "permissions" from package.json "cmod", and write "approve": true there if the mod approves tool calls.\n',
+  )
+  expect(refused.exitCode).toBe(1)
+
+  await writeFiles(root, { 'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.3.4' }), 'node_modules/@cmodjs/core/records.js': '' })
+
+  expect((await cmod(home, 'check', root)).stdout).toContain("Checking the permission check hooks…\n✔ The mod approves Claude's tool calls, so its release keeps its allow and ask answers\n")
 })
 
 test('cmod check fails a mod whose source hears permissions when register.ts does not call registerPermissionCheck', async () => {
@@ -335,12 +381,12 @@ test('cmod check fails a mod whose source hears permissions when register.ts doe
   })
 
   expect((await cmod(home, 'check', root)).stdout).toContain(
-    "Reading the permissions…\n✘ src/mod.ts hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck\n    fix: Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.\n",
+    "Checking the permission check hooks…\n✘ src/mod.ts hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck\n    fix: Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.\n",
   )
 
   await writeFiles(root, { 'src/mod.ts': "import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'\n" })
 
-  expect((await cmod(home, 'check', root)).stdout).toContain('Reading the permissions…\n– package.json "cmod" asks for no permissions\n')
+  expect((await cmod(home, 'check', root)).stdout).toContain("Checking the permission check hooks…\n– The mod approves none of Claude's tool calls\n")
 
   await writeFiles(root, {
     'src/mod.ts': "// sessions.current.onPermissionCheck((check) => mod.log(check.name))\n/* import { readFileSync } from 'node:fs' */\nimport type { Stats } from 'node:fs'\nexport type Size = Stats['size']\n",
@@ -348,7 +394,7 @@ test('cmod check fails a mod whose source hears permissions when register.ts doe
   })
   const commented = (await cmod(home, 'check', root)).stdout
 
-  expect(commented).toContain('Reading the permissions…\n– package.json "cmod" asks for no permissions\n')
+  expect(commented).toContain("Checking the permission check hooks…\n– The mod approves none of Claude's tool calls\n")
   expect(commented).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
 })
 

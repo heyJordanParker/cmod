@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { chmod, lstat, readdir, readFile, readlink, rename, rm, stat, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
-import { parseEvent, readRecord, recordPath } from '@cmodjs/core/src/records.js'
+import { readRecord, recordPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, listFiles, readText } from '../src/files.js'
 import { cmod, cmodInTerminal, cmodOnPath, cmodWith, deleteTemporaryHomes, hashOf, startCmod, startCmodInTerminal, temporaryHome, writeFiles, writeLinked } from './cmod.js'
@@ -99,7 +99,7 @@ test('setup --events with an install step that prints four progress lines emits 
   const root = await createMod(home)
   const sha256 = await hashOf(root)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', sha256)
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('progress 1 4 Checking Homebrew\nprogress 2 4 Installing trash\nprogress 3 4 Adding the zsh alias\nprogress 4 4 Finishing\ndone demo 0.1.0\n')
   expect(result.exitCode).toBe(0)
@@ -109,84 +109,73 @@ test('setup --events with an install step that prints four progress lines emits 
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 
-test('setup --events on changed scripts prints needs-consent and runs nothing, and --consent with the right hash runs it', async () => {
+test('setup --events on changed scripts runs them again without asking', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   await writeFiles(root, { 'setup/install.sh': `${fourStepInstall}echo "a new line"\n` })
-  const changed = await hashOf(root)
   const runs = join(home, '.local/share/cmod/data/demo/runs')
 
-  const asked = await cmod(home, 'setup', root, '--events')
+  const rerun = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(asked.exitCode).toBe(10)
-  expect(await readFile(runs, 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
-
-  const approved = await cmod(home, 'setup', root, '--events', '--consent', changed)
-
-  expect(approved.stdout).toBe('progress 1 4 Checking Homebrew\nprogress 2 4 Installing trash\nprogress 3 4 Adding the zsh alias\nprogress 4 4 Finishing\nlog a new line\ndone demo 0.1.0\n')
-  expect(approved.exitCode).toBe(0)
+  expect(rerun.stdout).toBe('progress 1 4 Checking Homebrew\nprogress 2 4 Installing trash\nprogress 3 4 Adding the zsh alias\nprogress 4 4 Finishing\nlog a new line\ndone demo 0.1.0\n')
+  expect(rerun.exitCode).toBe(0)
   expect(await readFile(runs, 'utf8')).toBe(`ran in ${root} at 0.1.0\nran in ${root} at 0.1.0\n`)
 })
 
-test('changing only the uninstall script asks for consent again', async () => {
+test('a setup --events from a library built on @cmodjs/core 4 still passes --consent, and cmod sets the mod up', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
-  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
 
-  const asked = await cmod(home, 'setup', root, '--events')
-
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(asked.exitCode).toBe(10)
+  expect(await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).toMatchObject({ stdout: expect.stringContaining('done demo 0.1.0\n'), exitCode: 0 })
 })
 
-test('changing only a sourced sibling script asks for consent again', async () => {
+test.each([
+  ['the uninstall script', { 'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled again" >> "$HOME/uninstalls"\n' }],
+  ['a sourced sibling script', { 'setup/lib.sh': 'greet() {\n  echo "progress 1 1 Greeting again"\n}\n' }],
+])('changing only %s runs the install step again', async (_, files) => {
   const home = await temporaryHome()
-  const root = await createMod(home, '#!/bin/sh\n. "$(dirname "$0")/lib.sh"\ngreet\n')
+  const root = await createMod(home, '#!/bin/sh\n. "$(dirname "$0")/lib.sh"\ngreet\necho ran >> "$CMOD_DATA/runs"\n')
   await writeFiles(root, { 'setup/lib.sh': 'greet() {\n  echo "progress 1 1 Greeting"\n}\n' })
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
-  await writeFiles(root, { 'setup/lib.sh': 'greet() {\n  rm -rf "$HOME/Documents"\n}\n' })
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  await writeFiles(root, files)
 
-  const asked = await cmod(home, 'setup', root, '--events')
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(asked.exitCode).toBe(10)
+  expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\nran\n')
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'demo'))?.scriptsSha256).toBe(await hashOf(root))
 })
 
-test('an update that changes only setup/lib asks consent again', async () => {
+test('an update that changes only setup/lib runs the install step again', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\n. ./setup/lib/common.sh\ngreet\n')
   await writeFiles(root, { 'setup/lib/common.sh': 'greet() {\n  echo "progress 1 1 Greeting"\n}\n' })
-  const approved = await hashOf(root)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', approved)).exitCode).toBe(0)
-  await writeFiles(root, { 'setup/lib/common.sh': 'greet() {\n  rm -rf "$HOME/Documents"\n}\n' })
+  const installed = await hashOf(root)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  await writeFiles(root, { 'setup/lib/common.sh': 'greet() {\n  echo "progress 1 1 Greeting again"\n}\n' })
   const changed = await hashOf(root)
 
-  const asked = await cmod(home, 'setup', root, '--events')
+  const rerun = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(asked.exitCode).toBe(10)
-  expect(changed).not.toBe(approved)
+  expect(rerun).toMatchObject({ stdout: 'progress 1 1 Greeting again\ndone demo 0.1.0\n', exitCode: 0 })
+  expect(changed).not.toBe(installed)
 })
 
-test('a changed script behind a symbolic link asks consent again', async () => {
+test('a changed script behind a symbolic link runs the install step again', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   await writeFiles(root, { 'scripts/install.sh': fourStepInstall })
   await rm(join(root, 'setup/install.sh'))
   await symlink('../scripts/install.sh', join(root, 'setup/install.sh'))
-  const approved = await hashOf(root)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', approved)).exitCode).toBe(0)
-  await writeFiles(root, { 'scripts/install.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
+  const installed = await hashOf(root)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  await writeFiles(root, { 'scripts/install.sh': '#!/bin/sh\necho "progress 1 1 Changed"\n' })
   const changed = await hashOf(root)
 
-  const asked = await cmod(home, 'setup', root, '--events')
+  const rerun = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(asked.exitCode).toBe(10)
-  expect(changed).not.toBe(approved)
+  expect(rerun).toMatchObject({ stdout: 'progress 1 1 Changed\ndone demo 0.1.0\n', exitCode: 0 })
+  expect(changed).not.toBe(installed)
 })
 
 test('the CLI and the SDK hash a mod with a nested setup/lib and a symbolic link the same', async () => {
@@ -194,9 +183,7 @@ test('the CLI and the SDK hash a mod with a nested setup/lib and a symbolic link
   const root = await createMod(home, '#!/bin/sh\n. ./setup/lib/common.sh\n')
   await writeFiles(root, { 'setup/lib/common.sh': 'echo safe\n', 'setup/lib/shell/zsh.sh': 'echo zsh\n', 'shared/aliases.sh': 'echo aliases\n' })
   await symlink('../../shared/aliases.sh', join(root, 'setup/lib/aliases.sh'))
-  const asked = parseEvent((await cmod(home, 'setup', root, '--events')).stdout.trim())
-  if (asked.type !== 'needs-consent') throw new Error(`cmod setup printed ${asked.type}, not needs-consent`)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', asked.sha256)).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   const { readPlugin } = await import(coreLifecycle)
 
   const plugin = await readPlugin(claudeOnDisk(home, { name: 'demo', root }))
@@ -213,9 +200,9 @@ test('a step script at the plugin root is refused', async () => {
     'install.sh': fourStepInstall,
   })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
-  expect(result.stderr).toBe(`cmod setup: ${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: cmod asks consent for the whole folder of each script.\n`)
+  expect(result.stderr).toBe(`cmod setup: ${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: cmod runs the steps again whenever anything in a script's folder changes.\n`)
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
 })
@@ -231,7 +218,7 @@ test('cmod setup --events with a refused cmod key prints one failed line', async
 
   const result = await cmod(home, 'setup', root, '--events')
 
-  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: cmod asks consent for the whole folder of each script.\n`)
+  expect(result.stdout).toBe(`failed 1\t${root}: package.json "cmod.install" names ./install.sh, a script at the plugin root. Move it into a folder, such as ./setup/install.sh: cmod runs the steps again whenever anything in a script's folder changes.\n`)
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(1)
 })
@@ -244,10 +231,10 @@ test('a step that runs make -C setup is refused at setup', async () => {
     'package.json': JSON.stringify({ name: 'demo', cmod: { install: 'make -C setup' } }),
     'setup/Makefile': 'all:\n\techo installed\n',
   })
-  const refusal = 'package.json "cmod.install" runs "make -C setup", which names no script file in the mod, so consent cannot cover what it runs. Put the commands in a script, such as ./setup/install.sh.'
+  const refusal = 'package.json "cmod.install" runs "make -C setup", which names no script file in the mod, so cmod cannot tell when what it runs changes. Put the commands in a script, such as ./setup/install.sh.'
   const { readPlugin } = await import(coreLifecycle)
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.stderr).toBe(`cmod setup: ${refusal}\n`)
   expect(result.exitCode).toBe(1)
@@ -260,10 +247,10 @@ test('a link to a folder in a step folder is refused', async () => {
   const root = await createMod(home)
   await writeFiles(root, { 'shared/lib.sh': 'echo shared\n' })
   await symlink('../shared', join(root, 'setup/shared'))
-  const refusal = './setup/shared links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.'
+  const refusal = './setup/shared links to a folder or to nothing, so cmod cannot tell when it changes. Point the link at a file, or delete it.'
   const { readPlugin } = await import(coreLifecycle)
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.stderr).toBe(`cmod setup: ${refusal}\n`)
   expect(result.exitCode).toBe(1)
@@ -275,30 +262,15 @@ test('a link to nothing in a step folder is refused', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   await symlink('../missing.sh', join(root, 'setup/missing.sh'))
-  const refusal = './setup/missing.sh links to a folder or to nothing, so consent cannot cover it. Point the link at a file, or delete it.'
+  const refusal = './setup/missing.sh links to a folder or to nothing, so cmod cannot tell when it changes. Point the link at a file, or delete it.'
   const { readPlugin } = await import(coreLifecycle)
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.stderr).toBe(`cmod setup: ${refusal}\n`)
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(home, '.local/share/cmod'))).toBe(false)
   await expect(readPlugin(claudeOnDisk(home, { name: 'demo', root }))).rejects.toThrow(refusal)
-})
-
-test('setup --events asks consent for a mod that names only a program', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'hello-mod')
-  await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0', repository: 'https://github.com/owner/hello-mod' }),
-    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello' } }),
-  })
-
-  const asked = await cmod(home, 'setup', root, '--events')
-
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\t\n`)
-  expect(asked.exitCode).toBe(10)
-  expect(existsSync(join(home, '.local/share/cmod/bin/hello'))).toBe(false)
 })
 
 async function createWatcher(home: string, cmodKey: object): Promise<string> {
@@ -312,183 +284,39 @@ async function createWatcher(home: string, cmodKey: object): Promise<string> {
 
 const consentFile = (home: string) => join(home, '.local/share/cmod/consent.json')
 
-test('setup --events asks consent for the permissions, and --consent grants each one with the scripts', async () => {
+test('setup of a mod built on @cmodjs/core 4 that declares permissions approves its hash and each permission without asking', async () => {
   const home = await temporaryHome()
   const root = await createWatcher(home, { permissions: { network: ['api.github.com'], prompt: true } })
   const sha256 = await hashOf(root)
 
-  const asked = await cmod(home, 'setup', root, '--events')
+  const result = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${sha256}\t\t\t\tnetwork:api.github.com\tprompt\n`)
-  expect(asked.exitCode).toBe(10)
-  expect(await cmod(home, 'setup', root, '--events', '--consent', sha256)).toMatchObject({ stdout: 'done ci-watch 0.2.0\n', exitCode: 0 })
+  expect(result).toMatchObject({ stdout: 'done ci-watch 0.2.0\n', exitCode: 0 })
   expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'network:api.github.com', 'prompt'] })
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch')).toMatchObject({ permissions: ['network:api.github.com', 'prompt'], grantedOnUpdate: [] })
 })
 
-async function updateWatcher(root: string, permissions: object): Promise<void> {
+test('an update of a mod built on @cmodjs/core 4 that adds a permission approves it, and grants nothing on update', async () => {
+  const home = await temporaryHome()
+  const root = await createWatcher(home, { permissions: { prompt: true } })
+  const installed = await hashOf(root)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
-    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions } }),
-  })
-}
-
-const watcherRecord = (home: string) => readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch')
-
-test('an update that adds a permission grants it without asking, and the record names it as granted on update', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true } })
-  const installed = await hashOf(root)
-  await cmod(home, 'setup', root, '--events', '--consent', installed)
-  expect((await watcherRecord(home))?.permissions).toEqual(['prompt'])
-  await updateWatcher(root, { prompt: true, conversation: true })
-
-  const updated = await cmod(home, 'setup', root, '--events')
-
-  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [installed, 'prompt', 'conversation'] })
-  expect(await watcherRecord(home)).toMatchObject({ version: '0.3.0', permissions: ['prompt', 'conversation'], grantedOnUpdate: ['conversation'] })
-})
-
-test('an update that adds a permission asks consent for that permission alone when the person asks before an update adds a permission', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true } })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await writeFiles(home, { '.local/share/cmod/preferences.json': JSON.stringify({ asksBeforeUpdatePermissions: true }) })
-  await updateWatcher(root, { prompt: true, conversation: true })
-  const updated = await hashOf(root)
-
-  const asked = await cmod(home, 'setup', root, '--events')
-
-  expect(asked).toMatchObject({ stdout: `needs-consent ${updated}\t\t\t\tconversation\n`, exitCode: 10 })
-  expect(await cmod(home, 'setup', root, '--events', '--consent', updated)).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
-  expect(await watcherRecord(home)).toMatchObject({ permissions: ['prompt', 'conversation'], grantedOnUpdate: [] })
-})
-
-test('an update keeps off a permission the person turned off, without asking for it again', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true, conversation: true } })
-  const installed = await hashOf(root)
-  await cmod(home, 'setup', root, '--events', '--consent', installed)
-  await cmod(home, 'permission', 'ci-watch', 'conversation', 'off')
-  await updateWatcher(root, { prompt: true, conversation: true })
-
-  const updated = await cmod(home, 'setup', root, '--events')
-
-  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [installed, 'prompt'] })
-  expect(await watcherRecord(home)).toMatchObject({ version: '0.3.0', grantedOnUpdate: [] })
-})
-
-test('an update of a mod recorded before cmod 4.3.0 asks consent for a permission it adds', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true } })
-  const installed = await hashOf(root)
-  await cmod(home, 'setup', root, '--events', '--consent', installed)
-  await writeFiles(home, { '.local/share/cmod/records/ci-watch.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0', root, installedAt: '2026-10-20T00:00:00.000Z', scriptsSha256: installed, uninstall: null, program: null, keys: {} }) })
-  await updateWatcher(root, { prompt: true, conversation: true })
-
-  const asked = await cmod(home, 'setup', root, '--events')
-
-  expect(asked).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t\t\t\tconversation\n`, exitCode: 10 })
-})
-
-test('an update of a mod whose consent.json the person deleted asks consent for every permission again', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true, conversation: true } })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  expect((await watcherRecord(home))?.permissions).toEqual(['prompt', 'conversation'])
-  await rm(consentFile(home))
-  await updateWatcher(root, { prompt: true, conversation: true })
-
-  const asked = await cmod(home, 'setup', root, '--events')
-
-  expect(asked).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t\t\t\tprompt\tconversation\n`, exitCode: 10 })
-})
-
-test('an update that drops a permission sets the mod up without asking', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true, network: ['api.github.com'] } })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
-    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions: { prompt: true } } }),
+    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions: { prompt: true, conversation: true } } }),
   })
 
   const updated = await cmod(home, 'setup', root, '--events')
 
   expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
-  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch'))?.scriptsSha256).toBe(await hashOf(root))
-})
-
-async function consentTheOldWay(home: string): Promise<string> {
-  const root = await createWatcher(home, { install: './setup/install.sh', permissions: { prompt: true, network: ['api.github.com'] } })
-  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n' })
-  const sha256 = await hashOf(root)
-  await cmod(home, 'setup', root, '--events', '--consent', sha256)
-  await writeFiles(home, { '.local/share/cmod/consent.json': JSON.stringify({ 'ci-watch': [sha256, 'network:api.github.com', 'prompt'] }) })
-  await rm(join(home, '.local/share/cmod/consent-parts'), { force: true })
-  return root
-}
-
-test('a mod consented before cmod 4.1.1, then updated to drop a permission, sets up without asking once any cmod command has run', async () => {
-  const home = await temporaryHome()
-  const root = await consentTheOldWay(home)
-
-  await cmod(home, 'list')
-  await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
-    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { install: './setup/install.sh', permissions: { prompt: true } } }),
-  })
-  const updated = await cmod(home, 'setup', root, '--events')
-
-  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
-})
-
-test('a mod consented before cmod 4.1.1 whose script changed since its install still asks for the changed script', async () => {
-  const home = await temporaryHome()
-  const root = await consentTheOldWay(home)
-  await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
-
-  await cmod(home, 'list')
-  const asked = await cmod(home, 'setup', root, '--events')
-
-  expect(asked).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t./setup/install.sh\t\t\n`, exitCode: 10 })
-  expect(existsSync(join(home, '.local/share/cmod/consent-parts'))).toBe(true)
-})
-
-test('cmod permission turns a permission the mod lists off and on, and refuses one it does not list', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true, network: ['api.github.com'] } })
-  const sha256 = await hashOf(root)
-  await cmod(home, 'setup', root, '--events', '--consent', sha256)
-
-  expect(await cmod(home, 'permission', 'ci-watch', 'network', 'api.github.com', 'off')).toMatchObject({ stdout: 'Turned off for ci-watch: Connect to api.github.com\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'prompt'] })
-  expect(await cmod(home, 'permission', 'ci-watch', 'network', 'api.github.com', 'on')).toMatchObject({ stdout: 'Turned on for ci-watch: Connect to api.github.com\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'prompt', 'network:api.github.com'] })
-
-  const refused = await cmod(home, 'permission', 'ci-watch', 'tasks', 'on')
-
-  expect(refused.exitCode).toBe(1)
-  expect(refused.stderr).toBe('cmod permission: ci-watch does not list tasks in its package.json "cmod.permissions", so there is nothing to turn on. It lists: prompt, network:api.github.com.\n')
-  expect((await cmod(home, 'permission', 'ci-watch', 'network', 'on')).stderr).toBe('cmod permission: network takes a value, such as cmod permission ci-watch network api.github.com on.\n')
-})
-
-test('teardown revokes every permission it granted', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true, model: true } })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await cmod(home, 'permission', 'ci-watch', 'model', 'off')
-
-  await cmod(home, 'teardown', 'ci-watch', '--events')
-
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({})
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [installed, 'prompt', await hashOf(root), 'conversation'] })
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch')).toMatchObject({ version: '0.3.0', permissions: ['prompt', 'conversation'], grantedOnUpdate: [] })
 })
 
 test('setup --events on a set-up mod prints done and runs nothing', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
 
   const again = await cmod(home, 'setup', root, '--events')
 
@@ -501,7 +329,7 @@ test('setup --events on a failing install step prints failed with the exit code 
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho "progress 1 2 Fetching"\necho "curl: could not resolve host" >&2\nexit 7\n')
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('progress 1 2 Fetching\nlog curl: could not resolve host\nlog The uninstall step of demo undid the install.\nfailed 7\tThe install step of demo exited 7: curl: could not resolve host.\n')
   expect(result.exitCode).toBe(1)
@@ -523,7 +351,7 @@ test('setup --events on a mod with no install step writes its record and prints 
 test('teardown runs the saved uninstall step after the plugin folder is deleted, then deletes the record and the saved step', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await rm(root, { recursive: true })
   const store = join(home, '.local/share/cmod')
 
@@ -539,7 +367,7 @@ test('teardown runs the saved uninstall step after the plugin folder is deleted,
 test('teardown keeps the config folder', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await writeFiles(home, { '.claude/cmods/demo/skills/architecture-diagram/SKILL.md': 'My own diagram rules.\n', '.claude/cmods/demo/state.json': '{ "global": { "retries": 5 } }\n' })
   await rm(root, { recursive: true })
 
@@ -550,17 +378,14 @@ test('teardown keeps the config folder', async () => {
   expect(await readFile(join(home, '.claude/cmods/demo/state.json'), 'utf8')).toBe('{ "global": { "retries": 5 } }\n')
 })
 
-test('teardown forgets the approved scripts, so setting the mod up again asks for consent', async () => {
+test('teardown deletes the mod\'s approvals from consent.json', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
 
   expect((await cmod(home, 'teardown', 'demo', '--events')).stdout).toBe('done demo\n')
 
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({})
-  const again = await cmod(home, 'setup', root, '--events')
-  expect(again.stdout).toBe(`needs-consent ${await hashOf(root)}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(again.exitCode).toBe(10)
 })
 
 test('the saved uninstall runs a script that sources a sibling file after the plugin folder is gone', async () => {
@@ -570,7 +395,7 @@ test('the saved uninstall runs a script that sources a sibling file after the pl
     'setup/uninstall.sh': '#!/bin/sh\n. "$(dirname "$0")/lib.sh"\nremove_alias\n',
     'setup/lib.sh': 'remove_alias() {\n  echo "alias removed" >> "$HOME/uninstalls"\n}\n',
   })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await rm(root, { recursive: true })
 
   const result = await cmod(home, 'teardown', 'demo', '--events')
@@ -587,7 +412,7 @@ test('teardown runs an uninstall that sources setup/lib after the mod\'s folder 
     'setup/uninstall.sh': '#!/bin/sh\n. ./setup/lib/alias.sh\nremove_alias\n',
     'setup/lib/alias.sh': 'remove_alias() {\n  echo "alias removed" >> "$HOME/uninstalls"\n}\n',
   })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await rm(root, { recursive: true })
 
   const result = await cmod(home, 'teardown', 'demo', '--events')
@@ -603,7 +428,7 @@ test('teardown runs an uninstall step reached through a symbolic link', async ()
   await writeFiles(root, { 'scripts/uninstall.sh': '#!/bin/sh\necho "uninstalled through the link" >> "$HOME/uninstalls"\n' })
   await rm(join(root, 'setup/uninstall.sh'))
   await symlink('../scripts/uninstall.sh', join(root, 'setup/uninstall.sh'))
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   await rm(root, { recursive: true })
 
   const result = await cmod(home, 'teardown', 'demo', '--events')
@@ -617,7 +442,7 @@ test('two teardowns of one mod run its uninstall once', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nsleep 1\necho "uninstalled" >> "$HOME/uninstalls"\n' })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await rm(root, { recursive: true })
 
   const results = await Promise.all([cmod(home, 'teardown', 'demo', '--events'), cmod(home, 'teardown', 'demo', '--events')])
@@ -630,7 +455,7 @@ test('two teardowns of one mod run its uninstall once', async () => {
 test('reading a record while a teardown deletes it and a setup writes it again returns the record or nothing, never an error', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   const store = join(home, '.local/share/cmod')
   const record = recordPath(store, 'demo')
   const text = await readFile(record, 'utf8')
@@ -657,12 +482,11 @@ test('a setup that starts during a teardown waits, then sets up a mod whose save
   const home = await temporaryHome()
   const root = await createMod(home)
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\ntouch "$HOME/uninstalling"\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
-  const sha256 = await hashOf(root)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', sha256)).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   const teardown = startCmod(home, 'teardown', 'demo', '--events')
   await waitFor(join(home, 'uninstalling'))
 
-  const setup = await cmod(home, 'setup', root, '--events', '--consent', sha256)
+  const setup = await cmod(home, 'setup', root, '--events')
 
   expect((await teardown.done).stdout).toBe('done demo\n')
   expect(setup.stdout).toEndWith('done demo 0.1.0\n')
@@ -677,9 +501,9 @@ test('a teardown during an upgrade waits and removes version 0.2.0', async () =>
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled $CMOD_VERSION" >> "$HOME/uninstalls"\n' })
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': '#!/bin/sh\ntouch "$HOME/installing"\nsleep 1\n' })
-  const upgrade = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const upgrade = startCmod(home, 'setup', root, '--events')
   await waitFor(join(home, 'installing'))
 
   const teardown = await cmod(home, 'teardown', 'demo', '--events')
@@ -696,7 +520,7 @@ test('a teardown takes over a lock whose process is gone', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho $$ > "$HOME/install-pid"\necho partial >> "$CMOD_DATA/partial"\nexec sleep 30\n')
   const store = join(home, '.local/share/cmod')
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const setup = startCmod(home, 'setup', root, '--events')
   await waitFor(join(store, 'data/demo/partial'))
   setup.child.kill('SIGKILL')
   await setup.done
@@ -716,7 +540,7 @@ test('a failed uninstall keeps the record, so teardown can run again', async () 
   const home = await temporaryHome()
   const root = await createMod(home)
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   const store = join(home, '.local/share/cmod')
 
   const result = await cmod(home, 'teardown', 'demo', '--events')
@@ -732,7 +556,7 @@ test("a failed removal's message names the saved step from the record under the 
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\ntouch "$HOME/installing"\nsleep 1\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const setup = startCmod(home, 'setup', root, '--events')
   await waitFor(join(home, 'installing'))
 
   const result = await cmod(home, 'teardown', 'demo')
@@ -748,7 +572,7 @@ test("a linked checkout's failed setup says it retries once the checkout changes
   await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nexit 3\n' })
   await writeLinked(home, root)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toEndWith('failed 3\tThe install step of demo exited 3.\nretries changed\n')
 })
@@ -757,11 +581,11 @@ test('a failed upgrade keeps only the approval of the version its record names',
   const home = await temporaryHome()
   const root = await createMod(home)
   const sha256 = await hashOf(root)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', sha256)).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   const store = join(home, '.local/share/cmod')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': '#!/bin/sh\nexit 3\n' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('failed 3\tThe install step of demo exited 3.\n')
   expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0' })
@@ -774,7 +598,7 @@ test('setup downloads the named program for this platform, checks it against SHA
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe(
     [
@@ -803,7 +627,7 @@ test('a download whose SHA-256 differs from SHA256SUMS fails and installs nothin
   const url = `${server.url.origin}${release}/hello-${platform}`
   const actual = new Bun.CryptoHasher('sha256').update(helloBuild[`hello-${platform}`] as string).digest('hex')
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toStartWith(`progress 0 3 Downloading hello 0.2.0\nfailed 1\t${url} has SHA-256 ${actual}, but SHA256SUMS lists `)
   expect(result.exitCode).toBe(1)
@@ -818,7 +642,7 @@ test('a failed install leaves no program link', async () => {
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
   await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n' })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(1)
   for (const path of [join(home, '.local/bin/hello'), join(home, '.local/share/cmod/bin/hello'), join(home, '.local/share/cmod/records/hello-mod.json')]) {
@@ -830,10 +654,10 @@ test('a failed install of a set-up mod keeps the program its record names', asyn
   const home = await temporaryHome()
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n' })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(1)
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
@@ -845,14 +669,14 @@ test('a failed upgrade keeps the program the record names', async () => {
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const repository = `${server.url.origin}/owner/hello-mod`
   const root = await createProgramMod(home, repository)
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   await writeFiles(home, { '.local/share/cmod/bin/hello/0.3.0/hello': '#!/bin/sh\necho "hello 0.3.0"\n' })
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0', repository }),
     'setup/install.sh': '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n',
   })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(1)
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'))
@@ -870,7 +694,7 @@ test('Ctrl+C during the install step of cmod setup leaves no program link', asyn
     'setup/install.sh': '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n',
   })
 
-  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+  const result = await cmodInTerminal(home, 'setup', root)
 
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled on SIGINT. The install step of hello-mod exited 130.')
@@ -886,7 +710,7 @@ test('Ctrl+C during the install step runs the uninstall step and leaves nothing'
   const root = await createMod(home, '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n')
   const store = join(home, '.local/share/cmod')
 
-  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+  const result = await cmodInTerminal(home, 'setup', root)
 
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 130.')
@@ -903,7 +727,7 @@ test('a fresh install step that traps Ctrl+C and exits 1 runs the uninstall step
   const root = await createMod(home, `#!/bin/sh\ntrap 'exit 1' INT\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n`)
   const store = join(home, '.local/share/cmod')
 
-  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+  const result = await cmodInTerminal(home, 'setup', root)
 
   expect(result.exitCode).toBe(130)
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${root}\n`)
@@ -918,7 +742,7 @@ test('a fresh install step that fails runs the uninstall step and leaves nothing
   const root = await createMod(home, '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\necho "brew: no such formula" >&2\nexit 3\n')
   const store = join(home, '.local/share/cmod')
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(1)
   expect(result.stdout).toContain('The uninstall step of demo undid the install.')
@@ -935,7 +759,7 @@ test('a fresh install whose uninstall step fails says parts may remain', async (
   const root = await createMod(home, '#!/bin/sh\necho "curl: could not resolve host" >&2\nexit 7\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe(
     'log curl: could not resolve host\nlog zsh: no such file\nfailed 7\tThe install step of demo exited 7: curl: could not resolve host. The uninstall step then exited 2: zsh: no such file, so parts of the install may remain.\n',
@@ -948,7 +772,7 @@ test('a fresh install that exits with no stderr and whose uninstall step fails n
   const root = await createMod(home, '#!/bin/sh\nexit 7\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('log zsh: no such file\nfailed 7\tThe install step of demo exited 7. The uninstall step then exited 2: zsh: no such file, so parts of the install may remain.\n')
   expect(result.exitCode).toBe(1)
@@ -959,7 +783,7 @@ test("Ctrl+C during the undo keeps the install step's exit code and reason", asy
   const root = await createMod(home, '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nkill -INT 0\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
 
-  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+  const result = await cmodInTerminal(home, 'setup', root)
 
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 3: brew: no such formula.')
@@ -973,11 +797,11 @@ test("Ctrl+C during an upgrade's install step keeps the version its record names
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nrm -f "$HOME/history.db"\necho "uninstalled $CMOD_VERSION" >> "$HOME/uninstalls"\n' })
   const store = join(home, '.local/share/cmod')
   const installed = await hashOf(root)
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   const savedStep = await readFile(join(store, 'uninstall/demo/root/setup/uninstall.sh'), 'utf8')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': '#!/bin/sh\nkill -INT 0\nsleep 1\n' })
 
-  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+  const result = await cmodInTerminal(home, 'setup', root)
 
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 130.')
@@ -999,7 +823,7 @@ sleep 1
 `)
   const store = join(home, '.local/share/cmod')
 
-  const result = await cmodInTerminal(home, 'setup', root, '--yes')
+  const result = await cmodInTerminal(home, 'setup', root)
 
   expect(result.exitCode).toBe(130)
   expect(result.output).toContain('Cancelled on SIGINT. The install step of demo exited 130.')
@@ -1020,7 +844,7 @@ test("Ctrl+C during cmod remove's uninstall step still removes the mod", async (
     'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
     'setup/uninstall.sh': '#!/bin/sh\nkill -INT 0\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n',
   })
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
 
   const result = await cmodInTerminal(home, 'remove', 'hello-mod')
 
@@ -1039,7 +863,7 @@ test('a record write that fails after the uninstall step is saved deletes the sa
   const root = await createMod(home, blockRecordWrite)
   const store = join(home, '.local/share/cmod')
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(1)
   expect(existsSync(join(store, 'records/demo.json'))).toBe(false)
@@ -1050,11 +874,11 @@ test('a record write that fails in an upgrade keeps the new saved uninstall step
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   const newUninstall = '#!/bin/sh\necho "the new uninstall" >> "$HOME/uninstalls"\n'
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'setup/install.sh': blockRecordWrite, 'setup/uninstall.sh': newUninstall })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(1)
   expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
@@ -1067,11 +891,11 @@ test('a crash between the saved step and the record leaves a record whose uninst
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
   await writeFiles(root, Object.fromEntries(Array.from({ length: 3000 }, (_, index) => [`setup/lib/${index}.sh`, `echo ${index}\n`])))
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
   const recordFile = join(store, 'records/demo.json')
 
-  const setup = startCmod(home, 'setup', root, '--yes')
+  const setup = startCmod(home, 'setup', root)
   while (setup.child.exitCode === null && !(await readFile(recordFile, 'utf8')).includes('"version": "0.2.0"')) await Bun.sleep(0)
   setup.child.kill('SIGKILL')
   await setup.done
@@ -1092,14 +916,14 @@ test('an upgrade that drops cmod.program removes the old program', async () => {
     'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
     'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
   })
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(store, 'bin/hello/0.2.0/hello'))
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
     'package.json': JSON.stringify({ name: 'hello-mod', cmod: { install: './setup/install.sh' } }),
   })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(store, 'records/hello-mod.json'), 'utf8'))).toMatchObject({ version: '0.3.0', program: null })
@@ -1118,13 +942,13 @@ test('an upgrade that renames cmod.program removes the old program and links the
     'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
     'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
   })
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
     'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hi', install: './setup/install.sh' } }),
   })
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(0)
   expect(await readlink(join(home, '.local/bin/hi'))).toBe(join(store, 'bin/hi/0.3.0/hi'))
@@ -1139,7 +963,7 @@ test('Ctrl+C while cmod setup downloads the program installs nothing', async () 
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
   const store = join(home, '.local/share/cmod')
 
-  const setup = startCmod(home, 'setup', root, '--yes')
+  const setup = startCmod(home, 'setup', root)
   await setup.waitForOutput('Downloading hello 0.2.0')
   setup.child.kill('SIGINT')
   const result = await setup.done
@@ -1165,7 +989,7 @@ test('SIGTERM to cmod setup --events during the install step leaves a recorded m
     'setup/uninstall.sh': '#!/bin/sh\necho uninstalled >> "$HOME/uninstalls"\n',
   })
 
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const setup = startCmod(home, 'setup', root, '--events')
   await waitFor(join(home, 'installing'))
   setup.child.kill('SIGTERM')
   const result = await setup.done
@@ -1191,7 +1015,7 @@ test('concurrent setups of eight mods keep every approval', async () => {
   }
   const hashes = await Promise.all(roots.map((root) => hashOf(root)))
 
-  const results = await Promise.all(roots.map((root, index) => cmod(home, 'setup', root, '--events', '--consent', hashes[index] as string)))
+  const results = await Promise.all(roots.map((root) => cmod(home, 'setup', root, '--events')))
 
   expect(results.map((result) => result.exitCode)).toEqual(names.map(() => 0))
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual(Object.fromEntries(names.map((name, index) => [name, [hashes[index]]])))
@@ -1207,7 +1031,7 @@ test('a mod named constructor sets up', async () => {
   })
   const sha256 = await hashOf(root)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', sha256)
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result).toEqual({ exitCode: 0, stdout: 'done constructor 0.1.0\n', stderr: '' })
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({ constructor: [sha256] })
@@ -1218,7 +1042,7 @@ test('SIGTERM to cmod teardown --events during the uninstall step still removes 
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\ntouch "$HOME/uninstalling"\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
 
   const teardown = startCmod(home, 'teardown', 'demo', '--events')
   await waitFor(join(home, 'uninstalling'))
@@ -1237,9 +1061,8 @@ test('six concurrent setups of one mod run the install step once and all exit 0'
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\nsleep 0.3\necho ran >> "$CMOD_DATA/runs"\n')
   const store = join(home, '.local/share/cmod')
-  const consent = await hashOf(root)
 
-  const results = await Promise.all(Array.from({ length: 6 }, () => cmod(home, 'setup', root, '--events', '--consent', consent)))
+  const results = await Promise.all(Array.from({ length: 6 }, () => cmod(home, 'setup', root, '--events')))
 
   expect(results.map((result) => ({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }))).toEqual(Array.from({ length: 6 }, () => ({ exitCode: 0, stdout: 'done demo 0.1.0\n', stderr: '' })))
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe('ran\n')
@@ -1251,7 +1074,7 @@ test('a setup deletes the staged uninstall folders a killed setup left', async (
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   await writeFiles(store, { 'uninstall/demo.tmp/uninstall.sh': 'left by a killed setup\n', 'uninstall/demo.old/uninstall.sh': 'left by a killed setup\n' })
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
 
@@ -1267,7 +1090,7 @@ test('a setup takes over a lock whose process is gone', async () => {
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
   await writeFiles(lock, { [String(await goneProcessId())]: '' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(result.exitCode).toBe(0)
@@ -1280,7 +1103,7 @@ test('a stale consent lock whose process is gone does not stall setup', async ()
   const lock = join(home, '.local/share/cmod/consent.json.lock')
   await writeFiles(lock, { [String(await goneProcessId())]: '' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(result.exitCode).toBe(0)
@@ -1293,7 +1116,7 @@ test('a lock held by a live process that is not its holder is taken over', async
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
   await writeFiles(lock, { '1': 'Thu Jan  1 00:00:00 2026' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(existsSync(lock)).toBe(false)
@@ -1304,7 +1127,7 @@ test('a setup that waits for a lock names the lock after a few seconds', async (
   const root = await createMod(home)
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const setup = startCmod(home, 'setup', root, '--events')
   await setup.waitForOutput(lockNotice)
 
   holder.kill()
@@ -1320,7 +1143,7 @@ test('the spinner resumes after the lock-wait notice', async () => {
   const root = await createMod(home, '#!/bin/sh\n')
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
-  const setup = startCmodInTerminal(home, 'setup', root, '--yes')
+  const setup = startCmodInTerminal(home, 'setup', root)
   await setup.waitForOutput(lockNotice)
 
   holder.kill()
@@ -1336,7 +1159,7 @@ test('a lock whose holder recorded no start time is held while its process lives
   const root = await createMod(home)
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(home, '.local/share/cmod/records/demo.json.lock'), { [String(holder.pid)]: '' })
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const setup = startCmod(home, 'setup', root, '--events')
   await setup.waitForOutput(lockNotice)
 
   holder.kill()
@@ -1353,7 +1176,7 @@ test("a holder file with cmod's own process ID is not held", async () => {
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(lock, { [String(holder.pid)]: await startOf(holder.pid) })
-  const setup = startCmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const setup = startCmod(home, 'setup', root, '--events')
   await writeFiles(lock, { [String(setup.child.pid)]: '' })
 
   holder.kill()
@@ -1384,10 +1207,8 @@ test('setup binds the mod hotkeys in the Chat bindings, keeps a combo the person
   const root = await createHotkeysMod(home, { cycle, review, clear })
   await writeFiles(home, { '.claude/keybindings.json': `{\n  "bindings": [\n    { "context": "Chat", "bindings": { "ctrl+k": "chat:clearInput" } }\n  ]\n}\n` })
 
-  const asked = await cmod(home, 'setup', root, '--events')
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\tshift+tab to Switch mode, alt+m to Review and ctrl+k to Clear\n`)
   expect(result.stdout).toBe('log ~/.claude/keybindings.json binds ctrl+k to "chat:clearInput", so it stays, and the modes hotkey clear has no combo. Pick one for it in Settings.\ndone modes 0.1.0\n')
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+k': 'chat:clearInput', 'shift+tab': 'command:modes--cycle', 'alt+m': 'command:modes--review' } }] })
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'shift+tab': 'modes--cycle', 'alt+m': 'modes--review' })
@@ -1403,13 +1224,13 @@ test('setup binds the mod hotkeys in the Chat bindings, keeps a combo the person
 test('an update from cmod 3 moves the key its record bound to a slash command onto the hotkey that declares that combo', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { review })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   const recordFile = join(home, '.local/share/cmod/records/modes.json')
   const record = JSON.parse(await readFile(recordFile, 'utf8'))
   await writeFiles(home, { '.local/share/cmod/records/modes.json': JSON.stringify({ ...record, keys: { 'alt+m': 'review-modes' } }), '.claude/keybindings.json': '{ "bindings": [{ "context": "Chat", "bindings": { "alt+m": "command:review-modes" } }] }\n' })
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }) })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('done modes 0.2.0\n')
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'alt+m': 'command:modes--review' } }] })
@@ -1419,12 +1240,12 @@ test('cmod hotkey moves a hotkey to another combo, an update keeps it, and a com
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle, review })
   await writeFiles(home, { '.claude/keybindings.json': '{ "bindings": [{ "context": "Chat", "bindings": { "ctrl+k": "chat:clearInput" } }] }\n' })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
 
   const moved = await cmod(home, 'hotkey', 'modes', 'cycle', 'ctrl+e')
   const taken = await cmod(home, 'hotkey', 'modes', 'review', 'ctrl+k')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }) })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
 
   expect(moved.stdout).toBe('Bound ctrl+e to Switch mode for modes.\n')
   expect(taken.stderr).toBe('cmod hotkey: ctrl+k already runs something else in ~/.claude/keybindings.json. Pick another combo.\n')
@@ -1435,11 +1256,11 @@ test('cmod hotkey moves a hotkey to another combo, an update keeps it, and a com
 test('an update whose new hotkey defaults to a combo the person rebound keeps the person’s combo and leaves the new hotkey unbound', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await cmod(home, 'hotkey', 'modes', 'cycle', 'alt+m')
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'modes', cmod: { hotkeys: { cycle, review } } }) })
 
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
 
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'alt+m': 'modes--cycle' })
 })
@@ -1447,11 +1268,11 @@ test('an update whose new hotkey defaults to a combo the person rebound keeps th
 test('a combo the person rebinds by hand in keybindings.json survives an update, and teardown removes it', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle, review })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await writeFiles(home, { '.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle', 'alt+n': 'command:modes--review' } }] }) })
 
   await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.2.0' }) })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   const updated = JSON.parse(await readFile(keybindings(home), 'utf8'))
   await cmod(home, 'teardown', 'modes')
 
@@ -1466,7 +1287,7 @@ test('setup writes keybindings.json under CLAUDE_CONFIG_DIR through its symbolic
   await writeFiles(home, { 'config/.keep': '' })
   await symlink(join(home, 'dotfiles/keybindings.json'), join(home, 'config/keybindings.json'))
 
-  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: join(home, 'config') }, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: join(home, 'config') }, 'setup', root, '--events')
 
   expect(result.stdout).toBe('done modes 0.1.0\n')
   expect((await lstat(join(home, 'config/keybindings.json'))).isSymbolicLink()).toBe(true)
@@ -1478,10 +1299,10 @@ test('setup writes keybindings.json under CLAUDE_CONFIG_DIR through its symbolic
   })
 })
 
-test('an upgrade that drops a hotkey removes its binding without asking, and a hotkey with a new default asks for it alone', async () => {
+test('an upgrade that drops a hotkey removes its binding, and a hotkey with a new default binds it', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle, review })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
   await createHotkeysMod(home, { cycle })
 
   const dropped = await cmod(home, 'setup', root, '--events')
@@ -1491,30 +1312,15 @@ test('an upgrade that drops a hotkey removes its binding without asking, and a h
 
   expect(dropped).toMatchObject({ stdout: 'done modes 0.1.0\n', exitCode: 0 })
   expect(bound).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
-  expect(changed).toMatchObject({ stdout: `needs-consent ${await hashOf(root)}\t\t\talt+r to Review\n`, exitCode: 10 })
-})
-
-test('an update that drops its hotkeys and keeps its permissions sets the mod up without asking', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'inbox')
-  await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
-    'package.json': JSON.stringify({ name: 'inbox', cmod: { hotkeys: { toggle: { title: 'Show the inbox', default: 'meta+1' } }, permissions: { run: ['git'], prompt: true } } }),
-  })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
-  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'inbox', cmod: { permissions: { run: ['git'], prompt: true } } }) })
-
-  const updated = await cmod(home, 'setup', root, '--events')
-
-  expect(updated).toMatchObject({ stdout: 'done inbox 0.2.0\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [] })
+  expect(changed).toMatchObject({ stdout: 'done modes 0.1.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle', 'alt+r': 'command:modes--review' } }] })
 })
 
 test('teardown removes a Chat block it leaves empty, and keeps the other blocks', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle })
   await writeFiles(home, { '.claude/keybindings.json': '{ "bindings": [{ "context": "Global", "bindings": { "ctrl+t": "app:toggleTodos" } }] }\n' })
-  await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  await cmod(home, 'setup', root, '--events')
 
   expect((await cmod(home, 'teardown', 'modes')).exitCode).toBe(0)
 
@@ -1531,30 +1337,14 @@ test('a hotkey default that is not a combo is refused', async () => {
   expect(existsSync(keybindings(home))).toBe(false)
 })
 
-test('the consent question lists the hotkeys it binds', async () => {
-  const home = await temporaryHome()
-  const root = await createHotkeysMod(home, { cycle })
-
-  const result = await cmod(home, 'setup', root)
-
-  expect(result.exitCode).toBe(10)
-  expect(result.stdout).toContain('  It binds hotkeys in ~/.claude/keybindings.json:\n    shift+tab      Switch mode\n')
-  expect(result.stdout).not.toContain('It runs these commands')
-  expect(result.stdout).toContain('modes is not set up: it needs your consent. Run the command again with --yes after reading what it does.')
-})
-
 const next = { title: 'Open the next item' }
 
-test('setup binds only the hotkeys with a default, and asks consent only for them', async () => {
+test('setup binds only the hotkeys with a default, and approves only them', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle, next })
 
-  const question = await cmod(home, 'setup', root)
-  const asked = await cmod(home, 'setup', root, '--events')
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
-  expect(question.stdout).toContain('  It binds hotkeys in ~/.claude/keybindings.json:\n    shift+tab      Switch mode\n\n')
-  expect(asked.stdout).toBe(`needs-consent ${await hashOf(root)}\t\t\tshift+tab to Switch mode\n`)
   expect(result.stdout).toBe('done modes 0.1.0\n')
   expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual({ modes: [await hashOf(root), 'hotkey:cycle=shift+tab'] })
@@ -1576,26 +1366,6 @@ test('cmod hotkey binds a hotkey without a default, and an update that adds anot
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'ctrl+n': 'modes--next' })
 })
 
-test('the consent question names the program it installs for Claude to run', async () => {
-  const home = await temporaryHome()
-  const root = await createProgramMod(home, 'http://127.0.0.1:9/owner/hello-mod')
-
-  const result = await cmod(home, 'setup', root)
-
-  expect(result.exitCode).toBe(10)
-  expect(result.stdout).toContain('  It installs the program hello, which Claude runs by its name.\n')
-})
-
-test('the consent question lists each permission in the words the person reads', async () => {
-  const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { network: ['api.github.com'], run: ['gh'] } })
-
-  const result = await cmod(home, 'setup', root)
-
-  expect(result.exitCode).toBe(10)
-  expect(result.stdout).toContain('  It asks to:\n    Connect to api.github.com\n    Run gh on your computer\n')
-})
-
 async function createMarketplaceMod(home: string, settings: Record<string, unknown>, known: Record<string, unknown> = { 'demo-market': { source: { source: 'github', repo: 'owner/demo' } } }): Promise<string> {
   const root = join(home, '.claude/plugins/cache/demo-market/demo/0.1.0')
   await writeFiles(home, {
@@ -1608,14 +1378,12 @@ async function createMarketplaceMod(home: string, settings: Record<string, unkno
   return root
 }
 
-test('setup turns on automatic updates for the marketplace a mod came from, says so in the consent question, and keeps the rest of settings.json', async () => {
+test('setup turns on automatic updates for the marketplace a mod came from, says so, and keeps the rest of settings.json', async () => {
   const home = await temporaryHome()
   const root = await createMarketplaceMod(home, { model: 'opus', extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' } } } })
 
-  const asked = await cmod(home, 'setup', root)
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
-  expect(asked.stdout).toContain('  It updates automatically from the demo-market marketplace, set in ~/.claude/settings.json.\n')
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain('demo now updates automatically from the demo-market marketplace. Turn it off in /plugin, Marketplaces.')
   expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ model: 'opus', extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: true } } })
@@ -1625,7 +1393,7 @@ test('setup declares a marketplace only known_marketplaces.json lists, with its 
   const home = await temporaryHome()
   const root = await createMarketplaceMod(home, {})
 
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
 
   expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: true } } })
 })
@@ -1634,12 +1402,12 @@ test('setup keeps automatic updates off when the person turned them off, in sett
   const home = await temporaryHome()
   const offInSettings = { extraKnownMarketplaces: { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: false } } }
   const root = await createMarketplaceMod(home, offInSettings)
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual(offInSettings)
 
   const other = await temporaryHome()
   const offInPlugin = await createMarketplaceMod(other, {}, { 'demo-market': { source: { source: 'github', repo: 'owner/demo' }, autoUpdate: false } })
-  const result = await cmod(other, 'setup', offInPlugin, '--yes')
+  const result = await cmod(other, 'setup', offInPlugin)
   expect(result.stdout).not.toContain('updates automatically')
   expect(JSON.parse(await readFile(join(other, '.claude/settings.json'), 'utf8'))).toEqual({})
 })
@@ -1648,7 +1416,7 @@ test('a linked mod, outside the plugin cache, leaves automatic updates alone', a
   const home = await temporaryHome()
   const root = await createMod(home)
 
-  const result = await cmod(home, 'setup', root, '--yes')
+  const result = await cmod(home, 'setup', root)
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).not.toContain('updates automatically')
@@ -1659,7 +1427,7 @@ test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async (
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
   const removal = startCmod(home, 'remove', 'demo')
@@ -1677,7 +1445,7 @@ test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async (
 test('a current mod whose approval is gone sets up without asking', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
-  expect((await cmod(home, 'setup', root, '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root)).exitCode).toBe(0)
   await rm(join(home, '.local/share/cmod/consent.json'))
 
   const result = await cmod(home, 'setup', root)
@@ -1693,7 +1461,7 @@ test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   const store = join(home, '.local/share/cmod')
   const holder = Bun.spawn(['sleep', '30'])
   await writeFiles(join(store, 'records/demo.json.lock'), { [String(holder.pid)]: await startOf(holder.pid) })
-  const setup = startCmod(home, 'setup', root, '--yes')
+  const setup = startCmod(home, 'setup', root)
   await setup.waitForOutput(lockNotice)
 
   const cancelledAt = Date.now()
@@ -1711,24 +1479,23 @@ test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   }
 }, 10_000)
 
-test('a mod whose scripts change while its setup waits asks consent again', async () => {
+test('a mod whose scripts change while its setup waits runs the changed scripts once the first setup ends', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\ntouch "$HOME/installing"\nwhile [ -d "$HOME" ] && [ ! -e "$HOME/finish" ]; do sleep 0.01; done\necho ran >> "$CMOD_DATA/runs"\n')
-  const approved = await hashOf(root)
-  const first = startCmod(home, 'setup', root, '--events', '--consent', approved)
+  const first = startCmod(home, 'setup', root, '--events')
   await waitFor(join(home, 'installing'))
-  const second = startCmod(home, 'setup', root, '--events', '--consent', approved)
+  const second = startCmod(home, 'setup', root, '--events')
   await second.waitForOutput(lockNotice)
-  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nrm -rf "$HOME/Documents"\n' })
+  await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled again" >> "$HOME/uninstalls"\n' })
   const changed = await hashOf(root)
   await writeFiles(home, { finish: '' })
 
-  const asked = await second.done
+  const rerun = await second.done
 
   expect((await first.done).stdout).toBe('done demo 0.1.0\n')
-  expect(asked.stdout).toBe(`needs-consent ${changed}\t./setup/install.sh\t./setup/uninstall.sh\t\n`)
-  expect(asked.exitCode).toBe(10)
-  expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\n')
+  expect(rerun).toMatchObject({ stdout: expect.stringContaining('done demo 0.1.0\n'), exitCode: 0 })
+  expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe('ran\nran\n')
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'demo'))?.scriptsSha256).toBe(changed)
 }, 15_000)
 
 test('setup --events prints failed when the release holds no build for this platform yet, says it retries later, and writes no record', async () => {
@@ -1736,7 +1503,7 @@ test('setup --events prints failed when the release holds no build for this plat
   using server = serveRelease({ SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe(`progress 0 3 Downloading hello 0.2.0\nfailed 1\tThe v0.2.0 release of hello-mod has no hello-${platform} yet. Its author attaches it with cmod publish.\nretries later\n`)
   expect(result.exitCode).toBe(1)
@@ -1750,7 +1517,7 @@ test('setup keeps a ~/.local/bin file cmod did not make, links the program into 
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
   await writeFiles(home, { '.local/bin/hello': '#!/bin/sh\necho "my own hello"\n' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain("log ~/.local/bin/hello is not cmod's, so a terminal runs that hello. Claude Code runs cmod's.\n")
@@ -1764,7 +1531,7 @@ test('setup installs a program whose name PATH finds elsewhere, links it into th
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
   await writeFiles(home, { 'bin/hello': '#!/bin/sh\necho "another hello"\n' })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain("log A terminal runs ~/bin/hello, which PATH finds before ~/.local/bin. Claude Code runs cmod's hello.\n")
@@ -1783,7 +1550,7 @@ test('setup refuses a mod whose package.json "os" leaves out this system, before
     'setup/install.sh': '#!/bin/sh\necho ran > "$CMOD_DATA/ran"\n',
   })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe(`failed 1\tsafe-delete runs on ${names[other]}, and this is ${names[process.platform]}, so cmod set up nothing.\n`)
   expect(result.exitCode).toBe(1)
@@ -1801,7 +1568,7 @@ test("an install step's PATH puts cmod's programs folder ahead of a system comma
     'setup/install.sh': '#!/bin/sh\nenv > "$CMOD_DATA/ran"\n',
   })
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, '.local/share/cmod/data/env-mod/ran'), 'utf8')).toBe("cmod's env\n")
@@ -1814,7 +1581,7 @@ test('setup installs a program when ~/.local/bin comes before the other folder P
   await writeFiles(home, { 'brew/bin/hello': '#!/bin/sh\necho "another hello"\n' })
   await chmod(join(home, 'brew/bin/hello'), 0o755)
 
-  const result = await cmodOnPath(home, `${join(home, 'bin')}:${join(home, '.local/bin')}:${join(home, 'brew/bin')}:${process.env['PATH']}`, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmodOnPath(home, `${join(home, 'bin')}:${join(home, '.local/bin')}:${join(home, 'brew/bin')}:${process.env['PATH']}`, 'setup', root, '--events')
 
   expect(result.exitCode).toBe(0)
   expect(existsSync(join(home, '.local/bin/hello'))).toBe(true)
@@ -1827,7 +1594,7 @@ test('setup links a program version already in the store, such as one the cmod b
   await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho "placed by the bootstrap"\n' })
   await chmod(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'), 0o755)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe('progress 2 3 Linking hello\nprogress 3 3 hello 0.2.0 is installed\nprogress 4 5 Adding the alias\nprogress 5 5 Finishing\ndone hello-mod 0.2.0\n')
   expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('placed by the bootstrap\n')
@@ -1844,7 +1611,7 @@ test('a linked mod whose version moved past its last release builds its program 
   })
   await writeLinked(home, root)
 
-  const result = await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.stdout).toBe(
     [
@@ -1867,7 +1634,7 @@ test('a program rebuilt after the install step ran makes setup run the install s
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
   await writeFiles(root, { 'setup/install.sh': '#!/bin/sh\nhello >> "$CMOD_DATA/runs"\n' })
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   const program = join(home, '.local/share/cmod/bin/hello/0.2.0/hello')
   await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho "hello from the rebuild"\n' })
   await chmod(program, 0o755)
@@ -1887,13 +1654,13 @@ test("a linked mod's failed build runs again only once a file in its program fol
   await writeLinked(home, root)
   const failure = `failed 1\tBuilding hello with "${build}" exited 1: error: expected ;. Fix the build in ~/hello-mod/cli, then save a file there or run the command again.\nretries changed\n`
 
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)
+  expect((await cmod(home, 'setup', root, '--events')).stdout).toEndWith(failure)
   await writeFiles(root, { 'README.md': 'outside the program folder\n' })
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)
+  expect((await cmod(home, 'setup', root, '--events')).stdout).toEndWith(failure)
   expect(await readFile(join(root, 'builds'), 'utf8')).toBe('built\n')
 
   await writeFiles(root, { 'cli/main.ts': 'export {}\n' })
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).stdout).toEndWith(failure)
+  expect((await cmod(home, 'setup', root, '--events')).stdout).toEndWith(failure)
   expect(await readFile(join(root, 'builds'), 'utf8')).toBe('built\nbuilt\n')
 })
 
@@ -1912,7 +1679,7 @@ test('teardown removes every installed version of the program', async () => {
   const home = await temporaryHome()
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) })
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
-  expect((await cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))).exitCode).toBe(0)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   const store = join(home, '.local/share/cmod')
   await writeFiles(store, { 'bin/hello/0.1.0/hello': '#!/bin/sh\necho "hello 0.1.0"\n' })
   expect(await readFile(join(store, 'data/hello-mod/runs'), 'utf8')).toBe('ran\n')

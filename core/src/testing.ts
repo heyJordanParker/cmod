@@ -77,7 +77,6 @@ export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; re
 export type TestOptions<State extends object, Declared extends Options = Options> = {
   readonly state?: { readonly [Lifetime in keyof State]?: Partial<State[Lifetime]> }
   readonly options?: Partial<OptionValues<Declared>>
-  readonly permissions?: readonly string[]
   readonly scope?: 'user' | 'project'
   readonly projectRoot?: string
   readonly cwd?: string
@@ -302,19 +301,15 @@ export function testMod<State extends object, Declared extends Options = Options
   let isColorTold = false
 
   const start = async () => {
-    started ??= lifecycle.start(fake.claude, async (claude) => {
-      const steps = await modSteps()
-      return {
-        name,
-        root,
-        version: '0.0.0',
-        store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
-        isInstalled: true,
-        shouldRecord: false,
-        steps,
-        granted: options.permissions ?? steps.permissions ?? [],
-      }
-    })
+    started ??= lifecycle.start(fake.claude, async (claude) => ({
+      name,
+      root,
+      version: '0.0.0',
+      store: storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() }),
+      isInstalled: true,
+      shouldRecord: false,
+      steps: await modSteps(),
+    }))
     await started
     await fake.settle()
     const { failure } = lifecycle

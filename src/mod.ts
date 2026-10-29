@@ -1,13 +1,13 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
-import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, permissionWords, pluginsChangedPath, readRecord, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { failedMethod } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
-import { configRootOf, failureLog, readConsent, readJson, refreshPreferences, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
 
@@ -45,10 +45,6 @@ const reloadToast = 'reload'
 
 const shownUpdates = 3
 
-const setupWaitMs = 10_000
-
-const recordCheckMs = 500
-
 type SyncedRules = {
   readonly linked: readonly { readonly mod: string; readonly rules: readonly { readonly name: string; readonly isGlobal: boolean; readonly text: string }[] }[]
   readonly placed: readonly string[]
@@ -84,7 +80,7 @@ export const cmodPlugin = defineMod({
     mod.use(
       slashCommand({
         name: 'mods',
-        description: 'Open Settings, where you turn your mods off or remove them, and change their options, permissions, hotkeys, pages, and widgets',
+        description: 'Open Settings, where you turn your mods off or remove them, and change their options, hotkeys, pages, and widgets',
         argumentHint: '[mod]',
         immediate: true,
         reply: ({ positionals }) => shown.openSettings(positionals[0]),
@@ -130,14 +126,6 @@ export const cmodPlugin = defineMod({
       )
       return Object.fromEntries(versions.flat())
     }
-    const grantedWords = async (name: string, version: string): Promise<string[]> => {
-      for (let waitedMs = 0; ; waitedMs += recordCheckMs) {
-        const record = await readRecord((path) => fs.read(path).catch(ifMissing(undefined)), store, name)
-        if (record?.version === version) return record.grantedOnUpdate.map(permissionWords)
-        if (record === undefined || waitedMs >= setupWaitMs) return []
-        await new Promise<void>((resolve) => mod.after(recordCheckMs, resolve))
-      }
-    }
     let loaded: Versions = {}
     const takeVersionsBeforeReload = async () => {
       const key = await sessionKey('versions-before-reload')
@@ -149,18 +137,11 @@ export const cmodPlugin = defineMod({
       const before = await takeVersionsBeforeReload()
       loaded = await loadedVersions()
       if (!isAfterOwnReload || before === undefined) return
-      const updates = await Promise.all(
-        Object.entries(loaded)
-          .filter(([id, version]) => before[id] !== undefined && before[id] !== version)
-          .map(async ([id, version]) => {
-            const name = id.replace(/@[^@]*$/, '')
-            return { line: `${name} updated to ${version}`, words: await grantedWords(name, version) }
-          }),
-      )
-      const rest = updates.filter(({ words }) => words.length === 0)
-      for (const { line, words } of updates) if (words.length > 0) claude.ui.toast([line, ...words].join(' · '))
-      if (rest.length > shownUpdates) claude.ui.toast(`${rest.length} plugins updated`)
-      else for (const { line } of rest) claude.ui.toast(line)
+      const updates = Object.entries(loaded)
+        .filter(([id, version]) => before[id] !== undefined && before[id] !== version)
+        .map(([id, version]) => `${id.replace(/@[^@]*$/, '')} updated to ${version}`)
+      if (updates.length > shownUpdates) claude.ui.toast(`${updates.length} plugins updated`)
+      else for (const update of updates) claude.ui.toast(update)
     }
     const announceUpdates = (isAfterOwnReload: boolean) => void showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
     announceUpdates((await claude.store.get(await sessionKey('hiding-reload'))) === true)
@@ -220,12 +201,13 @@ export const cmodPlugin = defineMod({
       return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reloadNote }] } })
     })
 
-    const isCmod = (id: string) => id.replace(/@[^@]*$/, '') === mod.name
+    const nameOf = (id: string) => id.replace(/@[^@]*$/, '')
+    const isCmod = (id: string) => nameOf(id) === mod.name
     const updatedFor = 'cmod:cmod-updated-for'
     let isCheckingPlugins = false
     const modifiedAt = async (path: string) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs ?? null
     const pluginsChangedAt = async (file: string) => [await modifiedAt(file), await modifiedAt(changed)] as const
-    const keepCmodCurrent = async ({ isForced }: { readonly isForced: boolean }): Promise<void> => {
+    const keepPluginsCurrent = async ({ isForced }: { readonly isForced: boolean }): Promise<void> => {
       if (pluginsFile === undefined || isCheckingPlugins) return
       isCheckingPlugins = true
       let checked: CmodPluginState['global']['pluginsCheckedAt']
@@ -236,12 +218,15 @@ export const cmodPlugin = defineMod({
         const listed = async () => JSON.parse(await runCmod(claude, ['list', '--json'], session)) as readonly Listed[]
         const needing = (rows: readonly Listed[]) => rows.filter((row) => row.unsatisfied.some(isCmod))
         const before = await listed()
-        const copies = new Set(before.filter((row) => isCmod(row.name)).map((row) => row.version))
+        const versionsOf = (name: string) => [...new Set(before.filter((row) => nameOf(row.name) === name).map((row) => row.version))].toSorted()
+        const hasDifferingCopies = (name: string) => versionsOf(name).length > 1
         let off = needing(before)
-        const reason = off.length > 0 || copies.size > 1 ? JSON.stringify([off.map((row) => row.name).toSorted(), [...copies].toSorted()]) : ''
+        const others = [...new Set(before.map((row) => nameOf(row.name)))].filter((name) => name !== mod.name && hasDifferingCopies(name)).toSorted()
+        const outdated = [...(off.length > 0 || hasDifferingCopies(mod.name) ? [mod.name] : []), ...others]
+        const reason = outdated.length > 0 ? JSON.stringify([off.map((row) => row.name).toSorted(), outdated.map((name) => [name, versionsOf(name)])]) : ''
         if (reason !== '' && reason !== (await claude.store.get(updatedFor))) {
           await claude.store.set(updatedFor, reason)
-          await runCmod(claude, ['update', mod.name], session)
+          for (const name of outdated) await runCmod(claude, ['update', name], session)
           checked = await pluginsChangedAt(pluginsFile)
           off = needing(await listed())
         }
@@ -252,9 +237,9 @@ export const cmodPlugin = defineMod({
       } finally {
         isCheckingPlugins = false
       }
-      if (JSON.stringify(await pluginsChangedAt(pluginsFile)) !== JSON.stringify(checked)) await keepCmodCurrent({ isForced: false })
+      if (JSON.stringify(await pluginsChangedAt(pluginsFile)) !== JSON.stringify(checked)) await keepPluginsCurrent({ isForced: false })
     }
-    const checkPlugins = (asked: { readonly isForced: boolean }) => void keepCmodCurrent(asked).catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain, isCritical: true }))
+    const checkPlugins = (asked: { readonly isForced: boolean }) => void keepPluginsCurrent(asked).catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain, isCritical: true }))
     const updateAgain = async () => {
       await claude.store.delete(updatedFor)
       checkPlugins({ isForced: true })
@@ -308,8 +293,8 @@ export const cmodPlugin = defineMod({
     settings.beforeFileChange({ source: 'user' }, () => void mod.after(reloadDelayMs, reloadIfChanged))
     sessions.current.onPrompt(() => reloadIfChanged())
 
-    void readConsent(mod)
-      .then(async (consent) => (Object.entries(consent).some(([name, granted]) => name !== mod.name && granted.includes('conversation')) ? runCmod(claude, ['history', 'index'], await claude.session.id()) : undefined))
+    void setUpMods(mod)
+      .then(async (mods) => (mods.length > 0 ? runCmod(claude, ['history', 'index'], await claude.session.id()) : undefined))
       .catch((error: unknown) => mod.log(messageOf(error)))
 
     const tearDown = async (name: string) => {

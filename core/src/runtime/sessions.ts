@@ -50,30 +50,11 @@ export function pickedColor(args: string): string | undefined {
   return resetColors.includes(picked) ? undefined : picked
 }
 
-export type Act = 'send' | 'startTask' | 'fork' | 'clone' | 'startBackgroundTask' | 'callTool' | 'usage' | 'surfaces' | 'abort'
+const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort'] as const
 
-const actPermissions: Readonly<Record<Exclude<Act, 'callTool'>, string>> = { send: 'prompt', startTask: 'tasks', fork: 'tasks', clone: 'tasks', startBackgroundTask: 'tasks', usage: 'conversation', surfaces: 'conversation', abort: 'prompt' }
+export type Act = (typeof acts)[number]
 
-const startsTurns: readonly string[] = ['CronCreate']
-
-const ownSchedule: readonly string[] = ['CronDelete', 'CronList']
-
-export const beforePermission = (event: BeforeEvent): string => (event === 'toolCall' ? 'tools' : event === TaskStart ? 'tasks' : 'prompt')
-
-const answerPermissions = (event: BeforeEvent, answer: Partial<Answers>): string[] => [
-  ...(Object.keys(answer).some((key) => key !== 'note') ? [beforePermission(event)] : []),
-  ...(answer.note === undefined ? [] : ['prompt']),
-]
-
-export const isAct = (action: string): action is Act => action === 'callTool' || action in actPermissions
-
-export function toolPermission(tool: string): string | undefined {
-  return startsTurns.includes(tool) ? 'prompt' : ownSchedule.includes(tool) ? undefined : 'tools'
-}
-
-export function actPermission(action: Act, input: unknown): string | undefined {
-  return action === 'callTool' ? (toolPermission(String((input as Partial<ToolCallArgs> | null)?.name)) ?? 'tools') : actPermissions[action]
-}
+export const isAct = (action: string): action is Act => (acts as readonly string[]).includes(action)
 
 export type Scope = { readonly session?: string; readonly context?: number; readonly turn?: string; readonly task?: string; readonly isGoal?: true; readonly isAgent?: true }
 
@@ -158,7 +139,7 @@ export function withoutPermissionCheck(name: string, hearer: string): string {
 
 export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>, failed?: (input: unknown, error: Error) => HookFields | undefined) => Subscription
 
-export function createSessionsClient({ name, claude, report, isGranted, permissionRefusal, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly isGranted: (permission: string) => boolean; readonly permissionRefusal: (call: string, permission: string) => string; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
+export function createSessionsClient({ name, claude, report, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
   const call = <Answer>(method: string, input: unknown) => claude.cmod.call({ to: cmodPluginName, method, input }) as Promise<Answer>
   const listening = new Map<string, Set<Listening>>()
   const deciding = new Map<string, Set<Listening>>()
@@ -236,18 +217,12 @@ export function createSessionsClient({ name, claude, report, isGranted, permissi
 
   const decides = (entry: Listening, session: string, change: SessionChange) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher))
 
-  const mayDecide = (session: string) => session === current.id || isGranted('conversation')
-
   const combined = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean): Promise<Partial<Answers> | undefined> => {
     const askers = decidersOf(session, event, isInProject)
       .map((entry) => async (latest: SessionChange) => {
         if (!decides(entry, session, latest)) return undefined
         const payload = await payloadFor(session, latest)
-        const answer = await invoke(entry.method, entry.options, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
-        if (answer === undefined || answer === null || (typeof answer === 'object' && 'refuse' in answer)) return answer
-        const missing = answerPermissions(event, answer as Partial<Answers>).find((permission) => !isGranted(permission))
-        if (missing === undefined) return answer
-        throw new Error(permissionRefusal(`${entry.method} with the answer { ${Object.keys(answer).join(', ')} }`, missing))
+        return invoke(entry.method, entry.options, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
       })
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) }
@@ -505,13 +480,11 @@ export function createSessionsClient({ name, claude, report, isGranted, permissi
     const run = await commandRun(e)
     const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise('beforeRun', run)
     if (typeof answer?.['refuse'] === 'string') return { text: answer['refuse'] }
-    const changes = answer !== undefined && isGranted('prompt') ? answer : undefined
-    if (answer !== undefined && changes === undefined) report('session:beforeRun', 'The beforeRun listener failed', new Error(permissionRefusal(`beforeRun with the answer { ${Object.keys(answer).join(', ')} }`, 'prompt')))
-    if (typeof changes?.['result'] === 'string') return { text: changes['result'], ...(typeof changes['exitCode'] === 'number' ? { exitCode: changes['exitCode'] } : {}) }
-    const args = typeof changes?.['args'] === 'string' ? changes['args'] : e.args
+    if (typeof answer?.['result'] === 'string') return { text: answer['result'], ...(typeof answer['exitCode'] === 'number' ? { exitCode: answer['exitCode'] } : {}) }
+    const args = typeof answer?.['args'] === 'string' ? answer['args'] : e.args
     const ran = await next(args === e.args ? e : { ...e, args })
     void raise('onRun', { ...run, args })
-    return typeof changes?.['note'] === 'string' ? { ...ran, context: [...(ran.context ?? []), modNote(name, changes['note'])] } : ran
+    return typeof answer?.['note'] === 'string' ? { ...ran, context: [...(ran.context ?? []), modNote(name, answer['note'])] } : ran
   }, async (e, error) => {
     const refusal = commandListeners.beforeRun.size === 0 ? undefined : refusalFor('beforeRun', await commandRun(e), error)
     return refusal === undefined ? undefined : { text: refusal.refuse }
@@ -603,10 +576,8 @@ export function createSessionsClient({ name, claude, report, isGranted, permissi
   })
   const every = eventMethods(() => ({}), false)
 
-  const answerBefore = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean) => (mayDecide(session) ? combined(session, event, change, isInProject) : undefined)
-
   const failedBefore = (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, error: Error) => {
-    const asked = mayDecide(session) ? decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change)) : []
+    const asked = decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change))
     return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined)
   }
 
@@ -640,7 +611,7 @@ export function createSessionsClient({ name, claude, report, isGranted, permissi
         }
       }
     },
-    answerBefore,
+    answerBefore: combined,
     failedBefore,
     raise,
     listen,

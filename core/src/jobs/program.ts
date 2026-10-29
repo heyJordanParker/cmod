@@ -1,5 +1,4 @@
 import type { Job } from '../mod.js'
-import { PermissionRefused, programAddresses } from '../runtime/grants.js'
 import { engineOf } from '../runtime/engine.js'
 import { messageOf } from '../utils/text.js'
 import { basename } from '../vendor.js'
@@ -26,17 +25,11 @@ export function program(options: { readonly command: readonly string[]; readonly
     let failure: Error | undefined
     let exits = 0
     const waiting: { resolve: (address: Address) => void; reject: (error: Error) => void }[] = []
-    const ownAddresses = programAddresses(mod)
 
-    const spawn = async () => (singleInstance ? spawnCmod(['program', mod.name, '--', ...command], request) : claude.process.spawn(request))
-
-    const forget = () => {
-      if (address !== undefined) ownAddresses.delete(freeAddressOf(address))
-      address = undefined
-    }
+    const spawn = () => (singleInstance ? spawnCmod(['program', mod.name, '--', ...command], environment) : claude.process.spawn(request))
 
     const stop = (reason: string) => {
-      forget()
+      address = undefined
       state = 'fatal'
       failure = new Error(`${mod.name}: the ${executable} program stopped: ${reason}`)
       const retry = () => {
@@ -49,11 +42,9 @@ export function program(options: { readonly command: readonly string[]; readonly
     }
 
     const show = (next: Address) => {
-      forget()
       address = next
       state = 'running'
       exits = 0
-      ownAddresses.add(freeAddressOf(next))
       for (const waiter of waiting.splice(0)) waiter.resolve(next)
     }
 
@@ -80,10 +71,9 @@ export function program(options: { readonly command: readonly string[]; readonly
           }
         }
       } catch (error) {
-        if (error instanceof PermissionRefused) return stop(messageOf(error))
         lastError = messageOf(error)
       }
-      forget()
+      address = undefined
       exits += 1
       const wait = backoffSeconds[exits - 1]
       if (wait === undefined) {
@@ -119,8 +109,4 @@ function addressOf(line: string): Address | undefined {
   const unix = /^unix:(\/.+)$/.exec(line)
   if (unix?.[1] !== undefined) return { url: 'http://localhost', socketPath: unix[1] }
   return undefined
-}
-
-function freeAddressOf(address: Address): string {
-  return address.socketPath ?? new URL(address.url).host
 }

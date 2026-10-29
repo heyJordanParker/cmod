@@ -120,7 +120,6 @@ test('a reply that passes the 30 s deadline shows /<name> failed with the deadli
         )
       },
     }),
-    { permissions: ['network:weather.example'] },
   )
   tested.fakes.http.fetch = () => new Promise(() => undefined)
   tested.fakes.clock.after = (ms, fn) => {

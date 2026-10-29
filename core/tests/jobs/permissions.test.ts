@@ -139,7 +139,6 @@ test('a when check that passes the 2 s deadline gives the rule its own decision'
         mod.use(permissions({ deny: [{ command: 'git commit', when: async () => (await process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] }))
       },
     }),
-    { permissions: ['run:git'] },
   )
   const timers: number[] = []
   tested.fakes.process.run = () => new Promise(() => undefined)
@@ -176,7 +175,7 @@ function inProject(rules: PermissionRules) {
         mod.use(permissions(rules))
       },
     }),
-    { scope: 'project', projectRoot: project, files, permissions: ['run:git'] },
+    { scope: 'project', projectRoot: project, files },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   return tested

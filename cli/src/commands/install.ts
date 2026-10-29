@@ -11,8 +11,8 @@ import { noteNextStep, setupInTerminal } from './setup.js'
 
 export const summary = "Install any plugin through Claude Code, and run a mod's install step."
 
-export const help = `Usage: cmod install <owner/repo | path> [name] [--yes]
-       cmod install <name | name@marketplace> [--yes]
+export const help = `Usage: cmod install <owner/repo | path> [name]
+       cmod install <name | name@marketplace>
 
 ${summary}
 
@@ -29,20 +29,17 @@ again. A linked plugin that is not a mod is skipped, because saving its files
 updates it. A path holds a "/", such as ./my-mod.
 
 Options:
-  --yes                 Approve the mod's install and uninstall commands without asking
   --option key=value    Set one of the plugin's options, as /config does. Repeat it for each option`
 
-export type Choices = { readonly yes: boolean; readonly options: readonly string[] }
-
 export async function run(argv: string[]): Promise<number> {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { yes: { type: 'boolean', default: false }, option: { type: 'string', multiple: true } } })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { option: { type: 'string', multiple: true } } })
   const [argument, chosen] = positionals
   if (argument === undefined || positionals.length > 2) throw new Error(`cmod install takes one source, and a mod name after a marketplace.\n\n${help}`)
-  const choices: Choices = { yes: values.yes, options: values.option ?? [] }
+  const options = values.option ?? []
   const progress = startProgress()
   if (!argument.includes('/')) {
     if (chosen !== undefined) throw new Error(`${argument} names a plugin, so cmod install takes nothing after it. Run cmod install ${argument}.`)
-    return installByName(argument, choices, progress)
+    return installByName(argument, options, progress)
   }
   const source = sourceOf(argument)
 
@@ -55,42 +52,42 @@ export async function run(argv: string[]): Promise<number> {
   progress.succeed(`Added the marketplace ${marketplace.name}`)
 
   const name = await modIn(`${marketplace.installLocation}/.claude-plugin/marketplace.json`, chosen, argument)
-  return installPlugin(`${name}@${marketplace.name}`, choices, progress)
+  return installPlugin(`${name}@${marketplace.name}`, options, progress)
 }
 
-async function installByName(argument: string, choices: Choices, progress: Progress): Promise<number> {
+async function installByName(argument: string, options: readonly string[], progress: Progress): Promise<number> {
   const installed = (await listPlugins()).find((plugin) => plugin.name === argument || plugin.id === argument)
   if (installed !== undefined) {
-    if (await usesCmod(installed.installPath, installed.name)) return installMod(installed, choices, progress, await installCmodPlugin(progress))
-    if (!installed.isLinked) return installPlugin(installed.id, choices, progress)
-    await setOptions(installed, choices.options, progress)
+    if (await usesCmod(installed.installPath, installed.name)) return installMod(installed, options, progress, await installCmodPlugin(progress))
+    if (!installed.isLinked) return installPlugin(installed.id, options, progress)
+    await setOptions(installed, options, progress)
     progress.skip(`${installed.id} is linked from ${installed.installPath}, so saving its files updates it.`)
     return 0
   }
   const at = argument.lastIndexOf('@')
   const marketplaceName = at > 0 ? argument.slice(at + 1) : undefined
-  if (marketplaceName !== undefined && (await listMarketplaces()).some((marketplace) => marketplace.name === marketplaceName)) return installPlugin(argument, choices, progress)
+  if (marketplaceName !== undefined && (await listMarketplaces()).some((marketplace) => marketplace.name === marketplaceName)) return installPlugin(argument, options, progress)
   const name = at > 0 ? argument.slice(0, at) : argument
   throw new Error(`Claude Code holds no plugin named ${argument}. Install one from <owner/repo>, a path such as ./${name}, or ${name}@<marketplace> of a marketplace Claude Code has added. cmod list shows every plugin.`)
 }
 
-async function installPlugin(id: string, choices: Choices, progress: Progress): Promise<number> {
+async function installPlugin(id: string, options: readonly string[], progress: Progress): Promise<number> {
   progress.step(`Installing ${id} into Claude Code`)
   await changePlugin('install', id)
   const installed = (await listPlugins()).find((plugin) => plugin.id === id)
   if (installed === undefined) throw new Error(`Claude Code installed ${id} but claude plugin list does not show it.`)
   progress.succeed(`Installed ${id} into Claude Code`)
   if (!(await usesCmod(installed.installPath, installed.name))) {
-    await setOptions(installed, choices.options, progress)
+    await setOptions(installed, options, progress)
     return 0
   }
-  return installMod(installed, choices, progress, await installCmodPlugin(progress))
+  return installMod(installed, options, progress, await installCmodPlugin(progress))
 }
 
-export async function installMod(installed: InstalledPlugin, choices: Choices, progress: Progress, isCmodNew = false): Promise<number> {
+export async function installMod(installed: InstalledPlugin, options: readonly string[], progress: Progress, isCmodNew = false): Promise<number> {
   const plugin = await readPlugin(installed.installPath)
-  await setOptions(installed, choices.options, progress)
-  const code = await setupInTerminal(plugin, { yes: choices.yes }, progress)
+  await setOptions(installed, options, progress)
+  const code = await setupInTerminal(plugin, progress)
   if (code === 0) noteNextStep(plugin, progress, isCmodNew)
   return code
 }

@@ -1,4 +1,4 @@
-import { isObject, permissionWords } from '../records.js'
+import { isObject } from '../records.js'
 import { ifMissing } from '../utils/paths.js'
 import { listed } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -8,7 +8,7 @@ export type Announcement = { readonly message: string; readonly description?: st
 
 export const announcementMs = 10_000
 
-export async function announcementOf(claude: Claude, plugin: Plugin, granted: ReadonlySet<string>, added: readonly string[], openSettings: () => Promise<void>): Promise<Announcement> {
+export async function announcementOf(claude: Claude, plugin: Plugin, added: readonly string[], openSettings: () => Promise<void>): Promise<Announcement> {
   const manifest = jsonOf(await claude.fs.read(`${plugin.root}/.claude-plugin/plugin.json`).catch(ifMissing(undefined)))
   const { program, hotkeys } = plugin.steps
   const rules = (await claude.fs.list(`${plugin.root}/rules`).catch(ifMissing([]))).filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md')).map((entry) => entry.name.slice(0, -'.md'.length)).toSorted()
@@ -18,7 +18,6 @@ export async function announcementOf(claude: Claude, plugin: Plugin, granted: Re
     rules.length > 0 ? `Adds ${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}: ${listed(rules)}.` : undefined,
     program === undefined ? undefined : `Installed the ${program} program.`,
     ...Object.values(hotkeys ?? {}).flatMap(({ title, default: combo }) => (combo === undefined ? [] : [`Binds ${combo} to ${title}.`])),
-    ...[...granted].map((item) => `${permissionWords(item)}.`),
   ].filter((line) => line !== undefined)
   return { message: 'Installed', ...(lines.length === 0 ? {} : { description: lines.join('\n') }), action: { label: 'Settings', onClick: () => openSettings() } }
 }

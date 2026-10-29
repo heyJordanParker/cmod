@@ -115,10 +115,9 @@ export async function approvals(name: string): Promise<readonly string[]> {
   return (await readConsent())[name] ?? []
 }
 
-export async function approve(name: string, items: readonly string[], whileApproved?: string): Promise<void> {
+export async function approve(name: string, items: readonly string[]): Promise<void> {
   await changeConsent((consent) => {
     const approved = consent[name] ?? []
-    if (whileApproved !== undefined && !approved.includes(whileApproved)) return false
     const added = [...new Set(items)].filter((item) => !approved.includes(item))
     if (added.length === 0) return false
     consent[name] = [...approved, ...added]

@@ -423,7 +423,7 @@ const journal = defineMod({
 })
 
 test("a read after testMod's fake write sees the new text", async () => {
-  const tested = testMod(journal, { files: { '/work/journal.md': 'buy milk\n' }, permissions: ['files:/work/journal.md'] })
+  const tested = testMod(journal, { files: { '/work/journal.md': 'buy milk\n' } })
 
   await tested.type('/jot call mum')
 
@@ -544,7 +544,6 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
         sessions.current.onTurnEnd(() => void showGitLetters(mod))
       },
     }),
-    { permissions: ['run:git'] },
   )
   tested.fakes.process.run = (argv) => new Promise((resolve) => clock?.after(0, () => resolve(gitAnswer(argv))))
 
@@ -557,7 +556,7 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
 
 test('settle returns while a fake is held open by the test', async () => {
   const answers: (() => void)[] = []
-  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => sessions.current.onTurnEnd(() => void showGitLetters(mod)) }), { permissions: ['run:git'] })
+  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => sessions.current.onTurnEnd(() => void showGitLetters(mod)) }))
   tested.fakes.process.run = (argv) => new Promise((resolve) => answers.push(() => resolve(gitAnswer(argv))))
 
   await tested.add({ type: Prompt, text: 'Commit it' })
@@ -642,7 +641,6 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
         mod.use(slashCommand({ name: 'branch', description: 'Name the branch', reply: async () => (await process.run(['git', 'branch', '--show-current'])).stdout.trim() }))
       },
     }),
-    { permissions: ['run:git'] },
   )
   onMain(tested.fakes)
 
@@ -674,7 +672,6 @@ test('raise.beforeToolCall asks every beforeToolCall listener with the call and 
         sessions.current.beforeToolCall({ name: 'Bash' }, (call) => (String(call.input['command']).startsWith('rm ') ? { refuse: 'Move it to the trash instead.' } : undefined))
       },
     }),
-    { permissions: ['tools'] },
   )
 
   expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })).toEqual({ refuse: 'Move it to the trash instead.' })
@@ -694,7 +691,6 @@ test('raise.beforePrompt gives the listener a Prompt placed in the open turn, an
         })
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   expect(await tested.raise.beforePrompt({ text: 'Cut a release' })).toEqual({ note: 'Run bun run release.' })
@@ -720,7 +716,6 @@ test('raise.beforeSessionStart returns the note every listener gives, the last t
         sessions.current.beforeSessionStart(() => ({ title: 'Morning' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   expect(await tested.raise.beforeSessionStart({ source: 'startup' })).toEqual({ note: 'The build is red.', title: 'Morning' })
@@ -728,7 +723,7 @@ test('raise.beforeSessionStart returns the note every listener gives, the last t
 })
 
 test('raise.beforeTurnEnd asks about the open turn, and says how to open one when none is open', async () => {
-  const tested = testMod(defineMod({ name: 'reviewer', setup: () => void sessions.current.beforeTurnEnd((turn) => (turn.prompt.text === 'Ship it' ? { refuse: 'Run the tests first.' } : undefined)) }), { permissions: ['prompt'] })
+  const tested = testMod(defineMod({ name: 'reviewer', setup: () => void sessions.current.beforeTurnEnd((turn) => (turn.prompt.text === 'Ship it' ? { refuse: 'Run the tests first.' } : undefined)) }))
 
   await expect(tested.raise.beforeTurnEnd()).rejects.toThrow("reviewer has no turn open to end. Open one with tested.add({ type: Prompt, text: '…' }).")
   await tested.add({ type: Prompt, text: 'Ship it' })

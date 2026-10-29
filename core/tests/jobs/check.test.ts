@@ -19,7 +19,6 @@ function typed(...jobs: Job<void>[]) {
         for (const job of jobs) mod.use(job)
       },
     }),
-    { permissions: ['run:tsc', 'run:bun', 'prompt'] },
   )
   tested.fakes.fs.exists = async (path) => path.endsWith('.ts')
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
@@ -101,7 +100,7 @@ test('a check after edits to src/** still runs after cd src', async () => {
         mod.use(check({ after: { write: 'src/**' }, run: ['tsc', '--noEmit'] }))
       },
     }),
-    { cwd: `${root}/src`, files: { [`${root}/src/a.ts`]: 'let a = 1' }, permissions: ['run:tsc'] },
+    { cwd: `${root}/src`, files: { [`${root}/src/a.ts`]: 'let a = 1' } },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
@@ -140,7 +139,6 @@ test('a command check in a project runs in the work tree the matched command run
     {
       scope: 'project',
       projectRoot: project,
-      permissions: ['run:bun'],
       files: {
         [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
         [`${project}/.git/worktrees/design/commondir`]: '../..\n',

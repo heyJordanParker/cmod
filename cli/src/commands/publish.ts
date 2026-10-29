@@ -7,7 +7,7 @@ import { version as coreVersion } from '@cmodjs/core/package.json'
 import { bundleDefines, isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { cmodPluginEntry, validatePlugin } from '../claude.js'
+import { cmodPluginEntry, listPlugins, validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
 import { cmodFloor, cmodRangeOf, readDeclared, readPlugin, type Plugin } from '../plugin.js'
 import { capture, run as runCommand } from '../process.js'
@@ -31,7 +31,11 @@ all of the mod's code. Checks
 the release with claude plugin validate --strict and commits it as the release
 branch. Builds the release archive from that commit and the program cli/
 declares, writes SHA256SUMS for every file of the release, and writes
-.claude-plugin/marketplace.json listing the archive and the cmod plugin. Then
+.claude-plugin/marketplace.json listing the archive, the cmod plugin, and
+each other mod plugin.json depends on, from the release branch of the GitHub
+repository its installed or linked copy names in plugin.json "repository", so
+each dependency resolves in the mod's marketplace. It refuses a dependency
+installed nowhere here, or whose plugin.json names no GitHub repository. Then
 commits that file, tags v<version>, tags the release commit
 <name>--v<version>, which Claude Code installs a version range from when a
 marketplace lists the mod from git, pushes both tags and the release branch,
@@ -93,8 +97,24 @@ export async function run(argv: string[]): Promise<number> {
   }
   const floor = await cmodFloor(plugin)
   const range = cmodRangeOf(written)
-  if (floor !== undefined && range !== floor) {
-    throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.slice(2)}, so it needs "${floor}", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
+  if (floor !== undefined && range !== `>=${floor.cmod}`) {
+    throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.core}, which runs on cmod ${floor.cmod} or later, so it needs ">=${floor.cmod}", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
+  }
+  const dependedOn = (Array.isArray(written['dependencies']) ? written['dependencies'] : [])
+    .map((dependency: unknown) => (isObject(dependency) ? dependency['name'] : dependency))
+    .filter((name): name is string => typeof name === 'string' && name !== cmodPluginEntry.name)
+  const installed = dependedOn.length === 0 ? [] : await listPlugins()
+  const dependencies: { name: string; repo: string; description: string | undefined }[] = []
+  const unlisted: string[] = []
+  for (const name of dependedOn) {
+    const copy = installed.find((each) => each.name === name)
+    const dependency = copy === undefined ? undefined : await readPlugin(copy.installPath)
+    const repo = dependency?.repository === undefined ? undefined : githubRepositoryOf(dependency.repository)
+    if (repo === undefined) unlisted.push(name)
+    else dependencies.push({ name, repo, description: dependency?.description })
+  }
+  if (unlisted.length > 0) {
+    throw new Error(`.claude-plugin/plugin.json depends on ${unlisted.join(', ')}, and no copy installed here names its GitHub repository in .claude-plugin/plugin.json "repository", so ${plugin.name}'s marketplace cannot list ${unlisted.length === 1 ? 'it' : 'them'} and Claude Code would leave ${plugin.name} off. Install or link ${unlisted.join(' and ')}, with "repository": "https://github.com/<owner>/<repo>" in its plugin.json, then run cmod publish again.`)
   }
 
   const progress = startProgress()
@@ -135,6 +155,10 @@ export async function run(argv: string[]): Promise<number> {
   if (plugin.name !== 'cmod') {
     plugins.push(cmodPluginEntry)
     progress.succeed(`Listed the cmod plugin from the ${releaseBranch} branch of heyJordanParker/cmod, so the cmod dependency resolves in this marketplace and follows each cmod release`)
+  }
+  for (const { name, repo, description } of dependencies) {
+    plugins.push({ name, description: description ?? `${name}, a Claude Code mod`, source: { source: 'github', repo, ref: releaseBranch } })
+    progress.succeed(`Listed ${name} from the ${releaseBranch} branch of ${repo}, so the ${name} dependency resolves in this marketplace and follows each ${name} release`)
   }
   const marketplacePath = dryRun ? join(output, 'marketplace.json') : join(plugin.root, '.claude-plugin', 'marketplace.json')
   const marketplace = { name: plugin.name, owner: { name: repository.split('/')[0] }, description: plugin.description ?? `${plugin.name}, a Claude Code mod`, plugins }
@@ -234,7 +258,7 @@ export async function bundledHooks(root: string, tree = root): Promise<{ hooks: 
     return new Error(`Bundling hooks/${module} failed: ${reason}${install}`)
   }
   const { steps } = await readPlugin(root)
-  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'], define: bundleDefines(steps.permissions ?? []) }).catch((error: unknown) => {
+  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'], define: bundleDefines(steps) }).catch((error: unknown) => {
     throw failed(error instanceof AggregateError ? error.errors.map(String).join('\n') : messageOf(error))
   })
   const [bundled] = built.outputs
@@ -263,9 +287,13 @@ async function commitRelease(output: string, tree: string, tag: string, parent: 
 }
 
 function githubRepository(remote: string): string {
-  const match = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(remote.trim())
-  if (!match) throw new Error(`The origin remote ${remote.trim() ? `(${remote.trim()}) is not a GitHub repository` : 'is missing'}. Run git remote add origin https://github.com/<owner>/<repo>.git.`)
-  return match[1] as string
+  const repository = githubRepositoryOf(remote)
+  if (repository === undefined) throw new Error(`The origin remote ${remote.trim() ? `(${remote.trim()}) is not a GitHub repository` : 'is missing'}. Run git remote add origin https://github.com/<owner>/<repo>.git.`)
+  return repository
+}
+
+function githubRepositoryOf(url: string): string | undefined {
+  return /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1]
 }
 
 async function fileSha256(path: string): Promise<string> {

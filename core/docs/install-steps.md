@@ -1,6 +1,6 @@
 # Install steps
 
-A mod that changes the machine, such as by adding a shell alias or downloading a program, names its install and uninstall steps in its `package.json`. The cmod program of Claude Mod Manager (cmod) runs them with the person's consent, and runs the uninstall step after the person removes the mod. The library never runs them.
+A mod that changes the machine, such as by adding a shell alias or downloading a program, names its install and uninstall steps in its `package.json`. The cmod program of Claude Mod Manager (cmod) runs the install step when the person installs the mod, and the uninstall step after the person removes it. The library never runs them.
 
 ## The cmod key
 
@@ -26,34 +26,32 @@ cmod refuses a `cmod` key that breaks these rules, with the fix in the message:
 
 - `cmod` is an object.
 - `install` and `uninstall` are each one command on one line, with no tab.
-- Each names at least one script file inside the mod, and no script at the mod's root. cmod asks consent for the whole folder of each script, so put the scripts in a folder, such as `setup/`.
+- Each names at least one script file inside the mod, and no script at the mod's root. cmod runs the steps again whenever anything in a script's folder changes, so put the scripts in a folder, such as `setup/`.
 - A symbolic link in a script folder points at a file.
 - `program` is a command name: letters, digits, `.`, `_`, and `-`, starting with a letter or digit.
 - Each hotkey has a title and an optional default combo, as `defineMod` takes them ([mod.md](mod.md#hotkeys)).
 - `.claude-plugin/plugin.json` has a `version`.
 
-## Consent
+## When the steps run
 
-Before a step runs for the first time, cmod shows the person the commands, the hotkeys, and the permissions, and asks to run them. cmod remembers what the person approved in three parts: each permission, each hotkey that has a default combo with that combo, and one hash of the commands, the program, and every file in each script folder. An update asks again only for what it adds: a changed command or script file, or a new hotkey or a new default combo, and it lists only the new hotkeys. A permission an update adds is granted without asking, and the `<mod> updated to <version>` toast names it ([permissions.md](permissions.md)). With `Ask before an update adds a permission` on, in Settings on cmod's page under Preferences, the update asks for each new permission too, and lists only the new ones. The switch is off at first, and it is `"asksBeforeUpdatePermissions": true` in `preferences.json` in the cmod store. A permission the person turned off stays off across updates, and no update asks for it again. A mod set up by a cmod before 4.3.0 asks for a permission its next update adds, because its install record does not name the permissions it had. An update that only drops a hotkey or a permission sets the mod up without asking.
+cmod runs the install step, installs the program, and binds the hotkeys when the person installs the mod, and again when an update changes a command or a file in a script folder, adds a hotkey, or changes its default combo. It asks nothing first.
 
-- In Claude Code, the mod opens its install page, the `Install <mod>` tab of the Sidebar. Claude Code gives the Sidebar the keys when the prompt is empty and nothing else holds them. Otherwise a click on the page does. A Sidebar opened this way shows only on a terminal 144 columns wide, so below that the toast `Installing`, with `Waiting for your answer` and an `Answer` button, opens it. The page asks `Install <mod>?` and lists `<mod> wants to:`, each permission as one sentence, then `and change your computer:` with `Run <install> now, and <uninstall> when you remove it`, `Install <program>, which Claude runs by its name`, and `Bind shift+tab to Cycle the mode`, naming only what the mod has. `Accept` (a) runs the setup, and a loading toast above the prompt shows the install with a progress bar. `Not now` (n) and the `×` on the tab decline. Escape hides the Sidebar, and the question waits in its tab and its toast.
-- In a session with no screen, such as `claude -p`, the mod waits and logs `<mod> waits for consent to run <install>. Run cmod install <mod> in a terminal.` That person is already in a terminal, and no screen exists to draw a button on.
-- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` print the commands, the program, the hotkeys, and the permissions, and ask `Set up <mod>? [y/N]`. `--yes` approves without asking.
-- `Not now` leaves the mod off with the toast `Not installed` and an `Install` button that asks again.
+- In Claude Code, the mod sets itself up as it loads, and a loading toast above the prompt shows the install with a progress bar.
+- In a terminal, `cmod install`, `cmod link`, `cmod try`, and `cmod update` set the mod up and print each step.
 
 The mod starts only once its install step has run ([mod.md](mod.md)).
 
 ## Automatic updates
 
-Claude Code updates a plugin by itself only when its marketplace has automatic updates on, and they are off for every marketplace that is not Anthropic's. So the setup of a mod installed from a marketplace turns them on, through `"autoUpdate": true` on that marketplace's `extraKnownMarketplaces` entry in `settings.json`. The consent lists it as `Update <mod> automatically from the <marketplace> marketplace`, and a mod with nothing to consent to logs it. The setup never changes a choice the person made, in `settings.json` or with the toggle under `/plugin` Marketplaces, and leaves a linked mod alone. The cmod plugin's own `cmod` marketplace gets the same entry whenever a `cmod` command installs the cmod plugin or `cmod update` updates it.
+Claude Code updates a plugin by itself only when its marketplace has automatic updates on, and they are off for every marketplace that is not Anthropic's. So the setup of a mod installed from a marketplace turns them on, through `"autoUpdate": true` on that marketplace's `extraKnownMarketplaces` entry in `settings.json`. The setup logs `<mod> now updates automatically from the <marketplace> marketplace. Turn it off in /plugin, Marketplaces.` The setup never changes a choice the person made, in `settings.json` or with the toggle under `/plugin` Marketplaces, and leaves a linked mod alone. The cmod plugin's own `cmod` marketplace gets the same entry whenever a `cmod` command installs the cmod plugin or `cmod update` updates it.
 
-Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update that changes a command or a script file, or adds a hotkey or changes its default combo, waits for consent again, so an update never runs a new install step unasked. An update that adds a permission waits for consent only while `Ask before an update adds a permission` is on.
+Claude Code downloads an update in the background and loads it at the next launch or `/reload-plugins`. An update that changes a command or a script file, adds a hotkey, or changes its default combo runs the install step again.
 
-In Claude Code, the mod sets itself up through the `cmod` program the cmod plugin installed, never one elsewhere on PATH, and only once that program is at least the version of the `@cmodjs/core` the mod bundles. Until then its toast says `Waiting for cmod`. After a minute it says `<mod> needs cmod <version> or later, and this computer has cmod <version>, so cmod is updating itself.` and runs `cmod update cmod` once. The mod sets up as soon as a new enough cmod is installed. When the update leaves cmod older, the next wait shows `<mod> needs cmod <version> or later, and the newest cmod is <version>.` with a Retry button instead of updating again.
+In Claude Code, the mod sets itself up through the `cmod` program the cmod plugin installed, never one elsewhere on PATH, and only once that program is at least the oldest cmod the `@cmodjs/core` the mod bundles runs on, `oldestCmodVersion` in its `records.js`. Until then its toast says `Waiting for cmod`. After a minute it says `<mod> needs cmod <version> or later, and this computer has cmod <version>, so cmod is updating itself.` and runs `cmod update cmod` once. The mod sets up as soon as a new enough cmod is installed. When the update leaves cmod older, the next wait shows `<mod> needs cmod <version> or later, and the newest cmod is <version>.` with a Retry button instead of updating again.
 
 ## Steps in Claude Code
 
-Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and its install page shows each one after the permissions and the options, once the mod has started:
+Some setup only the person can do, such as signing in to a service. A mod lists those steps in `installer`, and its install page shows each one after the options, once the mod has started:
 
 ```tsx
 import { defineMod, type Step } from '../node_modules/@cmodjs/core/mod.js'
@@ -87,7 +85,7 @@ type Step<State> = {
 
 ## Hotkeys
 
-A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only from the person's `keybindings.json`. So cmod writes each hotkey there, with consent, as the setup's last step. A hotkey runs a hidden command of the mod, `<mod>--<hotkey>`, which the mod hears as `onPress` ([mod.md](mod.md#hotkeys)):
+A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only from the person's `keybindings.json`. So cmod writes each hotkey there as the setup's last step. A hotkey runs a hidden command of the mod, `<mod>--<hotkey>`, which the mod hears as `onPress` ([mod.md](mod.md#hotkeys)):
 
 ```json
 { "bindings": [{ "context": "Chat", "bindings": { "shift+tab": "command:modes--cycle" } }] }
@@ -95,7 +93,7 @@ A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only f
 
 - cmod writes each combo into the `Chat` bindings of `~/.claude/keybindings.json`, or of `$CLAUDE_CONFIG_DIR/keybindings.json` when that variable is set. When the file is a symbolic link, cmod writes the file it points to. Claude Code reads the change at once, with no restart.
 - A combo the person already bound to something else stays theirs, and the hotkey has no combo. The person picks one in Settings, under the mod, Hotkeys.
-- A hotkey without a default combo binds nothing at setup and needs no consent. Settings lists it as unbound, and the person binds it there or with `cmod hotkey`.
+- A hotkey without a default combo binds nothing at setup. Settings lists it as unbound, and the person binds it there or with `cmod hotkey`.
 - The combo the person picks in Settings runs `cmod hotkey <mod> <hotkey> <combo>`. An update keeps the combo each hotkey has in `keybindings.json`, whether Settings or the person's own edit bound it ([commands.md](commands.md#cmod-hotkey)).
 - An upgrade that drops a hotkey removes its binding. Removing the mod removes every binding that runs one of its hotkeys, and a `Chat` block that leaves empty. A binding the person moved to another action stays.
 - A hotkey bound to `shift+tab` replaces Claude Code's own mode switch, and Claude Code then drops its `shift+tab` hint.

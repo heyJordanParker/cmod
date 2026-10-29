@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
+import { oldestCmodVersion } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { writeAtomically } from '../files.js'
 import { installPackages, readPlugin } from '../plugin.js'
@@ -74,7 +75,7 @@ function scaffold(name: string, isProject: boolean, author: { name: string; emai
   const definition = name.replace(/-([a-z0-9])/g, (_, letter: string) => letter.toUpperCase())
   const state = `${definition.charAt(0).toUpperCase()}${definition.slice(1)}State`
   const files: Record<string, string> = {
-    '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: [{ name: 'cmod', version: `>=${coreVersion}` }] }),
+    '.claude-plugin/plugin.json': json({ name, version: '0.1.0', description: `${name}, a Claude Code mod`, author, dependencies: [{ name: 'cmod', version: `>=${oldestCmodVersion}` }] }),
     '.gitignore': 'node_modules/\n.claude-plugin/types/\n',
     '.oxlintrc.json': json({ ignorePatterns: ['.claude-plugin/types/**'] }),
     'CHANGELOG.md': `# Changelog
@@ -186,7 +187,7 @@ description: Explains what the ${name} mod does. Use when the user asks about th
 
 The ${name} mod counts the prompts of this session and shows the count in the Sidebar and below the prompt.
 `,
-    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, cmod: { permissions: { prompt: true }, hotkeys: { toggle: { title: 'Show or hide the prompt count', default: 'alt+shift+p' } } }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
+    'package.json': json({ name, private: true, type: 'module', scripts: { test: 'bun test' }, cmod: { hotkeys: { toggle: { title: 'Show or hide the prompt count', default: 'alt+shift+p' } } }, dependencies: { '@cmodjs/core': process.env['CMOD_CORE'] || `^${coreVersion}` } }),
     'rules/prompt-count.md': `When the person asks how many prompts this session has, read the count the ${name} mod shows below the prompt.
 `,
     'tsconfig.json': json({
@@ -208,7 +209,7 @@ The ${name} mod counts the prompts of this session and shows the count in the Si
 - \`src/pages/\` holds one Sidebar or Settings page per file, \`src/panes/\` one pane, and \`src/widgets/\` one widget.
 - \`src/components/\` holds the components pages, panes, widgets, and styles draw with.
 - \`cmod check\` writes the hotkeys \`defineMod\` declares into \`package.json\` \`"cmod.hotkeys"\`, which cmod binds at install.
-- \`rules/\` holds rules in Claude Code's rule format. cmod links the folder into Claude Code's rules folder while the mod is on and has the \`prompt\` permission.
+- \`rules/\` holds rules in Claude Code's rule format. cmod links the folder into Claude Code's rules folder while the mod is on.
 - \`cmod link\` loads this checkout in every Claude Code session, the running ones too. \`cmod unlink\` stops it.
 - \`cmod check\` checks the mod and names the fix for each failure. \`cmod publish --dry-run\` builds the release in a temporary folder without pushing, and leaves this checkout as it was.
 `

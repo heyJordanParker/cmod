@@ -125,7 +125,6 @@ test('an execute whose fetch passes the 30 s deadline is denied, and the next ca
         )
       },
     }),
-    { permissions: ['network:tracker.example', 'run:tracker'] },
   )
   tested.fakes.http.fetch = () => new Promise(() => undefined)
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: 'synced', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
@@ -161,7 +160,7 @@ test('isDeferred reaches Claude Code as given, and a tool without it leaves the 
       mod.use(tool({ name: 'date', description: 'Find a memory by date', execute: () => undefined }))
     },
   })
-  const plugin = { name: 'memory', root: '/plugins/memory', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }
+  const plugin = { name: 'memory', root: '/plugins/memory', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
 
   await createLifecycle(definition).start(fake.claude, async () => plugin)
   await fake.settle()

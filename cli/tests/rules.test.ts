@@ -9,14 +9,13 @@ afterAll(deleteTemporaryHomes)
 
 const record = (root: string) => JSON.stringify({ name: 'house-style', version: '1.0.0', root, installedAt: '2026-10-14T10:00:00.000Z', scriptsSha256: '', uninstall: null, program: null, keys: {} })
 
-async function modWithRules(home: string, granted: readonly string[], enabled: Record<string, boolean>) {
+async function modWithRules(home: string, enabled: Record<string, boolean>) {
   const root = join(home, 'mods/house-style')
   await writeFiles(home, {
     'mods/house-style/.claude-plugin/plugin.json': JSON.stringify({ name: 'house-style', version: '1.0.0' }),
     'mods/house-style/rules/tests.md': 'Write a test before each fix.\n',
     'mods/house-style/rules/sql.md': '---\npaths:\n  - "**/*.sql"\n---\nQuote every identifier.\n',
     '.local/share/cmod/records/house-style.json': record(root),
-    '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': granted }),
     '.claude/settings.json': JSON.stringify({ enabledPlugins: enabled }),
   })
   return root
@@ -24,14 +23,14 @@ async function modWithRules(home: string, granted: readonly string[], enabled: R
 
 test("cmod rules links a mod's rules into Claude Code's rules folder and prints them", async () => {
   const home = await temporaryHome()
-  const root = await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  const root = await modWithRules(home, { 'house-style@market': true })
 
   const result = await cmod(home, 'rules', '--json')
 
   expect(result.exitCode).toBe(0)
   expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(root, 'rules'))
   expect(JSON.parse(result.stdout).watched).toEqual(
-    expect.arrayContaining([join(home, '.claude/settings.json'), join(home, '.local/share/cmod/consent.json'), join(home, '.local/share/cmod/records/house-style.json'), join(root, 'rules'), join(root, 'rules/tests.md'), join(root, 'rules/sql.md')]),
+    expect.arrayContaining([join(home, '.claude/settings.json'), join(home, '.local/share/cmod/records/house-style.json'), join(root, 'rules'), join(root, 'rules/tests.md'), join(root, 'rules/sql.md')]),
   )
   expect({ ...JSON.parse(result.stdout), watched: undefined }).toEqual({
     watched: undefined,
@@ -53,7 +52,7 @@ test("cmod rules links a mod's rules into Claude Code's rules folder and prints 
 
 test("a mod whose installed folder is gone leaves every other mod's rules linked", async () => {
   const home = await temporaryHome()
-  const root = await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  const root = await modWithRules(home, { 'house-style@market': true })
   await writeFiles(home, { '.local/share/cmod/records/gone.json': record(join(home, 'deleted-folder')).replace('"house-style"', '"gone"') })
   await writeLinked(home, root)
 
@@ -63,53 +62,37 @@ test("a mod whose installed folder is gone leaves every other mod's rules linked
   expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(root, 'rules'))
 })
 
-test("a mod that is off or lacks the prompt permission has no rules linked, and the link goes when it turns off", async () => {
+test("a mod that is off has no rules linked, and the link goes when it turns off", async () => {
   const home = await temporaryHome()
-  await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  await modWithRules(home, { 'house-style@market': true })
   await cmod(home, 'rules')
 
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': false } }) })
 
   expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['house-style'] })
   expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
-
-  await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true } }), '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': [] }) })
-
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: [] })
-  expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
 })
 
-test("cmod leaves a person's own rules link that shares a mod's name, and says so when it would place the mod's", async () => {
+test.each([
+  ['a folder', 'notes/house-style'],
+  ['nothing', 'personal/house-style/rules'],
+])("cmod leaves a person's own rules link to %s under a mod's name, and says so", async (_, target) => {
   const home = await temporaryHome()
-  await modWithRules(home, [], { 'house-style@market': true })
+  await modWithRules(home, { 'house-style@market': true })
   await writeFiles(home, { 'notes/house-style/tabs.md': 'Indent with tabs.\n' })
   await mkdir(join(home, '.claude/rules'), { recursive: true })
-  await symlink(join(home, 'notes/house-style'), join(home, '.claude/rules/house-style'))
+  await symlink(join(home, target), join(home, '.claude/rules/house-style'))
 
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: [] })
-  expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(home, 'notes/house-style'))
-
-  await writeFiles(home, { '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': ['prompt'] }) })
   const placing = await cmod(home, 'rules')
 
   expect(placing.exitCode).toBe(1)
-  expect(placing.stderr).toContain(`${join(home, '.claude/rules/house-style')} links to ${join(home, 'notes/house-style')}, which cmod did not link, so cmod leaves it. Move it away, then run the command again.`)
-  expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(home, 'notes/house-style'))
-})
-
-test("cmod leaves a person's dangling rules link under a mod's name", async () => {
-  const home = await temporaryHome()
-  await modWithRules(home, [], { 'house-style@market': true })
-  await mkdir(join(home, '.claude/rules'), { recursive: true })
-  await symlink(join(home, 'personal/house-style/rules'), join(home, '.claude/rules/house-style'))
-
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: [] })
-  expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(home, 'personal/house-style/rules'))
+  expect(placing.stderr).toContain(`${join(home, '.claude/rules/house-style')} links to ${join(home, target)}, which cmod did not link, so cmod leaves it. Move it away, then run the command again.`)
+  expect(await readlink(join(home, '.claude/rules/house-style'))).toBe(join(home, target))
 })
 
 test("a removed mod's rules leave every project, even one cmod never ran in since", async () => {
   const home = await temporaryHome()
-  await modWithRules(home, ['prompt'], {})
+  await modWithRules(home, {})
   const project = join(home, 'work/app')
   await writeFiles(home, { 'work/app/.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true } }) })
   await cmod(home, 'rules', '--project', project)
@@ -119,21 +102,9 @@ test("a removed mod's rules leave every project, even one cmod never ran in sinc
   expect(existsSync(join(project, '.claude/rules/house-style'))).toBe(false)
 })
 
-test("turning a mod's prompt permission off takes its rules out of every project", async () => {
-  const home = await temporaryHome()
-  await modWithRules(home, ['prompt'], {})
-  const project = join(home, 'work/app')
-  await writeFiles(home, { 'work/app/.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true } }) })
-  await cmod(home, 'rules', '--project', project)
-  await writeFiles(home, { '.local/share/cmod/consent.json': JSON.stringify({ 'house-style': [] }) })
-
-  expect(JSON.parse((await cmod(home, 'rules', '--json')).stdout)).toMatchObject({ linked: [], placed: [], removed: ['house-style'] })
-  expect(existsSync(join(project, '.claude/rules/house-style'))).toBe(false)
-})
-
 test('a mod on for the user but off for one project keeps its rules out of that project, and back in once it is on again', async () => {
   const home = await temporaryHome()
-  await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  await modWithRules(home, { 'house-style@market': true })
   const project = join(home, 'work/app')
   const local = join(project, '.claude/settings.local.json')
   await writeFiles(home, { 'work/app/.claude/settings.local.json': JSON.stringify({ enabledPlugins: { 'house-style@market': false } }) })
@@ -149,7 +120,7 @@ test('a mod on for the user but off for one project keeps its rules out of that 
 
 test("cmod leaves an exclusion the person wrote, after the mod is back on in the project", async () => {
   const home = await temporaryHome()
-  await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  await modWithRules(home, { 'house-style@market': true })
   const project = join(home, 'work/app')
   const local = join(project, '.claude/settings.local.json')
   const own = `${join(home, '.claude/rules/house-style')}/**`
@@ -186,7 +157,7 @@ test('a rules exclusion waits for a settings change in progress and keeps it', a
 
 test('a rule the person excluded with claudeMdExcludes never reaches the conversation as a note', async () => {
   const home = await temporaryHome()
-  await modWithRules(home, ['prompt'], { 'house-style@market': true })
+  await modWithRules(home, { 'house-style@market': true })
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true }, claudeMdExcludes: [`${join(home, '.claude/rules/house-style')}/tests.md`] }) })
 
   const result = JSON.parse((await cmod(home, 'rules', '--json')).stdout) as { linked: { rules: { name: string }[] }[] }
@@ -196,7 +167,7 @@ test('a rule the person excluded with claudeMdExcludes never reaches the convers
 
 test('a mod turned on for one project links its rules into that project', async () => {
   const home = await temporaryHome()
-  const root = await modWithRules(home, ['prompt'], {})
+  const root = await modWithRules(home, {})
   const project = join(home, 'work/app')
   await writeFiles(home, { 'work/app/.claude/settings.json': JSON.stringify({ enabledPlugins: { 'house-style@market': true } }) })
 

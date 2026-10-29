@@ -76,7 +76,7 @@ test('install <name> runs the install step of a plugin Claude Code already holds
     'cache/demo/0.1.0/setup/install.sh': '#!/bin/sh\necho "progress 1 1 Ran"\necho ran >> "$CMOD_DATA/runs"\n',
   })
 
-  const result = await cmod(home, 'install', 'demo', '--yes')
+  const result = await cmod(home, 'install', 'demo')
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain('✔ demo 0.1.0 is ready')
@@ -130,17 +130,17 @@ test('cmod runs the claude on PATH when the Claude Code that started it was upda
 
 test('cmod install says nothing about a cmod plugin that is already installed, and turns on one the person turned off', async () => {
   const home = await marketplaceHome({ 'file-tree': modFiles('file-tree'), diagrams: modFiles('diagrams') })
-  expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'file-tree@market')).exitCode).toBe(0)
   await claudeCalls(home)
 
-  const again = await cmod(home, 'install', 'diagrams@market', '--yes')
+  const again = await cmod(home, 'install', 'diagrams@market')
 
   expect(again.stdout).not.toContain('cmod@cmod')
   await claudeCalls(home)
   const installed = JSON.parse(await readFile(join(home, 'installed/cmod@cmod'), 'utf8'))
   await writeFiles(home, { 'installed/cmod@cmod': JSON.stringify({ ...installed, enabled: false }) })
 
-  const turnedOn = await cmod(home, 'install', 'file-tree@market', '--yes')
+  const turnedOn = await cmod(home, 'install', 'file-tree@market')
 
   expect(turnedOn.stdout).toContain('✔ Turned cmod@cmod on in Claude Code\n')
   expect(await claudeCalls(home)).toContain('plugin enable cmod@cmod --json\n')
@@ -149,7 +149,7 @@ test('cmod install says nothing about a cmod plugin that is already installed, a
 test('install <name>@<marketplace> installs that plugin through Claude Code, prints one line per step, and list shows it ready', async () => {
   const home = await marketplaceHome({ 'file-tree': modFiles('file-tree') })
 
-  const installed = await cmod(home, 'install', 'file-tree@market', '--yes')
+  const installed = await cmod(home, 'install', 'file-tree@market')
 
   expect(installed.exitCode).toBe(0)
   expect(installed.stdout).toContain('✔ Installed file-tree@market into Claude Code\n')
@@ -171,7 +171,7 @@ test('install <path> of a marketplace with several mods names them, and installs
   expect(asked.exitCode).toBe(1)
   expect(asked.stderr).toBe(`cmod install: ${market} lists several plugins: file-tree, diagrams. Name the one to install after it, such as cmod install ${market} file-tree.\n`)
 
-  const chosen = await cmod(home, 'install', market, 'diagrams', '--yes')
+  const chosen = await cmod(home, 'install', market, 'diagrams')
 
   expect(chosen.exitCode).toBe(0)
   expect(chosen.stdout).toContain('✔ Installed diagrams@market into Claude Code\n')
@@ -249,7 +249,7 @@ test('cmod remove of a name Claude Code does not hold and cmod never set up poin
 
 test('a cmod command that changes the set of mods writes plugins-changed, then the store-changed stamp every session polls', async () => {
   const home = await marketplaceHome({ demo: modFiles('demo') })
-  expect((await cmod(home, 'install', 'demo@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
 
   const [marked, stamped] = await Promise.all(['plugins-changed', 'store-changed'].map(async (name) => (await stat(join(storeOf(home), name))).mtimeMs))
 
@@ -258,7 +258,7 @@ test('a cmod command that changes the set of mods writes plugins-changed, then t
 
 test('cmod disable and cmod enable turn a mod off and on through Claude Code, and keep its setup', async () => {
   const home = await marketplaceHome({ demo: modFiles('demo') })
-  expect((await cmod(home, 'install', 'demo@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
   await claudeCalls(home)
 
   const installed = await readFile(join(storeOf(home), 'plugins-changed'), 'utf8')
@@ -327,7 +327,7 @@ test('cmod update <name> of a plain plugin updates it through Claude Code, nothi
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
-test('cmod update cmod updates every copy of the cmod plugin, and asks no consent for the hotkeys the cmod plugin binds itself', async () => {
+test('cmod update cmod updates every copy of the cmod plugin, and sets up no hotkeys the cmod plugin binds itself', async () => {
   const home = await marketplaceHome({})
   const copy = (id: string) => JSON.stringify({ id, version: '4.0.0', scope: 'user', enabled: true, installPath: join(home, 'cmod-plugin') })
   await writeFiles(home, {
@@ -349,7 +349,7 @@ test('cmod update cmod updates every copy of the cmod plugin, and asks no consen
 test('cmod update updates every plugin Claude Code holds, and checks the setup of the mods only', async () => {
   const home = await marketplaceHome({ plain: plainFiles('plain'), 'file-tree': modFiles('file-tree') })
   expect((await cmod(home, 'install', 'plain@market')).exitCode).toBe(0)
-  expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'file-tree@market')).exitCode).toBe(0)
   await claudeCalls(home)
 
   const result = await cmod(home, 'update')
@@ -365,8 +365,8 @@ test('cmod update updates every plugin Claude Code holds, and checks the setup o
 
 test('cmod update of two mods installs the cmod plugin once', async () => {
   const home = await marketplaceHome({ 'file-tree': modFiles('file-tree'), diagrams: modFiles('diagrams') })
-  expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
-  expect((await cmod(home, 'install', 'diagrams@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'file-tree@market')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'diagrams@market')).exitCode).toBe(0)
   await claudeCalls(home)
 
   const result = await cmod(home, 'update')
@@ -382,7 +382,7 @@ test('cmod update of two mods installs the cmod plugin once', async () => {
 test('cmod update with no name updates the mods after a plugin whose update fails, and exits 1', async () => {
   const home = await marketplaceHome({ archived: plainFiles('archived'), 'file-tree': modFiles('file-tree') })
   expect((await cmod(home, 'install', 'archived@market')).exitCode).toBe(0)
-  expect((await cmod(home, 'install', 'file-tree@market', '--yes')).exitCode).toBe(0)
+  expect((await cmod(home, 'install', 'file-tree@market')).exitCode).toBe(0)
   await rm(join(home, 'available/archived@market'))
   await claudeCalls(home)
 
@@ -409,7 +409,7 @@ test('cmod update of a plugin whose new version adds steps installs the cmod plu
   })
   await claudeCalls(home)
 
-  const result = await cmod(home, 'update', 'demo', '--yes')
+  const result = await cmod(home, 'update', 'demo')
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain('✔ Installed cmod@cmod into Claude Code\n')
@@ -426,7 +426,7 @@ test('installing the cmod plugin turns on its updates, unless the person chose',
   await rm(join(home, 'installed/cmod@cmod'))
   await writeFiles(home, { '.claude/plugins/known_marketplaces.json': JSON.stringify(cmodMarket) })
 
-  const result = await cmod(home, 'install', 'demo@market', '--yes')
+  const result = await cmod(home, 'install', 'demo@market')
 
   expect(result.exitCode).toBe(0)
   expect(result.stdout).toContain('✔ cmod now updates automatically from the cmod marketplace. Turn it off in /plugin, Marketplaces.\n')

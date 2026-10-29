@@ -126,7 +126,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the compact tool, the start_background_agent tool, the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nRun cmod on your computer.\nRead your Claude Code conversations.\nAdd text Claude reads and start turns.\nStart tasks that work beside Claude.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the compact tool, the start_background_agent tool, the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -253,7 +253,6 @@ function testSettings(files: Readonly<Record<string, string>> = {}) {
     state: bound,
     files: {
       [`${store}/records/ci-watch.json`]: JSON.stringify({ name: 'ci-watch', version: '0.2.0', root: '/plugins/ci-watch', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: { 'ctrl+l': 'ci-watch--runs' } }),
-      [`${store}/consent.json`]: JSON.stringify({ 'ci-watch': ['network:api.github.com'] }),
       '/test/home/.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'ctrl+l': 'command:ci-watch--runs' } }] }),
       '/plugins/ci-watch/package.json': JSON.stringify({ cmod: { permissions: { network: ['api.github.com'], model: true }, hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+l' } } } }),
       '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0', description: 'Tells you when CI fails on your branch' }),
@@ -264,7 +263,7 @@ function testSettings(files: Readonly<Record<string, string>> = {}) {
   const ran: string[] = []
   tested.fakes.process.run = async (argv) => {
     ran.push(argv.join(' '))
-    return { exitCode: 0, stdout: 'Turned on for ci-watch: Ask a model, which uses your plan\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
   tested.fakes.config.list = async () => [{ key: 'ci-watch.branch', label: 'Branch', kind: 'text', value: 'main', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false } as never]
   const called: string[] = []
@@ -279,7 +278,7 @@ function testSettings(files: Readonly<Record<string, string>> = {}) {
   return { tested, ran, called, declare, shown }
 }
 
-test("Settings lists each set-up mod with its Settings pages, options, permissions, and hotkeys, and the Sidebar's tabs", async () => {
+test("Settings lists each set-up mod with its Settings pages, options, and hotkeys, and the Sidebar's tabs", async () => {
   const { tested, declare, shown } = testSettings()
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
@@ -291,8 +290,6 @@ test("Settings lists each set-up mod with its Settings pages, options, permissio
   const page = await shown()
   await tested.shown.pane.press('section:options')
   const options = await shown()
-  await tested.shown.pane.press('section:permissions')
-  const permissions = await shown()
   await tested.shown.pane.press('section:hotkeys')
   const hotkeys = await shown()
 
@@ -304,9 +301,19 @@ test("Settings lists each set-up mod with its Settings pages, options, permissio
   expect(page).not.toContain('Off:')
   expect(page).toContain('last run passed')
   expect(options).toContain('Branch')
-  expect(permissions).toContain('[x] Connect to api.github.com')
-  expect(permissions).toContain('[ ] Ask a model, which uses your plan')
   expect(hotkeys).toContain('│ Show the runs                          │\n                  │ Combo ctrl+l                           │')
+})
+
+test('Settings draws no permission row for a mod that declares permissions', async () => {
+  const { tested, shown } = testSettings()
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  const page = await shown()
+
+  expect(page).toContain('Options  Hotkeys')
+  expect(page).not.toContain('Permissions')
+  expect(page).not.toContain('api.github.com')
 })
 
 const changelog = '# Changelog\n\n## [Unreleased]\n\n- Watches merge queues.\n\n## [0.2.0] - 2026-10-13\n\n### Added\n- CI failures on your branch.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
@@ -347,19 +354,17 @@ test('a checkout whose version has no changelog section yet opens the Changelog 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args[0])).toEqual([{ to: { key: 'changelog:Unreleased' }, in: 'sidebar', block: 'start' }])
 })
 
-test('a permission toggle runs cmod permission, an option saves through cmod option, and a combo binds through cmod hotkey', async () => {
+test('an option saves through cmod option, and a combo binds through cmod hotkey', async () => {
   const { tested, ran } = testSettings()
   await tested.type('/mods ci-watch')
   await tested.settle()
 
   await tested.shown.pane.input('option:ci-watch.branch', 'release')
-  await tested.shown.pane.press('section:permissions')
-  await tested.shown.pane.press('permission:model')
   await tested.shown.pane.press('section:hotkeys')
   await tested.shown.pane.input('hotkey:runs', 'ctrl+shift+r')
   await tested.settle()
 
-  expect(ran).toEqual([`${cmodProgram} option ci-watch branch release`, `${cmodProgram} permission ci-watch model on`, `${cmodProgram} hotkey ci-watch runs ctrl+shift+r`])
+  expect(ran).toEqual([`${cmodProgram} option ci-watch branch release`, `${cmodProgram} hotkey ci-watch runs ctrl+shift+r`])
 })
 
 test('Settings lists a hotkey without a default as unbound, and a combo binds it through cmod hotkey', async () => {
@@ -851,7 +856,7 @@ test('Settings draws a Mods panel with a status mark beside each mod, and a pane
     '                  │ Needs setup: Sign in to GitHub         │',
     '                  │ Finish setup                           │',
     '                  │                                        │',
-    '                  │  Options  Permissions  Hotkeys         │',
+    '                  │  Options  Hotkeys                      │',
     '                  │                                        │',
     '                  │ Branch                                 │',
     '                  │ Value main                             │',
@@ -939,9 +944,9 @@ test('cmod.call denies a call no mod takes with the install command', async () =
   expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Install it in Plugins.' })
 })
 
-const readingConsent = { [`${store}/consent.json`]: JSON.stringify({ recall: ['conversation'], notes: ['prompt'] }) }
+const recallSetUp = { [`${store}/records/recall.json`]: JSON.stringify({ name: 'recall', version: '1.0.0', root: '/plugins/recall', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }) }
 
-function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = readingConsent) {
+function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = recallSetUp) {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files, projectRoot: '/work/app' })
   const spawned: string[][] = []
   const sessions: (string | undefined)[] = []
@@ -1007,7 +1012,7 @@ test('a session started with a linked mod starts cmod watch only while no watche
 
 const askCmod = (tested: ReturnType<typeof cmodAnswering>['tested'], caller: string, method: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method, input, caller } as never)
 
-test("the sessions service runs cmod history in this session with each request as flags for a mod that may read conversations, and the session start indexes them", async () => {
+test('the sessions service runs cmod history in this session with each request as flags, and the session start indexes them', async () => {
   const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: false }
   const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' }, 'history search': { code: 0, stdout: '[]\n' } })
   await tested.start()
@@ -1026,17 +1031,16 @@ test("the sessions service runs cmod history in this session with each request a
   expect(sessions).toEqual(['test-session', 'test-session', 'test-session', 'test-session'])
 })
 
-test('the sessions service refuses a mod without the conversation grant, and runs nothing for it', async () => {
-  const { tested, spawned } = cmodAnswering({})
+test('the session start builds the history index while one mod besides cmod is set up, whatever consent.json holds', async () => {
+  const { tested, spawned } = cmodAnswering({}, { ...recallSetUp, [`${store}/consent.json`]: '{}' })
   await tested.start()
   await tested.settle()
 
-  expect(await askCmod(tested, 'notes', 'cmod:sessions', {})).toEqual({ deny: 'notes calls sessions.list without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
   expect(spawned).toEqual([[cmodProgram, 'history', 'index']])
 })
 
-test("the session start builds no history index while no other mod reads conversations, whatever cmod's own grants say", async () => {
-  const { tested, spawned } = cmodAnswering({}, { [`${store}/consent.json`]: JSON.stringify({ cmod: ['conversation'], notes: ['prompt'] }) })
+test('the session start builds no history index while no mod besides cmod is set up', async () => {
+  const { tested, spawned } = cmodAnswering({}, {})
   await tested.start()
   await tested.settle()
 
@@ -1044,11 +1048,11 @@ test("the session start builds no history index while no other mod reads convers
 })
 
 test("the updateSettings call runs cmod settings for the mod, and a refusal comes back as the deny with cmod's last error line", async () => {
-  const { tested, spawned } = cmodAnswering({ 'settings keeper': { code: 1, stderr: 'keeper has no grant to change statusLine.\n' } })
+  const { tested, spawned } = cmodAnswering({ 'settings keeper': { code: 1, stderr: 'keeper is not set up. Run cmod install keeper first.\n' } })
   const update = (mod: string, values: Record<string, unknown>) => tested.fire('cmod.call', { to: 'cmod', method: 'updateSettings', input: { mod, source: 'project', project: '/work/app', values } })
 
   expect(await update('notes', { cleanupPeriodDays: 365 })).toEqual({ value: null })
-  expect(await update('keeper', { statusLine: null })).toEqual({ deny: 'cmod: keeper has no grant to change statusLine.' })
+  expect(await update('keeper', { statusLine: null })).toEqual({ deny: 'cmod: keeper is not set up. Run cmod install keeper first.' })
 
   expect(spawned.filter((argv) => argv[1] === 'settings')).toEqual([
     [cmodProgram, 'settings', 'notes', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
@@ -1189,7 +1193,7 @@ test("another session's preference write reaches this session's Settings when st
 })
 
 test('pressing Show errors from installed mods writes preferences.json, then store-changed', async () => {
-  const { tested, shown } = testSettings({ [`${store}/preferences.json`]: JSON.stringify({ asksBeforeUpdatePermissions: true }) })
+  const { tested, shown } = testSettings()
   await tested.start()
   await tested.type('/mods cmod')
   await tested.settle()
@@ -1198,9 +1202,9 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   await tested.shown.pane.press('preference:showsInstalledModErrors')
   await tested.settle()
 
-  expect(before).toContain('[x] Ask before an update adds a permission')
+  expect(before).not.toContain('permission')
   expect(before).toContain('[ ] Show errors from installed mods')
-  expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/preferences.json`)) ?? '')).toEqual({ asksBeforeUpdatePermissions: true, showsInstalledModErrors: true })
+  expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/preferences.json`)) ?? '')).toEqual({ showsInstalledModErrors: true })
   expect(await tested.fakes.fs.exists?.(`${store}/store-changed`)).toBe(true)
   expect(await shown()).toContain('[x] Show errors from installed mods')
 })
@@ -1276,6 +1280,17 @@ test('the cmod plugin updates every copy of cmod when two marketplaces hold diff
   await tested.settle()
 
   expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update cmod', 'list --json'])
+})
+
+test('the cmod plugin updates every copy of a mod two marketplaces hold at different versions once, because Claude Code loads only one', async () => {
+  const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.3.4' }, { name: 'oneclaude@oneclaude', version: '0.9.0' }, { name: 'oneclaude@totalrecall', version: '0.9.1' }]])
+  await tested.start()
+  await tested.settle()
+  await tested.fakes.fs.write?.(installedPlugins, '{"oneclaude@oneclaude":[]}')
+  for (const run of ticks) run()
+  await tested.settle()
+
+  expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update oneclaude', 'list --json', 'list --json'])
 })
 
 test('a mod the newest cmod still does not satisfy shows why Claude Code turned it off', async () => {
@@ -1592,8 +1607,6 @@ test('a plugins-changed mark during a running turn runs /reload-plugins only aft
 
 const installedJson = (versions: Readonly<Record<string, string>>) => JSON.stringify({ version: 2, plugins: Object.fromEntries(Object.entries(versions).map(([id, version]) => [id, [{ scope: 'user', installPath: `/test/home/.claude/plugins/cache/${id}`, version }]])) })
 
-const installRecord = (name: string, version: string, grantedOnUpdate: readonly string[]) => JSON.stringify({ name, version, root: `/plugins/${name}`, installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {}, permissions: [], grantedOnUpdate })
-
 async function startedWith(from: Readonly<Record<string, string>>, files: Readonly<Record<string, string>> = {}) {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, ...Object.fromEntries(Object.keys(from).map((id) => [id, true])) })
   for (const [path, text] of Object.entries(files)) await tested.fakes.fs.write?.(path, text)
@@ -1645,18 +1658,11 @@ test('an update after /clear still shows its toast, because the versions belong 
   expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
 })
 
-test('with more than 3 updates, each update that granted a permission keeps its own toast, and only the rest are summed up', async () => {
-  const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version, 'deploys@market': version, 'recall@market': version, 'trace@market': version })
-  const { tested } = await updated(versions('1.0.0'), versions('1.1.0'), { [`${store}/records/inbox.json`]: installRecord('inbox', '1.1.0', ['conversation']), [`${store}/records/recall.json`]: installRecord('recall', '1.1.0', []) })
+test('a reload that changed three versions shows one toast for each', async () => {
+  const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version })
+  const { tested } = await updated(versions('1.0.0'), versions('1.1.0'))
 
-  expect(shownToasts(tested)).toEqual(['inbox updated to 1.1.0 · Read your Claude Code conversations', '5 plugins updated'])
-})
-
-test('with more than 3 updates, 3 or fewer left after the ones that granted a permission show one by one', async () => {
-  const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version, 'deploys@market': version })
-  const { tested } = await updated(versions('1.0.0'), versions('1.1.0'), { [`${store}/records/inbox.json`]: installRecord('inbox', '1.1.0', ['conversation']) })
-
-  expect(shownToasts(tested).toSorted()).toEqual(['deploys updated to 1.1.0', 'inbox updated to 1.1.0 · Read your Claude Code conversations', 'notes updated to 1.1.0', 'tasks updated to 1.1.0'])
+  expect(shownToasts(tested).toSorted()).toEqual(['inbox updated to 1.1.0', 'notes updated to 1.1.0', 'tasks updated to 1.1.0'])
 })
 
 test('a reload that changed notes from 1.2.0 to 1.3.0 shows notes updated to 1.3.0 in the corner', async () => {
@@ -1665,13 +1671,12 @@ test('a reload that changed notes from 1.2.0 to 1.3.0 shows notes updated to 1.3
   expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
 })
 
-test('a reload that updated a plugin installed from git names the version its plugin.json holds, without the commit Claude Code adds, and the permissions its record granted at it', async () => {
+test('a reload that updated a plugin installed from git names the version its plugin.json holds, without the commit Claude Code adds', async () => {
   const copy = (version: string) => `/test/home/.claude/plugins/cache/market/notes/${version}`
   const installed = (version: string) => JSON.stringify({ version: 2, plugins: { 'notes@market': [{ scope: 'user', installPath: copy(version), version }] } })
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'notes@market': true })
   await tested.fakes.fs.write?.(`${copy('1.2.0-aaaaaaaaaaaa')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'notes', version: '1.2.0' }))
   await tested.fakes.fs.write?.(`${copy('1.3.0-bbbbbbbbbbbb')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'notes', version: '1.3.0' }))
-  await tested.fakes.fs.write?.(`${store}/records/notes.json`, installRecord('notes', '1.3.0', ['conversation']))
   await tested.fakes.fs.write?.(installedPlugins, installed('1.2.0-aaaaaaaaaaaa'))
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1684,7 +1689,7 @@ test('a reload that updated a plugin installed from git names the version its pl
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0 · Read your Claude Code conversations'])
+  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
 })
 
 test('a reload that changed four versions shows one 4 plugins updated toast', async () => {
@@ -1711,30 +1716,13 @@ test('a reload with no version change, such as an edit to a linked mod, shows no
   expect(shownToasts(tested)).toEqual([])
 })
 
-test('an update whose install record at the new version granted a permission adds its words to the toast', async () => {
-  const { tested } = await updated({ 'notes@market': '1.2.0' }, { 'notes@market': '1.3.0' }, { [`${store}/records/notes.json`]: installRecord('notes', '1.3.0', ['conversation']) })
-
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0 · Read your Claude Code conversations'])
-})
-
-test("an update waits for the mod's setup to write its record at the new version, then names what it granted", async () => {
+test('an update whose install record lists what the update granted shows only its name and version, at once, without reading the record', async () => {
   const record = `${store}/records/notes.json`
-  const { tested, tick } = await updated({ 'notes@market': '1.2.0' }, { 'notes@market': '1.3.0' }, { [record]: installRecord('notes', '1.2.0', []) })
-  expect(shownToasts(tested)).toEqual([])
-
-  await tested.fakes.fs.write?.(record, installRecord('notes', '1.3.0', ['conversation']))
-  await tick()
-
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0 · Read your Claude Code conversations'])
-})
-
-test("an update whose mod never writes its record at the new version shows the toast without permissions after 10 s of checks", async () => {
-  const record = `${store}/records/notes.json`
-  const { tested, tick } = await updated({ 'notes@market': '1.2.0' }, { 'notes@market': '1.3.0' }, { [record]: installRecord('notes', '1.2.0', ['conversation']) })
-  for (let ticks = 0; ticks < 40 && shownToasts(tested).length === 0; ticks += 1) await tick()
+  const granted = JSON.stringify({ name: 'notes', version: '1.3.0', root: '/plugins/notes', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {}, permissions: ['conversation'], grantedOnUpdate: ['conversation'] })
+  const { tested } = await updated({ 'notes@market': '1.2.0' }, { 'notes@market': '1.3.0' }, { [record]: granted })
 
   expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
-  expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toHaveLength(21)
+  expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toEqual([])
 })
 
 test('a user settings change Claude Code reports turns a plugin on, and reloads the session once Claude Code has loaded it', async () => {

@@ -5,7 +5,7 @@ import { isObject, readRecord, storeFolder } from '@cmodjs/core/src/records.js'
 import { parse } from 'jsonc-parser'
 import { ifMissing, readJson, readLink, readText, writeAtomically } from './files.js'
 import { configRoot, excludeRules, includeRules, isLinked, settingsPath } from './settings.js'
-import { approvals, recordNames, storePath, takeLock } from './store.js'
+import { recordNames, storePath, takeLock } from './store.js'
 
 export type Rule = { readonly name: string; readonly isGlobal: boolean; readonly text: string }
 
@@ -42,7 +42,7 @@ export async function syncRules(project: string, pluginDirs: readonly string[] =
   const linked: LinkedRules[] = []
   const placed: string[] = []
   const removed: string[] = []
-  const watched = new Set([settingsPath(), join(project, '.claude', 'settings.json'), projectLocal, userRules, projectRules, storePath('records'), storePath('consent.json'), storePath('rules.json')])
+  const watched = new Set([settingsPath(), join(project, '.claude', 'settings.json'), projectLocal, userRules, projectRules, storePath('records'), storePath('rules.json')])
   if (names.length === 0 && !existsSync(storePath('rules.json'))) return { linked, placed, removed, watched: [...watched] }
   await withPlaced(async (recorded) => {
     const drop = async (entry: Placed) => {
@@ -55,7 +55,7 @@ export async function syncRules(project: string, pluginDirs: readonly string[] =
       if (record === undefined) continue
       const source = rulesFolderOf(record.root)
       watched.add(source)
-      const isWanted = existsSync(source) && (await approvals(mod)).includes('prompt')
+      const isWanted = existsSync(source)
       const isEverywhere = user.enabled.get(mod) === true || pluginDirs.includes(record.root) || (await isLinked(record.root))
       const isHere = here.enabled.get(mod) ?? isEverywhere
       const link = !isWanted ? undefined : isEverywhere ? join(userRules, mod) : here.enabled.get(mod) === true ? join(projectRules, mod) : undefined

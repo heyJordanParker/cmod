@@ -50,7 +50,7 @@ test("a prompt callback gets the work tree that holds the edited file as the cal
         mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: ({ call }) => readAll(process.spawn(['git', 'status'], call === undefined ? {} : { cwd: call.folder })) }))
       },
     }),
-    { scope: 'project', projectRoot: root, files, permissions: ['prompt', 'run:git'] },
+    { scope: 'project', projectRoot: root, files },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.spawn = () => written('On branch design\n')

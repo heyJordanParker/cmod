@@ -8,7 +8,7 @@ import { Prompt, sessions } from '../node_modules/@cmodjs/core/mod.js'
 const prompts = (await sessions.current.messages()).filter((message) => message.type === Prompt)
 ```
 
-A mod hears and reads the session it runs in with no permission. Every other session needs the `conversation` permission. Sending to a session and changing its text need `prompt`, calling a tool and changing a tool call need `tools`, and starting or changing a task needs `tasks`. A `refuse` answer needs no permission ([permissions.md](permissions.md)).
+A mod hears, reads, and acts on the session it runs in and every other session on the computer.
 
 ## The shape of a conversation
 
@@ -51,9 +51,9 @@ for await (const message of sessions.search('deploy job', { type: Prompt }, { si
 const more = sessions.search('deploy job', { type: Prompt }, { since: '1w', before: found.at(-1) })
 ```
 
-- Its `on` methods hear every running session of the project, this one included, and need the `conversation` permission ([Listen](#listen-to-a-record)). `sessions.current`'s methods hear this session with none. `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
+- Its `on` methods hear every running session of the project, this one included ([Listen](#listen-to-a-record)). `sessions.current`'s methods hear this session. `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
 
-While a mod holds the `conversation` permission, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since. The `cmod history` command answers the same questions in a terminal ([commands.md](commands.md#cmod-history)).
+While cmod has set up a mod other than cmod, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since. The `cmod history` command answers the same questions in a terminal ([commands.md](commands.md#cmod-history)).
 
 ## Session
 
@@ -90,7 +90,7 @@ type Session = {
 ```
 
 - `id` is Claude Code's session id, and a task owner's `id` is its task's id. `title` is the name the person gave it with `/rename`, or the first line of its first prompt. A resumed or forked session with no name, and a session the mod started in after its first prompt, has an empty `sessions.current.title` until `sessions.list()` reads it.
-- `color` is the color the person last picked with `/color`, such as `cyan`, and is absent when they never picked one or reset it with `/color default`. A task's owner has none. `sessions.current.color` follows each `/color` the person runs, and a resumed session's color holds from the mod's start, with or without the `conversation` permission, as `title` does.
+- `color` is the color the person last picked with `/color`, such as `cyan`, and is absent when they never picked one or reset it with `/color default`. A task's owner has none. `sessions.current.color` follows each `/color` the person runs, and a resumed session's color holds from the mod's start, as `title` does.
 - `project` is the project the session works in, and `cwd` is its working folder. For the current session both follow `/cd`, and `cwd` follows a `cd` in a Bash or PowerShell call.
 - `agentType` is the agent definition the session runs, such as `Explore` for a task's owner, or the agent a session started with `claude --agent` runs. A plain session has none.
 - `model` is the model the session runs on. `startedAt` and `lastAt` are ISO times.
@@ -202,7 +202,7 @@ sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ o
 sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { refuse: 'The tests fail. Fix them before you stop.' }))
 ```
 
-An answer that changes text needs the `prompt` permission, a `beforeToolCall` answer needs `tools`, and a `beforeTaskStart` answer needs `tasks`. A `note` always needs `prompt`, so a `beforeToolCall` answer with both `input` and `note` needs both. Without it the answer changes nothing, and the toast `The <method> listener failed` names the permission. When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
+When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
 Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>â€¦</tracer_mod>` for the mod `tracer`. Every note Claude received becomes a `Note` whose `from` is `{ type: 'mod', name }`, so `onNote({ from: { type: 'mod', name: 'tracer' } })` hears each note of tracer's that Claude got, and never one Claude Code dropped.
 
@@ -222,7 +222,7 @@ Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>â€
 | `onNotification` | Claude Code notifies the person | `Notification`: `text`, `title?`, `type` | |
 | `beforeElicitation`, `onElicitation` | an MCP server asks the person | `Elicitation`: `id?`, `server`, `text`, `mode?`, `url?`, `schema?` | `{ refuse }` |
 | `beforeElicitationResponse`, `onElicitationResponse` | the person answers an MCP server | `ElicitationResponse`: `id?`, `server`, `mode?`, `action`, `content?` | `{ refuse }` |
-| `beforePermissionCheck`, `onPermissionCheck` | Claude Code decides whether a tool call runs, asks, or is refused, before any dialog, and when a mod asks `tools.check` | `PermissionCheck`: `name`, `input`, `callId?`, `decision`, `reason?`, `rule?`, `ceiling?` | `{ allow: true }`, `{ ask }`, or `{ refuse }`. `allow` approves a call in every mode, auto mode included, and needs `approve`. A mod never overrides a refusal from the person's settings |
+| `beforePermissionCheck`, `onPermissionCheck` | Claude Code decides whether a tool call runs, asks, or is refused, before any dialog, and when a mod asks `tools.check` | `PermissionCheck`: `name`, `input`, `callId?`, `decision`, `reason?`, `rule?`, `ceiling?` | `{ allow: true }`, `{ ask }`, or `{ refuse }`. `allow` approves a call in every mode, auto mode included. `allow` and `ask` need `"approve": true` in `package.json` `"cmod"` ([mod.md](mod.md#register-the-mod-with-claude-code)). A mod never overrides a refusal from the person's settings |
 | `beforePermissionRequest`, `onPermissionRequest` | a permission dialog is about to show | `PermissionRequest`: `name`, `input`, `suggestions`, `mcpServer?` | `{ allow: true, input?, updates? }` or `{ refuse, interrupt? }` |
 | `beforePermissionDenial`, `onPermissionDenial` | a tool call was denied | `PermissionDenial`: `name`, `input`, `callId`, `reason`, `mcpServer?` | `{ retry: true }` |
 | `beforeToolBatch`, `onToolBatch` | a batch of tool calls finished | `ToolBatch`: `calls`, each `{ callId, name, input, output? }` | `{ note }` |
@@ -251,17 +251,17 @@ A `before` method on another session asks the mod over cmod from that session. T
 
 Every action works on the current session and on every other running session. cmod carries an action to another session, and that session's cmod does it there.
 
-- `send` adds a message to the session, and needs the `prompt` permission.
+- `send` adds a message to the session.
   - A `Note` is text the agent reads on its next call to the model and the person does not see. It starts no turn. It rejects with `<mod>: Claude Code refused the note: <reason>` when a plugin refuses it.
   - A `Prompt` is the next prompt, so the agent answers it as a turn of its own. Claude Code holds it until the session is idle, so it never cuts into a turn, and frames it as `The <mod> plugin sent a message:`. With `as: Person`, the agent reads it bare, as the person's own words, while every hook still sees that the mod sent it. It rejects with `<mod>: Claude Code dropped the prompt: <reason>` when a plugin drops it.
   - `as: Session` sends it to another session as a message from this one, which Claude Code shows as one session writing to another.
   - To a task's owner, `send` delivers the text to that running subagent.
-- `startTask` starts a task in the session, the way the Agent tool starts one, and resolves the `Task` once it started. It does not wait for the task to finish. `title` is the task's title, `agentType` names the owner's agent type, such as `Explore`, `name` is the address a teammate's `SendMessage` reaches it by, and `model` and `cwd` change what it runs on and where. It needs the `tasks` permission, and rejects with `<mod>: Claude Code refused the task: <reason>` when a hook refuses it.
+- `startTask` starts a task in the session, the way the Agent tool starts one, and resolves the `Task` once it started. It does not wait for the task to finish. `title` is the task's title, `agentType` names the owner's agent type, such as `Explore`, `name` is the address a teammate's `SendMessage` reaches it by, and `model` and `cwd` change what it runs on and where. It rejects with `<mod>: Claude Code refused the task: <reason>` when a hook refuses it.
   - With `isBackground: true`, the owner is a new background Claude Code session, as `claude --bg` starts, which starts fresh on the prompt and keeps running after this session ends. It takes no `name`, and rejects with `<mod>: a background task takes no name.` for one.
 - `fork` starts a subagent that keeps this session's whole conversation and does what the prompt says.
 - `clone` starts a new background session with a copy of this session's conversation, which carries on with the prompt.
 
-Every task needs the `tasks` permission and shows in this session's goal. `fork` and `clone` take only `prompt` and `title`, because the owner is a copy of this session. A `beforeTaskStart` listener that refuses a background task or a clone rejects the call with `<mod>: a beforeTaskStart listener refused the task: <reason>`.
+Every task shows in this session's goal. `fork` and `clone` take only `prompt` and `title`, because the owner is a copy of this session. A `beforeTaskStart` listener that refuses a background task or a clone rejects the call with `<mod>: a beforeTaskStart listener refused the task: <reason>`.
 
 ```ts
 await sessions.current.startTask({ title: 'Map the auth code', prompt, agentType: 'Explore' })
@@ -276,7 +276,7 @@ await sessions.current.startTask({ title: 'Upgrade dependencies', prompt, isBack
 | `fork` | absent | a subagent of this session, `forkedFrom` this session |
 | `clone` | `true` | a new session whose `id` is the task's, `forkedFrom` this session |
 | `startTask` with `isBackground` | `true` | a new session whose `id` is the task's |
-- `callTool` runs a tool in the session, such as `{ name: 'Bash', input: { command: 'bun test' } }`, and resolves its `ToolResult`. It needs the `tools` permission.
+- `callTool` runs a tool in the session, such as `{ name: 'Bash', input: { command: 'bun test' } }`, and resolves its `ToolResult`.
 - `usage` answers the session's model, its context window's fill, its rate limits, and its cost so far, as the status line shows them: `{ model, contextWindow: { tokenCount?, size?, percent? }, rateLimits?: { type, percent, resetsAt? }[], cost?: { usd } }`. Each rate limit is one window of the account's plan: its `type`, such as `five_hour`, `seven_day`, or a Claude gateway's `spend_limit`, how much of it is used, 0 to 100, and when it resets, as an ISO 8601 time. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript, with no rate limits.
 - `surfaces` answers the Claude apps showing the session now: `'terminal'`, `'desktop'`, `'mobile'`, and `'vscode'`. An ended session shows in none.
 
@@ -432,7 +432,7 @@ sessions.current.onTurnEnd((turn) => {
   if (turn.failure !== undefined) mod.toast.error(`Claude stopped: ${turn.failure.text}`)
 })
 ```
-- `abort()` stops a turn while it runs, a task's turn included, and needs the `prompt` permission. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.
+- `abort()` stops a turn while it runs, a task's turn included. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.
 - A context's `number` counts from 1. Its `closedAt` is set at the compaction that ended it.
 - A goal's text starts as the session's first prompt, and `text()` reads it. `update` replaces it, and `onGoalChange` hears the goal, whose `text()` reads the new text.
 - A task's `owner` is a `TaskOwner`: the session doing the work, which can't start tasks or call tools. Its goal is the task's prompt, its `agentType` and `model` are what the task runs, and its turns and messages are the task's own. Claude Code's checklist tools, `TaskCreate`, `TaskUpdate`, and `TaskList`, are not tasks: they are its todo list, which `onTodoCreate` and `onTodoComplete` hear.

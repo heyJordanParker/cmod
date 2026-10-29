@@ -18,7 +18,6 @@ function withPrompt(...jobs: Job<void>[]) {
         for (const job of jobs) mod.use(job)
       },
     }),
-    { permissions: ['prompt', 'run:git'] },
   )
 }
 
@@ -58,7 +57,6 @@ test("a prompt callback after a call gets the mod's own typed state, so it count
         mod.use(prompt({ name: 'commits', after: { command: 'git commit' }, prompt: (_input, mod) => `Commit ${(mod.state.project.commits += 1)} landed.` }))
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   const answer = await claudeCodeOf(tested).fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
@@ -101,7 +99,6 @@ test('a prompt with no trigger gives Claude its new text once each time the stat
         mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
   tested.state.session.mode = 'review'
@@ -127,7 +124,6 @@ test('after a resume, a prompt with no trigger gives Claude its text on the firs
         mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
   tested.state.session.mode = 'build'
@@ -153,24 +149,9 @@ test("a prompt callback gets the mod's own typed state, so a block shows state w
         mod.use(prompt({ name: 'notes', prompt: (_input, mod) => mod.state.global.notes.join('\n') }))
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [{ name: 'notes', text: 'buy milk' }] })
-})
-
-test('a prompt without the grant to add text Claude reads adds nothing, and says once which line to add', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => mod.use(prompt({ name: 'house-rules', prompt: 'Write tests with bun test.' })) }), { permissions: [] })
-
-  expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([
-    {
-      type: 'error',
-      message: 'Answered changed context without your grant to "Add text Claude reads and start turns", so cmod dropped it',
-      description: 'It needs "permissions": { "prompt": true } in package.json "cmod".',
-    },
-  ])
 })
 
 test('a block with the same name below adds nothing and writes one debug line', async () => {

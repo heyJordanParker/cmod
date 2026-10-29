@@ -27,7 +27,6 @@ Assert what a person or Claude sees: `tested.shown.page.lines()`, `tested.lines(
 type TestOptions<State, Options> = {
   readonly state?: { [Lifetime in keyof State]?: Partial<State[Lifetime]> }
   readonly options?: Partial<OptionValues<Options>>
-  readonly permissions?: readonly string[]
   readonly scope?: 'user' | 'project'
   readonly projectRoot?: string
   readonly cwd?: string
@@ -42,7 +41,6 @@ type TestOptions<State, Options> = {
 | --- | --- | --- |
 | `state` | Values over the declared starting state | The declared state |
 | `options` | The option values Claude Code passes, as a person set them ([options.md](options.md)) | none: each option gets its default |
-| `permissions` | Exactly the permissions the person granted, such as `['network:api.github.com', 'model']` ([permissions.md](permissions.md)) | every permission the mod's `package.json` declares |
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `sessions.current.project` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `sessions.current.cwd` | `projectRoot` |
@@ -89,7 +87,7 @@ Starts the mod: loads its state, runs `setup`, and adds its listeners, pages, pa
 
 ### raise
 
-`raise.<method>(payload)` runs the mod's listeners of that `on` or `before` method of `sessions.current`, and of `commands`, and returns the answer they combine to. For a `before` method of a Claude Code event, such as `beforeSessionStart`, `beforePermissionRequest`, or `beforeRun`, that is the answer before cmod drops the parts the mod has no permission for ([permissions.md](permissions.md#when-a-before-answer-has-no-grant)).
+`raise.<method>(payload)` runs the mod's listeners of that `on` or `before` method of `sessions.current`, and of `commands`, and returns the answer they combine to.
 
 - Each process method takes its payload without `session` and `cwd`, which `raise` fills: `raise.beforeModelChange({ model: 'haiku', previous: 'opus', source: 'command', … })`, `raise.onCwdChange({ previous: '/work/old' })`, `raise.beforeRun({ name: 'compact', args: '', from: { type: Person } })`.
 - Each message `before` method takes a `MessageDraft` without its `type`, placed in the open turn: `raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })` and `raise.beforePrompt({ text: 'Deploy to prod' })`. `{ task }` places it in a task.
@@ -322,7 +320,7 @@ Set a fake to answer a call:
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 - `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `fs.find` or `metadata.update` follows it as a real file system does.
 - `testMod` opens no install page: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.
-- The `committer` below runs `git`, so its `package.json` declares `"permissions": { "run": ["git"] }`. A gated call the mod does not declare fails before it reaches a fake ([permissions.md](permissions.md)).
+- The `committer` below runs `git`, and the `process.run` fake answers in its place.
 
 ```ts
 import { expect, test } from 'bun:test'
@@ -375,7 +373,7 @@ type ShownToast = { readonly type: ToastType; readonly message: string; readonly
 
 What the person and Claude would see: the toasts shown now, with a text description, the notes the mod added for Claude with `sessions.current.send` or a `prompt` that follows the state, and the `beforePrompt` notes a subagent reads as it starts from a spawn the test fires, the prompts it sent to the current session, the messages it sent to other sessions in `sent`, the log lines, the debug log lines, the open panes, the slash commands and tools the mod added, and the crons its `schedule` keeps now.
 
-The test kit keeps no Log, as a cmod older than 4.3.0 keeps none, so every error cmod catches for the mod shows in `toasts`, a refusal for a permission the test turned off with `permissions` included ([ui.md](ui.md#toasts)).
+The test kit keeps no Log, as a cmod older than 4.3.0 keeps none, so every error cmod catches for the mod shows in `toasts` ([ui.md](ui.md#toasts)).
 
 ```ts
 test('the Mode prompt follows the mode', async () => {

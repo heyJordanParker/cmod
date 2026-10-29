@@ -22,8 +22,8 @@ Runs the mod's saved uninstall step, then removes the key bindings it added
 that still run its commands and the Claude Code settings it set that still
 hold its values, and deletes its install record, the saved step,
 every version of its program with its links, its data
-folder, and the addresses of its single-instance programs, and forgets the scripts you approved for it, so installing it again asks
-again. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
+folder, the addresses of its single-instance programs, and its approvals in
+consent.json. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
 the files there are yours. Claude Code has already deleted the plugin's folder by then. A mod with
 no install record has only its data folder and approvals deleted. While a setup
 or another teardown of the mod runs, a teardown waits for it. A teardown whose

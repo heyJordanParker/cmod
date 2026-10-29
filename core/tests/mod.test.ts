@@ -3,7 +3,7 @@ import type { RenderElement } from 'claude-code'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
 import corePackage from '../package.json' with { type: 'json' }
-import { clipboard, commands, config, defineMod, fs, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
+import { clipboard, commands, config, defineMod, fs, http, messageOf, model, Note, Person, process, Prompt, Reply, sessions, settings, ToolCall, ToolResult, type CwdChange, type Job, type Listener, type ListenerTime, type Mod, type Page, type Pane, type PaneInit, type Subscription, type Task, type Timer } from '../src/mod.js'
 import { coreVersion } from '../src/records.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { createLifecycle } from '../src/runtime/lifecycle.js'
@@ -29,7 +29,7 @@ const touchTracker = defineMod({
 })
 
 test("an installed mod's setup runs during session.start and its beforeToolResult answers the first result", async () => {
-  const tested = testMod(touchTracker, { permissions: ['prompt'] })
+  const tested = testMod(touchTracker)
   await tested.start()
   expect(tested.state).toEqual({ session: { hasSetUp: true, touched: [] } })
 
@@ -78,7 +78,7 @@ test('mod.every refuses a time that is not a whole number of milliseconds', asyn
   const lifecycle = createLifecycle(defineMod({ name: 'ticker', setup: (mod) => void mod.every(0.5, () => undefined) }))
   const fake = fakeClaude({ name: 'ticker', root: '/test/plugins/ticker' })
 
-  await lifecycle.start(fake.claude, async () => ({ name: 'ticker', root: '/test/plugins/ticker', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'ticker', root: '/test/plugins/ticker', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
 
   expect(String(lifecycle.failure)).toContain('ticker: mod.every is 0.5. Give a whole number of milliseconds above 0 and at most 2147483647.')
 })
@@ -94,7 +94,6 @@ test('sessions.current.send adds a Note Claude reads, and a Prompt asks Claude f
         })
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   await tested.raise.onSessionStart({ source: 'startup' })
@@ -111,7 +110,6 @@ test('sessions.current.send rejects with the reason when a plugin refuses the No
       name: 'ci-watch',
       setup: () => void sessions.current.onSessionStart(() => sessions.current.send({ type: Note, text: 'CI failed.' }).catch((error: Error) => void (failure = error.message))),
     }),
-    { permissions: ['prompt'] },
   )
   tested.fakes.session.append = async () => ({ deny: 'Notes are off in this organization.' })
 
@@ -127,7 +125,6 @@ test("model.complete passes the request and options to Claude Code's model call"
       name: 'babysitter',
       setup: () => void sessions.current.onTurnEnd(async () => void (verdict = await model.complete({ model: 'haiku', prompt: 'Is this reply a waste of time?', timeoutMs: 8000 }))),
     }),
-    { permissions: ['model'] },
   )
   tested.fakes.model.complete = async () => ({ isAnswered: true, text: 'no' }) as never
 
@@ -139,7 +136,7 @@ test("model.complete passes the request and options to Claude Code's model call"
 })
 
 test('a before listener past its timeoutMs answers as if it were absent and shows the timeout', async () => {
-  const tested = testMod(defineMod({ name: 'babysitter', setup: () => void sessions.current.beforeSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }), { permissions: ['prompt'] })
+  const tested = testMod(defineMod({ name: 'babysitter', setup: () => void sessions.current.beforeSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }))
 
   expect(await tested.raise.beforeSessionStart({ source: 'startup' })).toBeUndefined()
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeSessionStart listener failed', description: 'beforeSessionStart passed its 0.02 s timeout' })
@@ -154,7 +151,6 @@ test('two beforeToolBatch notes both reach Claude, joined in the order the liste
         sessions.current.beforeToolBatch(() => ({ note: 'Check the docs.' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   expect(await tested.raise.beforeToolBatch({ calls: [] })).toEqual({ note: 'Check the tests.\n\nCheck the docs.' })
@@ -169,7 +165,6 @@ test("an answer a process before method does not take refuses beforePermissionRe
         sessions.current.beforeModelChange(() => ({ deny: 'Not here.' }) as never, { onFailure: 'refuse' })
       },
     }),
-    { permissions: ['approve', 'prompt'] },
   )
 
   expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toEqual({ refuse: 'gate: it answered deny, which beforePermissionRequest does not take. It takes { allow }, { input }, { updates }, { refuse }, { interrupt }.' })
@@ -185,7 +180,6 @@ test("a process before method's result never stops a later listener: a later ref
         commands.beforeRun(() => ({ refuse: 'B refuses' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   const trees = testMod(
     defineMod({
@@ -211,7 +205,6 @@ test('a before listener that answers something other than an object fails, and b
         sessions.current.beforeToolBatch(() => 'note' as never)
       },
     }),
-    { permissions: ['approve', 'prompt'] },
   )
 
   expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toMatchObject({ refuse: expect.stringContaining('it answered "deny"') })
@@ -220,7 +213,7 @@ test('a before listener that answers something other than an object fails, and b
   expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['The beforePermissionRequest listener failed', 'The beforeToolBatch listener failed'])
 })
 
-test('a session before listener answering false, as cond && { refuse } does, is no answer for a mod without the tools grant', async () => {
+test('a session before listener answering false, as cond && { refuse } does, is no answer', async () => {
   const tested = testMod(
     defineMod({
       name: 'guard',
@@ -228,7 +221,6 @@ test('a session before listener answering false, as cond && { refuse } does, is 
         sessions.current.beforeToolCall((call) => (call.name === 'Bash' && { refuse: 'No Bash here.' }) as never)
       },
     }),
-    { permissions: [] },
   )
   await tested.start()
 
@@ -248,7 +240,6 @@ test("onFailure: 'refuse' on a method that cannot refuse lets the moment through
         }, { onFailure: 'refuse' })
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   expect(await tested.raise.beforeSessionStart({ source: 'startup' } as never)).toBeUndefined()
@@ -278,7 +269,6 @@ test("a before listener with onFailure: 'refuse' refuses when it throws or passe
         )
       },
     }),
-    { permissions: ['tools', 'prompt'] },
   )
 
   expect(await tested.raise.beforeTodoCreate({ id: '1', subject: 'Ship it' })).toEqual({ refuse: 'gate: beforeTodoCreate passed its 0.02 s timeout' })
@@ -332,7 +322,7 @@ test('mod.toast with an id updates that toast in place', async () => {
 })
 
 test('an answer a before method does not take is shown with the method and what it takes', async () => {
-  const tested = testMod(defineMod({ name: 'wrong-field', setup: () => void sessions.current.beforeToolBatch(() => ({ title: 'nope' }) as never) }), { permissions: ['prompt'] })
+  const tested = testMod(defineMod({ name: 'wrong-field', setup: () => void sessions.current.beforeToolBatch(() => ({ title: 'nope' }) as never) }))
 
   expect(await tested.raise.beforeToolBatch({ calls: [] })).toBeUndefined()
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeToolBatch listener failed', description: 'it answered title, which beforeToolBatch does not take. It takes { note }.' })
@@ -367,7 +357,6 @@ test('a beforePermissionRequest answer without allow or refuse leaves the dialog
         sessions.current.beforeModelChange(() => ({}) as never)
       },
     }),
-    { permissions: ['approve', 'tools'] },
   )
   const asking = { decision: { behavior: 'ask' } } as never
 
@@ -392,7 +381,6 @@ test('two beforeToolBatch notes both reach Claude', async () => {
         sessions.current.beforeToolBatch(() => ({ note: 'second' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   expect(await tested.raise.beforeToolBatch({ calls: [] })).toEqual({ note: 'first\n\nsecond' })
@@ -409,7 +397,6 @@ test('a before listener that throws is shown, and the listeners after it still a
         sessions.current.beforeSessionStart(() => ({ note: 'The build is red.' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
 
   const answer = await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' }, { additionalContext: ['from settings'] })
@@ -802,7 +789,7 @@ test('an onCwdChange listener that refreshes runs once after /cd, before the nex
         sessions.current.onCwdChange(() => void process.run(['git', 'status', '--porcelain'], { cwd: sessions.current.project }))
       },
     }),
-    { projectRoot: '/work/a', permissions: ['run:git'] },
+    { projectRoot: '/work/a' },
   )
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   const refreshedFolders = () => tested.calls.filter((call) => call.call === 'process.run').map((call) => call.args[1])
@@ -1021,7 +1008,7 @@ test('fs reads a path under $HOME or $CLAUDE_CONFIG_DIR like one under ~', async
         read = [await fs.read('$CLAUDE_CONFIG_DIR/CLAUDE.md'), await fs.read('$HOME/notes.md')]
       },
     }),
-    { permissions: ['files:~/.claude', 'files:~/notes.md'], files: { '/test/home/.claude/CLAUDE.md': 'config\n', '/test/home/notes.md': 'notes\n' } },
+    { files: { '/test/home/.claude/CLAUDE.md': 'config\n', '/test/home/notes.md': 'notes\n' } },
   )
 
   await tested.start()
@@ -1042,7 +1029,6 @@ test('commands.beforeRun refuses a built-in command, and commands.onRun hears ea
         commands.beforeRun({ name: 'keep' }, () => ({ refuse: 'Not now.' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   const typed = (command: string, args = '') => claudeCodeOf(tested).fire('command.run', { command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } }, { text: `ran /${command}` })
   await tested.start()
@@ -1063,7 +1049,6 @@ test("commands.beforeRun rewrites a command's args and adds a note beside its ou
         commands.beforeRun({ name: 'review' }, (run) => ({ args: `${run.args} --strict`, note: 'Review against DESIGN.md.' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
 
@@ -1073,7 +1058,7 @@ test("commands.beforeRun rewrites a command's args and adds a note beside its ou
   expect(await tested.raise.beforeRun({ name: 'review', args: '7', from: { type: Person } })).toEqual({ args: '7 --strict', note: 'Review against DESIGN.md.' })
 })
 
-test('commands.beforeRun refuses without a grant, and a change without the prompt permission changes nothing and names the permission', async () => {
+test('commands.beforeRun refuses one command and changes the arguments of another', async () => {
   const tested = testMod(
     defineMod({
       name: 'keeper',
@@ -1082,14 +1067,14 @@ test('commands.beforeRun refuses without a grant, and a change without the promp
         commands.beforeRun({ name: 'model' }, () => ({ args: 'haiku' }))
       },
     }),
-    { permissions: [] },
   )
   const typed = (command: string) => claudeCodeOf(tested).fire('command.run', { command, args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } }, { text: `ran /${command}` })
   await tested.start()
 
   expect(await typed('compact')).toEqual({ text: 'No.' })
   expect(await typed('model')).toEqual({ text: 'ran /model' })
-  expect(tested.shown.toasts.find(({ message }) => message === 'The beforeRun listener failed')?.description).toContain('keeper calls beforeRun with the answer { args }, which needs "permissions": { "prompt": true } in package.json "cmod".')
+  await tested.settle()
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
 test('commands.list lists every command, and commands.run runs one and answers its output and note', async () => {
@@ -1103,7 +1088,6 @@ test('commands.list lists every command, and commands.run runs one and answers i
         output = await commands.run('compact', 'keep the plan')
       },
     }),
-    { permissions: ['prompt'] },
   )
   tested.fakes.command.list = async () => [{ name: 'compact', description: 'Compact the conversation', source: 'builtin' }]
   tested.fakes.command.run = async ({ command, args }) => ({ text: `ran /${command} ${args ?? ''}`, context: ['Compacted.'] })
@@ -1112,15 +1096,6 @@ test('commands.list lists every command, and commands.run runs one and answers i
 
   expect(listed).toEqual([{ name: 'compact', description: 'Compact the conversation', source: 'builtin' }])
   expect(output).toEqual({ text: 'ran /compact keep the plan', note: 'Compacted.' })
-})
-
-test('commands.run needs the prompt permission', async () => {
-  let failure = ''
-  const tested = testMod(defineMod({ name: 'runner', setup: () => void commands.run('compact').catch((error: unknown) => void (failure = messageOf(error))) }))
-  await tested.start()
-  await tested.settle()
-
-  expect(failure).toContain('prompt')
 })
 
 test('config.list lists every /config row, naming the plugin that owns a row', async () => {
@@ -1161,7 +1136,7 @@ const older: FakeSession = {
 }
 
 test('sessions.current.messages reads this conversation, and each message names its turn', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   const [prompt] = await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.add({ type: ToolCall, name: 'Read', input: { file_path: '/work/tree.ts' }, callId: 'toolu_1' })
@@ -1190,7 +1165,6 @@ test('sessions.current.on hears each new message of its type, and remove stops i
         listening = sessions.current.onReply((reply) => void heard.push(reply.text))
       },
     }),
-    { permissions: ['conversation'] },
   )
   await tested.start()
 
@@ -1203,7 +1177,7 @@ test('sessions.current.on hears each new message of its type, and remove stops i
 })
 
 test('a compact starts a new context, and a task keeps its own messages', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const task = await tested.startTask({ title: 'Find the pane', agentType: 'explorer' })
@@ -1220,7 +1194,7 @@ test('a compact starts a new context, and a task keeps its own messages', async 
 })
 
 test('sessions.search finds messages of the project newest first, and sessions.list lists its sessions', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'], sessions: [older] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }), { sessions: [older] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
 
@@ -1245,7 +1219,7 @@ test("a send to another running session reaches cmod, and a Prompt to the curren
         await sessions.current.send({ type: Prompt, text: 'Build mode is on.' })
       },
     }),
-    { permissions: ['conversation', 'prompt'], sessions: [{ ...older, isRunning: true }] },
+    { sessions: [{ ...older, isRunning: true }] },
   )
 
   await tested.start()
@@ -1264,7 +1238,7 @@ test('a send to an ended session is refused with its id', async () => {
         await other?.send({ type: Prompt, text: 'Switch to build mode.' }).catch((error: Error) => void (failure = error.message))
       },
     }),
-    { permissions: ['conversation', 'prompt'], sessions: [older] },
+    { sessions: [older] },
   )
 
   await tested.start()
@@ -1272,11 +1246,34 @@ test('a send to an ended session is refused with its id', async () => {
   expect(failure).toBe('session older has ended')
 })
 
-test('sessions refuses a mod without the conversation permission and names the fix', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: [] })
-  await tested.start()
+test('a mod that declares nothing in package.json "cmod" fetches any host, runs any program, reads other sessions, and adds text Claude reads, and none is refused or dropped', async () => {
+  const fetched: string[] = []
+  const ran: (readonly string[])[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'open',
+      setup() {
+        sessions.current.beforeSessionStart(() => ({ note: 'The build is red.' }))
+        sessions.current.onSessionStart(async () => {
+          await http.fetch('https://api.github.com/repos/owner/repo')
+          await http.fetch('http://localhost/containers/json', { socketPath: '/var/run/docker.sock' })
+          await process.run(['/usr/bin/make', 'all'])
+        })
+      },
+    }),
+    { sessions: [older] },
+  )
+  tested.fakes.http.fetch = async (url) => (fetched.push(url), { status: 200, headers: {}, body: '' }) as never
+  tested.fakes.process.run = async (argv) => (ran.push(argv), { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
-  await expect(sessions.list()).rejects.toThrow('history calls sessions.list, which needs "permissions": { "conversation": true } in package.json "cmod".')
+  const answer = await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.settle()
+
+  expect(answer).toEqual({ additionalContext: ['<open_mod>\nThe build is red.\n</open_mod>'] })
+  expect(fetched).toEqual(['https://api.github.com/repos/owner/repo', 'http://localhost/containers/json'])
+  expect(ran).toEqual([['/usr/bin/make', 'all']])
+  expect((await sessions.list()).map((session) => session.id)).toEqual(['test-session', 'older'])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error' || type === 'warning')).toEqual([])
 })
 
 test('sessions.current.startTask starts a task and returns it', async () => {
@@ -1290,7 +1287,6 @@ test('sessions.current.startTask starts a task and returns it', async () => {
         })
       },
     }),
-    { permissions: ['tasks'] },
   )
   tested.fakes.agent.spawn = async () => ({ agentId: 'agent-7', model: 'test-model' })
 

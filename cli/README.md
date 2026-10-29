@@ -4,7 +4,7 @@
 
 # @cmodjs/cli
 
-The `cmod` command of Claude Mod Manager. Claude Mod Manager (cmod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step that runs with your consent.
+The `cmod` command of Claude Mod Manager. Claude Mod Manager (cmod) installs, tries, builds, checks, and publishes Claude Code mods: plugins with hooks, panes, slash commands, tools, permission rules, and an install step.
 
 ```sh
 npm i -g @cmodjs/cli

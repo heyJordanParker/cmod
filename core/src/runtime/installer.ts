@@ -2,7 +2,7 @@ import type { RenderElement } from 'claude-code'
 import type { Step } from '../installer.js'
 import type { Mod } from '../mod.js'
 import type { Option } from '../options.js'
-import { isObject, permissionWords, secretFix } from '../records.js'
+import { isObject, secretFix } from '../records.js'
 import { Box, elementData, Input, Text, type Handler } from '../ui/elements.js'
 import { filledButton } from './buttons.js'
 import type { PageProps } from '../ui/panes.js'
@@ -13,15 +13,6 @@ import { merged, partMethods, stalePress, type DrawnPart, type PartPress, type P
 
 export const installPage = 'cmod:install'
 
-export type Consent = {
-  readonly install: string
-  readonly uninstall: string
-  readonly program: string
-  readonly hotkeys: string
-  readonly permissions: readonly string[]
-  readonly updates?: string | undefined
-}
-
 type Question = {
   draw(props: PageProps<undefined>): RenderElement
   cancel(): void
@@ -30,7 +21,6 @@ type Question = {
 export type Installer = {
   answer(method: string, input: unknown): Promise<{ readonly value: unknown }> | undefined
   hear(shown: ShownPages): void
-  consent(consent: Consent): Promise<boolean>
   options(missing: readonly (readonly [string, Option])[], save: (key: string, value: string) => Promise<string | undefined>): Promise<boolean>
   step<State extends object>(mod: Mod<State>, step: Step<State>, index: number, total: number): Promise<boolean>
   close(): Promise<void>
@@ -91,10 +81,6 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
 
   const dialog = (title: RenderElement, ...children: readonly RenderElement[]) => Box({ flexDirection: 'column', gap: 1, children: [title, ...children] })
 
-  const bullet = (text: string) => Box({ gap: 1, children: [Text({ dimColor: true, children: '•' }), Text({ wrap: 'wrap', children: text })] })
-
-  const group = (heading: string, items: readonly string[]) => Box({ flexDirection: 'column', children: [Text({ bold: true, children: heading }), ...items.map(bullet)] })
-
   const draw = (columns: number, isFocused: boolean): DrawnPart => {
     if (question === undefined && !isOpen) claude().clock.after(0, () => void send({ requests: [{ close: installPage }] }).catch(log('a leftover install page stayed open')))
     const handlers: Handler[] = []
@@ -138,28 +124,6 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       isOpen = false
       isSeen = false
       question?.cancel()
-    },
-    consent({ install, uninstall, program, hotkeys, permissions, updates }) {
-      const changes = [
-        ...(install === '' ? [] : [`Run ${install} now${uninstall === '' ? '' : `, and ${uninstall} when you remove it`}`]),
-        ...(install === '' && uninstall !== '' ? [`Run ${uninstall} when you remove it`] : []),
-        ...(program === '' ? [] : [`Install ${program}, which Claude runs by its name`]),
-        ...(hotkeys === '' ? [] : [`Bind ${hotkeys}`]),
-        ...(updates === undefined ? [] : [`Update ${name} automatically from the ${updates} marketplace`]),
-      ]
-      return show<boolean>(
-        (answer) => ({
-          draw: () =>
-            dialog(
-              Text({ bold: true, children: `Install ${name}?` }),
-              ...(permissions.length === 0 ? [] : [group(`${name} wants to:`, permissions.map(permissionWords))]),
-              ...(changes.length === 0 ? [] : [group(permissions.length === 0 ? `${name} wants to change your computer:` : 'and change your computer:', changes)]),
-              Text({ dimColor: true, wrap: 'wrap', children: 'You can turn each permission off later in Settings.' }),
-              actions(filledButton({ key: 'accept', hotkey: 'a', variant: 'primary', label: 'Accept', onPress: () => answer(true) }), filledButton({ key: 'not-now', hotkey: 'n', label: 'Not now', onPress: () => answer(false) })),
-            ),
-        }),
-        false,
-      )
     },
     options(missing, save) {
       const saved = new Map<string, string>()

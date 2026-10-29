@@ -1,23 +1,22 @@
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, hotkeyWords, isProgramNewer, marketplaceOf, parsePreferences, permissionWords, preferencesPath, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, isProgramNewer, marketplaceOf, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import type { Hotkeys } from '@cmodjs/core/src/hotkeys.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
-import { ifMissing, listFiles, readJson, readText, tilde, writeAtomically } from '../files.js'
-import { paint, startProgress, type Progress } from '../progress.js'
-import { bindKeys, isLinked, keybindingsPath, modBindings, settingsPath, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
-import { approvals, approve, modLock, recordNames, revokeApprovals, storePath, takeLock } from '../store.js'
+import { ifMissing, listFiles, readText, writeAtomically } from '../files.js'
+import { startProgress, type Progress } from '../progress.js'
+import { bindKeys, isLinked, modBindings, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
+import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 
 export const summary = "Run a mod's install step and record it."
 
-export const help = `Usage: cmod setup <plugin-root> [--events] [--consent <sha256>] [--yes]
+export const help = `Usage: cmod setup <plugin-root> [--events]
 
 ${summary}
 
@@ -31,51 +30,49 @@ Claude Code's keybindings.json, and records the mod as set up. A hotkey you
 rebound keeps your combo, and a combo you already bound to something else
 stays yours, and the setup prints the line to add. An unchanged mod runs
 nothing. While a setup or teardown of the mod runs, another setup waits for it,
-then checks the mod again; a mod whose scripts changed meanwhile asks consent
-again. A setup whose process is gone is taken over at once. Ctrl+C, a closed
-terminal, or SIGTERM while it waits or before the install step starts stops the
-setup and removes what it set up. When the install step of a mod that is not
-set up fails or is stopped, the setup runs the mod's uninstall step, then
-removes what it set up. When the install step of an upgrade fails or is
-stopped, the setup keeps the version the record names. Once the install step
+then checks the mod again. A setup whose process is gone is taken over at once.
+Ctrl+C, a closed terminal, or SIGTERM while it waits or before the install step
+starts stops the setup and removes what it set up. When the install step of a
+mod that is not set up fails or is stopped, the setup runs the mod's uninstall
+step, then removes what it set up. When the install step of an upgrade fails or
+is stopped, the setup keeps the version the record names. Once the install step
 has finished, the setup records the mod, then exits. Before all of that, it
 links each folder still in CLAUDE_CODE_PLUGIN_DIRS, which a cmod before 4.1.0
 linked, as cmod link does now, and takes it out of that list.
 
 Options:
   --events            Print one event per line for a program to read:
-                        needs-consent <sha256>\\t<install>\\t<uninstall>\\t<hotkeys>[\\t<permission>…]   exit 10
                         progress <done> <total> <label>
                         log <text>
                         done <name> <version>                          exit 0
                         failed <exit code>\\t<what failed>               exit 1
-  --consent <sha256>  Approve the scripts whose hash a needs-consent event named
-  --yes               Approve the scripts without asking`
+  --consent <sha256>  Ignored. A mod built on @cmodjs/core 4 passes it after a
+                      needs-consent line, which this cmod never prints`
 
-type SetupState = { sha256: string; isCurrent: boolean; needsConsent: boolean; asked: readonly string[]; hotkeys: Hotkeys; missing: readonly string[]; granted: readonly string[]; updates: string | undefined }
+type SetupState = { readonly sha256: string; readonly isCurrent: boolean; readonly approving: readonly string[]; readonly updates: string | undefined }
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { events: { type: 'boolean', default: false }, consent: { type: 'string' }, yes: { type: 'boolean', default: false } },
+    options: { events: { type: 'boolean', default: false }, consent: { type: 'string' } },
   })
   if (positionals.length !== 1) throw new Error(`cmod setup takes one plugin root.\n\n${help}`)
   const root = positionals[0] as string
   await relinkPluginFolders()
-  if (values.events) return setupWithEvents(root, values.consent)
+  if (values.events) return setupWithEvents(root)
   const plugin = await readPlugin(root)
   const progress = startProgress()
-  const code = await setupInTerminal(plugin, { yes: values.yes, consent: values.consent }, progress)
+  const code = await setupInTerminal(plugin, progress)
   if (code === 0) noteNextStep(plugin, progress)
   return code
 }
 
-async function setupWithEvents(root: string, consent: string | undefined): Promise<number> {
+async function setupWithEvents(root: string): Promise<number> {
   let failure: unknown
   try {
     const plugin = await readPlugin(root)
-    const code = await runSetup(plugin, consent, printEvent)
+    const code = await runSetup(plugin, printEvent)
     if (code === 0) printEvent({ type: 'done', name: plugin.name, version: plugin.version })
     if (code !== 1) return code
   } catch (error) {
@@ -96,30 +93,20 @@ export function printFailure(error: unknown): number {
   return 1
 }
 
-export async function setupInTerminal(plugin: Plugin, options: { yes: boolean; consent?: string | undefined }, progress: Progress): Promise<number> {
+export async function setupInTerminal(plugin: Plugin, progress: Progress): Promise<number> {
   using hold = holdSignals()
   const heading = `Installing ${plugin.name}`
   const failure = { code: 0, message: '' }
-  let code = 10
-  while (code === 10) {
-    const state = await checkSetup(plugin)
-    const { sha256, isCurrent, needsConsent } = state
-    if (isCurrent) {
-      progress.succeed(`${plugin.name} ${plugin.version} is already set up`)
-      return 0
-    }
-    const answer = !needsConsent || options.yes || options.consent === sha256 || (await askConsent(plugin, state, hold.abortSignal))
-    if (answer !== true) {
-      progress.fail(answer === false ? `${plugin.name} is not set up: it needs your consent. Run the command again with --yes after reading what it does.` : `Cancelled: ${plugin.name} is not set up.`)
-      return 10
-    }
-    progress.step(heading)
-    code = await runSetup(plugin, needsConsent ? sha256 : undefined, (event) => {
-      if (event.type === 'progress') progress.update(heading, event.done, event.total, event.label)
-      if (event.type === 'log') progress.log(event.text)
-      if (event.type === 'failed') Object.assign(failure, event)
-    })
+  if ((await checkSetup(plugin)).isCurrent) {
+    progress.succeed(`${plugin.name} ${plugin.version} is already set up`)
+    return 0
   }
+  progress.step(heading)
+  const code = await runSetup(plugin, (event) => {
+    if (event.type === 'progress') progress.update(heading, event.done, event.total, event.label)
+    if (event.type === 'log') progress.log(event.text)
+    if (event.type === 'failed') Object.assign(failure, event)
+  })
   if (code === 0) progress.succeed(`${plugin.name} ${plugin.version} is ready`)
   else if (hold.signal === undefined) progress.fail(`${failure.message} Fix the install step, then run the command again.`)
   else if (failure.code === 0) progress.fail(`Cancelled setting up ${plugin.name} on ${hold.signal}, before its install step started.`)
@@ -167,66 +154,30 @@ function hotkeyApproval(name: string, combo: string): string {
   return `hotkey:${name}=${combo}`
 }
 
-async function consentOf(plugin: Plugin): Promise<{ sha256: string; changes: readonly string[]; permissions: readonly string[] }> {
-  const files = { read: (path: string) => readText(join(plugin.root, path)), list: (folder: string) => listFiles(join(plugin.root, folder)) }
-  const { hotkeys = {}, permissions = [], ...commands } = plugin.steps
-  return {
-    sha256: await scriptsSha256(plugin.steps, files),
-    changes: [...(Object.keys(commands).length === 0 ? [] : [await scriptsSha256(commands, files)]), ...Object.entries(hotkeys).flatMap(([name, { default: combo }]) => (combo === undefined ? [] : [hotkeyApproval(name, combo)]))],
-    permissions,
-  }
-}
-
 async function checkSetup(plugin: Plugin): Promise<SetupState> {
   refuseThisMachine(plugin)
-  const { sha256, changes, permissions } = await consentOf(plugin)
+  const files = { read: (path: string) => readText(join(plugin.root, path)), list: (folder: string) => listFiles(join(plugin.root, folder)) }
+  const { hotkeys = {}, permissions = [], ...commands } = plugin.steps
+  const sha256 = await scriptsSha256(plugin.steps, files)
+  const hasCommands = commands.install !== undefined || commands.uninstall !== undefined || commands.program !== undefined
+  const items = [sha256, ...(hasCommands ? [await scriptsSha256(commands, files)] : []), ...Object.entries(hotkeys).flatMap(([name, { default: combo }]) => (combo === undefined ? [] : [hotkeyApproval(name, combo)])), ...permissions]
   const store = storeFolder(process.env)
   const record = await readRecord(readText, store, plugin.name)
   const programModifiedMs = record === undefined || record.program === null ? undefined : (await stat(programPath(store, record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
   const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, programModifiedMs)
   const approved = await approvals(plugin.name)
-  const recorded = approved.length === 0 ? null : (record?.permissions ?? null)
-  const added = permissions.filter((item) => !approved.includes(item) && (recorded === null || !recorded.includes(item)))
-  const preferences = preferencesPath(store)
-  const granted = recorded !== null && added.length > 0 && !parsePreferences(await readJson(preferences), preferences).asksBeforeUpdatePermissions ? added : []
-  const missing = added.filter((item) => !granted.includes(item))
-  const asked = [...changes.filter((item) => !approved.includes(item)), ...missing]
-  const hotkeys = Object.fromEntries(Object.entries(plugin.steps.hotkeys ?? {}).filter(([name, { default: combo }]) => combo !== undefined && asked.includes(hotkeyApproval(name, combo))))
-  const needsConsent = !isCurrent && !approved.includes(sha256) && asked.length > 0
-  return { sha256, isCurrent, needsConsent, asked, hotkeys, missing, granted, updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
+  return { sha256, isCurrent, approving: items.filter((item) => !approved.includes(item)), updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
 }
 
-export async function backfillConsentParts(): Promise<void> {
-  const store = storeFolder(process.env)
-  const marker = storePath('consent-parts')
-  if (!existsSync(store) || existsSync(marker)) return
-  for (const name of await recordNames()) {
-    const record = await readRecord(readText, store, name)
-    if (record === undefined || !existsSync(record.root)) continue
-    const consent = await readPlugin(record.root)
-      .then(consentOf)
-      .catch((error: unknown) => {
-        process.stderr.write(`cmod: ${name} may ask consent once more at its next update, because cmod could not read what you approved for it: ${messageOf(error)}\n`)
-        return undefined
-      })
-    if (consent?.sha256 === record.scriptsSha256) await approve(name, consent.changes, record.scriptsSha256)
-  }
-  await writeAtomically(marker, '')
-}
-
-async function runSetup(plugin: Plugin, consent: string | undefined, emit: (event: RunnerEvent) => void): Promise<number> {
+async function runSetup(plugin: Plugin, emit: (event: RunnerEvent) => void): Promise<number> {
   using hold = holdSignals()
   await using lock = await takeLock(modLock(plugin.name), hold.abortSignal)
   if (lock === undefined) return 1
   const state = await checkSetup(plugin)
   if (state.isCurrent) return 0
-  if (state.needsConsent && consent !== state.sha256) {
-    emit({ type: 'needs-consent', sha256: state.sha256, install: plugin.steps.install ?? '', uninstall: plugin.steps.uninstall ?? '', hotkeys: hotkeyWords(state.hotkeys), permissions: state.missing })
-    return 10
-  }
   if (hold.signal !== undefined) return 1
   const store = storeFolder(process.env)
-  const approving = [...(state.needsConsent ? [state.sha256, ...state.asked] : []), ...state.granted]
+  const { approving } = state
   let code = 1
   try {
     if (approving.length > 0) await approve(plugin.name, approving)
@@ -292,7 +243,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       program: program ?? null,
       keys: bound,
       permissions: plugin.steps.permissions ?? [],
-      grantedOnUpdate: state.granted,
+      grantedOnUpdate: [],
     })
     isRecorded = true
     if (state.updates !== undefined) {
@@ -348,43 +299,6 @@ async function saveUninstall(plugin: Plugin, folder: string): Promise<boolean> {
   }
   await Bun.write(join(folder, 'uninstall.sh'), `cd "$(dirname "$0")/root" || exit 1\n${uninstall}\n`)
   return true
-}
-
-async function askConsent(plugin: Plugin, { hotkeys, missing, updates }: SetupState, cancel: AbortSignal): Promise<boolean | undefined> {
-  const style = paint()
-  const { install, uninstall, program } = plugin.steps
-  const lines = [
-    '',
-    `${style.bold(plugin.name)} ${plugin.version}`,
-    ...(plugin.description === undefined ? [] : [`  ${style.dim(plugin.description)}`]),
-    '',
-    ...(install === undefined && uninstall === undefined
-      ? []
-      : [
-          `  It runs these commands in ${tilde(plugin.root)}:`,
-          `    install    ${install === undefined ? style.dim('none') : style.cyan(install)}`,
-          `    uninstall  ${uninstall === undefined ? style.dim('none') : style.cyan(uninstall)}`,
-        ]),
-    ...(program === undefined ? [] : [`  It installs the program ${style.cyan(program)}, which Claude runs by its name.`]),
-    ...(Object.keys(hotkeys).length === 0 ? [] : [`  It binds hotkeys in ${tilde(keybindingsPath())}:`, ...Object.values(hotkeys).flatMap(({ title, default: combo }) => (combo === undefined ? [] : [`    ${combo.padEnd(14)} ${style.cyan(title)}`]))]),
-    ...(missing.length === 0 ? [] : ['  It asks to:', ...missing.map((item) => `    ${style.cyan(permissionWords(item))}`)]),
-    ...(updates === undefined ? [] : [`  It updates automatically from the ${style.cyan(updates)} marketplace, set in ${tilde(settingsPath())}.`]),
-    '',
-  ]
-  process.stdout.write(`${lines.join('\n')}\n`)
-  if (!process.stdin.isTTY) return false
-  const prompt = createInterface({ input: process.stdin, output: process.stdout })
-  prompt.on('SIGINT', () => process.kill(process.pid, 'SIGINT'))
-  const closed = new Promise<undefined>((resolve) => prompt.once('close', () => resolve(undefined)))
-  try {
-    const answer = await Promise.race([prompt.question(`Set up ${plugin.name}? [y/N] `, { signal: cancel }), closed])
-    return answer === undefined ? undefined : /^y(es)?$/i.test(answer.trim())
-  } catch (error) {
-    if ((error as Error).name === 'AbortError') return undefined
-    throw error
-  } finally {
-    prompt.close()
-  }
 }
 
 export function noteNextStep(plugin: Plugin, progress: Progress, isCmodNew = false): void {

@@ -52,20 +52,22 @@ declare module 'claude-code' {
 A mod that calls tracer lists it in its own `.claude-plugin/plugin.json`, and Claude Code installs it with the mod:
 
 ```json
-"dependencies": [{ "name": "cmod", "version": ">=4.0.0" }, "tracer"]
+"dependencies": [{ "name": "cmod", "version": ">=5.0.0" }, "tracer"]
 ```
+
+Write the dependency bare, by its name alone. Claude Code looks for a bare dependency only in the mod's own marketplace, so `cmod publish` lists tracer there, from the `release` branch of the GitHub repository that the `"repository"` of tracer's `plugin.json` names. Install or link tracer before you publish, or `cmod publish` stops and says to. A dependency that names its `"marketplace"` loads for the people who install your mod, but not from the marketplace `cmod link` writes for your checkout.
 
 A provider that changes or removes a method breaks every mod that calls it, and with automatic updates the provider can update first. Name the versions you tested with a range, and Claude Code turns your mod off with a clear error instead of letting its calls fail one by one:
 
 ```json
-"dependencies": [{ "name": "cmod", "version": ">=4.0.0" }, { "name": "tracer", "version": "^1.0" }]
+"dependencies": [{ "name": "cmod", "version": ">=5.0.0" }, { "name": "tracer", "version": "^1.0" }]
 ```
 
-Claude Code checks the range against the provider's `version` when it loads your mod. Where a marketplace lists the provider from its git repository, as every mod's marketplace lists cmod, Claude Code also installs it at the highest `<name>--v<version>` tag inside the range, which `cmod publish` pushes for every release ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)).
+Claude Code checks the range against the provider's `version` when it loads your mod. Every mod's marketplace lists cmod and each provider from its git repository, so Claude Code also installs it at the highest `<name>--v<version>` tag inside the range, which `cmod publish` pushes for every release ([Claude Code's plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies)).
 
-cmod is a provider too, with one difference: every newer cmod runs every mod built on an older `@cmodjs/core`. So a mod names only the oldest cmod it runs on, the version of the `@cmodjs/core` it bundles, as `>=4.0.0`. `cmod check` writes that range whenever the mod's `@cmodjs/core` changes, and `cmod publish` refuses a release whose range differs. A caret range such as `^4.0.0` stops Claude Code from updating cmod past 4.x for every mod on the computer, so leave it to `cmod check`.
+cmod is a provider too, with one difference: every newer cmod runs every mod built on an older `@cmodjs/core`. So a mod names only the oldest cmod it runs on, which the `@cmodjs/core` it bundles names as `oldestCmodVersion` in its `records.js`, as `>=5.0.0`. `cmod check` writes that range whenever the mod's `@cmodjs/core` changes, and `cmod publish` refuses a release whose range differs. A caret range such as `^5.0.0` stops Claude Code from updating cmod past 5.x for every mod on the computer, so leave it to `cmod check`.
 
-Each mod's marketplace lists its own copy of cmod, and Claude Code loads only one of them. When a mod needs a newer cmod than a copy Claude Code installed, or two copies differ, the cmod plugin updates every copy and reloads the mods, so a mod never waits for the person to update cmod.
+Each mod's marketplace lists its own copy of cmod and of each provider, and Claude Code loads only one copy of each. When a mod needs a newer cmod than a copy Claude Code installed, the cmod plugin updates every copy of cmod, and when two copies of any plugin differ, it updates every copy of that plugin. Then it reloads the mods, so a mod never waits for the person to update its providers.
 
 Claude Code then lays tracer's types file beside the mod's own types, so the call is typed:
 

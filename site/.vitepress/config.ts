@@ -19,7 +19,6 @@ const docs: DefaultTheme.SidebarItem[] = [
       { text: 'Define a mod', link: '/docs/mod' },
       { text: 'State', link: '/docs/state' },
       { text: 'Options', link: '/docs/options' },
-      { text: 'Permissions', link: '/docs/permissions' },
       { text: 'Sessions', link: '/docs/session' },
       { text: 'UI', link: '/docs/ui' },
       { text: 'Jobs', link: '/docs/jobs' },

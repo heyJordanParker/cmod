@@ -46,7 +46,6 @@ test('update writes through a link to its target, keeps the link, and leaves the
   const { tested } = await started({
     files: { '/test/home/.agents/agents/reviewer.md': skill('reviewer', 'review') },
     links: { '/test/home/.claude/agents': '/test/home/.agents/agents' },
-    permissions: ['files:~/.claude/agents'],
   })
 
   await metadata.update('~/.claude/agents/reviewer.md', (metadata) => {
@@ -127,10 +126,12 @@ test('a file cmod cannot open comes back from find with its error, and read and 
   expect(tested.calls.filter((call) => call.call === 'fs.write')).toEqual([])
 })
 
-test('update outside the project needs the files permission that covers the path', async () => {
-  await started({ files: { '/test/home/notes/a.md': 'Body\n' }, permissions: [] })
+test('update writes a file outside the project', async () => {
+  const { tested } = await started({ files: { '/test/home/notes/a.md': 'Body\n' } })
 
-  await expect(metadata.update('~/notes/a.md', (metadata) => void (metadata['mode'] = 'build'))).rejects.toThrow('"permissions": { "files": ["~/notes/a.md"] }')
+  await metadata.update('~/notes/a.md', (metadata) => void (metadata['mode'] = 'build'))
+
+  expect(await tested.fakes.fs.read?.('/test/home/notes/a.md')).toBe('---\nmetadata:\n  modes.mode: build\n---\nBody\n')
 })
 
 test('a value that is not one line of text is refused before anything is written', async () => {

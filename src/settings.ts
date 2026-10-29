@@ -1,6 +1,6 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { consentPath, finishStepsMethod, hotkeyCommand, isObject, marketplaceOf, parseConsent, parsePreferences, pendingStepsMethod, permissionWords, preferencesPath, readRecord, readSteps, storeChangedPath, storeFolder, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { finishStepsMethod, hotkeyCommand, isObject, marketplaceOf, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, storeChangedPath, storeFolder, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
@@ -39,8 +39,6 @@ const moves: readonly { readonly move: Move; readonly hotkey: string; readonly l
   { move: 'right', hotkey: 'l', label: '→ right' },
 ]
 
-type Permission = { readonly item: string; readonly isOn: boolean }
-
 type HotkeyView = { readonly name: string; readonly title: string; readonly combo: string | undefined }
 
 export type ModView = {
@@ -48,7 +46,6 @@ export type ModView = {
   readonly version: string
   readonly description: string | undefined
   readonly isOn: boolean
-  readonly permissions: readonly Permission[]
   readonly hotkeys: readonly HotkeyView[]
   readonly options: readonly ConfigRow[]
   readonly pendingSteps: readonly string[]
@@ -59,10 +56,9 @@ type LogEntry = Omit<LoggedFailure, 'isCritical' | 'root'>
 
 const loggedFailures = 100
 
-const preferenceTitles: Readonly<Record<keyof Preferences, string>> = {
-  asksBeforeUpdatePermissions: 'Ask before an update adds a permission',
+const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
-}
+} satisfies Partial<Record<keyof Preferences, string>>
 
 const pageSection = 'page:'
 
@@ -81,9 +77,9 @@ export async function storeOf(mod: object): Promise<string> {
   return storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
 }
 
-export async function readConsent<State extends object>(mod: Mod<State>): Promise<ReturnType<typeof parseConsent>> {
-  const path = consentPath(await storeOf(mod))
-  return (await fs.exists(path)) ? parseConsent(JSON.parse(await fs.read(path)), path) : {}
+export async function setUpMods(mod: Mod<object>): Promise<string[]> {
+  const records = await fs.list(`${await storeOf(mod)}/records`).catch(ifMissing([]))
+  return records.filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)).filter((name) => name !== mod.name)
 }
 
 export async function configRootOf(mod: object): Promise<string | undefined> {
@@ -218,7 +214,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
 
     const read = (path: string) => fs.read(path).catch(ifMissing(undefined))
 
-    const viewOf = async (name: string, root: string, version: string, isOn: boolean, granted: readonly string[], rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
+    const viewOf = async (name: string, root: string, version: string, isOn: boolean, rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
       const manifest: unknown = await read(`${root}/package.json`).then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const plugin: unknown = await read(`${root}/.claude-plugin/plugin.json`).then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const steps = isObject(manifest) ? readSteps(manifest) : undefined
@@ -235,7 +231,6 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         version,
         description: isObject(plugin) && typeof plugin['description'] === 'string' ? plugin['description'] : undefined,
         isOn,
-        permissions: (steps?.permissions ?? []).map((item) => ({ item, isOn: granted.includes(item) })),
         hotkeys: Object.entries(steps?.hotkeys ?? {}).map(([hotkey, { title }]) => ({ name: hotkey, title, combo: combos.get(hotkeyCommand(name, hotkey)) })),
         options: rows.filter((row) => row.key.startsWith(`${name}.`)),
         pendingSteps: await ask(pendingStepsMethod),
@@ -245,17 +240,15 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
 
     const load = async (): Promise<readonly ModView[]> => {
       const store = await storeOf(mod)
-      const consent = await readConsent(mod)
       const rows = await claude.config.list()
       const combos = await readCombos(claude, await configRootOf(mod))
       const enabledPlugins = (await claude.settings.read())['enabledPlugins']
       const enabled = Object.entries(isObject(enabledPlugins) ? enabledPlugins : {}).map(([id, isEnabled]) => ({ name: id.replace(/@[^@]*$/, ''), isEnabled }))
       const turnedOff = enabled.filter(({ name, isEnabled }) => isEnabled === false && !enabled.some((each) => each.name === name && each.isEnabled === true)).map(({ name }) => name)
-      const names = (await fs.exists(`${store}/records`)) ? (await fs.list(`${store}/records`)).filter((entry) => entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -'.json'.length)) : []
-      const records = (await Promise.all(names.filter((name) => name !== mod.name).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
+      const records = (await Promise.all((await setUpMods(mod)).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
       const own = JSON.parse((await read(`${mod.folder}/.claude-plugin/plugin.json`)) ?? '{}') as { readonly version?: string }
-      const cmod = await viewOf(mod.name, mod.folder, own.version ?? '', true, [], [], combos)
-      const views = await Promise.all(records.map((record) => viewOf(record.name, record.root, record.version, !turnedOff.includes(record.name), consent[record.name] ?? [], rows, combos)))
+      const cmod = await viewOf(mod.name, mod.folder, own.version ?? '', true, [], combos)
+      const views = await Promise.all(records.map((record) => viewOf(record.name, record.root, record.version, !turnedOff.includes(record.name), rows, combos)))
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))]
     }
 
@@ -281,12 +274,6 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       return exitCode === 0 ? done || stdout.trim() : `cmod ${argv.slice(0, 2).join(' ')} ${formatExit(exitCode, cmodError(stderr, argv[0]))}`
     }
 
-    const toggle = (name: string, { item, isOn }: Permission) => {
-      const split = item.indexOf(':')
-      const words = split === -1 ? [item] : [item.slice(0, split), item.slice(split + 1)]
-      act(() => runCmod(['permission', name, ...words, isOn ? 'off' : 'on'], ''))
-    }
-
     const remove = (name: string) =>
       act(async () => {
         mod.state.memory.removing = null
@@ -304,7 +291,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       const own = pages.declared().find((each) => each.mod === view.name)?.pages.filter((page) => page.place === 'settings') ?? []
       return [
         ...own.map((page) => ({ key: `${pageSection}${page.id}`, label: page.title })),
-        ...(view.name === mod.name ? [] : [{ key: 'options', label: 'Options' }, { key: 'permissions', label: 'Permissions' }]),
+        ...(view.name === mod.name ? [] : [{ key: 'options', label: 'Options' }]),
         { key: 'hotkeys', label: 'Hotkeys' },
         ...(view.name === mod.name
           ? [
@@ -399,10 +386,6 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             }),
           ),
         })
-      }
-      if (section === 'permissions') {
-        if (view.permissions.length === 0) return Text({ dimColor: true, children: `${view.name} asks for no permissions.` })
-        return Box({ flexDirection: 'column', children: view.permissions.map((permission) => Button({ plain: true, key: `permission:${permission.item}`, label: `${permission.isOn ? '[x]' : '[ ]'} ${permissionWords(permission.item)}`, onPress: () => toggle(view.name, permission) })) })
       }
       if (section === 'hotkeys') {
         if (view.hotkeys.length === 0) return Text({ dimColor: true, children: `${view.name} has no hotkeys.` })

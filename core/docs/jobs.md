@@ -169,7 +169,7 @@ A `command` pattern is not a glob. cmod splits it into words the way it splits a
 
 ## permissions
 
-A `deny` rule needs no permission. An `ask` rule takes effect only with `"approve": true` in `package.json` `"cmod".permissions` ([permissions.md](permissions.md)).
+A `deny` rule works in every mod. An `ask` rule needs `"approve": true` in `package.json` `"cmod"`, because `cmod publish` leaves the code that asks out of the bundle of a mod without it ([commands.md](commands.md#cmod-publish)). `cmod check` adds the line when the mod has an `ask` rule.
 
 ```ts
 permissions<State>(rules: PermissionRules<State> | ((state: State) => PermissionRules<State>)): Job<void, State>
@@ -226,8 +226,6 @@ export const guard = defineMod({
 
 ## check
 
-Its command needs `"run"` with the program's name, such as `"run": ["tsc"]` ([permissions.md](permissions.md)).
-
 ```ts
 check<State>(options: { readonly after: Target | Target[]; readonly run: readonly string[]; readonly timeoutMs?: number }): Job<void, State>
 ```
@@ -252,8 +250,6 @@ export const lint = defineMod({
 ```
 
 ## prompt
-
-It needs `"prompt": true`. Without the grant it adds nothing and logs once which line to add ([permissions.md](permissions.md)).
 
 ```ts
 prompt<State>(options: {
@@ -292,8 +288,6 @@ export const conventions = defineMod({
 
 ## schedule
 
-It needs `"prompt": true`, because each cron starts a turn ([permissions.md](permissions.md)).
-
 ```ts
 schedule<State>(entry: ScheduledPrompt | ((state: State) => ScheduledPrompt | undefined)): Job<void, State>
 
@@ -323,8 +317,6 @@ export const loop = defineMod({
 
 ## program
 
-It needs `"run"` with the program's name. Without the grant the program stops at once and names the line to add ([permissions.md](permissions.md)).
-
 ```ts
 program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean }): Job<Program>
 
@@ -337,10 +329,10 @@ type Program = {
 `program` runs a background program, such as a preview server, and hands the mod its address.
 
 - `command` is the program on `PATH` and its arguments. `environment` sets variables for it. An empty `command` throws.
-- The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `http.fetch`, which reaches that address with no `network` permission while the program runs.
+- The program's first line on standard output must be its address: `127.0.0.1:<port>`, or `unix:<absolute socket path>`. `ready()` then resolves `{ url: 'http://127.0.0.1:<port>' }`, or `{ url: 'http://localhost', socketPath }`. Pass both to `http.fetch`, which reaches that address.
 - In an interactive session the program starts with the mod. Otherwise it starts at the first `ready()`.
 - When the program exits, cmod starts it again after 1, 2, 4, 8, and 16 seconds. After 5 failed tries, or a first line that is not an address, the state is `fatal`, `ready()` rejects, and cmod logs `<mod>: the <program> program stopped: <reason>`.
-- `singleInstance: true` runs one copy on the computer, however many sessions load the mod, such as a server that is the only writer of its data. Each session runs it through [`cmod program`](commands.md#cmod-program): the first session starts the copy, and every session's `ready()` resolves that copy's address and reaches it with no `network` permission. When the session running the copy ends, another open session starts a new copy, and from then on `ready()` resolves the new address in every session, so ask `ready()` before each use rather than keeping its answer. A copy a killed session left running is stopped before the new one starts. Two `singleInstance` programs with the same program name in one mod throw at `mod.use`.
+- `singleInstance: true` runs one copy on the computer, however many sessions load the mod, such as a server that is the only writer of its data. Each session runs it through [`cmod program`](commands.md#cmod-program): the first session starts the copy, and every session's `ready()` resolves that copy's address. When the session running the copy ends, another open session starts a new copy, and from then on `ready()` resolves the new address in every session, so ask `ready()` before each use rather than keeping its answer. A copy a killed session left running is stopped before the new one starts. Two `singleInstance` programs with the same program name in one mod throw at `mod.use`.
 - A program that ships with the mod gets onto `PATH` through the `program` key of the mod's `package.json` ([install-steps.md](install-steps.md)). A program an install step fetched with `cmod download` is not on `PATH`, so `command` names it by its full path, `${mod.dataFolder}/bin/<program>`.
 
 ```ts

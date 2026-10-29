@@ -9,7 +9,7 @@ import { setupInTerminal } from './setup.js'
 
 export const summary = 'Load a checkout in every Claude Code session.'
 
-export const help = `Usage: cmod link [path] [--yes]
+export const help = `Usage: cmod link [path]
 
 ${summary}
 
@@ -25,11 +25,10 @@ copy of the mod, and runs the checkout's install step. cmod watch reloads
 every session once a change builds.
 
 Options:
-  --yes                 Approve the mod's install and uninstall commands without asking
   --option key=value    Set one of the mod's options, as /config does. Repeat it for each option`
 
 export async function run(argv: string[]): Promise<number> {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { yes: { type: 'boolean', default: false }, option: { type: 'string', multiple: true } } })
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { option: { type: 'string', multiple: true } } })
   if (positionals.length > 1) throw new Error(`cmod link takes at most one path.\n\n${help}`)
   const plugin = await readPlugin(positionals[0] ?? '.')
   const progress = startProgress()
@@ -47,7 +46,7 @@ export async function run(argv: string[]): Promise<number> {
   progress.succeed(`Linked ${tilde(plugin.root)} as ${id}`)
   if (values.option !== undefined) await setOptions({ id, installPath: plugin.root }, values.option, progress)
 
-  const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
+  const code = await setupInTerminal(plugin, progress)
   if (code === 0) progress.note(`Every Claude Code session loads ${plugin.name} from ${tilde(plugin.root)}, and reloads it once a change you save builds.`)
   return code
 }

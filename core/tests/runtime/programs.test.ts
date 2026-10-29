@@ -6,7 +6,7 @@ const programs = '/test/home/.local/share/cmod/programs'
 const ran = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
 function started(files: Record<string, string>) {
-  const tested = testMod(defineMod({ name: 'tracer', setup() {} }), { permissions: ['run:trace', 'run:git'], files })
+  const tested = testMod(defineMod({ name: 'tracer', setup() {} }), { files })
   const argvs: (readonly string[])[] = []
   tested.fakes.process.run = async (argv) => (argvs.push(argv), ran)
   tested.fakes.process.spawn = (request) => {

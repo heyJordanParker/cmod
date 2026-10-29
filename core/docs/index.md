@@ -4,13 +4,13 @@ These are the docs of the `@cmodjs/core` version installed beside them. Read the
 
 ## What a mod is
 
-A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmod) installs mods, runs their install and uninstall steps with the person's consent, and builds and publishes new ones. The `cmod` command does that work in a terminal.
+A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmod) installs mods, runs their install and uninstall steps, and builds and publishes new ones. The `cmod` command does that work in a terminal.
 
 `cmod new my-mod` writes this layout:
 
 ```text
 my-mod/
-├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=4.0.0" }]
+├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=5.0.0" }]
 ├── .claude/CLAUDE.md                   facts for coding agents, starting with these docs
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
@@ -24,7 +24,7 @@ my-mod/
 ├── skills/my-mod/SKILL.md              a Skill the mod ships
 ├── rules/prompt-count.md               a rule Claude reads
 ├── tests/mod.test.ts                   testMod tests, run with bun test
-├── package.json                        depends on @cmodjs/core, and lists the permissions and hotkeys
+├── package.json                        depends on @cmodjs/core, and lists the hotkeys
 └── tsconfig.json                       extends .claude-plugin/types/tsconfig.json, with the JSX options
 ```
 
@@ -63,7 +63,6 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
 | How do I keep values across prompts, sessions, and projects? | [state.md](state.md) |
 | How does a person set a token, a URL, or a setting for my mod, for themselves or their team? | [options.md](options.md) |
-| Which hosts, programs, and files may my mod reach, and how does the person grant them? | [permissions.md](permissions.md) |
 | How does my mod find files and keep its own keys on each one, such as on a Skill? | [mod.md](mod.md#metadata-a-file-s-own-keys) |
 | How does the person finish a setup step only they can do, such as signing in? | [install-steps.md](install-steps.md#steps-in-claude-code) |
 | How do I add my mod's own page to Settings, or change Claude Code's settings? | [ui.md](ui.md#settings-pages), [mod.md](mod.md#settings-claude-code-s-settings-files) |
@@ -85,7 +84,7 @@ A mod imports from the files below, and every other file in this package is inte
 
 | Import | Exports | Docs |
 | --- | --- | --- |
-| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `Subscription`, `Timer`, `Reservation`, `Permissions`, `Allowed`, `JobContext`, `Job`, `SlashCommand`, `Tool`, `Step`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [install-steps.md](install-steps.md#steps-in-claude-code) |
+| `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `Subscription`, `Timer`, `Reservation`, `JobContext`, `Job`, `SlashCommand`, `Tool`, `Step`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [install-steps.md](install-steps.md#steps-in-claude-code) |
 | `mod.js` | `Hotkey`, `HotkeyInit`, `Combo`, `Key` | [mod.md](mod.md#hotkeys) |
 | `mod.js` | `settings`, `SettingsFile`, `SettingsFileChange`, `SettingsFileChangeListener`, `config`, `ConfigRow`, `commands`, `CommandInfo`, `CommandRun`, `CommandRunAnswer`, `CommandRunResult`, `model`, `fs`, `Entry`, `Stat`, `FileMatch`, `FileChange`, `metadata`, `Metadata`, `process`, `http`, `clipboard`, `Imports` | [mod.md](mod.md) |
 | `mod.js` | `sessions`, `Sessions`, `Session`, `CurrentSession`, `TaskOwner`, `RecordPart`, `OnMethods`, `BeforeMethods`, `Listener`, `ListenerTime`, `ReadOptions`, `AnswerOptions`, `Refusal`, `SearchOptions`, `SessionScope`, `SessionSend`, `TaskStartArgs`, `ToolCallArgs`, `Usage`, `RateLimit`, `TaskStatus`, `Surface`, `Matcher` | [session.md](session.md) |

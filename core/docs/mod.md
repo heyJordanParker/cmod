@@ -23,7 +23,7 @@ type ModDefinition<State, Name, Options, Hotkeys> = {
 - `state` holds the starting values, grouped by how long they last. [state.md](state.md) explains the groups.
 - `options` declares what a person sets, such as a token, and types `mod.options`. [options.md](options.md) explains them.
 - `hotkeys` declares the key combos the mod listens for, each with a title and an optional default combo the person can change ([Hotkeys](#hotkeys)).
-- `installer` lists the steps the person finishes in Claude Code after the permissions and the options, such as signing in. [install-steps.md](install-steps.md#steps-in-claude-code) explains them.
+- `installer` lists the steps the person finishes in Claude Code after the options, such as signing in. [install-steps.md](install-steps.md#steps-in-claude-code) explains them.
 - `setup` runs once when the mod starts. It adds listeners, pages, panes, widgets, styles, and jobs. It may be `async`. What it returns is the mod's API: an object of methods other mods call. Return nothing for a mod that offers none. [dependencies.md](dependencies.md) explains it.
 
 ```tsx
@@ -45,11 +45,11 @@ export const greeter = defineMod({
 
 ## When setup runs
 
-Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up. A mod the person has not accepted yet opens its install page, the `Install <name>` tab of the Sidebar, which lists its permissions and the changes it makes to the computer, and waits for Accept ([install-steps.md](install-steps.md)). An option with no default and no value is asked next on the same page. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the install page again for each `installer` step the mod declares that is not done.
+Claude Code loads the mod at the start of each session. cmod then checks that the mod is set up, and runs its install step when it is not, with a loading toast above the prompt ([install-steps.md](install-steps.md)). An option with no default and no value is asked on the mod's install page, the `Install <name>` tab of the Sidebar. Then cmod loads the saved state, runs `setup`, marks as open each of the mod's panes that Claude Code already shows, and opens the install page again for each `installer` step the mod declares that is not done.
 
-The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, the Branch widget and /deploy.`, what its install step set up, and each permission the person allowed, with a Settings button that opens Settings at the mod. A new version shows no toast of the mod's own: after the reload that loads it, the cmod plugin shows `<mod> updated to <version>` in the corner, followed by each permission the update granted ([commands.md](commands.md#install-mods)). A new session and `/reload-plugins` show no toast.
+The first time a mod starts on a machine, cmod shows the toast `Installed` under its name. Opened, it lists the mod's `plugin.json` `description`, what setup added, such as `Adds the my-mod pane, the Branch widget and /deploy.`, and what its install step set up, with a Settings button that opens Settings at the mod. A new version shows no toast of the mod's own: after the reload that loads it, the cmod plugin shows `<mod> updated to <version>` in the corner ([commands.md](commands.md#install-mods)). A new session and `/reload-plugins` show no toast.
 
-When a step fails, or the person declines the install, the mod stays stopped. Once another session sets it up, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
+When a step fails, the mod stays stopped. Once another session sets it up, the mod starts at the next prompt of every session it stopped in, with no `/reload-plugins`.
 
 A mod that loads while a session runs, such as after `/reload-plugins` or `/plugin install`, hears no SessionStart from Claude Code. cmod runs its `onSessionStart` and `beforeSessionStart` listeners before the next prompt instead, once, with the source `resume`.
 
@@ -62,7 +62,7 @@ When a step fails, the mod does not start. An error toast above the prompt names
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
 
-Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)). A failed step is critical, so its toast shows for an installed mod too, unless the failure is a refusal for a permission the person turned off, which goes only to the Log.
+Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)). A failed step is critical, so its toast shows for an installed mod too.
 
 ## Rules
 
@@ -75,11 +75,11 @@ my-mod/
     └── sql.md          <- front matter paths: ["**/*.sql"]
 ```
 
-While the mod is on and has the `prompt` permission, cmod links the folder into Claude Code's rules folder: a mod the person installed links at `<config>/rules/<mod>`, and a mod turned on for one project at `<project>/.claude/rules/<mod>`. A mod turned off for one project keeps its rules out of that project through `claudeMdExcludes` in the project's `.claude/settings.local.json`. A rule the person excluded with `claudeMdExcludes` stays out of the notes too. Turning the mod off, turning `prompt` off, and removing the mod remove the link, and an update links the new version's folder. cmod changes only the links and exclusions it made.
+While the mod is on, cmod links the folder into Claude Code's rules folder: a mod the person installed links at `<config>/rules/<mod>`, and a mod turned on for one project at `<project>/.claude/rules/<mod>`. A mod turned off for one project keeps its rules out of that project through `claudeMdExcludes` in the project's `.claude/settings.local.json`. A rule the person excluded with `claudeMdExcludes` stays out of the notes too. Turning the mod off and removing the mod remove the link, and an update links the new version's folder. cmod changes only the links and exclusions it made.
 
 Claude Code reads rules without `paths` only as a session starts. So when cmod links a mod's rules into a running session, it adds them to the conversation as one note, and when it removes the link, one note says the mod's rules no longer apply. A rule taken out of the folder is withdrawn by a note too. When an update changes a rule without `paths`, one note gives its new text. Claude Code loads rules with `paths` itself, at the read that matches.
 
-The `Installed` toast lists the rules, as in `Adds 2 rules: sql and tests.` `cmod check` fails a mod with a `rules/` folder whose `package.json` `"cmod"` does not ask for `"prompt": true`.
+The `Installed` toast lists the rules, as in `Adds 2 rules: sql and tests.`
 
 ## Release notes
 
@@ -135,7 +135,7 @@ export function register(addHook: On, options: PluginOptions): void {
 }
 ```
 
-A mod that allows or asks, with a `before` method or an `ask` rule of the `permissions` job, also declares `"approve": true` in its `package.json` `"cmod".permissions`, so the person grants it at install. `cmod check` adds the line when it is missing, and without the grant cmod drops every allow or ask the mod answers, so Claude Code decides those calls itself. A mod that only refuses needs no `approve`, and its bundle holds no code that allows, so Anthropic's plugin directory can list it ([permissions.md](permissions.md)). A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. Without it, each of those methods and `mod.use(permissions(…))` throws `<mod>: <method> hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.` where it is called, so a mod that calls one in `setup` does not start. `cmod check` fails a mod whose `src/` uses one while `register.ts` does not call `registerPermissionCheck`.
+A mod that allows or asks, with a `before` method or an `ask` rule of the `permissions` job, also declares `"approve": true` in its `package.json` `"cmod"`. `cmod check` adds the line when it is missing. Anthropic's plugin directory does not list a mod that can approve Claude's tool calls, so `cmod publish` leaves the code that allows and asks out of the bundle of a mod without `"approve": true`, and Claude Code decides those calls itself. A mod that only refuses needs no `approve`, and its bundle holds no code that allows, so the plugin directory can list it. A mod without `registerPermissionCheck` has no part in Claude Code's permission check, so the plugin directory reads it as one that never answers a permission. Without it, each of those methods and `mod.use(permissions(…))` throws `<mod>: <method> hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.` where it is called, so a mod that calls one in `setup` does not start. `cmod check` fails a mod whose `src/` uses one while `register.ts` does not call `registerPermissionCheck`.
 
 Where an organization manages Claude Code, Claude Code passes a mod the person installed over on its classic hooks, the notes it adds to a prompt, its Skill and instruction-file text, and compactions, and runs those only for a plugin the organization lists in managed settings. There, the `on` and `before` methods built on them hear nothing until the organization lists the mod and the cmod plugin. `claude plugin validate` names each such hook.
 
@@ -143,7 +143,7 @@ Keep `register.ts` this small. Claude Code checks a hooks module before it loads
 
 ## mod: this mod
 
-`setup` gets `mod`, of type `Mod<State, Options, Hotkeys>`. Every listener, render, and job gets the same `mod`. `mod` holds what belongs to this mod: its name, its folders, its values, its grants, its hotkeys, and what it adds to Claude Code.
+`setup` gets `mod`, of type `Mod<State, Options, Hotkeys>`. Every listener, render, and job gets the same `mod`. `mod` holds what belongs to this mod: its name, its folders, its values, its hotkeys, and what it adds to Claude Code.
 
 ```ts
 type Mod<State, Options, Hotkeys> = {
@@ -152,7 +152,6 @@ type Mod<State, Options, Hotkeys> = {
   readonly dataFolder: string
   readonly state: Readonly<State>
   readonly options: OptionValues<Options>
-  readonly permissions: Permissions
   readonly hotkeys: { readonly [name in keyof Hotkeys]: Hotkey }
   every(ms, listener): Timer
   after(ms, listener): Timer
@@ -174,7 +173,6 @@ type Mod<State, Options, Hotkeys> = {
 - `dataFolder` is the mod's own folder in the cmod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. cmod deletes it when the mod is removed ([install-steps.md](install-steps.md)).
 - `state` holds the mod's values. Assign to a key to change it ([state.md](state.md)).
 - `options` holds the values a person set for the mod's options, typed from their declaration. Read-only ([options.md](options.md)).
-- `permissions` says whether the person granted each permission ([permissions.md](permissions.md)).
 - `hotkeys` holds each hotkey `defineMod` declared ([Hotkeys](#hotkeys)).
 - `every` and `after` run a listener on a timer while the session runs.
 - `use` adds a job, such as a slash command or a tool, and returns its handle ([jobs.md](jobs.md)).
@@ -199,7 +197,7 @@ import { clipboard, commands, config, fs, http, metadata, model, process, sessio
 - `http` fetches a URL.
 - `clipboard` puts text on the person's clipboard ([ui.md](ui.md#toasts)).
 
-Each import works once the mod has started, in `setup` and anything it adds. Each one checks the permission it needs, and rejects with the line to add or the grant to turn on when the person has not granted it ([permissions.md](permissions.md)).
+Each import works once the mod has started, in `setup` and anything it adds.
 
 ### Take back what the mod added
 
@@ -293,8 +291,8 @@ type CommandRun = { name: string; args: string; source?: 'builtin' | 'plugin' | 
 ```
 
 - `list` answers every command the person can type: Claude Code's own, each plugin's, the person's and the project's, and each MCP server's prompts.
-- `run` runs a command, a built-in such as `compact` included, the way the person typing `/<name> <args>` would. It resolves the text the command printed and the note it left Claude. It needs the `prompt` permission.
-- `beforeRun` runs just before any command runs, typed or run by a mod, and its answer changes it: `{ args?, note? }` runs it with new arguments and adds a note Claude reads after its output, `{ result, exitCode? }` answers in its place without running it, and `{ refuse }` runs nothing and shows the reason as its output. An answer needs the `prompt` permission. `exitCode` is what a `claude -p "/lint"` run exits with.
+- `run` runs a command, a built-in such as `compact` included, the way the person typing `/<name> <args>` would. It resolves the text the command printed and the note it left Claude.
+- `beforeRun` runs just before any command runs, typed or run by a mod, and its answer changes it: `{ args?, note? }` runs it with new arguments and adds a note Claude reads after its output, `{ result, exitCode? }` answers in its place without running it, and `{ refuse }` runs nothing and shows the reason as its output. `exitCode` is what a `claude -p "/lint"` run exits with.
 - `onRun` hears each command once it ran.
 - A command a project or a plugin writes as a Markdown prompt, such as `/review`, also reaches `beforePrompt` after `beforeRun`, as its text goes to Claude ([session.md](session.md#change-what-happens)). A built-in such as `/model` reaches only these two.
 
@@ -323,9 +321,8 @@ settings.beforeFileChange(matcher?, listener: (change: SettingsFileChange) => { 
 - `update` merges `values` into that file as a JSON Merge Patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)). `mcpServers` in `settings.project` goes to the project's `.mcp.json`, where Claude Code reads a project's servers.
 - An object merges into the object already at that key, at every depth, so every key it does not name stays as it was. `null` removes the key at its depth. An array or any other value replaces the value. To replace a whole object, read it and set each key you drop to `null`.
 - The file's comments and formatting stay as they were.
-- Each value needs a `config` permission for its key path or a path above it ([permissions.md](permissions.md)): `"config": ["env.ANTHROPIC_BASE_URL"]` covers that one value, and `"config": ["env"]` covers every key in `env`. `update` rejects with the line to add for a value no grant covers, and changes nothing.
 - Removing the mod takes out each value it set that still equals what it set, then each object that leaves empty. A value the person changed since stays.
-- `fs.write` to a Claude Code settings file rejects and names `update`, because a whole-file write loses the person's own edits and leaves the mod's values behind when it is removed.
+- Change a Claude Code settings file with `update`, never `fs.write`, because a whole-file write loses the person's own edits and leaves the mod's values behind when it is removed.
 
 A mod that points Claude Code at its local proxy sets one variable in `env`, and the person's other variables stay:
 
@@ -357,7 +354,7 @@ type ConfigRow = { key: string; label: string; description?: string; kind: 'bool
 model.complete(request: ModelCompleteRequest, options?: { signal?: AbortSignal }): Promise<ModelCompleteResult>
 ```
 
-`complete` asks a model one question through Claude Code's own login, outside the conversation, so the answer costs no context and the person sees no turn. The request names the `model`, such as `'haiku'`, and the `prompt`, and takes `system`, `maxTokens`, `effort`, and `timeoutMs`. `timeoutMs` stops a model that is slow or down, so the listener that waits on it still answers in time. `options.signal` stops the call when its `AbortController` aborts. It needs the `model` permission.
+`complete` asks a model one question through Claude Code's own login, outside the conversation, so the answer costs no context and the person sees no turn. The request names the `model`, such as `'haiku'`, and the `prompt`, and takes `system`, `maxTokens`, `effort`, and `timeoutMs`. `timeoutMs` stops a model that is slow or down, so the listener that waits on it still answers in time. `options.signal` stops the call when its `AbortController` aborts.
 
 The call never rejects for what the model did. The result's `isAnswered` is true with the reply's `text`, or false with a `reason`, such as `'api-error'` or `'aborted'`.
 
@@ -377,7 +374,7 @@ process.run(argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunR
 process.spawn(argv: readonly string[], init?: { cwd?, env?, input? }): HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 ```
 
-Both run a program without a shell. `argv[0]` is the program and the rest are its arguments. A bare name that cmod installed, such as `trace`, runs from cmod's programs folder ([install-steps.md](install-steps.md#run-a-program-by-its-name)), and any other name runs through Claude Code's `PATH`. Each program needs its `run` permission.
+Both run a program without a shell. `argv[0]` is the program and the rest are its arguments. A bare name that cmod installed, such as `trace`, runs from cmod's programs folder ([install-steps.md](install-steps.md#run-a-program-by-its-name)), and any other name runs through Claude Code's `PATH`.
 
 - `init.cwd` is the program's folder, absolute or relative to the session's working folder. Without it the program runs in the session's working folder.
 - `init.env` sets variables over Claude Code's own environment.
@@ -425,7 +422,7 @@ type Stat = { isFile: boolean; isFolder: boolean; isLink: boolean; size: number;
 
 - A relative path is under the session's working folder. An absolute path is used as given. `~/.claude` and `$CLAUDE_CONFIG_DIR` are Claude Code's config folder, and `~` and `$HOME` are the home folder. Text is UTF-8.
 - `read` rejects a missing file and a file over 4 MiB.
-- `write` writes the whole file and creates its folders. Writing outside the project and the mod's data folder needs the `files` permission.
+- `write` writes the whole file and creates its folders.
 - `list` lists a folder, the working folder without a path. A symbolic link is neither a file nor a folder, with `isLink` true. `modifiedAt` is the time it last changed, in milliseconds since 1970.
 - `exists` answers whether the path leads to a file or a folder.
 - `stat` answers what the path leads to, following a symbolic link, and rejects a missing path. With `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
@@ -485,7 +482,7 @@ metadata:
 - A `.sh`, `.py`, `.ts`, `.js`, `.yaml`, or `.toml` file keeps it in a `/// metadata` comment block after any shebang, in the file's own comment, `#` or `//`, the way PEP 723 keeps a Python script's dependencies.
 - Any other file keeps it in a sidecar, `<file>.meta`.
 
-`update` hands `change` the mod's current keys, and writes what `change` leaves. It changes only the metadata block, keeps other mods' keys, writes nothing when nothing changed, and removes an empty block. It writes through a symbolic link to the file it points at. Writing a file outside the project and the mod's data folder needs the `files` permission, as `fs.write` does ([permissions.md](permissions.md)). A key is letters, digits, `_`, `.`, and `-`, and `update` rejects any other key and a value with a line break.
+`update` hands `change` the mod's current keys, and writes what `change` leaves. It changes only the metadata block, keeps other mods' keys, writes nothing when nothing changed, and removes an empty block. It writes through a symbolic link to the file it points at. A key is letters, digits, `_`, `.`, and `-`, and `update` rejects any other key and a value with a line break.
 
 `read` rejects when cmod cannot open the file or read its metadata, with the reason or the line. `update` rejects the same way and writes nothing, so it never overwrites metadata it could not read.
 
@@ -505,7 +502,7 @@ http.fetch(url: string, init?: HttpInit): Promise<HttpResponse>
 
 - `init` takes `method` (`GET` by default), `headers`, `body` as text, and `socketPath`, the absolute path of a Unix socket the request goes over.
 - The response is `{ status, ok, headers, text }`. `ok` is true for a 2xx status. Header names are lower case.
-- Each host needs its `network` permission. A fetch to the address the mod's own `program` job answers on needs none, while that program runs ([jobs.md](jobs.md#program)).
+- A mod reaches the address its own `program` job answers on the same way ([jobs.md](jobs.md#program)).
 
 ## messageOf
 

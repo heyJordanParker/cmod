@@ -83,23 +83,6 @@ export type Stat = Omit<Entry, 'name'> & {
 
 export type FileChange = { readonly path: string; readonly type: 'change' | 'add' | 'unlink' }
 
-export type Allowed = {
-  allows(value: string): boolean
-}
-
-export type Permissions = {
-  readonly conversation: boolean
-  readonly prompt: boolean
-  readonly model: boolean
-  readonly tasks: boolean
-  readonly tools: boolean
-  readonly approve: boolean
-  readonly network: Allowed
-  readonly run: Allowed
-  readonly files: Allowed
-  readonly config: Allowed
-}
-
 export type SettingsFile = {
   read(): Promise<Settings>
   update(values: Readonly<Record<string, unknown>>): Promise<void>
@@ -222,7 +205,6 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly dataFolder: string
   readonly state: Readonly<State>
   readonly options: OptionValues<Declared>
-  readonly permissions: Permissions
   readonly hotkeys: { readonly [Key in keyof Keys]: Hotkey }
   every(ms: number, listener: () => unknown): Timer
   after(ms: number, listener: () => unknown): Timer

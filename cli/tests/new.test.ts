@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { cp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
+import { oldestCmodVersion } from '@cmodjs/core/src/records.js'
 import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { listFiles } from '../src/files.js'
 import { capture } from '../src/process.js'
@@ -40,7 +41,7 @@ test('new writes the repository layout with a defineMod that has one listener an
   })
   expect(JSON.parse(await readFile(join(root, 'tests/tsconfig.json'), 'utf8'))).toEqual({ extends: '../tsconfig.json', include: ['.', '../types', '../node_modules/bun-types/index.d.ts'] })
   const manifest = JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8'))
-  expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: [{ name: 'cmod', version: `>=${coreVersion}` }] })
+  expect(manifest).toEqual({ name: 'my-mod', version: '0.1.0', description: 'my-mod, a Claude Code mod', author: expect.objectContaining({ name: expect.any(String) }), dependencies: [{ name: 'cmod', version: `>=${oldestCmodVersion}` }] })
   const mod = await readFile(join(root, 'src/mod.tsx'), 'utf8')
   expect(mod).toContain('export const myMod = defineMod({')
   expect(mod).toContain('sessions.current.onPrompt(')

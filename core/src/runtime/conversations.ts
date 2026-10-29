@@ -1,5 +1,5 @@
 import type { Args, EventResult, Frozen } from 'claude-code'
-import { consentPath, coreVersion, dataFolder, isObject, parseConsent, readRecord, readSteps } from '../records.js'
+import { coreVersion, dataFolder, isObject } from '../records.js'
 import { Message, rowOfAppend, type Row } from '../session/context/turn/message/message.js'
 import { modNote, Note } from '../session/context/turn/message/note.js'
 import { Person } from '../session/context/turn/message/sender.js'
@@ -15,11 +15,10 @@ import { formatExit, messageOf } from '../utils/text.js'
 import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName } from './dependencies.js'
-import { conversationCalls, refusal } from './grants.js'
 import { readLines, runCmod, spawnCmod } from './programs.js'
 import type { RoutedHook, Router } from './router.js'
 import { PassedTimeout } from './deadline.js'
-import { actPermission, conversationMethods, everySession, isAct, isHeardBy, isInScope, pickedColor, resultOf, spawnTask, usageOf, type Act, type Listened, type SessionColor } from './sessions.js'
+import { conversationMethods, everySession, isAct, isHeardBy, isInScope, pickedColor, resultOf, spawnTask, usageOf, type Act, type Listened, type SessionColor } from './sessions.js'
 
 type Request = Readonly<Record<string, unknown>>
 
@@ -129,35 +128,6 @@ export function serveConversations({
   })
 
   const json = async <Value>(args: readonly string[]): Promise<Value> => JSON.parse(await runCmod(claude, [...args, '--json', '--project', project()], await claude.session.id())) as Value
-
-  const isGranted = async (caller: string | undefined, item: string) => {
-    if (caller === cmodPluginName) return true
-    if (caller === undefined) return false
-    const path = consentPath(store)
-    const text = await claude.fs.read(path).catch(ifMissing('{}'))
-    return (parseConsent(JSON.parse(text), path)[caller] ?? []).includes(item)
-  }
-
-  const declaredBy = async (caller: string): Promise<readonly string[] | undefined> => {
-    const read = (path: string) => claude.fs.read(path).catch(ifMissing(undefined))
-    const record = await readRecord(read, store, caller)
-    if (record === undefined) return undefined
-    if (record.permissions !== null) return record.permissions
-    const pkg = await read(`${record.root}/package.json`)
-    return pkg === undefined ? undefined : (readSteps(JSON.parse(pkg))?.permissions ?? [])
-  }
-
-  const refused = async (caller: string | undefined, call: string, item: string) => {
-    const declared =
-      caller === undefined
-        ? undefined
-        : await declaredBy(caller).catch((error: unknown) => {
-            claude.ui.log(`cmod: its refusal of ${caller} names the grant, because the permissions ${caller} declares are unreadable: ${messageOf(error)}`, { to: 'debug' })
-            return undefined
-          })
-    return refusal({ name: caller ?? 'A mod', declared: declared ?? [item], home: undefined }, call, item)
-  }
-
 
   const ended = (id: string) => new Error(`session ${id} has ended`)
 
@@ -358,10 +328,7 @@ export function serveConversations({
     return [...new Map(all.filter((watcher) => watcher.events.includes(event)).map((watcher) => [`${watcher.from}\n${watcher.mod}`, watcher])).values()]
   }
 
-  const askHere = async (mod: string, event: BeforeEvent, change: SessionChange, from = session, isInProject = true) => {
-    if (from !== session && !(await isGranted(mod, 'conversation'))) throw new Error(await refused(mod, 'before', 'conversation'))
-    return claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } })
-  }
+  const askHere = async (mod: string, event: BeforeEvent, change: SessionChange, from = session, isInProject = true) => claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } })
 
   const isUnderHere = (task: string, ancestor: string) => {
     for (let at: string | undefined = task, steps = 0; at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1) if (at === ancestor) return true
@@ -561,13 +528,7 @@ export function serveConversations({
     return answered(() => askHere(relay.mod, relay.event, relay.change, relay.from, relay.project === project()))
   }
 
-  const checkAct = async (caller: string, action: Act, input: unknown) => {
-    const needed = actPermission(action, input)
-    if (needed !== undefined && !(await isGranted(caller, needed))) throw new Error(await refused(caller, action, needed))
-  }
-
   const perform = async (caller: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
-    await checkAct(caller, action, input)
     await starting
     if (action === 'abort') return abortTurn(input, task)
     if (task !== undefined) return performInTask(caller, action, input, task)
@@ -654,7 +615,6 @@ export function serveConversations({
   }
 
   const actElsewhere = async (caller: string, target: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
-    await checkAct(caller, action, input)
     const isLive = await isRunning(target)
     if (!isLive && action === 'usage') return json(['history', 'usage', target, ...(task === undefined ? [] : ['--task', task])])
     if (!isLive && action === 'surfaces') return []
@@ -823,8 +783,6 @@ export function serveConversations({
       const method = methods[e.method]
       if (method === undefined) return undefined
       const input = isObject(e.input) ? e.input : {}
-      const isDropping = (e.method === conversationMethods.subscribe || e.method === conversationMethods.watchBefore) && Array.isArray(input['subscriptions']) && input['subscriptions'].length === 0
-      if (e.method !== conversationMethods.act && !isDropping && input['session'] !== (await claude.session.id()) && !(await isGranted(e.caller, 'conversation'))) return { deny: await refused(e.caller, conversationCalls[e.method] ?? e.method, 'conversation') }
       try {
         return { value: await method(input, e.caller) }
       } catch (error) {

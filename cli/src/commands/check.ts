@@ -4,7 +4,7 @@ import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
-import { isAtLeast, isObject, permissionWords, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
+import { isAtLeast, isObject, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
 import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/metadata.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { addClaudeApi, listPlugins, testPlugin, validatePlugin, type InstalledPlugin } from '../claude.js'
@@ -50,7 +50,7 @@ const checks: Check[] = [
   { heading: 'Checking the layout', run: checkLayout },
   { heading: 'Checking the steps', run: checkSteps },
   { heading: 'Checking the machines', run: checkMachines },
-  { heading: 'Reading the permissions', run: checkPermissions },
+  { heading: 'Checking the permission check hooks', run: checkPermissionCheck },
   { heading: 'Reading the metadata', run: checkMetadata },
   { heading: 'Writing the options and hotkeys', run: checkOptions },
   { heading: 'Pinning the cmod plugin', run: checkCmodFloor },
@@ -109,7 +109,7 @@ async function checkSteps(plugin: Plugin): Promise<Result> {
   } catch (error) {
     return { status: 'fail', text: 'The steps have a problem', fix: messageOf(error) }
   }
-  return { status: 'pass', text: 'Each step runs a script in the mod, so consent covers its whole folder' }
+  return { status: 'pass', text: 'Each step runs a script in the mod, and cmod runs the steps again when anything in its folder changes' }
 }
 
 async function checkMachines(plugin: Plugin): Promise<Result> {
@@ -131,8 +131,15 @@ function downloadsIn(script: string): { program: string; listed: string[] }[] {
   })
 }
 
-async function checkPermissions(plugin: Plugin): Promise<Result> {
-  let permissions = plugin.steps.permissions ?? []
+const permissionlessCore = '5.0.0'
+
+async function checkPermissionCheck(plugin: Plugin): Promise<Result> {
+  const declared = plugin.packageJson?.['cmod']
+  const core = await readJson(join(plugin.root, 'node_modules', '@cmodjs', 'core', 'package.json'))
+  const coreVersion = isObject(core) && typeof core['version'] === 'string' ? core['version'] : undefined
+  if (isObject(declared) && declared['permissions'] !== undefined && coreVersion !== undefined && isAtLeast(coreVersion, permissionlessCore)) {
+    return { status: 'fail', text: `package.json "cmod" still declares "permissions", which @cmodjs/core ${coreVersion} no longer has`, fix: 'Delete "permissions" from package.json "cmod", and write "approve": true there if the mod approves tool calls.' }
+  }
   let sources: Source[]
   try {
     sources = await sourcesOf(plugin.root)
@@ -142,20 +149,16 @@ async function checkPermissions(plugin: Plugin): Promise<Result> {
   const hasPermissionCheck = /\bregisterPermissionCheck\s*\(/.test(sources.find(({ file }) => file === registerFile)?.code ?? '')
   const hearing = hasPermissionCheck ? undefined : sources.find(({ code }) => permissionListener.test(code) || answersPermissions(code))
   if (hearing !== undefined) return { status: 'fail', text: `${hearing.file} hears Claude Code's permission check, and hooks/register.ts does not call registerPermissionCheck`, fix: 'Add registerPermissionCheck(addHook) after registerMod in hooks/register.ts, then run cmod check again.' }
-  const isAdded = hasPermissionCheck && !permissions.includes('approve') && sources.some(({ code }) => approvesCalls(code))
+  const isAdded = hasPermissionCheck && plugin.steps.approve !== true && sources.some(({ code }) => approvesCalls(code))
   if (isAdded) {
     const path = join(plugin.root, 'package.json')
     const manifest = (await readJson(path)) as Record<string, unknown>
     const steps = isObject(manifest['cmod']) ? manifest['cmod'] : {}
-    const declared = isObject(steps['permissions']) ? steps['permissions'] : {}
-    await writeAtomically(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, permissions: { ...declared, approve: true } } }, null, 2)}\n`)
-    permissions = [...permissions, 'approve']
+    await writeAtomically(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, approve: true } }, null, 2)}\n`)
   }
-  if (existsSync(join(plugin.root, 'rules')) && !permissions.includes('prompt')) return { status: 'fail', text: 'rules/ holds rules Claude reads, and package.json "cmod" does not ask for "prompt"', fix: 'Add "permissions": { "prompt": true } to package.json "cmod", then run cmod check again.' }
-  if (permissions.length === 0) return { status: 'skip', text: 'package.json "cmod" asks for no permissions' }
+  if (!isAdded && plugin.steps.approve !== true) return { status: 'skip', text: "The mod approves none of Claude's tool calls" }
   const added = isAdded ? 'Added "approve": true to package.json "cmod", because the mod allows or asks on Claude Code\'s permission check\n    ' : ''
-  const unlisted = permissions.includes('approve') ? "\n    Anthropic's plugin directory does not list a mod that approves Claude's tool calls" : ''
-  return { status: 'pass', text: `${added}At install the person grants: ${permissions.map(permissionWords).join('; ')}${unlisted}` }
+  return { status: 'pass', text: `${added}The mod approves Claude's tool calls, so its release keeps its allow and ask answers\n    Anthropic's plugin directory does not list a mod that approves Claude's tool calls` }
 }
 
 const registerFile = join('hooks', 'register.ts')
@@ -247,8 +250,9 @@ async function checkOptions(plugin: Plugin): Promise<Result> {
 async function checkCmodFloor(plugin: Plugin): Promise<Result> {
   const floor = await cmodFloor(plugin)
   if (floor === undefined) return { status: 'skip', text: plugin.name === 'cmod' ? 'The cmod plugin depends on no cmod' : 'No @cmodjs/core 4 or later in node_modules, so the mod keeps its own cmod range' }
-  const core = floor.slice(2)
-  const isOlder = (copy: InstalledPlugin) => !isAtLeast(copy.version, core)
+  const { core, cmod } = floor
+  const range = `>=${cmod}`
+  const isOlder = (copy: InstalledPlugin) => !isAtLeast(copy.version, cmod)
   let copies = await cmodCopies()
   const isUpdated = copies.some((copy) => !copy.isLinked && isOlder(copy))
   if (isUpdated) {
@@ -260,13 +264,13 @@ async function checkCmodFloor(plugin: Plugin): Promise<Result> {
     .filter((copy) => !copy.isLinked)
     .map((copy) => copy.version)
     .toSorted((one, other) => (isAtLeast(one, other) ? 1 : -1))
-  if (oldest !== undefined && !isAtLeast(oldest, core)) return { status: 'fail', text: `@cmodjs/core ${core} needs cmod ${core}, and the newest cmod Claude Code can install here is ${oldest}`, fix: `Install @cmodjs/core ${oldest} with bun add @cmodjs/core@${oldest}, then run cmod check again.` }
+  if (oldest !== undefined && !isAtLeast(oldest, cmod)) return { status: 'fail', text: `@cmodjs/core ${core} needs cmod ${cmod}, and the newest cmod Claude Code can install here is ${oldest}`, fix: `Install @cmodjs/core ${oldest} with bun add @cmodjs/core@${oldest}, then run cmod check again.` }
   const linked = copies.find((copy) => copy.isLinked && isOlder(copy))
-  if (linked !== undefined) return { status: 'fail', text: `cmod is linked from ${linked.installPath}, at ${linked.version}`, fix: `Pull it to ${core} or newer, then run cmod check again.` }
-  const isWritten = await writeCmodFloor(plugin.root, floor)
+  if (linked !== undefined) return { status: 'fail', text: `cmod is linked from ${linked.installPath}, at ${linked.version}`, fix: `Pull it to ${cmod} or newer, then run cmod check again.` }
+  const isWritten = await writeCmodFloor(plugin.root, range)
   const lines = [
     ...(isUpdated && oldest !== undefined ? [`Updated cmod to ${oldest} through Claude Code, so it runs the @cmodjs/core this mod bundles`] : []),
-    `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${floor}", the @cmodjs/core this mod bundles, so every newer cmod runs it`,
+    `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${range}", the oldest cmod the @cmodjs/core ${core} this mod bundles runs on, so every newer cmod runs it`,
   ]
   return { status: 'pass', text: lines.join('\n    ') }
 }

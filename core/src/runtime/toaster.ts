@@ -1,7 +1,7 @@
 import type { ElementTable, RenderElement, RenderPropsOf, Timer } from 'claude-code'
 import type { Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
 import { Box, Button, drawWith, Link, Text } from '../ui/elements.js'
-import { coreVersion, grantFix, installFix, isObject, secretFix } from '../records.js'
+import { coreVersion, installFix, isObject, secretFix } from '../records.js'
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
@@ -224,15 +224,12 @@ export function createToaster(claude: Claude, name: string, version: () => strin
         .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
       return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${failedAt.toISOString()}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
     }
-    const text = `${message}\n${description ?? ''}`
-    const isGrantRefusal = text.includes(grantFix)
-    const isShownAtOnce = isCritical && !isGrantRefusal
     const logged = async () => {
       const contact = await contactOf(claude)
       const failure: LoggedFailure = { mod: name, id, message, details: await details(at), at: at.toISOString(), isCritical, root: claude.plugin.root, ...(contact === undefined ? {} : { contact }) }
-      const shows = await showsToast(failure, isShownAtOnce)
-      if (isShownAtOnce) return
-      if (shows === undefined || (shows && !isGrantRefusal)) return show()
+      const shows = await showsToast(failure, isCritical)
+      if (isCritical) return
+      if (shows !== false) return show()
       claude.ui.log(`${name}: ${message}${description === undefined ? '' : `: ${description}`}`, { to: 'debug' })
     }
     const show = () => {
@@ -275,8 +272,8 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const fixes = [
       { sentence: installFix, label: 'Plugins', onClick: () => claude.command.run({ command: 'plugin' }) },
       { sentence: secretFix, label: 'Open /config', onClick: () => claude.command.run({ command: 'config' }) },
-    ].filter(({ sentence }) => text.includes(sentence))
-    if (isShownAtOnce) show()
+    ].filter(({ sentence }) => `${message}\n${description ?? ''}`.includes(sentence))
+    if (isCritical) show()
     claude.clock.after(0, () => void logged())
     return id
   }

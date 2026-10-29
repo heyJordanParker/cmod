@@ -153,7 +153,7 @@ test('cmod setup links each folder an older cmod put in CLAUDE_CODE_PLUGIN_DIRS 
     'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
   })
 
-  const setUp = await cmod(home, 'setup', join(home, 'Developer/demo'), '--yes')
+  const setUp = await cmod(home, 'setup', join(home, 'Developer/demo'))
 
   expect(setUp.exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ env: { FOO: '1', CLAUDE_CODE_PLUGIN_DIRS: '~/Developer/missing', CLAUDE_CODE_PLUGIN_DIR_WATCH: 'false' } })

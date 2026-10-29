@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test'
 import { AttachedFile, defineMod, Note, Prompt, Reply, sessions, ToolCall, ToolResult, type AttachmentType, type Subscription, type TaskOwner, type Turn } from '../../src/mod.js'
-import { refusal } from '../../src/runtime/grants.js'
 import { createSessionsClient } from '../../src/runtime/sessions.js'
 import { Message } from '../../src/session/context/turn/message/message.js'
 import { TaskStart } from '../../src/session/goal/task.js'
@@ -9,7 +8,7 @@ import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
 
 test("a task's owner is a session: its agent type, its goal from its first prompt, and its own turns", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane', agentType: 'Explore', model: 'haiku' })
@@ -27,7 +26,7 @@ test("a task's owner is a session: its agent type, its goal from its first promp
 })
 
 test('sessions.current.turn() is the running turn, and none once Claude stops', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
 
@@ -52,7 +51,6 @@ test("a turn hears only its own messages, a session only its own agent's, and th
         ;sessions.current.goal.onMessage({ task: /./ }, (message) => void inSession.push(message.type))
       },
     }),
-    { permissions: ['conversation'] },
   )
   await tested.start()
   await tested.add({ type: Prompt, text: 'First' })
@@ -70,7 +68,7 @@ test("a turn hears only its own messages, a session only its own agent's, and th
 
 test("a task hears its subtask's replies, though it listens only for replies", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
@@ -85,7 +83,7 @@ test("a task hears its subtask's replies, though it listens only for replies", a
 })
 
 test("a running task of this session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -97,7 +95,7 @@ test("a running task of this session holds its status, its teammate name, and th
 })
 
 test("a task refuses its subtask's start", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
@@ -110,7 +108,7 @@ test("a task refuses its subtask's start", async () => {
 
 test("beforePrompt in a task hears the spawn's prompt when Claude Code starts the subagent inside the spawn, before cmod knows its task, and its note reaches the subagent", async () => {
   const prompts: { text: string; task: string | undefined }[] = []
-  const tested = testMod(defineMod({ name: 'modes', setup() {} }), { permissions: ['prompt'] })
+  const tested = testMod(defineMod({ name: 'modes', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   ;sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => {
@@ -126,7 +124,7 @@ test("beforePrompt in a task hears the spawn's prompt when Claude Code starts th
 })
 
 test("a goal refuses its session's top-level task starts", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tasks'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   ;sessions.current.goal.beforeTaskStart(() => ({ refuse: 'No new tasks' }))
@@ -136,7 +134,7 @@ test("a goal refuses its session's top-level task starts", async () => {
 })
 
 test("a task's owner keeps its context through a compaction and its turn through a stop, when its listeners refuse", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'prompt'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -151,7 +149,7 @@ test("a task's owner keeps its context through a compaction and its turn through
 })
 
 test("a note at the session's turn end, at a task owner's turn end, and on a tool call reaches Claude in the mod's tag", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'prompt'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -171,20 +169,9 @@ test("a note at the session's turn end, at a task owner's turn end, and on a too
   })
 })
 
-test('a note needs the prompt permission, even where the rest of the answer needs another', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'tools'] })
-  await tested.start()
-  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
-  sessions.current.beforeToolCall({ name: 'Edit' }, () => ({ note: 'src/gen is generated.' }))
-  await tested.settle()
-
-  expect(await claudeCodeOf(tested).fire('tool.call', { tool: 'Edit', tool_use_id: 'toolu_3', file_path: '/work/a.ts', old_string: 'a', new_string: 'b' } as never, { result: 'edited' } as never)).toEqual({ result: 'edited' })
-  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeToolCall listener failed', description: 'history calls beforeToolCall with the answer { note }, which needs "permissions": { "prompt": true } in package.json "cmod".' })
-})
-
 test('beforeAttachedFile keeps a file out of what Claude reads, or rewrites it, and beforeInstructionFile still answers for a CLAUDE.md', async () => {
   const heard: unknown[] = []
-  const tested = testMod(defineMod({ name: 'secrets', setup() {} }), { permissions: ['prompt'] })
+  const tested = testMod(defineMod({ name: 'secrets', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Read the config' })
   sessions.current.beforeAttachedFile({ path: /\.env$/ }, () => ({ refuse: '.env holds secrets' }))
@@ -201,7 +188,7 @@ test('beforeAttachedFile keeps a file out of what Claude reads, or rewrites it, 
 })
 
 test('an attached file a test adds reaches the mod as the attachment type it was given', async () => {
-  const tested = testMod(defineMod({ name: 'secrets', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'secrets', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Read the config' })
   const types: AttachmentType[] = ['contents', 'reference', 'change']
@@ -212,7 +199,7 @@ test('an attached file a test adds reaches the mod as the attachment type it was
 })
 
 test("a message sent to a task meets that task's prompt guard, and never the session's own", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation', 'prompt'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -226,7 +213,7 @@ test("a message sent to a task meets that task's prompt guard, and never the ses
 
 test('a subtask closes when its result reaches the parent task', async () => {
   const ended: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
@@ -241,7 +228,7 @@ test('a subtask closes when its result reaches the parent task', async () => {
 
 test("a session's context hears only the session's own messages, not a task's in a context with the same number", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Main loop prompt' })
   ;(await sessions.current.context()).onReply((reply) => void heard.push(reply.text))
@@ -256,7 +243,7 @@ test("a session's context hears only the session's own messages, not a task's in
 
 test("a task's TurnStart payload reads that task's messages", async () => {
   const read: string[][] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -270,7 +257,7 @@ test("a task's TurnStart payload reads that task's messages", async () => {
 })
 
 test('a listener on a turn that has ended throws, naming the turn', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.endTurn()
@@ -288,7 +275,6 @@ test("beforeSessionStart's note, title, and first prompt reach Claude Code, and 
         sessions.current.beforeSessionStart({ source: 'resume' }, () => ({ note: 'Docs held: none.', title: 'Tree pane', firstPrompt: 'Go on' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
 
@@ -305,7 +291,6 @@ test("a compaction's note reaches the window of the agent that compacted, hidden
         sessions.current.goal.beforeSessionStart({ source: 'compact' }, ({ task }) => ({ note: `Docs of ${task ?? 'the main agent'}.` }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
   const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
@@ -328,21 +313,11 @@ test("a compaction's title, Skill reload, and first prompt answer the SessionSta
           return { title: 'Compacted', reloadSkills: true, firstPrompt: 'Go on.' }
         }),
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
 
   expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'compact', session_id: 's1', context_tokens: 1200 } as never)).toEqual({ sessionTitle: 'Compacted', reloadSkills: true, initialUserMessage: 'Go on.' })
   expect(heard).toMatchObject([{ source: 'compact', model: expect.any(String), contextTokenCount: 1200 }])
-})
-
-test("a compaction's note needs the prompt permission, as every note does", async () => {
-  const tested = testMod(defineMod({ name: 'tracer', setup: () => void sessions.current.beforeSessionStart(() => ({ note: 'Docs held: none.' })) }))
-  const kept = { role: 'user' as const, text: 'The summary.', toolUses: [] }
-
-  expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', messages: [] } as never, { messages: [kept] } as never)).toEqual({ messages: [kept] })
-  expect(tested.shown.notes).toEqual([])
-  expect(tested.shown.toasts.map(({ message }) => message)).toContain('Answered additionalContext without your grant to "Add text Claude reads and start turns", so cmod dropped it')
 })
 
 test('beforeModelChange refuses a switch, and onCwdChange hears the new folder without answering', async () => {
@@ -355,7 +330,6 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
         sessions.current.onCwdChange((change) => void moved.push({ cwd: change.cwd, previous: change.previous }))
       },
     }),
-    { permissions: ['model'] },
   )
   await tested.start()
   const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
@@ -377,7 +351,6 @@ test("beforeModelChange's note reaches Claude after the switch, and beforeProjec
         sessions.current.beforeProjectSetup(() => ({ note: 'Run bun install first.' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
   const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
@@ -390,7 +363,7 @@ test("beforeModelChange's note reaches Claude after the switch, and beforeProjec
 })
 
 test("a model change's note reaches only the switch it answered, so a switch refused later leaves none for the next", async () => {
-  const tested = testMod(defineMod({ name: 'modes', setup: () => void sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' })) }), { permissions: ['prompt'] })
+  const tested = testMod(defineMod({ name: 'modes', setup: () => void sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' })) }))
   await tested.start()
   const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
   const code = claudeCodeOf(tested)
@@ -401,27 +374,6 @@ test("a model change's note reaches only the switch it answered, so a switch ref
   expect(await code.fire('PostModelSwitch', { ...switched, to_model: 'sonnet', requested_model: 'sonnet' } as never)).toEqual({})
 })
 
-test('a model change or project setup note needs the prompt permission, as every note does', async () => {
-  const tested = testMod(
-    defineMod({
-      name: 'modes',
-      setup() {
-        sessions.current.beforeModelChange(() => ({ note: 'Keep answers short.' }))
-        sessions.current.beforeProjectSetup(() => ({ note: 'Run bun install first.' }))
-      },
-    }),
-  )
-  await tested.start()
-  const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
-  const code = claudeCodeOf(tested)
-
-  await code.fire('PreModelSwitch', switched as never)
-
-  expect(await code.fire('PostModelSwitch', switched as never)).toEqual({})
-  expect(await code.fire('Setup', { session_id: 's1', cwd: '/work/a', trigger: 'init' } as never)).toEqual({})
-  expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual([expect.stringContaining('without your grant to "Add text Claude reads and start turns"')])
-})
-
 test("beforePrompt's note reaches Claude beside the prompt, and its title names the session", async () => {
   const tested = testMod(
     defineMod({
@@ -430,7 +382,6 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
         sessions.current.beforePrompt({ text: /^\/?commit/ }, () => ({ note: 'The person asked for a commit.', title: 'Commit' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
 
@@ -455,7 +406,6 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
         sessions.current.beforeToolResult({ name: 'Write' }, () => ({ isError: true, note: 'Write only under src/.' }))
       },
     }),
-    { permissions: ['prompt'] },
   )
   await tested.start()
   const used = (tool_name: string, tool_response: unknown) => ({ session_id: 's1', cwd: '/work', tool_name, tool_input: {}, tool_use_id: 'toolu_1', tool_response }) as never
@@ -465,33 +415,27 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
   expect(await claudeCodeOf(tested).fire('PostToolUse', used('Write', {}))).toEqual({ block: 'Write only under src/.' })
 })
 
-test('beforePermissionCheck approves a call with approve, and asks or refuses one with no permission', async () => {
-  const guard = (permissions: string[]) =>
-    testMod(
-      defineMod({
-        name: 'auto-approve',
-        setup() {
-          sessions.current.beforePermissionCheck({ name: 'Read' }, () => ({ allow: true }))
-          sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^git push/ } }, () => ({ ask: 'Pushing leaves this computer.' }))
-          sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
-        },
-      }),
-      { permissions },
-    )
+test('beforePermissionCheck allows, asks about, or refuses a call', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'auto-approve',
+      setup() {
+        sessions.current.beforePermissionCheck({ name: 'Read' }, () => ({ allow: true }))
+        sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^git push/ } }, () => ({ ask: 'Pushing leaves this computer.' }))
+        sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
+      },
+    }),
+  )
   const check = (tool: string, input: object) => ({ tool, input, tool_use_id: 'toolu_1' }) as never
+  await tested.start()
 
-  const allowed = guard(['approve'])
-  await allowed.start()
-  expect(await claudeCodeOf(allowed).fire('tool.check', check('Read', { file_path: '/work/a.ts' }))).toEqual({ decision: 'allow' })
-  expect(await claudeCodeOf(allowed).fire('tool.check', check('Bash', { command: 'git push' }))).toEqual({ decision: 'ask', reason: 'Pushing leaves this computer.' })
-
-  const unallowed = guard([])
-  await unallowed.start()
-  expect(await claudeCodeOf(unallowed).fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
+  expect(await claudeCodeOf(tested).fire('tool.check', check('Read', { file_path: '/work/a.ts' }))).toEqual({ decision: 'allow' })
+  expect(await claudeCodeOf(tested).fire('tool.check', check('Bash', { command: 'git push' }))).toEqual({ decision: 'ask', reason: 'Pushing leaves this computer.' })
+  expect(await claudeCodeOf(tested).fire('tool.check', check('Bash', { command: 'rm -rf build' }))).toEqual({ decision: 'deny', reason: 'Use trash instead of rm.' })
 })
 
-test('abort stops a running turn with the prompt permission, and throws on an ended one', async () => {
-  const tested = testMod(defineMod({ name: 'guard', setup() {} }), { permissions: ['prompt'] })
+test('abort stops a running turn, and throws on an ended one', async () => {
+  const tested = testMod(defineMod({ name: 'guard', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Deploy to prod' })
 
@@ -527,7 +471,7 @@ test('onToolResult hears the files a call changed and read, with the tool and it
 })
 
 test('a turn searches only its own messages', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.endTurn()
@@ -540,7 +484,7 @@ test('a turn searches only its own messages', async () => {
 })
 
 test("a session searches its own agent's messages, its goal every agent's, and a task's owner only its own", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const task = await tested.startTask({ title: 'Find the pane' })
@@ -557,7 +501,7 @@ test("a session searches its own agent's messages, its goal every agent's, and a
 })
 
 test('a search reads page after page until the loop breaks', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   for (let index = 0; index < 120; index += 1) await tested.add({ type: Prompt, text: `Rename pane ${index}` })
 
@@ -580,7 +524,6 @@ test('beforePrompt rewrites a typed prompt and refuses another', async () => {
         sessions.current.beforePrompt((prompt) => (prompt.text.includes('prod') ? { refuse: 'No deploys to prod from here.' } : { text: `${prompt.text}, with tests` }))
       },
     }),
-    { permissions: ['conversation', 'prompt'] },
   )
   await tested.start()
 
@@ -590,32 +533,23 @@ test('beforePrompt rewrites a typed prompt and refuses another', async () => {
   expect(await claudeCodeOf(tested).fire('prompt.submit', { ...typed, text: 'Deploy to prod' })).toEqual({ drop: 'No deploys to prod from here.' })
 })
 
-test('beforeToolCall refuses a call with no permission, and rewrites one only with the tools permission', async () => {
-  const guard = (permissions: string[]) =>
-    testMod(
-      defineMod({
-        name: 'guard',
-        setup() {
-          sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
-          sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^ls$/ } }, () => ({ input: { command: 'ls -la' } }))
-        },
-      }),
-      { permissions },
-    )
+test('beforeToolCall refuses one call and rewrites another', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'guard',
+      setup() {
+        sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
+        sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^ls$/ } }, () => ({ input: { command: 'ls -la' } }))
+      },
+    }),
+  )
   const call = (command: string) => ({ tool: 'Bash', tool_use_id: 'toolu_9', command }) as never
+  await tested.start()
 
-  const unallowed = guard([])
-  await unallowed.start()
-  expect(await claudeCodeOf(unallowed).fire('tool.call', call('rm -rf build'))).toEqual({ deny: 'Use trash instead of rm.' })
-  expect(await claudeCodeOf(unallowed).fire('tool.call', call('ls'))).toEqual({} as never)
-  await unallowed.settle()
-  expect(unallowed.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The beforeToolCall listener failed', description: 'guard calls beforeToolCall with the answer { input }, which needs "permissions": { "tools": true } in package.json "cmod".' }])
-
-  const allowed = guard(['tools'])
-  await allowed.start()
-  await claudeCodeOf(allowed).fire('tool.call', call('ls'))
-  await allowed.settle()
-  expect(allowed.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
+  expect(await claudeCodeOf(tested).fire('tool.call', call('rm -rf build'))).toEqual({ deny: 'Use trash instead of rm.' })
+  await claudeCodeOf(tested).fire('tool.call', call('ls'))
+  await tested.settle()
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
 test("beforeToolCall's cwd is the folder a subagent runs in, which a task given its own cwd changes", async () => {
@@ -627,7 +561,6 @@ test("beforeToolCall's cwd is the folder a subagent runs in, which a task given 
         sessions.current.goal.beforeToolCall((call) => void folders.push(call.cwd))
       },
     }),
-    { permissions: ['tools', 'tasks', 'conversation'] },
   )
   await tested.start()
   const call = (agentId?: string) => ({ tool: 'Read', tool_use_id: 'toolu_9', file_path: 'a.ts', ...(agentId === undefined ? {} : { agentId }) }) as never
@@ -653,7 +586,6 @@ test('beforeTaskStart picks the model a task runs on', async () => {
         sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ owner: { model: 'haiku' } }))
       },
     }),
-    { permissions: ['conversation', 'tasks'] },
   )
   await tested.start()
 
@@ -673,7 +605,6 @@ test("beforeTaskStart rewrites a task's prompt and owner, and the task's agent s
         sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => void prompts.push(prompt.text))
       },
     }),
-    { permissions: ['conversation', 'tasks', 'prompt'] },
   )
   await tested.start()
   await tested.add({ type: Prompt, text: 'Find the config' })
@@ -693,7 +624,6 @@ test('a removed before listener stops answering', async () => {
         listening = sessions.current.beforePrompt(() => ({ refuse: 'Not now.' }))
       },
     }),
-    { permissions: ['conversation', 'prompt'] },
   )
   await tested.start()
   listening?.remove()
@@ -710,7 +640,6 @@ test('a before listener removed after /clear stops answering in the new session'
         listening = sessions.current.beforePrompt(() => ({ refuse: 'Stopped by listener' }))
       },
     }),
-    { permissions: ['conversation', 'prompt'] },
   )
   await tested.start()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'clear', session_id: 'after-clear' })
@@ -729,7 +658,7 @@ test('a task heard starting in another running session is running, and a send re
     called.push(input)
     return { value: null }
   }
-  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true, permissionRefusal: (call, permission) => refusal({ name: 'watcher', declared: [], home: undefined }, call, permission) })
+  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {} })
   const owners: TaskOwner[] = []
   client.sessions.onTaskStart((task) => void owners.push(task.owner))
   await fake.settle()
@@ -745,7 +674,7 @@ test('a task heard starting in another running session is running, and a send re
 test("a session of another project reaches a mod's listener on that session, never its listener on every session", async () => {
   const fake = fakeClaude({ name: 'watcher', root: '/plugins/watcher' })
   fake.fakes.cmod.call = async () => ({ value: [] })
-  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {}, isGranted: () => true, permissionRefusal: (call, permission) => refusal({ name: 'watcher', declared: [], home: undefined }, call, permission) })
+  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {} })
   const heard: string[] = []
   client.sessions.onPrompt((prompt) => void heard.push(`every: ${prompt.text}`))
   await fake.settle()
@@ -758,7 +687,7 @@ test("a session of another project reaches a mod's listener on that session, nev
 
 test("a task owner's goal hears its own update", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.startTask({ title: 'Find the pane' })
@@ -776,7 +705,7 @@ test("a task owner's goal hears its own update", async () => {
 
 test("a task goal's event payload updates that task's goal, never the session's", async () => {
   const payloads: { update(goal: { text: string }): Promise<void> }[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Main goal' })
   await tested.startTask({ title: 'Find the pane' })
@@ -792,17 +721,9 @@ test("a task goal's event payload updates that task's goal, never the session's"
   expect([await sessions.current.goal.text(), await task!.owner.goal.text()]).toEqual(['Main goal', 'Updated through event'])
 })
 
-test('callTool with CronList or CronDelete needs the tools permission', async () => {
-  const tested = testMod(defineMod({ name: 'runner', setup() {} }), { permissions: [] })
-  await tested.start()
-
-  await expect(sessions.current.callTool({ name: 'CronList', input: {} })).rejects.toThrow('runner calls callTool, which needs "permissions": { "tools": true } in package.json "cmod".')
-  expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
-})
-
 test("a task owner's goal hears the owner and the tasks it started", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const owner = await tested.startTask({ title: 'Find the pane' })
@@ -818,13 +739,12 @@ test("a task owner's goal hears the owner and the tasks it started", async () =>
   expect(heard).toEqual(['Owner reply', 'Child reply'])
 })
 
-test('callTool runs a tool in this session and answers its result, with the tools permission alone', async () => {
+test('callTool runs a tool in this session and answers its result', async () => {
   const tested = testMod(
     defineMod({
       name: 'runner',
       setup() {},
     }),
-    { permissions: ['tools'] },
   )
   tested.fakes.tool.call = async () => ({ result: { stdout: 'ok' }, text: 'ok' })
   await tested.start()
@@ -836,16 +756,8 @@ test('callTool runs a tool in this session and answers its result, with the tool
   expect(tested.calls.filter((call) => call.call === 'tool.call').map((call) => call.args[0])).toEqual([{ command: 'bun run build', tool: 'Bash' }])
 })
 
-test('callTool with CronCreate needs the prompt permission, because a schedule starts turns', async () => {
-  const tested = testMod(defineMod({ name: 'runner', setup() {} }), { permissions: ['tools'] })
-  await tested.start()
-
-  await expect(sessions.current.callTool({ name: 'CronCreate', input: { cron: '0 9 * * *', prompt: 'Standup' } })).rejects.toThrow('runner calls callTool, which needs "permissions": { "prompt": true } in package.json "cmod".')
-  expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
-})
-
 test('surfaces() names the Claude apps showing the session, and an ended session shows in none', async () => {
-  const tested = testMod(defineMod({ name: 'compact', setup() {} }), { permissions: ['conversation'], sessions: [{ id: 'older', lastAt: '2026-10-10T09:00:00.000Z', messages: [{ type: Prompt, text: 'Older work' }] }] })
+  const tested = testMod(defineMod({ name: 'compact', setup() {} }), { sessions: [{ id: 'older', lastAt: '2026-10-10T09:00:00.000Z', messages: [{ type: Prompt, text: 'Older work' }] }] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Now' })
   const older = (await sessions.list()).find((session) => session.id === 'older')
@@ -882,7 +794,6 @@ test("a subagent's task has no isBackground and no forkedFrom, takes every befor
         sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
       },
     }),
-    { permissions: ['conversation', 'tasks'] },
   )
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
@@ -907,7 +818,6 @@ test("a fork's owner is a subagent forked from this session, without an agent ty
         sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
       },
     }),
-    { permissions: ['conversation', 'tasks'] },
   )
   const spawned: unknown[] = []
   tested.fakes.agent.spawn = async (args) => (spawned.push(args), { agentId: 'agent-7', model: 'opus' })
@@ -935,7 +845,6 @@ test("a background task's owner is a new session whose id is the task's, its bef
         sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
       },
     }),
-    { permissions: ['conversation', 'tasks'] },
   )
   await tested.start()
   await tested.add({ type: Prompt, text: 'Ship the release' })
@@ -966,7 +875,6 @@ test("a clone is a background task whose owner is forked from this session, and 
         sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
       },
     }),
-    { permissions: ['conversation', 'tasks'] },
   )
   await tested.start()
   await tested.add({ type: Prompt, text: 'Store the notes' })

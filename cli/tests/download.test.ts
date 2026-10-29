@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
-import { cmod, cmodFromSource, deleteTemporaryHomes, hashOf, temporaryHome, writeFiles } from './cmod.js'
+import { cmod, cmodFromSource, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -55,7 +55,7 @@ async function setUp(home: string, install: string) {
     'package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh' } }),
     'setup/install.sh': `#!/bin/sh\nset -e\n${install}\n`,
   })
-  return cmod(home, 'setup', root, '--events', '--consent', await hashOf(root))
+  return cmod(home, 'setup', root, '--events')
 }
 
 const data = (home: string, ...path: string[]) => join(home, '.local/share/cmod/data/demo', ...path)

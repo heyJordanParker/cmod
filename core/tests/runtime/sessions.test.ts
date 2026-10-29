@@ -21,7 +21,7 @@ function titles() {
       })
     },
   })
-  return { tested: testMod(mod, { permissions: ['conversation'] }), seen }
+  return { tested: testMod(mod), seen }
 }
 
 test("a new session's title is the first line of its first prompt, in sessions.current and in sessions.list()", async () => {
@@ -59,7 +59,7 @@ function colors(isListing: boolean) {
   return { mod, seen }
 }
 
-test('sessions.current.color follows /color in a mod without the conversation grant, and /color default clears it', async () => {
+test('sessions.current.color follows /color, and /color default clears it', async () => {
   const { mod, seen } = colors(false)
   const tested = testMod(mod)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
@@ -74,7 +74,7 @@ test('sessions.current.color follows /color in a mod without the conversation gr
 
 test("the color a session already has reaches sessions.current when the mod starts, and each listed session carries its own", async () => {
   const { mod, seen } = colors(true)
-  const tested = testMod(mod, { permissions: ['conversation'], sessions: [{ id: 'test-session', color: 'cyan' }, { id: 'plain', title: 'No color picked' }] })
+  const tested = testMod(mod, { sessions: [{ id: 'test-session', color: 'cyan' }, { id: 'plain', title: 'No color picked' }] })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
   await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'Fix the login bug' })
 
@@ -89,7 +89,7 @@ test('/color with no color names the color to give in a test, because Claude Cod
 
 test("a listener under a task still hears that task's subtasks start after /clear moves it to the new session", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { permissions: ['conversation'] })
+  const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
   const parent = await tested.startTask({ title: 'Find the pane' })
   const [task] = await sessions.current.goal.tasks()
@@ -115,54 +115,31 @@ test('a mod that starts after the first prompt takes the title from the index, n
   ])
 })
 
-async function linkedMod(setup: () => void, declared: readonly string[]) {
+async function installedMod(setup: () => void) {
   const fake = fakeClaude({ name: 'tracer', root: '/plugins/tracer' })
   fake.store.set('cmod:announced', { version: '1.0.0', added: [] })
-  const logged: unknown[] = []
-  fake.fakes.cmod.call = async (call) => {
-    if (call.method !== 'cmod:failed') return null
-    logged.push(call.input)
-    return { showsToast: true }
-  }
+  fake.fakes.cmod.call = async (call) => (call.method === 'cmod:failed' ? { showsToast: true } : null)
   const lifecycle = createLifecycle(defineMod({ name: 'tracer', setup }))
-  await lifecycle.start(fake.claude, async () => ({ name: 'tracer', root: '/plugins/tracer', version: '1.0.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: { permissions: declared }, granted: [] }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'tracer', root: '/plugins/tracer', version: '1.0.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  return { fake, lifecycle, logged }
+  return { fake, lifecycle }
 }
 
-test('a linked mod that never declared conversation and listens on every session shows a toast naming the declaration to add', async () => {
-  const { lifecycle } = await linkedMod(() => void sessions.onPrompt(() => undefined), [])
-
-  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'Hears nothing from the other sessions', description: 'tracer calls on, which needs "permissions": { "conversation": true } in package.json "cmod".' }])
-})
-
-test('a mod that declared conversation without the grant and listens on every session logs where to turn it on, and shows no toast', async () => {
-  const { lifecycle, logged } = await linkedMod(() => void sessions.onPrompt(() => undefined), ['conversation'])
+test('a mod listens on every session, with nothing declared in package.json "cmod"', async () => {
+  const { fake, lifecycle } = await installedMod(() => void sessions.onPrompt(() => undefined))
 
   expect(lifecycle.toasts).toEqual([])
-  expect(logged).toEqual([expect.objectContaining({ message: 'Hears nothing from the other sessions', details: expect.stringContaining('tracer calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.') })])
+  expect(fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method: string }).method === conversationMethods.subscribe ? [(input as { input: unknown }).input] : []))).toEqual([{ session: '*', subscriptions: [{ event: 'prompt', matcher: undefined }] }])
 })
 
-async function noteBeforeBash(declared: readonly string[]) {
-  const tested = await linkedMod(() => void sessions.current.beforeToolCall({ name: 'Bash' }, () => ({ note: 'Run it from the project root.' })), declared)
-  await tested.lifecycle.route('classic.SessionStart', { session_id: 'test-session', transcript_path: '/t', cwd: '/work', hook_event_name: 'SessionStart', source: 'startup' } as unknown as Frozen<Args<'classic.SessionStart'>>, async () => ({}))
+test("a mod's note before a tool call reaches the cmod plugin, with nothing declared in package.json \"cmod\"", async () => {
+  const { fake, lifecycle } = await installedMod(() => void sessions.current.beforeToolCall({ name: 'Bash' }, () => ({ note: 'Run it from the project root.' })))
+  await lifecycle.route('classic.SessionStart', { session_id: 'test-session', transcript_path: '/t', cwd: '/work', hook_event_name: 'SessionStart', source: 'startup' } as unknown as Frozen<Args<'classic.SessionStart'>>, async () => ({}))
   const ask = { to: 'tracer', caller: 'cmod', method: conversationMethods.before, input: { session: 'test-session', event: 'toolCall', change: { type: 'message', message: { id: 't1', at: '', type: 'toolCall', session: 'test-session', context: 1, callId: 't1', name: 'Bash', input: {}, cwd: '/work', files: { read: [], changed: [] } } } } }
-  const answer = await tested.lifecycle.route('cmod.call', ask, async () => ({ deny: 'unanswered' }))
-  await tested.fake.settle()
-  return { ...tested, answer }
-}
 
-test("a linked mod's note that needs a permission it never declared changes nothing, and its toast names the declaration to add", async () => {
-  const { answer, lifecycle } = await noteBeforeBash([])
+  const answer = await lifecycle.route('cmod.call', ask, async () => ({ deny: 'unanswered' }))
+  await fake.settle()
 
-  expect(answer).toEqual({ value: null })
-  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The beforeToolCall listener failed', description: 'tracer calls beforeToolCall with the answer { note }, which needs "permissions": { "prompt": true } in package.json "cmod".' }])
-})
-
-test("a mod's note that needs a permission it declared without the grant changes nothing, and logs where to turn it on without a toast", async () => {
-  const { answer, lifecycle, logged } = await noteBeforeBash(['prompt'])
-
-  expect(answer).toEqual({ value: null })
+  expect(answer).toEqual({ value: { note: '<tracer_mod>\nRun it from the project root.\n</tracer_mod>' } })
   expect(lifecycle.toasts).toEqual([])
-  expect(logged).toEqual([expect.objectContaining({ message: 'The beforeToolCall listener failed', details: expect.stringContaining('tracer calls beforeToolCall with the answer { note } without your grant to "Add text Claude reads and start turns". Turn it on in Settings.') })])
 })

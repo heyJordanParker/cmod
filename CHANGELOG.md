@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-29
+
+### Removed
+- The permission system is gone. A mod reaches any host, runs any program, writes any file, changes any Claude Code setting, reads other sessions, and adds text Claude reads, with nothing declared, and the person is asked nothing at install or update. Every mod could already reach Claude Code directly from its own `hooks/register.ts`, so the checks stopped only honest authors. Delete `"permissions"` from package.json "cmod". `cmod check` fails on a mod built on `@cmodjs/core` 5.0.0 that still has it, and names the fix.
+- `mod.permissions`, the `permissions` option of `testMod`, and `cmod permission` are gone, with the permission rows of the install page and Settings, the `Ask before an update adds a permission` preference, and the permissions an update toast named.
+
+### Changed
+- A mod that approves Claude's tool calls declares `"approve": true` directly in package.json "cmod", instead of inside `"permissions"`. `cmod check` writes it there when the mod's code needs it. `cmod publish` still leaves the approving code out of a mod without it, so the mod can be listed in Anthropic's plugin directory.
+- `cmod check` writes a mod's `cmod` dependency as `>=` the oldest cmod its `@cmodjs/core` runs on, 5.0.0 for this release, instead of `>=` the `@cmodjs/core` version itself. A later library release raises it only when the library needs something new from cmod, so a mod no longer forces everyone onto the newest cmod.
+
+### Fixed
+- A mod that depends on another mod loads when installed from its published marketplace. Claude Code looks for a bare dependency only in the mod's own marketplace, so `cmod publish` now lists each mod the `plugin.json` depends on there, from the GitHub `repository` in that mod's installed `plugin.json`, as it lists cmod. Write the dependency bare, such as `{ "name": "oneclaude", "version": ">=0.9.0" }`, which also resolves in the marketplace `cmod link` writes. The cmod plugin keeps the copies of each plugin at one version, as it does for cmod.
+
+Mods built on any 4.x `@cmodjs/core` keep running unchanged: cmod grants them everything they declare, without asking.
+
 ## [4.3.4] - 2026-10-29
 
 ### Fixed

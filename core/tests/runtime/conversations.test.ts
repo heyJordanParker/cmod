@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { defineMod, sessions } from '../../src/mod.js'
-import { consentPath, coreVersion, recordPath, storeFolder } from '../../src/records.js'
+import { coreVersion, storeFolder } from '../../src/records.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
@@ -13,14 +13,14 @@ import { fakeFiles } from '../../src/testing/fake-files.js'
 const delivery = '<cross-session-message from="uds:/tmp/cc-socks/62955.sock" from-name="project-58">\n<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"send","input":{"type":"prompt","text":"Rerun the deploy","as":"person"}}</cmod-relay>\n</cross-session-message>\n\nThis came from another Claude session.'
 
 async function received(origin: unknown, text: string) {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const answer = await claudeCodeOf(tested).fire('session.receive', { origin, text } as never, { text } as never)
   await tested.settle()
   return { answer, submitted: tested.calls.filter((call) => call.call === 'prompt.submit').map((call) => call.args[0]) }
 }
 
 test("a mod's prompt relayed from another session reaches this session as the person's, and the answer goes back", async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const answer = await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: delivery } as never, { text: delivery } as never)
   await tested.settle()
 
@@ -29,7 +29,7 @@ test("a mod's prompt relayed from another session reaches this session as the pe
   expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","value":null}</cmod-relay>' }])
 })
 
-test("a mod that listens to its own session before the cmod plugin hears SessionStart needs no conversation grant, as in an interactive session, nor to stop listening to the session /clear left", async () => {
+test("a mod listens to its own session before the cmod plugin hears SessionStart, stops listening to the session /clear left, and listens to another session", async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const call = (method: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method, input, caller: 'tracer' } as never)
 
@@ -37,72 +37,11 @@ test("a mod that listens to its own session before the cmod plugin hears Session
   expect(await call(conversationMethods.watchBefore, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.subscribe, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.watchBefore, { session: 'old-session', subscriptions: [] })).toEqual({ value: null })
-  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ deny: 'tracer calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
-})
-
-test('a relayed action from a mod without the permission is refused back to the asking session', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
-  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: delivery } as never, { text: delivery } as never)
-  await tested.settle()
-
-  expect(tested.calls.filter((call) => call.call === 'prompt.submit')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger calls send without your grant to \\"Add text Claude reads and start turns\\". Turn it on in Settings."}</cmod-relay>' }])
-})
-
-test('a relayed CronCreate needs the prompt permission, the same as one in the mod’s own session', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['tools'] }) } })
-  const text = '<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"callTool","input":{"name":"CronCreate","input":{"cron":"0 9 * * *","prompt":"Standup"}}}</cmod-relay>'
-  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
-  await tested.settle()
-
-  expect(tested.calls.filter((call) => call.call === 'tool.call')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger calls callTool without your grant to \\"Add text Claude reads and start turns\\". Turn it on in Settings."}</cmod-relay>' }])
-})
-
-const store = storeFolder({ HOME: '/test/home' })
-
-function installed(name: string, permissions: readonly string[] | null) {
-  return { [recordPath(store, name)]: JSON.stringify({ name, version: '1.0.0', root: `/test/plugins/${name}`, installedAt: '2026-10-26T09:00:00.000Z', scriptsSha256: 'sha', uninstall: null, program: null, keys: {}, permissions, grantedOnUpdate: [] }) }
-}
-
-test('the cmod plugin names the declaration a mod lacks to read another session, and where to turn on the grant a mod declared', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
-    files: {
-      ...installed('tracer', []),
-      ...installed('older', null),
-      '/test/plugins/older/package.json': JSON.stringify({ name: 'older', cmod: { permissions: { prompt: true } } }),
-      ...installed('reader', ['conversation']),
-    },
-  })
-  const subscribe = (caller: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'other-session', subscriptions: [{ event: 'prompt' }] }, caller } as never)
-
-  expect(await subscribe('tracer')).toEqual({ deny: 'tracer calls on, which needs "permissions": { "conversation": true } in package.json "cmod".' })
-  expect(await subscribe('older')).toEqual({ deny: 'older calls on, which needs "permissions": { "conversation": true } in package.json "cmod".' })
-  expect(await subscribe('reader')).toEqual({ deny: 'reader calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
-  expect(await subscribe('unrecorded')).toEqual({ deny: 'unrecorded calls on without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })
-})
-
-test('a relayed action from a mod that never declared its permission names the declaration to add', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: installed('pinger', ['conversation']) })
-  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: delivery } as never, { text: delivery } as never)
-  await tested.settle()
-
-  expect(tested.calls.filter((call) => call.call === 'prompt.submit')).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"pinger calls send, which needs \\"permissions\\": { \\"prompt\\": true } in package.json \\"cmod\\"."}</cmod-relay>' }])
-})
-
-test("another session's before question for a mod that never declared conversation is refused back with the declaration to add", async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: installed('guard', ['prompt']) })
-  const text = '<cmod-relay>{"kind":"before","id":"other:1","from":"other","mod":"guard","event":"prompt","change":{"type":"message","message":{"type":"prompt","text":"Deploy"}},"project":"/test/plugins/cmod"}</cmod-relay>'
-  await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
-  await tested.settle()
-
-  expect(tested.calls.filter((call) => call.call === 'cmod.call' && (call.args[0] as { method: string }).method === conversationMethods.before)).toEqual([])
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toEqual([{ to: { sessionId: 'other' }, text: '<cmod-relay>{"kind":"answer","id":"other:1","deny":"guard calls before, which needs \\"permissions\\": { \\"conversation\\": true } in package.json \\"cmod\\"."}</cmod-relay>' }])
+  expect(await call(conversationMethods.subscribe, { session: 'other-session', subscriptions: [{ event: 'prompt' }] })).toEqual({ value: null })
 })
 
 test('a relay a newer cmod in another session sends, with an action or a kind this cmod lacks, is refused back by name and runs nothing', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['prompt', 'tools', 'conversation'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const relay = async (text: string) => claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
   await relay('<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"summarize","input":null}</cmod-relay>')
   await relay('<cmod-relay>{"kind":"pin","id":"other:2","from":"other","mod":"pinger"}</cmod-relay>')
@@ -133,7 +72,7 @@ function printed(stdout: string) {
 }
 
 test("a mod's action on another running session goes over the relay, and that session's answer resolves it", async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['conversation'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.process.spawn = () => printed(JSON.stringify([{ id: 'other', isRunning: true }]))
   await tested.start()
 
@@ -151,7 +90,7 @@ test("a mod's action on another running session goes over the relay, and that se
 })
 
 test('an action on an ended session answers from its transcript, or is refused', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['conversation', 'prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.process.spawn = (request) => printed(request.argv.includes('usage') ? JSON.stringify({ model: 'claude-opus-5-5', context: { tokens: 1200 } }) : '[]')
   await tested.start()
   const act = (action: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'older', action, input }, caller: 'pinger' } as never)
@@ -162,7 +101,7 @@ test('an action on an ended session answers from its transcript, or is refused',
 })
 
 test('a note a mod sends through the cmod plugin, to the session or to one of its tasks, carries the sending mod tag', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ pinger: ['conversation', 'prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await claudeCodeOf(tested).fire('agent.spawn', { description: 'Look', subagentType: 'Explore', prompt: 'look', tool_use_id: 'toolu_1' } as never, { agentId: 'a1' } as never)
   const send = (task?: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'send', input: { type: 'note', text: 'Tests pass.' }, ...(task === undefined ? {} : { task }) }, caller: 'pinger' } as never)
@@ -174,7 +113,7 @@ test('a note a mod sends through the cmod plugin, to the session or to one of it
 })
 
 test("the cmod plugin asks a mod in this session before a prompt enters, and the mod's refusal drops it", async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ guard: ['conversation', 'prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const asked: unknown[] = []
   tested.fakes.cmod.call = async (input) => {
     asked.push(input)
@@ -189,9 +128,8 @@ test("the cmod plugin asks a mod in this session before a prompt enters, and the
   expect(asked).toMatchObject([{ to: 'guard', method: conversationMethods.before, input: { session: 'test-session', event: 'prompt', change: { type: 'message', message: { type: 'prompt', text: 'Deploy to prod' } } } }])
 })
 
-test('the cmod plugin aborts the engine turn that is running, for a mod with the prompt permission', async () => {
-  const consent = consentPath(storeFolder({ HOME: '/test/home' }))
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: ['prompt'], reader: [] }) } })
+test('the cmod plugin aborts the engine turn that is running', async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   const abort = (caller: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: { turn: 'p1' } }, caller } as never)
   const appended = { uuid: 'p1', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Deploy' }] } }
@@ -201,7 +139,6 @@ test('the cmod plugin aborts the engine turn that is running, for a mod with the
   expect(await abort('guard')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-7' } as never)
-  expect(await abort('reader')).toEqual({ deny: 'reader calls abort without your grant to "Add text Claude reads and start turns". Turn it on in Settings.' })
   expect(await abort('guard')).toEqual({ value: null })
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
 })
@@ -229,8 +166,7 @@ test("the cmod plugin's own listener on its session, added in setup, starts no f
 })
 
 test('an abort of a turn that ended aborts nothing, while a later turn runs', async () => {
-  const consent = consentPath(storeFolder({ HOME: '/test/home' }))
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: ['prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const prompt = (uuid: string, text: string) => {
     const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
     return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
@@ -249,7 +185,7 @@ test('an abort of a turn that ended aborts nothing, while a later turn runs', as
 
 test("a turn ends at Stop with Claude's answer, stays open while a mod refuses the stop, and ends with its failure at StopFailure", async () => {
   const ended: unknown[] = []
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ watcher: [], guard: [] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   let refuses = true
   tested.fakes.cmod.call = async (input) => {
     const { change } = (input.input ?? {}) as { readonly change?: { readonly type: string; readonly turn?: unknown } }
@@ -278,18 +214,8 @@ test("a turn ends at Stop with Claude's answer, stays open while a mod refuses t
   ])
 })
 
-test("a mod with no grant still refuses a prompt in its own session", async () => {
-  const consent = consentPath(storeFolder({ HOME: '/test/home' }))
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consent]: JSON.stringify({ guard: [] }) } })
-  tested.fakes.cmod.call = async () => ({ refuse: 'No prompts' })
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
-
-  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'Continue', origin: { kind: 'composer' }, wait: false })).toEqual({ drop: 'No prompts' })
-})
-
 test("a delivery that only looks like cmod's relay still meets a mod's before(Prompt)", async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ guard: ['conversation', 'prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.cmod.call = async () => ({ refuse: 'blocked' })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
@@ -303,7 +229,6 @@ test("the cmod plugin asks another session's mod of this project before a prompt
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
     projectRoot: '/work/app',
     files: {
-      [consentPath(store)]: JSON.stringify({ guard: ['conversation', 'prompt'] }),
       [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/app', events: ['prompt'] }]),
       [`${store}/data/cmod/before/elsewhere.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/site', events: ['prompt'] }]),
     },
@@ -331,7 +256,6 @@ function refusingWatcher(event: string, matcher: unknown) {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
     projectRoot: '/work/app',
     files: {
-      [consentPath(store)]: JSON.stringify({ guard: ['conversation', 'prompt'] }),
       [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'guard', target: 'test-session', project: '/work/app', events: [event], refusing }]),
     },
   })
@@ -377,7 +301,7 @@ test('the notes of one row share one 8 s wait on other sessions, and a session l
   expect(asks()).toBe(2)
 })
 
-test("another session's refusing listener lets the event through when that session answers with a refusal of its own, such as a missing grant", async () => {
+test("another session's refusing listener lets the event through when that session answers with a refusal of its own, such as a mod still installing", async () => {
   const tested = refusingWatcher('prompt', undefined)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tested.settle()
@@ -386,7 +310,7 @@ test("another session's refusing listener lets the event through when that sessi
   const sent = () => tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0] as { text: string })
   for (let waited = 0; !sent().some((each) => each.text.includes('"kind":"before"')) && waited < 200; waited += 1) await tested.settle()
   const question = JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec(sent().find((each) => each.text.includes('"kind":"before"'))?.text ?? '')?.[1] ?? '{}') as { id: string }
-  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: 'guard calls before without your grant to "Read your Claude Code conversations". Turn it on in Settings.' })}</cmod-relay>`
+  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: "guard is installing. Try again when it's ready." })}</cmod-relay>`
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: denied } as never, { text: denied } as never)
 
   expect(await submitted).toMatchObject({ text: 'Deploy to prod' })
@@ -394,7 +318,7 @@ test("another session's refusing listener lets the event through when that sessi
 
 test('a mod listening on this session and on every session is asked once before a prompt', async () => {
   const asked: unknown[] = []
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ guard: ['conversation', 'prompt'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.cmod.call = async (input) => {
     asked.push(input)
     return undefined
@@ -410,7 +334,7 @@ test('a mod listening on this session and on every session is asked once before 
 
 test("another project's session reaches only the mod that named it, never a mod listening on every session", async () => {
   const told: string[] = []
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ global: ['conversation'], explicit: ['conversation'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.cmod.call = async (input) => {
     if (input.method === conversationMethods.changed) told.push(input.to)
     return undefined
@@ -427,7 +351,7 @@ test("another project's session reaches only the mod that named it, never a mod 
 
 test('the follower moves with the session to a new project and to a new session', async () => {
   const spawned: { argv: readonly string[]; env?: Readonly<Record<string, string>> }[] = []
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { projectRoot: '/work/old', files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ watcher: ['conversation'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { projectRoot: '/work/old' })
   tested.fakes.process.spawn = (request) => {
     spawned.push(request)
     return followerChild().stream
@@ -453,7 +377,7 @@ test("a session whose saved listeners do not read still follows the other sessio
   const router = createRouter()
   const reported: string[] = []
   const followed: (string | undefined)[] = []
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ watcher: ['conversation'] }), '/store/data/cmod/listeners/next.json': '{"watcher":' })
+  fake.fakes.fs = fakeFiles({ '/store/data/cmod/listeners/next.json': '{"watcher":' })
   fake.fakes.process.spawn = (request) => {
     if (request.argv.includes('follow')) followed.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
     return followerChild().stream
@@ -473,7 +397,6 @@ test("after /cd, a session no longer asks the old project's guards, and asks the
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
     projectRoot: '/work/old',
     files: {
-      [consentPath(store)]: JSON.stringify({ guard: ['conversation', 'prompt'] }),
       [`${store}/data/cmod/before/old-session.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/old', events: ['prompt'] }]),
       [`${store}/data/cmod/before/new-session.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/new', events: ['prompt'] }]),
     },
@@ -548,7 +471,7 @@ test("a guard of a session that ended without saying so lets the prompt in quiet
 test('a failure to tell a mod about a change clears once cmod reaches that mod again', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
+  fake.fakes.fs = fakeFiles({})
   fake.fakes.process.spawn = () => printed('[]')
   let isDown = true
   fake.fakes.cmod.call = async () => {
@@ -576,7 +499,7 @@ test('a failure to tell a mod about a change clears once cmod reaches that mod a
 })
 
 test("a goal updated from another session becomes that running session's goal", async () => {
-  const disk = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
+  const disk = fakeFiles({})
   const plugin = async (id: string) => {
     const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
     const router = createRouter()
@@ -605,7 +528,7 @@ test('another session hears when a before listener on it goes away, and when the
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
   const told: string[] = []
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ guard: ['conversation', 'prompt'] }) })
+  fake.fakes.fs = fakeFiles({})
   fake.fakes.process.spawn = () => printed('[]')
   fake.fakes.session.send = async ({ to, text }) => {
     if (text.includes('"kind":"watch"')) told.push(JSON.stringify(to))
@@ -626,7 +549,7 @@ test('another session hears when a before listener on it goes away, and when the
 test("two before listeners registered at once both stay registered", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  const disk = fakeFiles({ [consentPath('/store')]: JSON.stringify({ guard: ['conversation', 'prompt'] }) })
+  const disk = fakeFiles({})
   let release = () => {}
   const held = new Promise<void>((resolve) => (release = resolve))
   let writes = 0
@@ -649,7 +572,7 @@ test("two before listeners registered at once both stay registered", async () =>
 })
 
 test('a cmod plugin that restarts mid-session keeps asking and telling the mods that listened to the one before it', async () => {
-  const disk = fakeFiles({ [consentPath('/store')]: JSON.stringify({ tracer: ['prompt'] }) })
+  const disk = fakeFiles({})
   const plugin = async () => {
     const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
     const router = createRouter()
@@ -681,7 +604,7 @@ test('a cmod plugin that restarts mid-session keeps asking and telling the mods 
 test("one compaction of a task moves its context once, and one of the session moves the session's once", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
+  fake.fakes.fs = fakeFiles({})
   fake.fakes.process.spawn = () => printed('[]')
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   const passed = async () => ({})
@@ -702,7 +625,7 @@ test("one compaction of a task moves its context once, and one of the session mo
 test("a running task of the cmod plugin's session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ history: ['conversation'] }) })
+  fake.fakes.fs = fakeFiles({})
   fake.fakes.process.spawn = () => printed('[]')
   fake.fakes.agent.list = async () => [{ id: 'task-1', description: 'Find the pane', type: 'Explore', status: 'waiting', name: 'scout', spawnedBy: 'scoper' }]
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
@@ -717,7 +640,7 @@ test("a running task of the cmod plugin's session holds its status, its teammate
 test('the cmod plugin asks the before listeners of its session, starts a background task through cmod task start, and closes it when the task’s session relays its answer', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ scoper: ['tasks', 'conversation'] }) })
+  fake.fakes.fs = fakeFiles({})
   const started = { id: 'bg-1', title: 'Upgrade the dependencies', model: 'haiku', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }
   const ran: string[][] = []
   fake.fakes.process.spawn = (request) => (ran.push([...request.argv]), printed(request.argv[1] === 'task' ? JSON.stringify(started) : '[]'))
@@ -750,7 +673,7 @@ test('the cmod plugin asks the before listeners of its session, starts a backgro
 test('a clone runs cmod task start with --clone and none of the owner a listener picks, and a fork spawns a subagent of the fork agent type', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  fake.fakes.fs = fakeFiles({ [consentPath('/store')]: JSON.stringify({ scoper: ['tasks'] }) })
+  fake.fakes.fs = fakeFiles({})
   const ran: string[][] = []
   fake.fakes.process.spawn = (request) => (ran.push([...request.argv]), printed(request.argv[1] === 'task' ? JSON.stringify({ id: 'clone-1', title: 'Try SQL', forkedFrom: 'test-session', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }) : '[]'))
   const spawned: unknown[] = []
@@ -789,7 +712,7 @@ test("a background session's cmod plugin records its task's answer at the sessio
   expect(JSON.parse(await disk.read('/store/data/cmod/tasks/starter/test-session.json'))).toEqual(ended)
 })
 
-test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this cmod knows, so it is refused only for its permission', async () => {
+test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this cmod knows, so it is never refused as unknown', async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const actions = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort']
   for (const [index, action] of actions.entries()) {
@@ -798,12 +721,9 @@ test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this c
   }
   await tested.settle()
 
-  const denials = tested.calls.filter((call) => call.call === 'session.send').map((call) => JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec((call.args[0] as { text: string }).text)?.[1] ?? '{}') as { deny: string })
-  const prompt = 'Add text Claude reads and start turns'
-  const tasks = 'Start tasks that work beside Claude'
-  const conversation = 'Read your Claude Code conversations'
-  const needs = [prompt, tasks, tasks, tasks, tasks, "Use and change Claude's tool calls", conversation, conversation, prompt]
-  expect(denials.map(({ deny }) => deny)).toEqual(actions.map((action, index) => `pinger calls ${action} without your grant to "${needs[index]}". Turn it on in Settings.`))
+  const answers = tested.calls.filter((call) => call.call === 'session.send').map((call) => JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec((call.args[0] as { text: string }).text)?.[1] ?? '{}') as { id: string; deny?: string })
+  expect(answers.map(({ id }) => id).toSorted()).toEqual(actions.map((_action, index) => `other:${index}`))
+  expect(answers.filter(({ deny }) => deny?.includes('which has no') === true)).toEqual([])
 })
 
 test("the cmod plugin tells each mod of its session the color the index holds at the session's start, and each color /color picks", async () => {
@@ -853,7 +773,7 @@ function followerChild() {
 }
 
 test('the cmod plugin restarts its follower quietly, and says so when a follower exits on its own', async () => {
-  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [consentPath(storeFolder({ HOME: '/test/home' }))]: JSON.stringify({ watcher: ['conversation'] }) } })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const children: ReturnType<typeof followerChild>[] = []
   tested.fakes.process.spawn = () => {
     const child = followerChild()

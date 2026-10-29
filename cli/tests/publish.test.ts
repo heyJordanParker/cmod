@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { chmod, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { version as coreVersion } from '@cmodjs/core/package.json'
-import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -139,19 +139,80 @@ test("a mod's marketplace lists the cmod plugin from cmod's release branch, so i
   expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'github', repo: 'heyJordanParker/cmod', ref: 'release' } })
 })
 
-test('publish refuses a cmod dependency other than >= the @cmodjs/core the mod bundles, and names cmod check', async () => {
+const dependsOnOneclaude = { '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'oneclaude', version: '>=0.9.0' }] }), 'package.json': JSON.stringify({ name: 'greeter' }) }
+
+const oneclaudeEntry = { name: 'oneclaude', description: 'One Claude across every session', source: { source: 'github', repo: 'heyJordanParker/oneclaude', ref: 'release' } }
+
+const oneclaudeManifest = JSON.stringify({ name: 'oneclaude', version: '0.9.0', description: 'One Claude across every session', repository: 'https://github.com/heyJordanParker/oneclaude' })
+
+async function installOneclaude(home: string, id: string, installPath: string): Promise<void> {
+  await writeFiles(home, { 'bin/claude': claudeAnswering([...cmodPluginListed, { id, version: '0.9.0', scope: 'user', enabled: true, installPath }]) })
+}
+
+async function publishedListing(result: { stdout: string }): Promise<unknown[]> {
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  return JSON.parse(await readFile(join(dirname(archive), 'marketplace.json'), 'utf8')).plugins
+}
+
+test("a mod's marketplace lists each mod it depends on from the release branch of the GitHub repository its installed copy names, so the dependency resolves in the mod's marketplace", async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, dependsOnOneclaude)
+  await writeFiles(home, { 'cache/oneclaude/.claude-plugin/plugin.json': oneclaudeManifest })
+  await installOneclaude(home, 'oneclaude@oneclaude', join(home, 'cache/oneclaude'))
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  const listed = await publishedListing(result)
+  expect(listed.map((plugin) => (plugin as { name: string }).name)).toEqual(['greeter', 'cmod', 'oneclaude'])
+  expect(listed[2]).toEqual(oneclaudeEntry)
+  expect(result.stdout).toContain('Listed oneclaude from the release branch of heyJordanParker/oneclaude, so the oneclaude dependency resolves in this marketplace and follows each oneclaude release\n')
+})
+
+test('a dependency installed only as a linked checkout lists from the repository its checkout names', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, dependsOnOneclaude)
+  const checkout = join(home, 'Developer/oneclaude')
+  await writeFiles(checkout, { '.claude-plugin/plugin.json': oneclaudeManifest })
+  await writeLinked(home, checkout)
+  await installOneclaude(home, 'oneclaude@Developer-linked', join(home, '.claude/plugins/cache/Developer-linked/oneclaude/0.9.0'))
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
+  expect((await publishedListing(result))[2]).toEqual(oneclaudeEntry)
+})
+
+test('publish refuses a dependency installed nowhere here before it builds anything, and says to install or link it with its repository', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, dependsOnOneclaude)
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe(
+    'cmod publish: .claude-plugin/plugin.json depends on oneclaude, and no copy installed here names its GitHub repository in .claude-plugin/plugin.json "repository", so greeter\'s marketplace cannot list it and Claude Code would leave greeter off. Install or link oneclaude, with "repository": "https://github.com/<owner>/<repo>" in its plugin.json, then run cmod publish again.\n',
+  )
+  expect(result.stdout).toBe('')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
+})
+
+test('publish refuses a cmod dependency other than >= the oldest cmod the bundled @cmodjs/core runs on, and names cmod check', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'cmod', version: '^4.0.0' }] }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'cmod', version: '>=5.1.0' }] }),
     'package.json': JSON.stringify({ name: 'greeter' }),
-    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.2.0' }),
+    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.1.0' }),
+    'node_modules/@cmodjs/core/records.js': "export const oldestCmodVersion = '5.0.0'\n",
   })
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toBe(
-    'cmod publish: .claude-plugin/plugin.json depends on cmod "^4.0.0", and this mod bundles @cmodjs/core 4.2.0, so it needs ">=4.2.0", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.\n',
+    'cmod publish: .claude-plugin/plugin.json depends on cmod ">=5.1.0", and this mod bundles @cmodjs/core 5.1.0, which runs on cmod 5.0.0 or later, so it needs ">=5.0.0", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.\n',
   )
 })
 

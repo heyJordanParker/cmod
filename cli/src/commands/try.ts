@@ -18,7 +18,7 @@ import { teardownInTerminal } from './teardown.js'
 
 export const summary = 'Start one throwaway Claude Code session with mods set up.'
 
-export const help = `Usage: cmod try <owner/repo | path>... [--yes] [--home <folder>] [-- claude arguments]
+export const help = `Usage: cmod try <owner/repo | path>... [--home <folder>] [-- claude arguments]
 
 ${summary}
 
@@ -32,15 +32,13 @@ rules, and preferences stay behind. --home <folder> runs in that folder and
 keeps it for the next try, and --home ~ runs in your own home.
 
 Installs the cmod plugin into Claude Code when it lacks it and runs each mod's
-install step after asking consent for its install and uninstall commands and
-its key bindings, then starts one Claude Code session that loads every mod
+install step, then starts one Claude Code session that loads every mod
 with --plugin-dir. A checkout's program is built from its cli/ with your own
 home and environment, as cmod link builds it, and a GitHub mod's program comes
 from its release. When the session ends, even when
 its terminal closes, runs each mod's uninstall step and deletes its record, data
 folder, approval, key bindings, and program, so the mod stays uninstalled.
-Ctrl+C or Ctrl+D at a consent question deletes the clones and changes nothing
-else. Ctrl+C, a closed terminal, or SIGTERM installs nothing more and skips a
+Ctrl+C, a closed terminal, or SIGTERM installs nothing more and skips a
 session that has not started, and the uninstall steps run to their end.
 The cmod plugin stays installed in the home, as the cmod program does. A GitHub
 mod is cloned into a temporary folder that is deleted too. A mod another folder
@@ -49,8 +47,6 @@ A checkout already set up from the same folder keeps its setup. Arguments after
 -- go to claude, such as -- -p "hello".
 
 Options:
-  --yes            Approve each mod's install and uninstall commands and key
-                   bindings without asking
   --home <folder>  Run in this home folder and keep it, such as --home ~
   --option key=value
                    Set one of a mod's options in the home, as /config does.
@@ -63,7 +59,7 @@ export async function run(argv: string[]): Promise<number> {
   const split = argv.indexOf('--')
   const own = split === -1 ? argv : argv.slice(0, split)
   const forwarded = split === -1 ? [] : argv.slice(split + 1)
-  const { values, positionals } = parseArgs({ args: own, allowPositionals: true, options: { yes: { type: 'boolean', default: false }, home: { type: 'string' }, option: { type: 'string', multiple: true } } })
+  const { values, positionals } = parseArgs({ args: own, allowPositionals: true, options: { home: { type: 'string' }, option: { type: 'string', multiple: true } } })
   if (positionals.length === 0) throw new Error(`cmod try takes at least one source.\n\n${help}`)
   const sources = positionals.map(sourceOf)
   const kept = values.home === undefined ? undefined : homeFolder(values.home)
@@ -103,7 +99,7 @@ export async function run(argv: string[]): Promise<number> {
     const pluginDirs = tried.map(({ plugin }) => plugin.root)
     try {
       for (const { plugin, record } of tried) {
-        const code = await setupInTerminal(plugin, { yes: values.yes }, progress)
+        const code = await setupInTerminal(plugin, progress)
         if (code !== 0) return code
         if (record === undefined) setUp.push(plugin.name)
         if (hold.signal !== undefined) return code
