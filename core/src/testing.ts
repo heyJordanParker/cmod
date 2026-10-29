@@ -56,7 +56,7 @@ import { drawnParts } from './runtime/parts.js'
 import { serveWidgets, type Widgets } from './runtime/widgets.js'
 import { engineOf } from './runtime/engine.js'
 import { pagesOf, servePages } from './runtime/pages.js'
-import { partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
+import { inheriting, partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
 export type { FakeSession, MessageDraft, StartedTask } from './testing/fake-sessions.js'
@@ -236,7 +236,7 @@ export function testMod<State extends object, Declared extends Options = Options
       if (drawn === undefined) missedMarkdown.set(drawnAt, { markdown: props.text, ...at })
       if (drawn === undefined || drawn === null || drawn.tree === null) return table.Markdown(props)
       const { draw, tree } = drawn
-      return drawWith(table, () => elementOf(tree, keyPrefix, (handler, args) => void pressPart({ draw, handler, args }))) as RenderElement
+      return drawWith(table, () => elementOf(tree, keyPrefix, (handler, args) => void pressPart({ draw, handler, args })), inheriting(props, table.Markdown)) as RenderElement
     }
   }
   const withOwnMarkdown = async <Drawn>(draw: () => Promise<Drawn>): Promise<Drawn> => {

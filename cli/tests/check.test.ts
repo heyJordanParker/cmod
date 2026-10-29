@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
-import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodOnPath, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -104,10 +104,12 @@ test('cmod check writes the options defineMod declares into plugin.json userConf
   expect(again.stdout).toContain('✔ plugin.json userConfig holds the option defineMod declares: branch\n    package.json "cmod.hotkeys" holds the hotkey defineMod declares: runs\n')
 })
 
+const cmodAt = (version: string, id = 'cmod@cmod', scope = 'user') => ({ id, version, scope, enabled: true, installPath: '/cmod' })
+
 test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod installed, keeping the rest of the entry', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
-  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.2.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
     'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.2.0' }),
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', marketplace: 'cmod', version: '^4.0.0' }, 'tracer'] }),
@@ -141,7 +143,7 @@ test('cmod check keeps the cmod range of a mod on @cmodjs/core 3, which cmod 4 d
 test('cmod check adds the cmod dependency to a plugin.json that names none', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
-  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.0.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
     'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.0.0' }),
     '.claude-plugin/plugin.json': '{\n  "name": "demo",\n  "version": "0.1.0"\n}\n',
@@ -151,6 +153,111 @@ test('cmod check adds the cmod dependency to a plugin.json that names none', asy
   await cmod(home, 'check', root)
 
   expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', version: '>=4.0.0' }])
+})
+
+const newerCoreMod = {
+  'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.3.3' }),
+  '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', version: '>=4.3.2' }] }),
+  'package.json': JSON.stringify({ name: 'demo' }),
+}
+
+const dependenciesOf = async (root: string): Promise<unknown> => JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies
+
+test('cmod check updates each older cmod plugin through Claude Code before it writes a cmod dependency that cmod would not meet', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  const linkedMarketplaceCopy = 'cmod@Developer-linked'
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering([cmodAt('4.3.2'), cmodAt('4.3.2', linkedMarketplaceCopy)], 'exit 1', [cmodAt('4.3.3'), cmodAt('4.3.3', linkedMarketplaceCopy)]),
+    '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n',
+  })
+  await writeFiles(root, newerCoreMod)
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain(
+    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\nUpdating cmod@Developer-linked…\n✔ Updated cmod@Developer-linked through Claude Code\n✔ Updated cmod to 4.3.3 through Claude Code, so it runs the @cmodjs/core this mod bundles\n    Wrote the cmod dependency ">=4.3.3", the @cmodjs/core this mod bundles, so every newer cmod runs it\n',
+  )
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toStartWith('plugin list --json\nplugin list --json\nplugin update cmod@cmod --json\nplugin update cmod@Developer-linked --json\nplugin list --json\nplugin list --json\nplugin validate ')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
+})
+
+test('cmod check fails and keeps the cmod dependency when Claude Code can install no cmod as new as the @cmodjs/core the mod bundles', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('4.3.2')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, newerCoreMod)
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain(
+    'Pinning the cmod plugin…\nUpdating cmod@cmod…\n✔ Updated cmod@cmod through Claude Code\n✘ @cmodjs/core 4.3.3 needs cmod 4.3.3, and the newest cmod Claude Code can install here is 4.3.2\n    fix: Install @cmodjs/core 4.3.2 with bun add @cmodjs/core@4.3.2, then run cmod check again.\n',
+  )
+  expect(result.exitCode).toBe(1)
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.2' }])
+})
+
+test('cmod check writes the cmod dependency without an update on a machine where Claude Code has no cmod plugin installed', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { 'bin/claude': claudeAnswering([{ id: 'tracer@market', version: '1.0.0', scope: 'user', enabled: true, installPath: '/tracer' }]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, newerCoreMod)
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3", the @cmodjs/core this mod bundles, so every newer cmod runs it\n')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
+})
+
+test('cmod check compares a cmod installed from git by the version its plugin.json holds, as Claude Code does, not by the commit claude plugin list adds to it', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  const copy = join(home, '.claude/plugins/cache/Developer-linked/cmod/4.3.3-8b9188b04241')
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering([{ ...cmodAt('4.3.3-8b9188b04241', 'cmod@Developer-linked'), installPath: copy }]),
+    '.claude/plugins/cache/Developer-linked/cmod/4.3.3-8b9188b04241/.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '4.3.3' }),
+    '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n',
+  })
+  await writeFiles(root, newerCoreMod)
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3", the @cmodjs/core this mod bundles, so every newer cmod runs it\n')
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
+})
+
+test('cmod check fails and keeps the cmod dependency when a cmod linked from a checkout is older than the @cmodjs/core the mod bundles, because cmod update cannot update a checkout', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  const checkout = join(home, 'Developer/cmod')
+  await writeFiles(home, { 'bin/claude': claudeAnswering([{ ...cmodAt('4.3.2', 'cmod@inline', 'session'), installPath: checkout }]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, newerCoreMod)
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain(`Pinning the cmod plugin…\n✘ cmod is linked from ${checkout}, at 4.3.2\n    fix: Pull it to 4.3.3 or newer, then run cmod check again.\n`)
+  expect(result.exitCode).toBe(1)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.2' }])
+})
+
+test('cmod check on a machine without Claude Code writes the cmod dependency, fails the release validation with its fix, and runs every later check', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, newerCoreMod)
+  await mkdir(join(home, 'only-git'))
+  await symlink(Bun.which('git') as string, join(home, 'only-git/git'))
+
+  const result = await cmodOnPath(home, join(home, 'only-git'), 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.3.3"')
+  expect(result.stdout).toContain('Building and validating the release…\n✘ Building and validating the release could not run\n    fix: claude is not on PATH. Install it, then run the command again.\n')
+  expect(result.stdout).toContain('Checking the plugin name…\n')
+  expect(result.exitCode).toBe(1)
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=4.3.3' }])
 })
 
 test('cmod check names each machine package.json "os" and "cpu" allow that a cmod download line has no build for', async () => {

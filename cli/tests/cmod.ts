@@ -34,10 +34,11 @@ if (missing.length === 0) console.log("✔ Validation passed")
 else console.log("✘ Found " + missing.length + " error" + (missing.length === 1 ? "" : "s") + ":\\n\\n" + missing.map(([key, value]) => "  ❯ " + key + ": Path not found: " + value + ". The runtime loader will report this as a load failure.").join("\\n") + "\\n\\n✘ Validation failed")
 process.exit(missing.length === 0 ? 0 : 1)`
 
-export const claudeAnswering = (listed: unknown[], session = 'exit 1') => `#!/bin/sh
+export const claudeAnswering = (listed: unknown[], session = 'exit 1', updated = listed) => `#!/bin/sh
 echo "$*" >> "$HOME/claude-calls"
 case "$*" in
-  "plugin list --json") echo '${JSON.stringify(listed)}' ;;
+  "plugin list --json") if grep -q '^plugin update ' "$HOME/claude-calls"; then echo '${JSON.stringify(updated)}'; else echo '${JSON.stringify(listed)}'; fi ;;
+  "plugin update "*" --json") echo '{"outcome":"ok"}' ;;
   "plugin marketplace list --json") echo '[]' ;;
   "plugin marketplace add heyJordanParker/cmod") ;;
   "plugin marketplace add /"*) "${process.execPath}" -e '${knownMarketplaces}' add "$4" ;;

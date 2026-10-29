@@ -4,16 +4,17 @@ import { builtinModules } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
-import { isObject, permissionWords, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
+import { isAtLeast, isObject, permissionWords, scriptPaths, scriptsSha256 } from '@cmodjs/core/src/records.js'
 import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/metadata.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { addClaudeApi, listPlugins, testPlugin, validatePlugin } from '../claude.js'
+import { addClaudeApi, listPlugins, testPlugin, validatePlugin, type InstalledPlugin } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
 import { cmodFloor, installPackages, readDeclared, readPlugin, writeCmodFloor, writeHotkeys, writeUserConfig, type Declared, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
-import { startProgress } from '../progress.js'
+import { interruptProgress, startProgress } from '../progress.js'
 import { buildRelease } from './publish.js'
+import * as update from './update.js'
 import { linkedFolders } from '../settings.js'
 import { storePath } from '../store.js'
 
@@ -71,7 +72,7 @@ export async function run(argv: string[]): Promise<number> {
   const counts = { pass: 0, fail: 0, skip: 0 }
   for (const check of checks) {
     progress.step(check.heading)
-    const result = await check.run(plugin)
+    const result = await check.run(plugin).catch((error: unknown): Result => ({ status: 'fail', text: `${check.heading} could not run`, fix: messageOf(error) }))
     counts[result.status] += 1
     if (result.status === 'pass') progress.succeed(result.text)
     if (result.status === 'skip') progress.skip(result.text)
@@ -246,8 +247,36 @@ async function checkOptions(plugin: Plugin): Promise<Result> {
 async function checkCmodFloor(plugin: Plugin): Promise<Result> {
   const floor = await cmodFloor(plugin)
   if (floor === undefined) return { status: 'skip', text: plugin.name === 'cmod' ? 'The cmod plugin depends on no cmod' : 'No @cmodjs/core 4 or later in node_modules, so the mod keeps its own cmod range' }
+  const core = floor.slice(2)
+  const isOlder = (copy: InstalledPlugin) => !isAtLeast(copy.version, core)
+  let copies = await cmodCopies()
+  const isUpdated = copies.some((copy) => !copy.isLinked && isOlder(copy))
+  if (isUpdated) {
+    const resumeProgress = interruptProgress()
+    await update.run(['cmod']).finally(resumeProgress)
+    copies = await cmodCopies()
+  }
+  const [oldest] = copies
+    .filter((copy) => !copy.isLinked)
+    .map((copy) => copy.version)
+    .toSorted((one, other) => (isAtLeast(one, other) ? 1 : -1))
+  if (oldest !== undefined && !isAtLeast(oldest, core)) return { status: 'fail', text: `@cmodjs/core ${core} needs cmod ${core}, and the newest cmod Claude Code can install here is ${oldest}`, fix: `Install @cmodjs/core ${oldest} with bun add @cmodjs/core@${oldest}, then run cmod check again.` }
+  const linked = copies.find((copy) => copy.isLinked && isOlder(copy))
+  if (linked !== undefined) return { status: 'fail', text: `cmod is linked from ${linked.installPath}, at ${linked.version}`, fix: `Pull it to ${core} or newer, then run cmod check again.` }
   const isWritten = await writeCmodFloor(plugin.root, floor)
-  return { status: 'pass', text: `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${floor}", the @cmodjs/core this mod bundles, so every newer cmod runs it` }
+  const lines = [
+    ...(isUpdated && oldest !== undefined ? [`Updated cmod to ${oldest} through Claude Code, so it runs the @cmodjs/core this mod bundles`] : []),
+    `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${floor}", the @cmodjs/core this mod bundles, so every newer cmod runs it`,
+  ]
+  return { status: 'pass', text: lines.join('\n    ') }
+}
+
+async function cmodCopies(): Promise<InstalledPlugin[]> {
+  const plugins = await listPlugins().catch((error: unknown) => {
+    if (error instanceof Error && isObject(error.cause) && error.cause['code'] === 'ENOENT') return []
+    throw error
+  })
+  return plugins.filter((plugin) => plugin.name === 'cmod')
 }
 
 async function checkImports(plugin: Plugin): Promise<Result> {

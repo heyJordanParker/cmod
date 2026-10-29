@@ -5,7 +5,7 @@ import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { partMethods } from '../../src/runtime/ui.js'
 import { testMod } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
-import { checkKeys, findElement, textOf } from '../../src/testing/fake-elements.js'
+import { checkKeys, elements, findElement, textOf } from '../../src/testing/fake-elements.js'
 import * as vendorMarkdown from '../../src/vendor-markdown.js'
 import { Box, Button, Input, Markdown, Text } from '../../src/ui/elements.js'
 import { BlockQuote, CodeBlock, Heading, HtmlBlock, List, markdownBlocks, Paragraph, Table, ThematicBreak } from '../../src/ui/markdown.js'
@@ -541,6 +541,132 @@ test('a style that draws each list item with Default draws every item through Cl
     '      text: "me"',
     '      isFirstOfReply: false',
   ])
+})
+
+const docs = 'https://example.com/docs'
+
+const linkList = `- [docs](${docs})\n- later`
+
+const eachItemByDefault = ({ source, Default }: StyleProps<typeof List>) => Box({ flexDirection: 'column', children: bulletItems(source).map((item) => Default({ source: item })) })
+
+const linkSteps = (pressed: string[]) =>
+  defineMod({
+    name: 'links',
+    setup(mod) {
+      mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) })
+      const render = () => <Markdown key="steps" text={linkList} dimColor pressableLinks={[docs]} onLinkPress={({ href }) => void pressed.push(href)} />
+      mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
+      void mod.sidebar.add({ id: 'all', title: 'Links', render }).open()
+    },
+  })
+
+async function defaultPartsDrawn(draw: () => Promise<unknown>): Promise<Record<string, unknown>[]> {
+  const markdown = spyOn(elements, 'Markdown')
+  try {
+    await draw()
+    return markdown.mock.calls.map(([props]) => props as Record<string, unknown>).filter(({ text }) => text === `[docs](${docs})` || text === 'later')
+  } finally {
+    markdown.mockRestore()
+  }
+}
+
+const linkPart = (key: string, text: string) => ({ key, text, dimColor: true, pressableLinks: [docs], onLinkPress: expect.any(Function) })
+
+const pressDocs = async (part: Record<string, unknown> | undefined) => (part?.['onLinkPress'] as ((link: { readonly href: string }) => unknown) | undefined)?.({ href: docs })
+
+test("a Sidebar page's Markdown keeps its dim color and links in each part its style draws through Default", async () => {
+  const pressed: string[] = []
+  const tested = testMod(linkSteps(pressed))
+
+  const parts = await defaultPartsDrawn(() => tested.shown.page.lines())
+  await tested.shown.page.press('steps', docs)
+
+  expect(parts).toEqual([linkPart('links/all:steps', `[docs](${docs})`), linkPart('links/all:steps:1', 'later')])
+  expect(pressed).toEqual([docs])
+})
+
+test("a widget's Markdown keeps its dim color and links in each part its style draws through Default", async () => {
+  const pressed: string[] = []
+  const tested = testMod(linkSteps(pressed))
+
+  const parts = await defaultPartsDrawn(() => tested.lines(BelowPrompt))
+  await pressDocs(parts[0])
+  await tested.settle()
+
+  expect(parts).toEqual([linkPart('links/next:steps', `[docs](${docs})`), linkPart('links/next:steps:1', 'later')])
+  expect(pressed).toEqual([docs])
+})
+
+test("a pane's Markdown keeps its dim color and links in each part another mod's style draws through Default", async () => {
+  const lists = await started(defineMod({ name: 'lists', setup: (mod) => void mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) }) }))
+  const pressed: string[] = []
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('ui.render', pane, drawsLikeClaude)
+  await fake.settle()
+
+  const drawn = await notes.route('ui.render', pane, drawsLikeClaude)
+  const parts = ['steps', 'steps:1'].map((key) => findElement(drawn, 'Markdown', key))
+  await pressDocs(parts[0])
+
+  expect(parts).toEqual([linkPart('steps', `[docs](${docs})`), linkPart('steps:1', 'later')])
+  expect(pressed).toEqual([docs])
+})
+
+test("a pane's Markdown keeps its dim color and links in each keyless Markdown its own style draws", async () => {
+  const pressed: string[] = []
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  const notes = createLifecycle(
+    defineMod({
+      name: 'notes',
+      setup(mod) {
+        mod.styles.add({ kind: List, render: (_mod, { source }) => Box({ flexDirection: 'column', children: bulletItems(source).map((item) => Markdown({ text: item })) }) })
+        mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) })
+      },
+    }),
+  )
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+
+  const drawn = await notes.route('ui.render', pane, drawsLikeClaude)
+  const parts = ['steps', 'steps:1'].map((key) => findElement(drawn, 'Markdown', key))
+  await pressDocs(parts[0])
+
+  expect(parts).toEqual([linkPart('steps', `[docs](${docs})`), linkPart('steps:1', 'later')])
+  expect(pressed).toEqual([docs])
+})
+
+test("a pane's Markdown that its own style and another mod's style both split through Default gives every part its own key", async () => {
+  const lists = await started(defineMod({ name: 'lists', setup: (mod) => void mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) }) }))
+  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  const notes = createLifecycle(
+    defineMod({
+      name: 'notes',
+      setup(mod) {
+        mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) })
+        mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: `${linkList}\n\n# Next\n\nDone.`, dimColor: true, pressableLinks: [docs], onLinkPress: () => undefined }) })
+      },
+    }),
+  )
+  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {}, granted: [] }))
+  await fake.settle()
+  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('ui.render', pane, drawsLikeClaude)
+  await fake.settle()
+
+  const drawn = await notes.route('ui.render', pane, drawsLikeClaude)
+  checkKeys(drawn, 'notes', 'Pane')
+
+  expect(['steps', 'steps:1', 'steps:2'].map((key) => findElement(drawn, 'Markdown', key))).toEqual([linkPart('steps', `[docs](${docs})`), linkPart('steps:1', 'later'), linkPart('steps:2', 'Done.')])
+  expect(rows(drawn)).toEqual([`[docs](${docs})`, 'later', '', 'NEXT', '', 'Done.'])
 })
 
 const indexKeyed = ({ source }: StyleProps<typeof List>) => (

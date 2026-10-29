@@ -4,6 +4,15 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [4.3.4] - 2026-10-29
+
+### Fixed
+- A linked mod whose `plugin.json` asks for a newer cmod than the one installed, such as after `cmod check` raised it to `>=4.3.3`, no longer stays off with nothing on screen. Claude Code turns it off at the next reload. cmod now updates itself as soon as `cmod watch` sees the edit, and checks again at each session start, and the reload after the update turns the mod back on. If no newer cmod fixes it, the `<mod> is off` toast says why, as it does for an installed mod.
+- `cmod check` no longer writes a `cmod` dependency that the cmod on your machine does not meet, which turned a linked mod off in every session. Before it writes `>=` your `@cmodjs/core`, it compares that version with each cmod plugin Claude Code installed, and updates an older one as `cmod update cmod` does. When no cmod Claude Code can install is new enough, the check fails, keeps the old dependency, and says which `@cmodjs/core` to install instead, such as `Install @cmodjs/core 4.3.2 with bun add @cmodjs/core@4.3.2, then run cmod check again.` When a cmod linked from a checkout is older, the check fails too, and says to pull that checkout.
+- A plugin Claude Code installed from git, such as the cmod a linked mod's marketplace lists, counts at the version its `plugin.json` holds, as Claude Code counts it, not at the version with a commit that `claude plugin list` shows, such as `4.3.3-8b9188b04241`. Before, `cmod check` judged that cmod older than 4.3.3 and failed, and the corner toast after an update read `cmod updated to 4.3.3-8b9188b04241` and waited 10 seconds without naming the permissions the update granted.
+- A check `cmod check` cannot run, such as one that needs Claude Code on a machine without it, fails with the reason, such as `claude is not on PATH`, and every later check still runs. Before, `cmod check` stopped there.
+- A `Markdown` element with `dimColor`, `onLinkPress`, or `pressableLinks` keeps them in every part a markdown style draws through `Default`, on a Sidebar page, in a widget, and in a pane another mod's style draws, as it already did in a mod's own pane. Before, those parts drew at full color, and Claude Code opened their links itself instead of running `onLinkPress`. A `Markdown` a style draws itself in place of `Default` keeps them too, on every surface, the mod's own pane included, unless it sets them itself. Each part without a key of its own also takes the element's `key`, the first as it is and each later one with `:1`, `:2`, and so on, because Claude Code needs a key on a `Markdown` with `onLinkPress`, so the test kit's `press(key, link)` presses a link in the first part by the key the mod wrote. Styling mods built on any 4.x `@cmodjs/core` need no change.
+
 ## [4.3.3] - 2026-10-28
 
 ### Fixed

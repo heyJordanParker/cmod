@@ -91,6 +91,27 @@ function pieceProps(props: object, given: object, isFirst: boolean): object {
   return isFirst || !('isFirstOfReply' in merged) ? merged : { ...merged, isFirstOfReply: false }
 }
 
+function laterKeys(key: string | undefined): () => string | undefined {
+  let used = 0
+  return () => (key === undefined ? undefined : `${key}:${(used += 1)}`)
+}
+
+export function inheriting(props: MarkdownProps, draw: (drawn: MarkdownProps) => RenderElement, laterKey = laterKeys(props.key)): (left: MarkdownProps) => RenderElement {
+  const { dimColor, onLinkPress, pressableLinks } = props
+  const inherited = { ...(dimColor === undefined ? {} : { dimColor }), ...(onLinkPress === undefined ? {} : { onLinkPress }), ...(pressableLinks === undefined ? {} : { pressableLinks }) }
+  let isKeyTaken = false
+  const keyOf = (left: MarkdownProps) => {
+    if (left.key !== undefined) return left.key
+    if (isKeyTaken) return laterKey()
+    isKeyTaken = true
+    return props.key
+  }
+  return (left) => {
+    const key = keyOf(left)
+    return draw({ ...inherited, ...(key === undefined ? {} : { key }), ...left })
+  }
+}
+
 function threw(error: unknown): string {
   return `threw, so Claude Code draws its own: ${messageOf(error)}`
 }
@@ -324,27 +345,28 @@ export function createUi<State extends object>({ name, claude, router, report, a
 
   const renderOf = (type: string) => markdownRenders.get(type)
 
-  const drawnBlock = (piece: MarkdownPiece<MarkdownRender>, at: StyledAt, drawClaudes: (text: string) => RenderElement, keyPrefix: string, table?: ElementTable): RenderElement => {
-    if ('text' in piece) return drawClaudes(piece.text)
+  const drawnBlock = (piece: MarkdownPiece<MarkdownRender>, at: StyledAt, drawClaudes: (part: MarkdownProps) => RenderElement, keyPrefix: string, table?: ElementTable): RenderElement => {
+    if ('text' in piece) return drawClaudes({ text: piece.text })
     const { render, props: block } = piece
-    const draw = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes(source) }))
+    const draw = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }: { readonly source?: string }) => drawClaudes({ text: source }) }))
     try {
-      return table === undefined ? draw() : drawWith(table, draw)
+      return table === undefined ? draw() : drawWith(table, draw, drawClaudes)
     } catch (error) {
       render.log(threw(error))
-      return drawClaudes(block.source)
+      return drawClaudes({ text: block.source })
     }
   }
 
   const othersFrom =
     (table: ElementTable, at: StyledAt, from: number, unkeyedScope: () => string) =>
-    (props: MarkdownProps): RenderElement => {
+    (props: MarkdownProps, laterKey = laterKeys(props.key)): RenderElement => {
       if (from >= stylers.length) return table.Markdown(props)
       const scope = props.key ?? unkeyedScope()
       for (const [index, styler] of stylers.entries()) {
         if (index < from) continue
         const cached = `${stylersSeen}\u0000${at.surface}\u0000${at.columns}\u0000${props.text}`
-        const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }, scope), othersFrom(table, at, index + 1, unkeyedScope))
+        const next = othersFrom(table, at, index + 1, unkeyedScope)
+        const drawn = drawWith(table, () => borrowed(styler, cached, { markdown: props.text, ...at }, scope), inheriting(props, (part) => next(part, laterKey), laterKey))
         if (drawn !== undefined) return drawn
       }
       return table.Markdown(props)
@@ -360,11 +382,8 @@ export function createUi<State extends object>({ name, claude, router, report, a
       const pieces = reader(props.text, renderOf)
       if (pieces.every((piece) => 'text' in piece)) return others(props)
       const scope = props.key ?? unkeyedScope()
-      let drawn = 0
-      const drawClaudes = (text: string) => {
-        const index = drawn++
-        return others(index === 0 || props.key === undefined ? { ...props, text } : { ...props, text, key: `${props.key}:${index}` })
-      }
+      const laterKey = laterKeys(props.key)
+      const drawClaudes = inheriting(props, (part) => others(part, laterKey), laterKey)
       const drawings = pieces.map((piece, index) => drawnBlock(piece, at, drawClaudes, `${scope}:${index}:`, table))
       return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })), 'pane')
     }
@@ -373,7 +392,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
   const markdownDrawing = (text: string, at: StyledAt): RenderElement => {
     const pieces = read === undefined ? [] : read(text, renderOf)
     if (pieces.every((piece) => 'text' in piece)) return Markdown({ text })
-    return drawPieces(pieces.map((piece, index) => ({ drawing: drawnBlock(piece, at, (source) => Markdown({ text: source }), `${index}:`), isClaudesRow: false })), 'pane')
+    return drawPieces(pieces.map((piece, index) => ({ drawing: drawnBlock(piece, at, Markdown, `${index}:`), isClaudesRow: false })), 'pane')
   }
 
   const routeMarkdown = (createReader: () => MarkdownReader) => {

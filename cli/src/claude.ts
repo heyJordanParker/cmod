@@ -6,7 +6,7 @@ import { isObject } from '@cmodjs/core/src/records.js'
 import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../package.json'
-import { readText, tilde, writeAtomically } from './files.js'
+import { readJson, readText, tilde, writeAtomically } from './files.js'
 import { readPlugin, type Plugin } from './plugin.js'
 import { capture, run, runAttached, spawn, type Captured } from './process.js'
 import { linkedEntries, linkedMarketplaceFile, linkedPlugins, pluginFolders, removePluginFolder, type LinkedEntry } from './settings.js'
@@ -47,15 +47,20 @@ export async function listPlugins(): Promise<InstalledPlugin[]> {
   const entries = parse(await run([claudeCode(), 'plugin', 'list', '--json']), 'claude plugin list --json')
   if (!Array.isArray(entries)) throw new Error('claude plugin list --json printed no list. Update Claude Code to 2.1.289 or later.')
   const linked = new Map((await linkedPlugins()).map((plugin) => [plugin.id, plugin.folder]))
-  return entries.filter(isObject).map((entry) => {
-    const id = String(entry['id'])
-    const scope = String(entry['scope'])
-    const checkout = linked.get(id)
-    const errors = Array.isArray(entry['errors']) ? entry['errors'].map(String) : []
-    const details = Array.isArray(entry['errorDetails']) ? entry['errorDetails'].filter(isObject) : []
-    const unsatisfied = details.filter((detail) => detail['type'] === 'dependency-version-unsatisfied' && typeof detail['dependency'] === 'string').map((detail) => String(detail['dependency']))
-    return { id, name: id.slice(0, id.lastIndexOf('@')), version: String(entry['version']), scope, enabled: entry['enabled'] === true, isLinked: scope === 'session' || checkout !== undefined, installPath: checkout ?? String(entry['installPath']), errors, unsatisfied }
-  })
+  return Promise.all(
+    entries.filter(isObject).map(async (entry) => {
+      const id = String(entry['id'])
+      const scope = String(entry['scope'])
+      const checkout = linked.get(id)
+      const installPath = checkout ?? String(entry['installPath'])
+      const manifest = await readJson(join(installPath, '.claude-plugin/plugin.json'))
+      const errors = Array.isArray(entry['errors']) ? entry['errors'].map(String) : []
+      const details = Array.isArray(entry['errorDetails']) ? entry['errorDetails'].filter(isObject) : []
+      const unsatisfied = details.filter((detail) => detail['type'] === 'dependency-version-unsatisfied' && typeof detail['dependency'] === 'string').map((detail) => String(detail['dependency']))
+      const version = isObject(manifest) && typeof manifest['version'] === 'string' ? manifest['version'] : String(entry['version'])
+      return { id, name: id.slice(0, id.lastIndexOf('@')), version, scope, enabled: entry['enabled'] === true, isLinked: scope === 'session' || checkout !== undefined, installPath, errors, unsatisfied }
+    }),
+  )
 }
 
 export async function listMarketplaces(): Promise<Marketplace[]> {

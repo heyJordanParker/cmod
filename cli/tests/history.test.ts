@@ -75,21 +75,27 @@ test('readers of a session longer than several write batches, running at once, e
     [`${projectFolder(project)}/s1/subagents/agent-a7.meta.json`]: JSON.stringify({ agentType: 'explorer', description: 'Look', toolUseId: 'toolu_1' }),
   })
 
-  const results = await Promise.all(
-    [
-      ['messages', 's1', '--project', project, '--json'],
-      ['messages', 's1', '--project', project, '--json'],
-      ['messages', 's1', '--project', project, '--task', 'a7', '--json'],
-      ['turns', 's1', '--project', project, '--json'],
-    ].map((args) => startCmod(home, 'history', ...args).done),
-  )
-  const [first, second, task, turns] = results.map((result) => JSON.parse(result.stdout) as { id: string }[])
+  const commands = [
+    ['messages', 's1', '--project', project, '--json'],
+    ['messages', 's1', '--project', project, '--json'],
+    ['messages', 's1', '--project', project, '--task', 'a7', '--json'],
+    ['turns', 's1', '--project', project, '--json'],
+  ]
+  const results = await Promise.all(commands.map((args) => startCmod(home, 'history', ...args).done))
+  expect(results.map(({ exitCode, stderr }, index) => ({ command: commands[index]?.join(' '), exitCode, stderr }))).toEqual(commands.map((args) => ({ command: args.join(' '), exitCode: 0, stderr: '' })))
+  const [first, second, task, turns] = results.map((result, index) => {
+    try {
+      return JSON.parse(result.stdout) as { id: string }[]
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error
+      throw new Error(`cmod history ${commands[index]?.join(' ')} printed ${result.stdout.length} characters of stdout that are not JSON`)
+    }
+  })
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
   const db = new Database(join(home, '.local/share/cmod/history-11.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
-  expect(results.map((result) => result.stderr)).toEqual(['', '', '', ''])
   expect(first?.map((message) => message.id)).toEqual(expected)
   expect(second?.map((message) => message.id)).toEqual(expected)
   expect(task?.map((message) => message.id)).toEqual(taskRows.map((row) => row.uuid))
@@ -358,11 +364,14 @@ test('search returns the newest messages up to --limit, and --before pages throu
   const { project } = await writeHistory(home)
   await writeFiles(home, { [`${projectFolder(project)}/s2.jsonl`]: lines([{ ...conversation(project)[0], forkedFrom: { sessionId: 's1' } }]) })
 
-  const pages = [await json(home, 'search', 'rename', '--project', project, '--limit', '1')]
-  pages.push(await json(home, 'search', 'rename', '--project', project, '--limit', '1', '--before', 's2:u1'))
-  pages.push(await json(home, 'search', 'rename', '--project', project, '--limit', '1', '--before', 's1:u1'))
+  const page = async (...before: string[]) => ((await json(home, 'search', 'tree pane', '--project', project, '--limit', '1', ...before)) as { session: string; id: string }[]).map((message) => `${message.session}:${message.id}`)
 
-  expect(pages.map((page) => (page as { session: string; id: string }[]).map((message) => `${message.session}:${message.id}`))).toEqual([['s2:u1'], ['s1:u1'], []])
+  const first = await page()
+  const second = await page('--before', first[0] ?? '')
+  const third = await page('--before', second[0] ?? '')
+  const fourth = await page('--before', third[0] ?? '')
+
+  expect([[...first, ...second].toSorted(), third, fourth]).toEqual([['s1:u1', 's2:u1'], ['s0:o1'], []])
 })
 
 test('search finds a value in a tool input, misses one past its first 1,024 characters, and refuses fewer than 3 characters', async () => {

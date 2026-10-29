@@ -321,7 +321,7 @@ test('cmod link of a mod before cmod is linked lists nothing', async () => {
 test('cmod link of the cmod checkout lists it in place of the cmod plugin from GitHub, and a mod linked after it installs no other cmod', async () => {
   const home = await temporaryHome()
   await writeFiles(home, {
-    'bin/claude': claudeBeforeCmodIsLinked.replace(/  "plugin list --json"\) echo '.*' ;;/, `  "plugin list --json") grep -q Developer-linked "$HOME/.claude/plugins/known_marketplaces.json" 2>/dev/null && echo '[{"id":"cmod@Developer-linked","version":"0.1.0","scope":"user","enabled":true,"installPath":"/cache"}]' || echo '[]' ;;`),
+    'bin/claude': claudeBeforeCmodIsLinked.replace(/  "plugin list --json"\) .* ;;/,`  "plugin list --json") grep -q Developer-linked "$HOME/.claude/plugins/known_marketplaces.json" 2>/dev/null && echo '[{"id":"cmod@Developer-linked","version":"0.1.0","scope":"user","enabled":true,"installPath":"/cache"}]' || echo '[]' ;;`),
     'Developer/cmod/.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.1.0' }),
     'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
   })

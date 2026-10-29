@@ -1240,7 +1240,7 @@ test("Claude's compact tool compacts the conversation once Claude's answer ends,
 const installedPlugins = '/test/home/.claude/plugins/installed_plugins.json'
 
 function pluginsListed(lists: readonly (readonly { name: string; version: string; state?: string; unsatisfied?: string[] }[])[], global: Partial<CmodPluginState['global']> = {}) {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true, pluginsCheckedAt: null, ...global } }, files: { [installedPlugins]: '{}' } })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true, pluginsCheckedAt: null, ...global } }, files: { [installedPlugins]: '{}', [`${store}/store-changed`]: '' } })
   const ticks: (() => void)[] = []
   tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
   const ran: string[] = []
@@ -1267,7 +1267,7 @@ test('the cmod plugin updates cmod when Claude Code turned a mod off for an olde
 
   expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update cmod', 'list --json'])
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
-  expect(tested.state.global.pluginsCheckedAt).toBe(0)
+  expect(tested.state.global.pluginsCheckedAt).toEqual([0, null])
 })
 
 test('the cmod plugin updates every copy of cmod when two marketplaces hold different versions, because Claude Code loads only one', async () => {
@@ -1387,16 +1387,57 @@ test('a linked mod that does not build shows its error in one toast, and the toa
   expect(tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')).toEqual([])
 })
 
-test('the cmod plugin reads the plugin list only after Claude Code changes its installed plugins, and updates nothing when every mod has the cmod it needs', async () => {
-  const { tested, ran } = pluginsListed([[{ name: 'cmod@cmod', version: '4.0.0' }, { name: 'notes@cmod', version: '0.1.0' }]])
+test('the cmod plugin updates nothing when every mod has the cmod it needs, and a store change that marks no plugin change lists nothing', async () => {
+  const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.0.0' }, { name: 'notes@cmod', version: '0.1.0' }]])
   await tested.start()
   await tested.settle()
-  const checked = pluginsListed([[]], { pluginsCheckedAt: tested.state.global.pluginsCheckedAt })
-  await checked.tested.start()
-  await checked.tested.settle()
+  await writeStoreFile(tested, `${store}/widgets.json`, '{}')
+  for (const run of ticks) run()
+  await tested.settle()
 
   expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json'])
-  expect(checked.ran.filter((command) => !command.startsWith('rules'))).toEqual([])
+})
+
+test('a session start lists the mods even when no plugin changed since the last check, and shows a mod off for an older cmod', async () => {
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const first = pluginsListed([off])
+  await first.tested.start()
+  await first.tested.settle()
+  const { tested, ran } = pluginsListed([off], { pluginsCheckedAt: first.tested.state.global.pluginsCheckedAt })
+  await tested.start()
+  await tested.settle()
+
+  expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update cmod', 'list --json'])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'file-tree@beta is off', description: turnedOff }])
+})
+
+test('a session no app shows, such as claude -p, lists no mods at its start when no plugin changed since the last check', async () => {
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const first = pluginsListed([off])
+  await first.tested.start()
+  await first.tested.settle()
+  const { tested, ran } = pluginsListed([off], { pluginsCheckedAt: first.tested.state.global.pluginsCheckedAt })
+  tested.fakes.session.surfaces = async () => []
+  await tested.start()
+  await tested.settle()
+
+  expect(ran.filter((command) => !command.startsWith('rules'))).toEqual([])
+})
+
+test("a linked mod's new plugins-changed mark, with installed_plugins.json unchanged, updates cmod when the mod is off for an older cmod, and shows it while it stays off", async () => {
+  const healthy = [{ name: 'cmod@Developer-linked', version: '4.3.2' }, { name: 'oneclaude@Developer-linked', version: '0.1.0' }]
+  const linkedOff = 'Claude Code turned it off: Requires "cmod@Developer-linked" >=4.3.3, installed 4.3.2'
+  const off = [healthy[0]!, { name: 'oneclaude@Developer-linked', version: '0.1.0', state: linkedOff, unsatisfied: ['cmod@Developer-linked'] }]
+  const { tested, ran, ticks } = pluginsListed([healthy, off, off])
+  await tested.start()
+  await tested.settle()
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  for (const run of ticks) run()
+  await tested.settle()
+
+  expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'list --json', 'update cmod', 'list --json'])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'oneclaude@Developer-linked is off', description: linkedOff }])
 })
 
 test('a mod Claude Code installs while cmod checks the plugin list is checked too', async () => {
@@ -1622,6 +1663,28 @@ test('a reload that changed notes from 1.2.0 to 1.3.0 shows notes updated to 1.3
   const { tested } = await updated({ 'notes@market': '1.2.0', 'inbox@market': '2.0.0' }, { 'notes@market': '1.3.0', 'inbox@market': '2.0.0' })
 
   expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
+})
+
+test('a reload that updated a plugin installed from git names the version its plugin.json holds, without the commit Claude Code adds, and the permissions its record granted at it', async () => {
+  const copy = (version: string) => `/test/home/.claude/plugins/cache/market/notes/${version}`
+  const installed = (version: string) => JSON.stringify({ version: 2, plugins: { 'notes@market': [{ scope: 'user', installPath: copy(version), version }] } })
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'notes@market': true })
+  await tested.fakes.fs.write?.(`${copy('1.2.0-aaaaaaaaaaaa')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'notes', version: '1.2.0' }))
+  await tested.fakes.fs.write?.(`${copy('1.3.0-bbbbbbbbbbbb')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'notes', version: '1.3.0' }))
+  await tested.fakes.fs.write?.(`${store}/records/notes.json`, installRecord('notes', '1.3.0', ['conversation']))
+  await tested.fakes.fs.write?.(installedPlugins, installed('1.2.0-aaaaaaaaaaaa'))
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+
+  await tested.fakes.fs.write?.(installedPlugins, installed('1.3.0-bbbbbbbbbbbb'))
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0 · Read your Claude Code conversations'])
 })
 
 test('a reload that changed four versions shows one 4 plugins updated toast', async () => {

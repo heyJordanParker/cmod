@@ -55,7 +55,7 @@ export function spawn<Out extends 'pipe' | 'inherit' | 'ignore', Err extends 'pi
       stderr: options.stderr,
     })
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`${argv[0]} is not on PATH. Install it, then run the command again.`)
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`${argv[0]} is not on PATH. Install it, then run the command again.`, { cause: error })
     throw error
   }
 }
