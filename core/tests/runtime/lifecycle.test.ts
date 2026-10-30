@@ -1583,6 +1583,29 @@ test("the cmod plugin runs its bootstrap from its root, and its mod.dataFolder n
   expect(folder).toBe('/home/.local/share/cmod/data/cmod')
 })
 
+test('the cmod plugin takes what a mod listens to while it installs, and serves it once it is set up', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const disk = fakeFiles({})
+  Object.assign(fake.fakes.fs, disk)
+  const bootstrap = controlledStream()
+  fake.fakes.process.spawn = (request) => (request.argv.includes('./setup/bootstrap.sh') ? bootstrap.stream : finished(['[]'], 0))
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+  const listens = [{ event: 'Prompt' }]
+  const watches = [{ event: 'ContextEnd' }]
+
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
+  await fake.settle()
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  const refused = { deny: 'cmod has no method.' }
+  expect(await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:subscribe', input: { session: 'test-session', subscriptions: listens }, caller: 'totalrecall' }, refused)).toEqual({ value: null })
+  expect(await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:watchBefore', input: { session: 'test-session', subscriptions: watches }, caller: 'totalrecall' }, refused)).toEqual({ value: null })
+  bootstrap.exit(0)
+  await fake.settle()
+
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ totalrecall: { 'test-session': listens } })
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/before/test-session.json'))).toMatchObject([{ mod: 'totalrecall', target: 'test-session', events: ['ContextEnd'] }])
+})
+
 test('the cmod plugin counts as installed when the cmod program is its version or newer', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "cmod", "version": "0.1.10" }' }))

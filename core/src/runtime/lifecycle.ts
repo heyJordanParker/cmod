@@ -49,6 +49,8 @@ export type Plugin = {
 
 export type Phase = 'starting' | 'installing' | 'waiting' | 'failed' | 'ready' | 'active'
 
+const listenMethods: readonly string[] = [conversationMethods.subscribe, conversationMethods.watchBefore]
+
 export type Lifecycle<State extends object> = {
   readonly phase: Phase
   readonly mod: Mod<State> | undefined
@@ -208,6 +210,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   let recording: Promise<void> | undefined
   let missedSessionStart: Frozen<Args<'classic.SessionStart'>> | undefined
   let hasHeardSessionStart = false
+  const heldListens = new Map<string, Frozen<Args<'cmod.call'>> & { readonly caller?: string }>()
   let settleStart: () => void = () => undefined
   const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
 
@@ -372,6 +375,12 @@ export function createLifecycle<State extends object, Declared extends Options =
     router = activeRouter
     phase = 'active'
     stopWatchingRecord()
+    const held = [...heldListens.values()]
+    heldListens.clear()
+    for (const call of held) {
+      const failed = (error: unknown) => void toastFailure({ id: `listens:${String(call.caller)}`, message: `${String(call.caller)} hears nothing from this session`, error })
+      void activeRouter.dispatch('cmod.call', call, async () => ({ deny: `${definition.name} has no method ${call.method}.` })).then((answer) => ('deny' in answer ? failed(new Error(answer.deny)) : undefined), failed)
+    }
     runtime.claude.ui.invalidate('ui.render')
     if (definition.name === cmodPluginName) runtime.claude.ui.invalidate('command.describe')
     void runSteps(active.mod).catch((error: unknown) => toastFailure({ id: 'cmod:steps', message: 'Its installer stopped', error, isCritical: true }))
@@ -633,6 +642,10 @@ export function createLifecycle<State extends object, Declared extends Options =
         return next(e)
       }
       if (isCallToThisMod && phase !== 'active') {
+        if (event === 'cmod.call' && listenMethods.includes(asked.method)) {
+          heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
+          return { value: null } as EventResult<N>
+        }
         return { deny: phase === 'failed' ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
       }
       const call = e as Frozen<Args<'cmod.call'>>

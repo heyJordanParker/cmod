@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.1.1] - 2026-10-30
+
+### Fixed
+- A mod that starts while cmod is still installing hears its session once cmod is ready. cmod refused the mod's listeners with "cmod is installing", so the mod's `on` and `before` listeners, such as `beforeContextEnd`, stayed silent until the next session, and its toasts said it "Hears nothing" and "Changes nothing". cmod now keeps them while it installs and starts serving them when it is ready. This is the first session after a mod install that brings a new cmod.
+
 ## [5.1.0] - 2026-10-30
 
 ### Added
