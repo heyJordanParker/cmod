@@ -347,7 +347,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.1.0";
+var coreVersion = "5.1.1";
 var oldestCmodVersion = "5.1.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -10121,6 +10121,7 @@ function Progress({ value, width = 24 }) {
 }
 
 // node_modules/@cmodjs/core/runtime/lifecycle.js
+var listenMethods = [conversationMethods.subscribe, conversationMethods.watchBefore];
 var announcedKey = "cmod:announced";
 var cmodUpdatedKey = "cmod:cmod-updated-for";
 var installId = "cmod:install";
@@ -10223,6 +10224,7 @@ function createLifecycle(definition, permissionRoutes = () => {
   let recording;
   let missedSessionStart;
   let hasHeardSessionStart = false;
+  const heldListens = new Map;
   let settleStart = () => {
     return;
   };
@@ -10383,6 +10385,12 @@ function createLifecycle(definition, permissionRoutes = () => {
     router = activeRouter;
     phase = "active";
     stopWatchingRecord();
+    const held = [...heldListens.values()];
+    heldListens.clear();
+    for (const call of held) {
+      const failed = (error) => void toastFailure({ id: `listens:${String(call.caller)}`, message: `${String(call.caller)} hears nothing from this session`, error });
+      activeRouter.dispatch("cmod.call", call, async () => ({ deny: `${definition.name} has no method ${call.method}.` })).then((answer) => ("deny" in answer) ? failed(new Error(answer.deny)) : undefined, failed);
+    }
     runtime.claude.ui.invalidate("ui.render");
     if (definition.name === cmodPluginName)
       runtime.claude.ui.invalidate("command.describe");
@@ -10658,6 +10666,12 @@ function createLifecycle(definition, permissionRoutes = () => {
         return next(e);
       }
       if (isCallToThisMod && phase !== "active") {
+        if (event === "cmod.call" && listenMethods.includes(asked.method)) {
+          heldListens.set(`${asked.caller}
+${asked.method}
+${String(asked.input.session)}`, asked);
+          return { value: null };
+        }
         return { deny: phase === "failed" ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` };
       }
       const call = e;
@@ -11315,7 +11329,7 @@ function changelogSections(markdown2) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-4oJJE9/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11780,7 +11794,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-4oJJE9/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12035,7 +12049,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-4oJJE9/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12089,7 +12103,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-4oJJE9/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var newestMessages = 8;
@@ -12453,7 +12467,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-5a6zpa/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-4oJJE9/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built2 = await passOn(eventInput);
