@@ -1,6 +1,4 @@
 import { existsSync, realpathSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isAtLeast, isObject, readRecord, readSteps, storeFolder, type Steps } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
@@ -149,12 +147,7 @@ export async function installPackages(plugin: Plugin): Promise<boolean> {
   if (plugin.packageJson === undefined) return false
   const dependencies = plugin.packageJson['dependencies']
   const hasTarball = Object.values(isObject(dependencies) ? dependencies : {}).some((spec) => typeof spec === 'string' && spec.startsWith('file:') && /\.(tgz|tar\.gz)$/.test(spec))
-  const cache = hasTarball ? await mkdtemp(join(tmpdir(), 'cmod-bun-cache-')) : undefined
-  try {
-    const bun = bunArgv('install', ...(cache === undefined ? [] : ['--cache-dir', cache]))
-    await run(bun.argv, { cwd: plugin.root, env: bun.env })
-  } finally {
-    if (cache !== undefined) await rm(cache, { recursive: true, force: true })
-  }
+  const bun = bunArgv('install', ...(hasTarball ? ['--force'] : []))
+  await run(bun.argv, { cwd: plugin.root, env: bun.env })
   return true
 }

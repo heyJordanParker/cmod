@@ -1,4 +1,5 @@
 import type { RecordPart } from '../../session.js'
+import type { Device } from './device.js'
 import type { Message } from './message/message.js'
 import type { Prompt } from './message/prompt.js'
 
@@ -14,6 +15,7 @@ export type Turn = RecordPart & {
   readonly answer?: string
   readonly reason?: 'answer' | 'error'
   readonly failure?: { readonly type: string; readonly text: string }
+  readonly device?: Device
   messages(): Promise<Message[]>
   abort(): Promise<void>
 }

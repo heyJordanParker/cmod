@@ -4,6 +4,7 @@ import type { Options } from './options.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
 import { cmodPluginName } from './runtime/dependencies.js'
+import { readDevice } from './runtime/device.js'
 import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle.js'
 import { permissionRoutes, type PermissionRoutes } from './runtime/permission-check.js'
 
@@ -84,16 +85,17 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       dataHome: () => $.env.get('XDG_DATA_HOME'),
       configHome: () => $.env.get('CLAUDE_CONFIG_DIR'),
     },
+    device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) },
   }
   const [, answer] = await Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)])
   return answer
 }
 
-type PassOn<N extends RoutedEvent> = { readonly event: N; (e: never): Promise<EventResult<N>> }
+type PassOn<N extends RoutedEvent> = { readonly event: N; readonly signal: AbortSignal; (e: never): Promise<EventResult<N>> }
 
 function routeToMod<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: PassOn<N>): Promise<EventResult<N>> {
-  return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as never))
+  return lifecycle.route(passOn.event, eventInput, (passed: unknown) => passOn(passed as never), passOn.signal)
 }
 
 function routeFailure<N extends RoutedEvent>(_$: EngineInterface, eventInput: Frozen<Args<N>>, passOn: PassOn<N> & Caught): Promise<EventResult<N>> {
@@ -105,7 +107,7 @@ const withCaller = (eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.ca
 const withoutCaller = (passOn: Next<'cmod.call'>) => (passed: Frozen<Args<'cmod.call'>>) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== 'caller')) as Args<'cmod.call'>)
 
 function routeCallToMod(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'>): Promise<EventResult<'cmod.call'>> {
-  return lifecycle.route('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn))
+  return lifecycle.route('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn.signal)
 }
 
 function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.call'>>, passOn: Next<'cmod.call'> & Caught): Promise<EventResult<'cmod.call'>> {

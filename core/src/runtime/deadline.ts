@@ -27,20 +27,25 @@ export function listenerOf(name: string, method: string, args: readonly unknown[
   return { matcher: hasMatcher ? args[0] : undefined, listener, options }
 }
 
-export async function withinTime<Value>(clock: Pick<Claude['clock'], 'now'>, method: string, { timeoutMs = listenerMs }: ListenOptions, run: (time: ListenTime) => Value | Promise<Value>): Promise<Value> {
+export async function withinTime<Value>(clock: Pick<Claude['clock'], 'now'>, method: string, { timeoutMs = listenerMs }: ListenOptions, cancel: AbortSignal, run: (time: ListenTime) => Value | Promise<Value>): Promise<Value> {
   const controller = new AbortController()
   const deadline = (await clock.now()) + timeoutMs
+  cancel.throwIfAborted()
   let timer: unknown
+  let cancelled: () => void = () => undefined
   const passed = new Promise<never>((_resolve, reject) => {
     timer = timers.setTimeout(() => {
       controller.abort()
       reject(new PassedTimeout(`${method} passed its ${timeoutMs / 1000} s timeout`))
     }, timeoutMs)
+    cancelled = () => reject(cancel.reason)
+    cancel.addEventListener('abort', cancelled, { once: true })
   })
   try {
-    return await Promise.race([Promise.resolve().then(() => run({ deadline, signal: controller.signal })), passed])
+    return await Promise.race([Promise.resolve().then(() => run({ deadline, signal: AbortSignal.any([controller.signal, cancel]) })), passed])
   } finally {
     timers.clearTimeout(timer)
+    cancel.removeEventListener('abort', cancelled)
   }
 }
 

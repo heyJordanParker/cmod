@@ -91,7 +91,7 @@ export function serveConversations({
   const listeners = `${folder}/listeners`
   const heard = new Map<string, Map<string, readonly Heard[]>>()
   const subscribed = new Map<string, Map<string, readonly Listened[]>>()
-  let savingListeners: Promise<unknown> = Promise.resolve()
+  let listenerFiles: Promise<unknown> = Promise.resolve()
   const asked = new Map<string, Asked>()
   const ownWatches = new Map<string, Watch>()
   let watchers: readonly Watcher[] = []
@@ -112,18 +112,18 @@ export function serveConversations({
     engineTurns.set(agent, e.turnId)
     return next(e)
   })
-  const endTurn = (ending: TurnEnding, task?: string) => <Below extends { readonly block?: string }>(below: Below): Below => {
+  const endTurn = (ending: TurnEnding, task?: string) => <Below extends { readonly block?: string }>(below: Below, isInterrupted = false): Below => {
     if (below.block !== undefined) return below
     engineTurns.delete(task ?? '')
-    dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task))
+    if (!isInterrupted) dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task))
     return below
   }
-  router.add('classic.Stop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) })(await next(e)))
+  router.add('classic.Stop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) })(await next(e), next.signal.aborted))
   router.add('classic.StopFailure', async (e, next) => endTurn({ reason: 'error', failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)))
-  router.add('classic.SubagentStop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) }, e.agent_id)(await next(e)))
+  router.add('classic.SubagentStop', async (e, next) => endTurn({ reason: 'answer', ...(e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message }) }, e.agent_id)(await next(e), next.signal.aborted))
   router.add('classic.Stop', async (e, next) => {
     const below = await next(e)
-    if (below.block === undefined) void answerTask().catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
+    if (below.block === undefined && !next.signal.aborted) void answerTask().catch((error: unknown) => report('task', 'Could not record that this session answered its task', error))
     return below
   })
 
@@ -265,8 +265,12 @@ export function serveConversations({
 
   const publishNow = async (isEnding: boolean) => {
     if (session === '') return
-    const list = isEnding ? [] : [...ownWatches.values()].filter((watch) => watch.events.length > 0)
-    await claude.fs.write(`${watches}/${session}.json`, JSON.stringify(list))
+    const at = session
+    const list = await onListenerFiles(async () => {
+      const kept = isEnding ? [] : [...ownWatches.values()].filter((watch) => watch.events.length > 0)
+      await claude.fs.write(`${watches}/${at}.json`, JSON.stringify(kept))
+      return kept
+    })
     const targets = new Set([...published, ...list.map((watch) => watch.target)])
     published = new Set(list.map((watch) => watch.target))
     const running = targets.has(everySession) ? (await json<SessionData[]>(['history', 'sessions', '--running'])).map((each) => each.id) : []
@@ -283,34 +287,56 @@ export function serveConversations({
     subscribed.set(caller, lists)
   }
 
-  const saveListeners = (isEnding = false) => {
-    const at = session
-    const kept = isEnding ? {} : Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)]))
-    const next = savingListeners.then(() => (at === '' ? undefined : claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(kept))))
-    savingListeners = next.catch((error: unknown) => claude.ui.log(`cmod: saving the mods' listeners failed: ${messageOf(error)}`, { to: 'debug' }))
+  const onListenerFiles = <Value>(work: () => Promise<Value>) => {
+    const next = listenerFiles.then(work)
+    listenerFiles = next.catch((error: unknown) => claude.ui.log(`cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`, { to: 'debug' }))
     return next
   }
 
-  const restoreListeners = async () => {
-    const kept = JSON.parse(await claude.fs.read(`${listeners}/${session}.json`).catch(ifMissing('{}'))) as Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>>
-    for (const [caller, lists] of Object.entries(kept)) if (!subscribed.has(caller)) for (const [id, list] of Object.entries(lists)) hear(caller, id, list)
+  const clearListeners = (at: string) => onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, '{}'))
+
+  const clearWatches = (at: string) => onListenerFiles(() => claude.fs.write(`${watches}/${at}.json`, '[]'))
+
+  const saveListeners = (isEnding = false) => {
+    const at = session
+    if (at === '') return Promise.resolve()
+    if (isEnding) return clearListeners(at)
+    return onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)])))))
   }
 
-  const readWatchers = async () => {
-    const files = await claude.fs.list(watches).catch(ifMissing([]))
-    const found: Watcher[] = []
-    for (const file of files) {
-      const from = file.name.replace(/\.json$/, '')
-      if (!file.name.endsWith('.json')) continue
-      const list = JSON.parse(await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing('[]'))) as readonly Watch[]
-      if (from === session) {
-        for (const watch of list) if (!ownWatches.has(`${watch.mod}\n${watch.target}`)) ownWatches.set(`${watch.mod}\n${watch.target}`, watch)
-        continue
-      }
-      found.push(...list.filter((watch) => watch.target === session || (watch.target === everySession && watch.project === project())).map((watch) => ({ ...watch, from })))
-    }
-    watchers = found
+  const restoreListeners = () => {
+    const at = session
+    return onListenerFiles(async () => {
+      const kept = JSON.parse(await claude.fs.read(`${listeners}/${at}.json`).catch(ifMissing('{}'))) as Readonly<Record<string, Readonly<Record<string, readonly Listened[]>>>>
+      for (const [caller, lists] of Object.entries(kept)) if (!subscribed.has(caller)) for (const [id, list] of Object.entries(lists)) hear(caller, id, list)
+    })
   }
+
+  const readWatchers = () =>
+    onListenerFiles(async () => {
+      const files = await claude.fs.list(watches).catch(ifMissing([]))
+      const found: Watcher[] = []
+      for (const file of files) {
+        const from = file.name.replace(/\.json$/, '')
+        if (!file.name.endsWith('.json')) continue
+        const text = await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing('[]'))
+        let list: readonly Watch[]
+        try {
+          list = JSON.parse(text) as readonly Watch[]
+        } catch (error) {
+          if (from === session || !(error instanceof SyntaxError)) throw error
+          claude.ui.log(`cmod: session ${from} was writing its before listeners, so it keeps the ones from before until it relays that it changed them`, { to: 'debug' })
+          found.push(...watchers.filter((watch) => watch.from === from))
+          continue
+        }
+        if (from === session) {
+          for (const watch of list) if (!ownWatches.has(`${watch.mod}\n${watch.target}`)) ownWatches.set(`${watch.mod}\n${watch.target}`, watch)
+          continue
+        }
+        found.push(...list.filter((watch) => watch.target === session || (watch.target === everySession && watch.project === project())).map((watch) => ({ ...watch, from })))
+      }
+      watchers = found
+    })
 
   const changeGoal = (task: string | undefined, text: string) => dispatch(session, task === undefined ? conversation.changeGoal(text) : [{ type: GoalChange, goal: { text, task } }])
 
@@ -350,7 +376,7 @@ export function serveConversations({
       }
       watchers = watchers.filter((each) => each.from !== watcher.from)
       claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: 'debug' })
-      await claude.fs.write(`${watches}/${watcher.from}.json`, '[]')
+      await clearWatches(watcher.from)
       return undefined
     }
   }
@@ -360,18 +386,21 @@ export function serveConversations({
     return deciders(event).length > 0
   }
 
-  const decide = (): Decide => {
+  const decide = (cancel?: AbortSignal): Decide => {
     let endsAt: Promise<number> | undefined
     return (event, change) =>
       foldBefore(
         event,
         change,
         deciders(event).map((watcher) => async (latest: SessionChange) => {
+          if (cancel?.aborted === true) return undefined
           if (watcher.from === session) return askHere(watcher.mod, event, latest)
           endsAt ??= claude.clock.now().then((now) => now + awayFoldMs)
           return askAway(watcher, event, latest, await endsAt)
         }),
-        (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error),
+        (error) => {
+          if (cancel?.aborted !== true) report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error)
+        },
       )
   }
 
@@ -422,9 +451,9 @@ export function serveConversations({
       .then(follow)
     starting = Promise.all([starting, restored]).then(() => undefined)
     reloadWatchers()
-    if (subscribed.size > 0) void Promise.all([previous === '' ? undefined : claude.fs.write(`${listeners}/${previous}.json`, '{}'), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
+    if (subscribed.size > 0) void Promise.all([previous === '' ? undefined : clearListeners(previous), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
     if (ownWatches.size === 0) return
-    void Promise.all([previous === '' ? undefined : claude.fs.write(`${watches}/${previous}.json`, '[]'), publishWatches()]).catch((error: unknown) => report('before', 'Kept its before listeners on the session from before', error))
+    void Promise.all([previous === '' ? undefined : clearWatches(previous), publishWatches()]).catch((error: unknown) => report('before', 'Kept its before listeners on the session from before', error))
   }
 
   const take = async (row: Row, task: string | undefined) => {

@@ -30,8 +30,8 @@ Loads the checkout at `path` (default: the current folder) in every Claude Code 
 It loads the checkout through a marketplace cmod keeps in the checkout's parent folder:
 
 1. It lists the checkout in `<parent>/.claude-plugin/marketplace.json`, named `<parent folder>-linked`, beside the cmod plugin from the `release` branch of `heyJordanParker/cmod`, so the mod's `cmod` dependency resolves in that marketplace. Every checkout linked from one folder shares its marketplace. The checkout's own `.claude-plugin/marketplace.json`, the one `cmod publish` writes, stays as it was.
-2. It adds that file to the parent's `.git/info/exclude` when the parent is inside a git repository.
-3. It adds the marketplace to Claude Code and installs `<mod>@<parent folder>-linked` from it, which loads the checkout's own files in every session at the next reload.
+2. It adds that file, and `<parent>/.claude/settings.local.json` beside it, to the parent's `.git/info/exclude` when the parent is inside a git repository.
+3. It adds the marketplace to Claude Code with `claude plugin marketplace add <parent> --scope local`, which declares it in `<parent>/.claude/settings.local.json`, so the `settings.json` you share between computers holds no path of this one, the way `npm link` keeps a link out of the shared `package.json`. Then it installs `<mod>@<parent folder>-linked` from it, which loads the checkout's own files in every session, in any project, at the next reload.
 4. It turns off the installed copy of the mod from any other marketplace, and records it in `links.json` in the cmod store, so `cmod unlink` turns that copy back on.
 
 It refuses a parent folder whose `.claude-plugin/marketplace.json` cmod did not write. `cmod watch` reloads every session once a change builds.
@@ -44,7 +44,7 @@ It refuses a parent folder whose `.claude-plugin/marketplace.json` cmod did not 
 cmod unlink [path]
 ```
 
-Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace from Claude Code, and deletes its file and its line in `.git/info/exclude`. Then it turns back on the copy of the mod `cmod link` turned off, runs the checkout's uninstall step, and removes the program `cmod link` built, with its links.
+Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace and its declaration in `<parent>/.claude/settings.local.json` from Claude Code, and deletes its file and its line in `.git/info/exclude`. The line for `settings.local.json` stays while that file does, because Claude Code leaves it behind, empty. Then it turns back on the copy of the mod `cmod link` turned off, runs the checkout's uninstall step, and removes the program `cmod link` built, with its links.
 
 ### cmod check
 
@@ -61,7 +61,7 @@ Runs every check this machine can run on the mod at `path` (default: the current
 5. Checks the permission check. It adds `"approve": true` to `package.json` `"cmod"` when the mod allows or asks on Claude Code's permission check and `hooks/register.ts` calls `registerPermissionCheck`. It fails a mod whose `src/` hears the permission check while `register.ts` does not call `registerPermissionCheck`, and a mod on `@cmodjs/core` 5.0.0 or later whose `package.json` `"cmod"` still declares `"permissions"`, with the fix `Delete "permissions" from package.json "cmod", and write "approve": true there if the mod approves tool calls.`
 6. Reads the metadata of every file in the mod, and names each file whose metadata cmod cannot read.
 7. Writes the options `defineMod` declares into `.claude-plugin/plugin.json` `userConfig`, and its hotkeys into `package.json` `"cmod"` `hotkeys`, keeping each file's own formatting, so Claude Code shows the options in `/config` ([options.md](options.md)). It loads `hooks/register.ts` to read them, without starting the mod.
-8. Writes the `cmod` dependency in `.claude-plugin/plugin.json` as `>=` the oldest cmod the `@cmodjs/core` the mod installed runs on, `oldestCmodVersion` in its `records.js`, such as `>=5.1.0`, so every newer cmod runs the mod. A `@cmodjs/core` that does not export `oldestCmodVersion` runs on the cmod of its own version, so the range is `>=` that version, such as `>=4.3.4`. A mod still on `@cmodjs/core` 3 keeps its own range ([dependencies.md](dependencies.md#call-the-methods-mod-dependencies)). Claude Code turns a mod off when its cmod is older than that dependency, so `cmod check` first compares it with every cmod plugin Claude Code installed on this machine. When an installed copy is older, it updates them as `cmod update cmod` does. When one is still older, as when your `@cmodjs/core` needs a cmod newer than every published one, the check fails, keeps the old dependency, and names the `@cmodjs/core` to install instead. When a cmod linked from a checkout is older, the check fails the same way and says to pull that checkout, because no update reaches it. On a machine without Claude Code or without a cmod plugin, such as CI, it writes the dependency at once.
+8. Writes the `cmod` dependency in `.claude-plugin/plugin.json` as `>=` the oldest cmod the `@cmodjs/core` the mod installed runs on, `oldestCmodVersion` in its `records.js`, such as `>=5.2.0`, so every newer cmod runs the mod. A `@cmodjs/core` that does not export `oldestCmodVersion` runs on the cmod of its own version, so the range is `>=` that version, such as `>=4.3.4`. A mod still on `@cmodjs/core` 3 keeps its own range ([dependencies.md](dependencies.md#call-the-methods-mod-dependencies)). Claude Code turns a mod off when its cmod is older than that dependency, so `cmod check` first compares it with every cmod plugin Claude Code installed on this machine. When an installed copy is older, it updates them as `cmod update cmod` does. When one is still older, as when your `@cmodjs/core` needs a cmod newer than every published one, the check fails, keeps the old dependency, and names the `@cmodjs/core` to install instead. When a cmod linked from a checkout is older, the check fails the same way and says to pull that checkout, because no update reaches it. On a machine without Claude Code or without a cmod plugin, such as CI, it writes the dependency at once.
 9. Checks its imports.
 10. Looks for prebuilt binaries outside `cli/`.
 11. Builds the release in a temporary folder as `cmod publish` builds it, with its `"files"` list and its bundled hooks module, and validates the release with Claude Code, `claude plugin validate --strict`. So it fails on a path `plugin.json` names that `"files"` leaves out, a `"files"` path that matches no file in the mod, and each reason a bundle fails, and prints every line the validator writes. Then it deletes the folder.
@@ -147,7 +147,7 @@ Adds the plugin's marketplace to Claude Code and installs the plugin through Cla
 - When the marketplace lists several plugins, name the one to install after it.
 - Given `name@marketplace` of a marketplace Claude Code has added, it installs that plugin.
 - Given the name of a plugin Claude Code already holds, it runs a mod's install step again.
-- A path holds a `/`, such as `./my-mod`.
+- A path holds a `/`, such as `./my-mod`. A folder's marketplace is declared in that folder's `.claude/settings.local.json`, so the `settings.json` you share between computers holds no path of this one, and an `owner/repo` marketplace is declared in `settings.json`. In a git checkout, that file goes into `.git/info/exclude`, so `git status` stays clean. `cmod remove` keeps the line, because the marketplace and its file stay after the plugin is gone.
 - `--option key=value` sets one of the mod's options through `claude plugin configure`, once per option, so a scripted install needs no visit to `/config`. It refuses a key the mod does not declare, and names the keys it does ([options.md](options.md)).
 
 ### cmod update
@@ -183,7 +183,7 @@ cmod list [--json]
 
 Lists every plugin Claude Code has installed or linked, with its version. A mod shows whether cmod set it up, and any other plugin shows whether Claude Code enabled it. A plugin Claude Code turned off shows Claude Code's reason, such as `Requires "cmod@market" >=4.2.0, installed 4.0.0`. It also lists every mod Claude Code removed whose uninstall step has not run yet.
 
-- `--json` prints the list as JSON: one object per row with its `name`, `version`, `state`, and `unsatisfied`, the dependencies Claude Code turned the plugin off for because they are older than the plugin needs.
+- `--json` prints the list as JSON: one object per row with its `name`, `version`, `state`, and `unsatisfied`, the dependencies Claude Code turned the plugin off for because they are older than the plugin needs. A plugin whose folder exists also has `folder`, the folder it runs from: the checkout for a linked mod, and Claude Code's copy for any other. A mod also has `dataFolder`, and the two are the folders its `mod.folder` and `mod.dataFolder` name. A removed mod has only `dataFolder`, because its data stays until `cmod teardown` deletes it.
 
 - The `cmod` commands count a plugin as a mod only when its `package.json` has a `cmod` step key or cmod holds an install record for it. A mod made with `cmod new` has neither until its first Claude Code session sets it up, so until then `cmod list` shows it as `enabled`, like any other plugin.
 
@@ -210,7 +210,7 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 - `sessions` lists the conversations of the current folder's project, or `--project`'s, newest first, each with its time, id, and title. `--all` lists every project's, `--since` keeps those active in the last `30m`, `6h`, `2d`, or `1w`, or since a date such as `2026-10-01`, and `--running` keeps those open in Claude Code now.
 - `search` prints the newest 50 messages whose text or tool input contains the text, at least 3 characters, any case, each with its time and session. Each tool input value is searched in its first 1,024 characters, and tool results are not searched. `--all`, `--since`, and `--running` scope it as they scope `sessions`, `--limit` changes the 50, and `--before <session>:<id>` prints the page after the message it names, the last one of the page before. `--session` searches one conversation, and inside it `--task` searches a task and the tasks it started, `--turn` one turn, `--context` one context, and `--agent` keeps the main agent's messages, or with `--task` that task's own, without the tasks it started.
 - `messages` prints one conversation's messages in order: the session named, or the one the command runs in when Claude Code runs it. `--task` reads a task's messages instead, `--turn` keeps one turn's, `--after` starts after a message id, and `--last` keeps that many from the end.
-- `turns` prints the conversation's turns, each opened by a prompt and closed when Claude finishes. `--context` keeps one context's, and `--last` keeps that many from the end.
+- `turns` prints the conversation's turns, each opened by a prompt and closed when Claude finishes. `--context` keeps one context's, and `--last` keeps that many from the end. With `--json`, a turn names the `device` it ran on, as `Turn.device` does ([session.md](session.md#turn-context-goal-and-task)).
 - `contexts` prints the conversation's contexts, a new one after each compaction.
 - `tasks` prints the tasks the conversation started, with `--task` the tasks that task started, and with `--nested` every task at any depth.
 - `goal` prints what the conversation is for: the goal a mod set, or its first prompt.
@@ -219,7 +219,7 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 - `state` prints what a running conversation resumes from.
 - `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later. The cmod plugin runs it to hear other running sessions.
 - `--json` prints JSON instead of one line each.
-- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-11.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, contexts, and tasks. While cmod has set up a mod other than cmod, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
+- `index` reads every saved conversation into the index at `~/.local/share/cmod/history-12.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, with the device each ran on, contexts, and tasks. While cmod has set up a mod other than cmod, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.
 
 ## Run in an install script
 
@@ -251,7 +251,7 @@ cmod runs these itself. A person runs them to see a step's whole log, or to fini
 cmod setup <plugin-root> [--events]
 ```
 
-Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, binds its hotkeys, and records the mod as set up, asking nothing first ([install-steps.md](install-steps.md#when-the-steps-run)). A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the setup says so. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them. Before all of that, it links each folder a cmod before 4.1.0 left in `CLAUDE_CODE_PLUGIN_DIRS`, as [`cmod watch`](#cmod-watch) does.
+Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out. Downloads the program its `cmod.program` names, or builds it from the checkout's `cli/` when `cmod link` loaded the mod, so a linked checkout whose version has no release yet still sets up, and links it into cmod's programs folder, which Claude Code runs it from by its name, and into `~/.local/bin` unless a file there is not cmod's. Runs the mod's install step, saves its uninstall step, binds its hotkeys, and records the mod as set up, asking nothing first ([install-steps.md](install-steps.md#when-the-steps-run)). A mod installed from a marketplace whose automatic updates the person has not turned on or off gets them turned on, unless the marketplace is a folder, which Claude Code reads in place, through `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in Claude Code's `settings.json`, and the setup says so. An unchanged mod runs nothing. `--events` prints one event per line for a program to read, and the mod's install toast in Claude Code reads them. Before all of that, it links each folder a cmod before 4.1.0 left in `CLAUDE_CODE_PLUGIN_DIRS`, as [`cmod watch`](#cmod-watch) does.
 
 ### cmod teardown
 
@@ -259,7 +259,7 @@ Refuses a machine the `os` and `cpu` keys of the mod's `package.json` leave out.
 cmod teardown <plugin-name> [--events]
 ```
 
-Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, its data folder, and `instances/<plugin-name>/`, where its `singleInstance` programs keep their addresses, takes out each Claude Code setting it changed that still has the value it set, and deletes its entry in `consent.json`. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
+Runs a removed mod's saved uninstall step, then deletes its install record, the saved step, every version of its program, its data folder, and `instances/<plugin-name>/`, where its `singleInstance` programs keep their addresses, takes out each Claude Code setting it changed that still has the value it set, deletes its secrets ([cmod secret](#cmod-secret)), and deletes its entry in `consent.json`. It keeps the mod's config folder, `~/.claude/cmods/<plugin-name>`. A failed uninstall step keeps the record, so `cmod teardown` can run again.
 
 ### cmod hotkey
 
@@ -268,6 +268,18 @@ cmod hotkey <mod> <hotkey> <combo>
 ```
 
 Binds one hotkey of a mod to a new combo in Claude Code's `keybindings.json`, such as `cmod hotkey notes toggle ctrl+shift+n`, and removes the combo it had. It binds a hotkey without a default combo the same way. A combo in Settings, under the mod, Hotkeys, runs it, and so does the cmod plugin for its own two hotkeys at its first start. It refuses a combo that is not one, and a combo the person already bound to something else, with `<combo> already runs something else in ~/.claude/keybindings.json. Pick another combo.` The mod's next update keeps the combo ([mod.md](mod.md#hotkeys)).
+
+### cmod secret
+
+```text
+cmod secret store <mod> <key>
+cmod secret get <mod> <key>
+cmod secret delete <mod> <key>
+```
+
+Keeps a mod's secrets, for `mod.secrets` and the mod's own programs ([mod.md](mod.md#mod-secrets)). `store` reads the value from stdin, such as `printf '%s' "$TOKEN" | cmod secret store anyhost token`, and refuses a terminal, where the value would show, and an empty value. `get` prints the value to stdout as it was stored, with no newline added, and prints nothing for a secret the mod does not have. `delete` removes one secret. A value never goes in the arguments, where every process on the computer can read it.
+
+Every mod's secrets live in `secrets.json` in the cmod store, mode 600, as `{ "<mod>": { "<key>": "<value>" } }`. On macOS each value is sealed as Chromium's `os_crypt` seals Chrome's and VS Code's: one random 32-byte key for cmod lives in the login keychain at `~/Library/Keychains/login.keychain-db`, as the generic password `cmod Safe Storage` with account `cmod`, and each value is `v10`, a fresh 12-byte nonce, the AES-256-GCM ciphertext, and its 16-byte tag, in base64. cmod makes the key once through `/usr/bin/security -i`, with the key hex-encoded on stdin, and reads it with `security find-generic-password -w`, so `security` is the one program the item trusts, and an update of cmod asks nothing. Only the key crosses `security`, so a secret has no size limit. A home with no login keychain keeps nothing, because `security` writes to the default keychain when the one it names does not exist. On Linux the values are plain, as Claude Code keeps its own login in `~/.claude/.credentials.json`. `cmod teardown` deletes the secrets of a removed mod, and the key stays for the other mods.
 
 ### cmod settings
 

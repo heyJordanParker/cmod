@@ -1,4 +1,5 @@
 import { ContextEnd, ContextStart, type Context } from './context/context.js'
+import { deviceOf, type Device } from './context/turn/device.js'
 import { Message, messagesOf, tagOf, textOf, type Row } from './context/turn/message/message.js'
 import { Note } from './context/turn/message/note.js'
 import { Prompt } from './context/turn/message/prompt.js'
@@ -25,7 +26,7 @@ export type SessionData = {
 
 export type ContextData = Pick<Context, 'number' | 'openedAt' | 'closedAt' | 'task'>
 
-export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt' | 'answer' | 'reason' | 'failure'>
+export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt' | 'answer' | 'reason' | 'failure' | 'device'>
 
 export type TurnEnding = Pick<Turn, 'answer' | 'reason' | 'failure'>
 
@@ -47,7 +48,7 @@ export function tasksWithAgents(tasks: readonly TaskData[], agents: readonly Age
   })
 }
 
-export type RunningTask = TaskData & { readonly context: number; readonly contextOpenedAt?: string }
+export type RunningTask = TaskData & { readonly context: number; readonly contextOpenedAt?: string; readonly device?: Device }
 
 export type GoalData = { readonly text: string; readonly task?: string }
 
@@ -65,6 +66,7 @@ export type ConversationState = {
   readonly contextOpenedAt: string
   readonly turn?: TurnData
   readonly goal?: string
+  readonly device?: Device
   readonly agentCalls: readonly string[]
   readonly endedCalls: Readonly<Record<string, string>>
   readonly tasks: Readonly<Record<string, RunningTask>>
@@ -95,7 +97,7 @@ export function emptyConversation(session: string): ConversationState {
 }
 
 export function createConversation(start: ConversationState): Conversation {
-  let { context, contextOpenedAt, turn, goal } = start
+  let { context, contextOpenedAt, turn, goal, device } = start
   const agentCalls = new Set(start.agentCalls)
   const endedCalls = new Map(Object.entries(start.endedCalls))
   const tasks = new Map(Object.entries(start.tasks))
@@ -164,9 +166,11 @@ export function createConversation(start: ConversationState): Conversation {
       const owner = task === undefined ? undefined : tasks.get(task)
       const placedIn = owner?.context ?? context
       for (const unplaced of messagesOf(row, task !== undefined)) {
+        if (task === undefined && unplaced.type === Note) device = deviceOf(unplaced) ?? device
         if (unplaced.type === Prompt) {
           changes.push(...(task === undefined ? endTurn(row.at) : endTaskTurn(task, row.at)))
-          const opened: TurnData = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...(task === undefined ? {} : { task }) }, context: placedIn, openedAt: row.at, ...(owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }) }
+          const ranOn = task === undefined ? device : owner?.device
+          const opened: TurnData = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...(task === undefined ? {} : { task }) }, context: placedIn, openedAt: row.at, ...(owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }), ...(ranOn === undefined ? {} : { device: ranOn }) }
           if (task === undefined) turn = opened
           else taskTurns.set(task, opened)
           changes.push({ type: TurnStart, turn: opened })
@@ -196,7 +200,7 @@ export function createConversation(start: ConversationState): Conversation {
     },
     startTask(data) {
       if (tasks.has(data.id)) return []
-      const started = { ...data, context }
+      const started = { ...data, context, ...(device === undefined ? {} : { device }) }
       tasks.set(data.id, started)
       agentCalls.add(data.openedBy)
       const changes: SessionChange[] = [{ type: TaskStart, task: started }]
@@ -221,6 +225,7 @@ export function createConversation(start: ConversationState): Conversation {
         contextOpenedAt,
         ...(turn === undefined ? {} : { turn }),
         ...(goal === undefined ? {} : { goal }),
+        ...(device === undefined ? {} : { device }),
         agentCalls: [...agentCalls],
         endedCalls: Object.fromEntries(endedCalls),
         tasks: Object.fromEntries(tasks),

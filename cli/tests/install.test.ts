@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
-import { claudeAnswering, cmod, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, cmodWith, deleteTemporaryHomes, environment, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -211,6 +211,46 @@ test('cmod install of a plain plugin from owner/repo adds the marketplace and in
   expect(result.stdout).toContain('✔ Installed plain@market into Claude Code\n')
   expect(await claudeCalls(home)).toBe('plugin marketplace add owner/market\nplugin marketplace list --json\nplugin install plain@market --json\nplugin list --json\n')
   expect(existsSync(storeOf(home))).toBe(false)
+})
+
+async function folderMarketHome(): Promise<{ home: string; market: string }> {
+  const home = await temporaryHome()
+  const copy = join(home, '.claude/plugins/cache/market/demo/0.1.0')
+  const claude = claudeAnswering([{ id: 'demo@market', version: '0.1.0', scope: 'user', enabled: true, installPath: copy }]).replace('  "plugin "*) exit 1 ;;', '  "plugin install demo@market --json"|"plugin uninstall demo@market --json") echo \'{"outcome":"ok"}\' ;;\n  "plugin "*) exit 1 ;;')
+  const files = modFiles('demo')
+  await writeFiles(home, {
+    'bin/claude': claude,
+    'market/.claude-plugin/marketplace.json': JSON.stringify({ name: 'market', owner: { name: 'test' }, plugins: [{ name: 'demo', source: './demo' }] }),
+    ...Object.fromEntries(Object.entries(files).flatMap(([path, text]) => [[`market/demo/${path}`, text], [`.claude/plugins/cache/market/demo/0.1.0/${path}`, text]])),
+  })
+  return { home, market: join(home, 'market') }
+}
+
+test("cmod install of a mod from a folder declares the folder's marketplace in its .claude/settings.local.json, so settings.json holds no path of this computer, and the cmod plugin from GitHub stays declared there", async () => {
+  const { home, market } = await folderMarketHome()
+
+  const result = await cmod(home, 'install', market)
+
+  expect(result.exitCode).toBe(0)
+  expect(await claudeCalls(home)).toContain(`plugin marketplace add ${market} --scope local\n`)
+  expect(JSON.parse(await readFile(join(market, '.claude/settings.local.json'), 'utf8'))).toEqual({ extraKnownMarketplaces: { market: { source: { source: 'directory', path: market } } } })
+  expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ extraKnownMarketplaces: { cmod: { source: { source: 'github', repo: 'heyJordanParker/cmod' }, autoUpdate: true } } })
+})
+
+test("cmod install and cmod remove of a mod from a git checkout leave git status clean, because the folder's .claude/settings.local.json is excluded from git", async () => {
+  const { home, market } = await folderMarketHome()
+  const git = (...args: string[]) => Bun.spawn(['git', '-C', market, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { env: environment(home), stdout: 'pipe', stderr: 'ignore' })
+  await git('init', '-q').exited
+  await git('add', '.').exited
+  await git('commit', '-q', '-m', 'mod').exited
+  const status = async () => new Response(git('status', '--porcelain', '--untracked-files=all').stdout).text()
+
+  expect((await cmod(home, 'install', market)).exitCode).toBe(0)
+  expect(existsSync(join(market, '.claude/settings.local.json'))).toBe(true)
+  expect(await status()).toBe('')
+
+  expect((await cmod(home, 'remove', 'demo')).exitCode).toBe(0)
+  expect(await status()).toBe('')
 })
 
 test('cmod install <name> of a plain plugin Claude Code already holds installs it through Claude Code, nothing more', async () => {
@@ -504,7 +544,7 @@ test('cmod list says why Claude Code turned a mod off, and --json names each dep
   const json = await cmod(home, 'list', '--json')
 
   expect(listed.stdout).toContain(`file-tree@market  0.1.0    Claude Code turned it off: ${unmet}\n`)
-  expect(JSON.parse(json.stdout)).toContainEqual({ name: 'file-tree@market', version: '0.1.0', state: `Claude Code turned it off: ${unmet}`, unsatisfied: ['cmod@market'] })
+  expect(JSON.parse(json.stdout)).toContainEqual({ name: 'file-tree@market', version: '0.1.0', state: `Claude Code turned it off: ${unmet}`, unsatisfied: ['cmod@market'], folder: join(home, 'market/file-tree') })
 })
 
 test('cmod list shows the cmod plugin ready when the cmod program is its version or newer, with no record', async () => {

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { ContextEnd, ContextStart } from '../../src/session/context/context.js'
+import { deviceNote, type Device } from '../../src/session/context/turn/device.js'
 import { AttachedFile, attachedPathOf } from '../../src/session/context/turn/message/attached-file.js'
 import { InstructionFile } from '../../src/session/context/turn/message/instruction-file.js'
 import { instructionPathOf, Message, rowOfAppend, rowOfLine, withTexts, type Row } from '../../src/session/context/turn/message/message.js'
@@ -287,4 +288,25 @@ test('a conversation restarted from its saved state keeps its open turn, goal, a
   expect(restarted.state.goal).toBe('Find the pane')
   expect(kinds(ended)).toEqual([ToolResult, TaskEnd])
   expect(ended[0]?.type === Message && ended[0].message.turn).toBe(first.state.turn?.prompt.id)
+})
+
+test("a task's device note leaves the session's device alone, so the main turns after it keep the device of the main transcript, and the task's turns the device it started on", () => {
+  const laptop: Device = { id: 'a'.repeat(32), name: 'laptop', os: 'darwin', arch: 'arm64' }
+  const devbox: Device = { id: 'b'.repeat(32), name: 'devbox', os: 'linux', arch: 'x64' }
+  const noted = (device: Device) => line({ type: 'attachment', attachment: { type: 'hook_additional_context', hookName: 'SessionStart', content: [`<cmod_mod>\n${deviceNote(device, '2026-10-13T10:00:00.000Z')}\n</cmod_mod>`] } })
+  const deviceOfTurn = (changes: readonly SessionChange[]) => changes.flatMap((change) => (change.type === TurnStart ? [change.turn.device?.name] : []))
+  const conversation = createConversation(emptyConversation('s1'))
+  conversation.add(noted(laptop))
+  conversation.add(typed('Plan it'))
+  conversation.add(said({ type: 'tool_use', id: 'toolu_1', name: 'Agent', input: { prompt: 'explore' } }))
+  conversation.startTask({ id: 'agent-1', title: 'Explore', agentType: 'explorer', openedBy: 'toolu_1', openedAt: '2026-10-13T10:00:03.000Z' })
+  conversation.add(noted(devbox))
+  const built = conversation.add(typed('Build it'))
+
+  const explored = conversation.add(typed('explore'), 'agent-1')
+  conversation.add(noted(laptop), 'agent-1')
+  const shipped = conversation.add(typed('Ship it'))
+
+  expect([...deviceOfTurn(built), ...deviceOfTurn(explored), ...deviceOfTurn(shipped)]).toEqual(['devbox', 'laptop', 'devbox'])
+  expect(conversation.state.device).toEqual(devbox)
 })

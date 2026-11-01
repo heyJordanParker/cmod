@@ -12,7 +12,7 @@ export type Hook = Exclude<ClassicHookEvent, 'PreToolUse'>
 
 export type HookFields = Readonly<Record<string, unknown>>
 
-export type HookListener<H extends Hook> = (input: ClassicHookInputs[H]) => HookFields | undefined | Promise<HookFields | undefined>
+export type HookListener<H extends Hook> = (input: ClassicHookInputs[H], signal: AbortSignal) => HookFields | undefined | Promise<HookFields | undefined>
 
 export type RoutedEvent =
   | `classic.${Hook}`
@@ -39,9 +39,9 @@ export type RoutedEvent =
 type CallFiles = { readonly read: string[]; readonly changed: string[] }
 
 export function classicHook<H extends Hook>(event: H, hook: HookListener<H>, report: (failure: Failure) => void): RoutedHook<RoutedEvent> {
-  const routed = async (e: unknown, next: (e: unknown) => Promise<unknown>) => {
+  const routed = async (e: unknown, next: ((e: unknown) => Promise<unknown>) & { readonly signal: AbortSignal }) => {
     const ours = await Promise.resolve()
-      .then(() => hook(e as ClassicHookInputs[H]))
+      .then(() => hook(e as ClassicHookInputs[H], next.signal))
       .catch((error: unknown) => {
         report({ id: `hook:${event}`, message: `The ${event} listener failed`, error })
         return undefined

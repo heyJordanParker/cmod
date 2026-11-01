@@ -3,6 +3,7 @@ import type { EngineCreateResult, HookStream, ProcessSpawnChunk, ProcessSpawnRes
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { elements, findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
+import { readDevice } from '../node_modules/@cmodjs/core/runtime/device.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { register } from '../hooks/register.js'
 import { cmodPlugin, type CmodPluginState } from '../src/mod.js'
@@ -61,6 +62,12 @@ function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]): { r
 
 const cmodNote = (text: string) => `<cmod_mod>\n${text}\n</cmod_mod>`
 
+const startedAt = '2026-10-31T16:24:12.671Z'
+
+const testDeviceNote = `As of ${startedAt}, this session runs on test-computer, a linux x64 computer with the cmod device id 5f0e8c2a9b7d4e31a6c4d2b0e8f71a93.`
+
+const startsAt = (tested: ReturnType<typeof testMod>, at: string) => void (tested.fakes.clock.now = async () => Date.parse(at))
+
 const appendedNotes = (tested: ReturnType<typeof testMod>) => tested.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
 test("a mod's global rules linked after Claude Code started reach Claude as one note the person never sees, and a later unlink says they no longer apply", async () => {
@@ -71,13 +78,14 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   ]
   const linked = { linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed: ['house-style'], removed: [], watched }
   const rulesRuns = answerRules(tested, [linked, { linked: [], placed: [], removed: ['house-style'], watched }])
+  startsAt(tested, startedAt)
 
   const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
   await settled()
 
   await prompt(tested, 'hello')
 
-  expect(started.additionalContext).toEqual([cmodNote('The house-style mod adds these rules from now on:\n\nWrite a test before each fix.')])
+  expect(started.additionalContext).toEqual([cmodNote(`${testDeviceNote}\n\nThe house-style mod adds these rules from now on:\n\nWrite a test before each fix.`)])
   expect(appendedNotes(tested)).toEqual([])
   expect(rulesRuns.runs).toBe(1)
 
@@ -88,6 +96,48 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   expect(noted).toEqual([cmodNote("The house-style mod's rules no longer apply.")])
   expect(appendedNotes(tested)).toEqual([])
   expect(rulesRuns.runs).toBe(2)
+})
+
+test("the note Claude reads at every session start, clear, resume, and compaction names the device the session runs on and when, so Claude Code, which drops a resume's note that repeats an earlier one, keeps each", async () => {
+  const mac = { id: '6649fe3715ce42ba91d9ea8ff5b8f67f', name: 'Jordans-Mac-mini', os: 'darwin', arch: 'arm64' } as const
+  const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' } as const
+  const startedOn = async (device: typeof mac | typeof devbox, starts: readonly (readonly ['startup' | 'resume' | 'clear' | 'compact', string])[]) => {
+    const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+    tested.fakes.device.read = async () => device
+    const notes: (readonly string[] | undefined)[] = []
+    for (const [source, at] of starts) {
+      startsAt(tested, at)
+      notes.push(((await claudeCodeOf(tested).fire('SessionStart', { source })) as { readonly additionalContext?: readonly string[] }).additionalContext)
+    }
+    return notes
+  }
+  const noted = (at: string, { id, name, os, arch }: typeof mac | typeof devbox) => [cmodNote(`As of ${at}, this session runs on ${name}, a ${os} ${arch} computer with the cmod device id ${id}.`)]
+
+  const first = await startedOn(mac, [['startup', '2026-10-31T09:00:00.000Z'], ['clear', '2026-10-31T09:30:00.000Z'], ['compact', '2026-10-31T10:00:00.000Z']])
+  const moved = await startedOn(devbox, [['resume', '2026-10-31T12:00:00.000Z'], ['compact', '2026-10-31T13:00:00.000Z']])
+  const back = await startedOn(mac, [['resume', '2026-10-31T18:00:00.000Z']])
+
+  expect(first).toEqual([noted('2026-10-31T09:00:00.000Z', mac), noted('2026-10-31T09:30:00.000Z', mac), noted('2026-10-31T10:00:00.000Z', mac)])
+  expect(moved).toEqual([noted('2026-10-31T12:00:00.000Z', devbox), noted('2026-10-31T13:00:00.000Z', devbox)])
+  expect(back).toEqual([noted('2026-10-31T18:00:00.000Z', mac)])
+})
+
+test('a Linux computer with no machine id in /etc/machine-id or /var/lib/dbus/machine-id starts its session with no device note, one line in the debug log, and no failure', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const devcontainer = {
+    process: { run: async () => ({ exitCode: 0, stdout: 'Linux devcontainer x86_64\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }) },
+    fs: { read: async (path: string) => (path === '/etc/machine-id' ? '' : Promise.reject(new Error(`ENOENT: no such file or directory, open '${path}'`))) },
+  }
+  await tested.start()
+  tested.fakes.device.read = () => readDevice(devcontainer as never)
+
+  const started = await tested.raise.beforeSessionStart({ source: 'startup' })
+  await tested.settle()
+
+  expect(started).toBeUndefined()
+  expect(tested.shown.debug.filter((line) => line.includes('names no device'))).toEqual(["cmod: this start's note names no device, because cmod could not read this computer: neither /etc/machine-id nor /var/lib/dbus/machine-id holds a machine id."])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
 })
 
 test('a watched file that changes while cmod rules runs makes the next prompt run it again', async () => {
@@ -112,6 +162,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
   const tests = { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' }
   const old = { name: 'old-api', isGlobal: true, text: 'Use the old API.' }
   answerRules(tested, [linked([tests, old], ['house-style']), linked([tests], [])])
+  startsAt(tested, startedAt)
 
   const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
   await settled()
@@ -119,7 +170,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
   const noted = await prompt(tested, 'hello')
   await settled()
 
-  expect(started.additionalContext).toEqual([cmodNote('The house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.')])
+  expect(started.additionalContext).toEqual([cmodNote(`${testDeviceNote}\n\nThe house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.`)])
   expect(noted).toEqual([cmodNote('These rules of the house-style mod no longer apply:\n\nUse the old API.')])
   expect(appendedNotes(tested)).toEqual([])
 })
@@ -931,17 +982,51 @@ test('the key bar of a Sidebar without the focus says a click focuses it, and na
   expect((await tested.shown.pane.lines()).at(-1)).toBe(' click focus')
 })
 
-test('cmod.call denies a call no mod takes with the install command', async () => {
+async function unansweredCall(): Promise<Cmod['call']> {
   const hooks = new Map<string, (...args: unknown[]) => Promise<EngineCreateResult>>()
   const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => {
     hooks.set(event, hook)
     return { catch: () => undefined }
   }
   register(on, {})
-
   const built = (await hooks.get('engine.create')?.({}, { plugins: ['cmod'] }, async () => ({}))) as { cmod: Cmod }
+  return built.cmod.call
+}
 
-  expect(await built.cmod.call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).toEqual({ deny: 'tracer is not installed. Install it in Plugins.' })
+test('cmod.call rejects a call to a mod this Claude Code did not load with the install command, because Claude Code resolves the caller with whatever it returns', async () => {
+  await startedWith({ 'notes@market': '1.0.0' })
+  const call = await unansweredCall()
+
+  await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow('tracer is not installed. Install it in Plugins.')
+})
+
+test('cmod.call rejects a call to a loaded mod whose hook gave no answer with that reason, and no install command', async () => {
+  await startedWith({ 'tracer@market': '1.0.0' })
+  const call = await unansweredCall()
+
+  await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow(/^tracer did not answer in time, so Claude Code went on without it\.$/)
+})
+
+test('cmod.call rejects a call to a mod run from its checkout with --plugin-dir, which installed_plugins.json never names, as loaded once the mod told cmod its parts', async () => {
+  const { tested } = await startedWith({ 'notes@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'tracer' } as never)
+  const call = await unansweredCall()
+
+  await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow(/^tracer did not answer in time, so Claude Code went on without it\.$/)
+  await expect(call({ to: 'linter', method: 'check', input: {} })).rejects.toThrow('linter is not installed. Install it in Plugins.')
+})
+
+test('cmod.call rejects a call to a mod removed after it told cmod its parts with the install command, once the reload took it out', async () => {
+  const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+
+  await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
+  await tick()
+  await tick()
+  const call = await unansweredCall()
+
+  expect(reloads).toEqual(['reload-plugins'])
+  await expect(call({ to: 'notes', method: 'search', input: {} })).rejects.toThrow('notes is not installed. Install it in Plugins.')
 })
 
 const recallSetUp = { [`${store}/records/recall.json`]: JSON.stringify({ name: 'recall', version: '1.0.0', root: '/plugins/recall', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }) }

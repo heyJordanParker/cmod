@@ -17,9 +17,10 @@ ${summary}
 Stops loading the checkout at path (default: the current folder) in every
 Claude Code session. Uninstalls it through Claude Code and takes it out of the
 marketplace cmod keeps in its parent folder, removing that marketplace with the
-cmod plugin it lists once it lists no checkout. Turns the installed copy of the
-mod that cmod link turned off back on, runs the checkout's uninstall step, and
-removes the program cmod link built, with its links.`
+cmod plugin it lists, and its declaration in the parent folder's
+.claude/settings.local.json, once it lists no checkout. Turns the installed
+copy of the mod that cmod link turned off back on, runs the checkout's
+uninstall step, and removes the program cmod link built, with its links.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })

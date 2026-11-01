@@ -13,7 +13,7 @@ import { Skill } from '../session/context/turn/message/skill.js'
 import { ToolCall } from '../session/context/turn/message/tool-call.js'
 import { ToolResult } from '../session/context/turn/message/tool-result.js'
 import { TurnEnd } from '../session/context/turn/turn.js'
-import { ownerOfSpawn, type ContextData, type ConversationState, type RunningTask, type SessionChange, type TaskData } from '../session/conversation.js'
+import { ownerOfSpawn, type ContextData, type ConversationState, type RunningTask, type SessionChange, type TaskData, type TurnData } from '../session/conversation.js'
 import { Task, TaskStart } from '../session/goal/task.js'
 import { sessionEvents, type BeforeEvent, type SessionEvent } from '../session/session.js'
 import type { Claude } from './claude.js'
@@ -41,7 +41,7 @@ export type Answers = {
   readonly summary: string
 }
 
-export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly fold: () => Decide }
+export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly fold: (cancel: AbortSignal) => Decide }
 
 const appended: readonly BeforeEvent[] = [Note, Reply, Notice]
 
@@ -65,7 +65,7 @@ export function relayOf(e: Frozen<Args<'session.receive'>>): string | undefined 
 export function installBefore({ claude, router, hooks }: { readonly claude: Claude; readonly router: Router; readonly hooks: BeforeHooks }): Subscription {
   const { place, wants, fold } = hooks
   const now = () => new Date().toISOString()
-  const asked = async (event: BeforeEvent, change: SessionChange, decide: Decide = fold()) => (await decide(event, change)) ?? {}
+  const asked = async (event: BeforeEvent, change: SessionChange, decide: Decide) => (await decide(event, change)) ?? {}
   const message = (where: Place, unplaced: Unplaced, task: string | undefined, isInTurn = true): SessionChange => {
     const turn = isInTurn ? (task === undefined ? where.turn : where.taskTurns[task]) : undefined
     const context = task === undefined ? where.context : (where.tasks[task]?.context ?? where.context)
@@ -82,7 +82,20 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     return waiting.length === 1 ? waiting[0]?.[0] : undefined
   }
   const agentFolders = new Map<string, string>()
-  const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: (e: never) => Promise<unknown>) => {
+  const askedAtStop = (turn: TurnData, signal: AbortSignal) =>
+    new Promise<Partial<Answers>>((resolve, reject) => {
+      if (signal.aborted) return resolve({})
+      const cancelled = () => resolve({})
+      signal.addEventListener('abort', cancelled, { once: true })
+      asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } }, fold(signal))
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener('abort', cancelled))
+    })
+  const answeredStop = (below: ClassicFields, answer: Partial<Answers>, signal: AbortSignal): ClassicFields => {
+    if (signal.aborted) return below
+    return answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse }
+  }
+  const toolResultHook = (isFailure: boolean) => async (e: Readonly<Record<string, unknown>>, next: ((e: never) => Promise<unknown>) & { readonly signal: AbortSignal }) => {
     if (!(await wants(ToolResult))) return next(e as never)
     const where = await place()
     const name = String(e['tool_name'])
@@ -90,7 +103,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const input = (typeof e['tool_input'] === 'object' && e['tool_input'] !== null ? e['tool_input'] : {}) as Readonly<Record<string, unknown>>
     const task = typeof e['agent_id'] === 'string' ? e['agent_id'] : undefined
     const result = { id: callId, at: now(), type: ToolResult, callId, name, input, cwd: String(e['cwd']), files: noFiles, output: isFailure ? e['error'] : e['tool_response'], isError: isFailure } as const
-    const answer = await asked(ToolResult, message(where, result, task))
+    const answer = await asked(ToolResult, message(where, result, task), fold(next.signal))
     const below = await next(e as never)
     const rewritten = answer.output === undefined || isFailure ? {} : name.startsWith('mcp__') ? { updatedMCPToolOutput: answer.output } : { updatedToolOutput: answer.output }
     const failed = answer.isError === true && !isFailure ? { block: answer.note === undefined ? `${name} failed.` : untagged(answer.note) } : {}
@@ -100,7 +113,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     router.add('prompt.submit', async (e, next) => {
       if (!(await wants(Prompt))) return next(e)
       const where = await place()
-      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false))
+      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false), fold(next.signal))
       if (answer.refuse !== undefined) return { drop: answer.refuse }
       const text = answer.text ?? e.text
       if (answer.title !== undefined) titles.set(text, answer.title)
@@ -124,14 +137,14 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     router.add('session.receive', async (e, next) => {
       if (!(await wants(Prompt)) || relayOf(e) !== undefined) return next(e)
       const where = await place()
-      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: { type: 'session' } }, e.agentId, false))
+      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: { type: 'session' } }, e.agentId, false), fold(next.signal))
       if (answer.refuse !== undefined) return { consumed: answer.refuse }
       return next(answer.text === undefined ? e : { ...e, text: answer.text })
     }),
     router.add('skill.prompt', async (e, next) => {
       if (!(await wants(Skill))) return next(e)
       const where = await place()
-      const answer = await asked(Skill, message(where, { id: '', at: now(), type: Skill, name: e.skill, text: e.text }, undefined))
+      const answer = await asked(Skill, message(where, { id: '', at: now(), type: Skill, name: e.skill, text: e.text }, undefined), fold(next.signal))
       return answer.text === undefined ? next(e) : { text: answer.text }
     }),
     router.add('prompt.attachment', async (e, next) => {
@@ -143,7 +156,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
         attachmentType === undefined
           ? { id: '', at: now(), type: InstructionFile, path: instructionPathOf(e.text), text: e.text, isRule: isRulePath(instructionPathOf(e.text)) }
           : { id: '', at: now(), type: AttachedFile, path: attachedPathOf(e.text), attachmentType, text: e.text }
-      const answer = await asked(event, message(where, found, e.agentId))
+      const answer = await asked(event, message(where, found, e.agentId), fold(next.signal))
       if (answer.refuse !== undefined) return { text: null }
       return answer.text === undefined ? next(e) : { text: answer.text }
     }),
@@ -155,7 +168,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (!found.some((each) => wanted.has(each.type))) return next(e)
       const where = await place()
       const texts = new Map<number, string>()
-      const decide = fold()
+      const decide = fold(next.signal)
       for (const [part, unplaced] of found.entries()) {
         if (!wanted.has(unplaced.type)) continue
         const answer = await asked(unplaced.type, message(where, unplaced, e.agentId), decide)
@@ -168,7 +181,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const where = await place()
       const input = toolInputOf(e)
       const cwd = (e.agentId === undefined ? undefined : agentFolders.get(e.agentId)) ?? (await claude.session.cwd())
-      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd, files: noFiles }, e.agentId))
+      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd, files: noFiles }, e.agentId), fold(next.signal))
       if (answer.refuse !== undefined) return { deny: answer.refuse }
       if (answer.result !== undefined) return withContext({ result: answer.result }, answer.note)
       if (answer.input === undefined) return withContext(await next(e), answer.note)
@@ -188,7 +201,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       if (!(await wants(TaskStart))) return start(e)
       const where = await place()
       const task: TaskData = { id: '', title: e.description, ...ownerOfSpawn(e.subagentType, where.session), model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...(e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }) }
-      const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } })
+      const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } }, fold(next.signal))
       if (answer.refuse !== undefined) {
         spawned.delete(e.tool_use_id)
         return { deny: answer.refuse }
@@ -219,7 +232,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       const open = where.taskTurns[e.agent_id]?.prompt
       const text = open?.text ?? prompt
       if (text === undefined) return next(e)
-      const answer = await asked(Prompt, message(where, { id: open?.id ?? '', at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false))
+      const answer = await asked(Prompt, message(where, { id: open?.id ?? '', at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false), fold(next.signal))
       return withNote(await next(e), answer.note)
     }),
     router.add('classic.SubagentStop', async (e, next) => {
@@ -227,27 +240,25 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
         if (answer.block === undefined) agentFolders.delete(e.agent_id)
         return answer
       }
-      if (!(await wants(TurnEnd))) return stopped(await next(e))
+      if (next.signal.aborted || !(await wants(TurnEnd))) return stopped(await next(e))
       const turn = (await place()).taskTurns[e.agent_id]
       if (turn === undefined) return stopped(await next(e))
-      const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } })
-      const below = await next(e)
-      return stopped(answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse })
+      const answer = await askedAtStop(turn, next.signal)
+      return stopped(answeredStop(await next(e), answer, next.signal))
     }),
     router.add('classic.Stop', async (e, next) => {
-      if (!(await wants(TurnEnd))) return next(e)
-      const where = await place()
-      if (where.turn === undefined) return next(e)
-      const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...where.turn, closedAt: now() } })
-      const below = await next(e)
-      return answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse }
+      if (next.signal.aborted || !(await wants(TurnEnd))) return next(e)
+      const { turn } = await place()
+      if (turn === undefined) return next(e)
+      const answer = await askedAtStop(turn, next.signal)
+      return answeredStop(await next(e), answer, next.signal)
     }),
     router.add('session.compact', async (e, next) => {
       if (!(await wants(ContextEnd)) || e.trigger === 'precompute') return next(e)
       const where = await place()
       const task = e.agentId === undefined ? undefined : where.tasks[e.agentId]
       if (e.agentId !== undefined && task === undefined) return next(e)
-      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) })
+      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) }, fold(next.signal))
       if (answer.refuse !== undefined) return { skip: answer.refuse }
       return answer.summary === undefined ? next(e) : { messages: [{ role: 'user', text: answer.summary, toolUses: [] }] }
     }),

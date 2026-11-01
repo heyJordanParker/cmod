@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { EngineInterface, HookFailure, On, RenderElement } from 'claude-code'
 import { registerMod, registerPermissionCheck } from '../src/register.js'
-import { commands, defineMod, sessions } from '../src/mod.js'
+import { commands, defineMod, device, sessions, type Device } from '../src/mod.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { processEvents } from '../src/session/session.js'
 import { Message } from '../src/session/context/turn/message/message.js'
@@ -552,6 +552,7 @@ declare const Bun: {
   file(path: string): { text(): Promise<string> }
   write(path: string, text: string): Promise<number>
   build(options: { entrypoints: string[]; format: 'esm'; target: 'browser'; external: string[]; define: Record<string, string> }): Promise<{ outputs: { text(): Promise<string> }[] }>
+  spawnSync(argv: string[]): { exitCode: number; stdout: { toString(): string } }
 }
 
 test('no module a hook loads holds import(), which makes Claude Code refuse the whole hooks module', async () => {
@@ -594,4 +595,73 @@ test("registerMod names each event as a string literal, which Claude Code's hook
   expect([...source.matchAll(/addHook\(\s*([^,]+),/g)].map((match) => match[1]).filter((name) => !/^'[a-zA-Z.]+'$/.test(name ?? ''))).toEqual([])
   const heard = Object.values(processEvents).flatMap((event): string[] => ['before' in event ? [event.on, event.before] : [event.on]].flat())
   expect([...heard, 'ConfigChange'].filter((hook) => !hook.includes('.') && hook !== 'CwdChanged' && !classic.includes(`classic.${hook}`))).toEqual([])
+})
+
+declare const process: { readonly platform: string; readonly arch: string }
+
+async function readDeviceOn(computer: { readonly run: (argv: readonly string[]) => { readonly exitCode: number; readonly stdout: string }; readonly read?: (path: string) => string }): Promise<readonly Device[]> {
+  const fake = fakeOn()
+  const { $, shown } = engine(files)
+  Object.assign($.ui, { log: (text: string) => void shown.logs.push(text) })
+  Object.assign($, { process: { run: async (argv: readonly string[]) => ({ stderr: '', ...computer.run(argv) }) } })
+  const read = $.fs.read
+  if (computer.read !== undefined) Object.assign($.fs, { read: async (path: string) => (path.endsWith('/machine-id') ? computer.read?.(path) : read(path)) })
+  let reads: Promise<readonly Device[]> | undefined
+  keepTime($)
+  registerMod(fake.on, defineMod({ name: 'demo', setup: () => void (reads = Promise.all([device.read(), device.read()])) }), {})
+  await fake.dispatch('session.start', $, {}, {})
+  for (let ticks = 0; reads === undefined && ticks < 20; ticks += 1) await settled()
+  if (reads === undefined) throw new Error(`the mod never ran its setup: ${shown.logs.join('\n')}`)
+  return reads
+}
+
+test("a mod reads this computer as its device: one id every time the mod starts, and the os and arch cmod's builds are named for", async () => {
+  const thisComputer = {
+    run: (argv: readonly string[]) => {
+      const ran = Bun.spawnSync([...argv])
+      return { exitCode: ran.exitCode, stdout: ran.stdout.toString() }
+    },
+    read: (path: string) => Bun.spawnSync(['cat', path]).stdout.toString(),
+  }
+
+  const [first, again] = await readDeviceOn(thisComputer)
+  const [restarted] = await readDeviceOn(thisComputer)
+
+  expect(first?.id).toMatch(/^[0-9a-f]{32}$/)
+  expect([again, restarted]).toEqual([first, first])
+  expect([first?.os, first?.arch] as readonly unknown[]).toEqual([process.platform, process.arch])
+})
+
+test("a device id is the computer's machine id hashed for cmod the way systemd's sd_id128_get_machine_app_specific hashes it, so the raw id never shows", async () => {
+  const linux = {
+    run: () => ({ exitCode: 0, stdout: 'Linux devbox aarch64\n' }),
+    read: () => 'b08dfa6083e7567a1921a715000001fb\n',
+  }
+  const mac = {
+    run: (argv: readonly string[]) => {
+      if (argv[0] === 'uname') return { exitCode: 0, stdout: 'Darwin Jordans-Mac-mini.local x86_64\n' }
+      if (argv[0] === 'scutil') return { exitCode: 0, stdout: 'Jordans-Mac-mini\n' }
+      return { exitCode: 0, stdout: '+-o Mac14,5  <class IOPlatformExpertDevice>\n    {\n      "IOPlatformSerialNumber" = "D5F2MJKC00"\n      "IOPlatformUUID" = "E1F9C9A2-6B5E-4B9A-9D2C-0A1B2C3D4E5F"\n    }\n' }
+    },
+  }
+
+  expect((await readDeviceOn(linux))[0]).toEqual({ id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'arm64' })
+  expect((await readDeviceOn(mac))[0]).toEqual({ id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Jordans-Mac-mini', os: 'darwin', arch: 'x64' })
+})
+
+test("a Linux computer whose /etc/machine-id is missing or empty reads D-Bus's /var/lib/dbus/machine-id as systemd does, and one with neither names both files", async () => {
+  const id = 'b08dfa6083e7567a1921a715000001fb\n'
+  const linuxWith = (files: Readonly<Record<string, string>>) => ({
+    run: () => ({ exitCode: 0, stdout: 'Linux devbox aarch64\n' }),
+    read: (path: string) => {
+      const text = files[path]
+      if (text === undefined) throw new Error(`ENOENT: no such file or directory, open '${path}'`)
+      return text
+    },
+  })
+  const devbox: Device = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'arm64' }
+
+  expect((await readDeviceOn(linuxWith({ '/var/lib/dbus/machine-id': id })))[0]).toEqual(devbox)
+  expect((await readDeviceOn(linuxWith({ '/etc/machine-id': '', '/var/lib/dbus/machine-id': id })))[0]).toEqual(devbox)
+  await expect(readDeviceOn(linuxWith({ '/etc/machine-id': '\n' }))).rejects.toThrow('cmod could not read this computer: neither /etc/machine-id nor /var/lib/dbus/machine-id holds a machine id.')
 })

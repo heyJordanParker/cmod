@@ -15,6 +15,7 @@ import * as program from './commands/program.js'
 import * as publish from './commands/publish.js'
 import * as remove from './commands/remove.js'
 import * as rules from './commands/rules.js'
+import * as secret from './commands/secret.js'
 import * as settings from './commands/settings.js'
 import * as setup from './commands/setup.js'
 import * as task from './commands/task.js'
@@ -46,6 +47,7 @@ const commands: Record<string, Command> = {
   teardown,
   option,
   hotkey,
+  secret,
   settings,
   rules,
   history,

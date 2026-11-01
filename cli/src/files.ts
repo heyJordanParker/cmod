@@ -1,4 +1,4 @@
-import { mkdir, readdir, readlink, rename } from 'node:fs/promises'
+import { mkdir, readdir, readlink, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 
@@ -45,9 +45,10 @@ export function tilde(path: string): string {
   return value && (path === value || path.startsWith(`${value}/`)) ? `~${path.slice(value.length)}` : path
 }
 
-export async function writeAtomically(path: string, text: string): Promise<void> {
+export async function writeAtomically(path: string, text: string, { mode = 0o664 }: { mode?: number } = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${process.pid}.tmp`
-  await Bun.write(temporary, text)
+  await rm(temporary, { force: true })
+  await writeFile(temporary, text, { mode, flag: 'wx' })
   await rename(temporary, path)
 }

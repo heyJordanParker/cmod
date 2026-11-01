@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { defineMod, sessions } from '../../src/mod.js'
+import { defineMod, notInstalled, sessions } from '../../src/mod.js'
 import { coreVersion, storeFolder } from '../../src/records.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createRouter } from '../../src/runtime/router.js'
@@ -9,6 +9,9 @@ import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
+import { messageOf } from '../../src/utils/text.js'
+
+declare function setTimeout(run: () => void, ms: number): unknown
 
 const delivery = '<cross-session-message from="uds:/tmp/cc-socks/62955.sock" from-name="project-58">\n<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"send","input":{"type":"prompt","text":"Rerun the deploy","as":"person"}}</cmod-relay>\n</cross-session-message>\n\nThis came from another Claude session.'
 
@@ -212,6 +215,40 @@ test("a turn ends at Stop with Claude's answer, stays open while a mod refuses t
     { prompt: { text: 'Rename the tree pane' }, reason: 'answer', answer: 'Renamed it, and the tests pass.' },
     { prompt: { text: 'Deploy it' }, reason: 'error', failure: { type: 'server_error', text: 'API Error: 500' } },
   ])
+})
+
+test('a turn the person cut off with Esc during its Stop ends at the next prompt with no reason, as its transcript does, and its Stop waits on no mod', async () => {
+  const ended: unknown[] = []
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  let asking: () => void = () => undefined
+  const asked = new Promise<void>((resolve) => (asking = resolve))
+  let answer: () => Promise<unknown> = () => new Promise(() => asking())
+  tested.fakes.cmod.call = async (input) => {
+    const { change } = (input.input ?? {}) as { readonly change?: { readonly type: string; readonly turn?: unknown } }
+    if (input.method === conversationMethods.changed && change?.type === 'turnEnd') ended.push(change.turn)
+    return input.method === conversationMethods.before ? answer() : undefined
+  }
+  const prompt = (uuid: string, text: string) => {
+    const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
+    return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+  }
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'watcher' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'guard' } as never)
+  await prompt('p1', 'Rename the tree pane')
+
+  const esc = new AbortController()
+  const stopping = claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renaming.' } as never, {}, esc.signal)
+  await asked
+  esc.abort(new Error('user-cancel'))
+  expect(await stopping).toEqual({})
+  await prompt('p2', 'Deploy it')
+  answer = async () => ({ refuse: 'Run the tests first.' })
+  expect(await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Deployed.' } as never)).toEqual({ block: 'Run the tests first.' })
+  await tested.settle()
+
+  expect(ended).toEqual([expect.not.objectContaining({ reason: expect.anything() })])
+  expect(ended).toMatchObject([{ prompt: { text: 'Rename the tree pane' } }])
 })
 
 test("a delivery that only looks like cmod's relay still meets a mod's before(Prompt)", async () => {
@@ -468,6 +505,38 @@ test("a guard of a session that ended without saying so lets the prompt in quiet
   expect(JSON.parse(await disk.read('/store/data/cmod/before/crashed.json'))).toEqual([])
 })
 
+test("another session's half-written guards keep that session's guards from before, and the other sessions' new guards still load", async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  const guard = (mod: string) => JSON.stringify([{ mod, target: '*', project: '/work/app', events: ['prompt'] }])
+  const disk = fakeFiles({ '/store/data/cmod/before/writing.json': guard('guard'), '/store/data/cmod/before/fresh.json': '[]' })
+  const reported: string[] = []
+  const asked: string[] = []
+  fake.fakes.fs = disk
+  fake.fakes.process.spawn = () => printed('[]')
+  fake.fakes.session.send = async ({ to, text }) => {
+    const relay = JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec(text)?.[1] ?? '{}') as { kind?: string; id?: string; mod?: string }
+    if (relay.kind !== 'before') return { isDelivered: true }
+    asked.push(`${JSON.stringify(to)} ${relay.mod}`)
+    const answer = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: relay.id, value: null })}</cmod-relay>`
+    void Promise.resolve().then(() => router.dispatch('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: answer } as never, async () => ({}) as never))
+    return { isDelivered: true }
+  }
+  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message) => void reported.push(message), clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
+  await fake.settle()
+
+  await disk.write('/store/data/cmod/before/writing.json', '[{"mod":"guard","tar')
+  await disk.write('/store/data/cmod/before/fresh.json', guard('newguard'))
+  const watch = '<cmod-relay>{"kind":"watch"}</cmod-relay>'
+  await router.dispatch('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: watch } as never, async () => ({}) as never)
+  await fake.settle()
+  await router.dispatch('prompt.submit', { text: 'Go on', origin: { kind: 'composer' }, wait: false } as never, async () => ({}) as never)
+  await fake.settle()
+
+  expect({ reported, asked: asked.sort() }).toEqual({ reported: [], asked: ['{"sessionId":"fresh"} newguard', '{"sessionId":"writing"} guard'] })
+})
+
 test('a failure to tell a mod about a change clears once cmod reaches that mod again', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
@@ -601,6 +670,59 @@ test('a cmod plugin that restarts mid-session keeps asking and telling the mods 
   ])
 })
 
+test("a cmod plugin that restarts after a mod listened again reads every saved listener back whole, and keeps them all", async () => {
+  const disk = fakeFiles({})
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+  const claudeCodeDisk: typeof disk = {
+    ...disk,
+    read: async (path) => (await tick(), disk.read(path)),
+    write: async (path, text) => {
+      await disk.write(path, '')
+      await tick()
+      await disk.write(path, text)
+    },
+  }
+  const plugin = () => {
+    const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+    const router = createRouter()
+    const told: string[] = []
+    const reported: string[] = []
+    fake.fakes.fs = claudeCodeDisk
+    fake.fakes.process.spawn = () => printed('[]')
+    fake.fakes.cmod.call = async ({ to, method }) => {
+      told.push(`${to} ${method}`)
+      return null
+    }
+    const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message) => void reported.push(message), clear: () => {} })
+    const listen = async (caller: string) => {
+      await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller })
+      await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'contextEnd' }] }, caller })
+    }
+    const start = (source: string) => router.dispatch('classic.SessionStart', { session_id: 'test-session', source } as never, async () => ({}))
+    return { fake, router, told, reported, listen, start }
+  }
+  const before = plugin()
+  await before.start('startup')
+  await before.listen('tracer')
+  await before.listen('watcher')
+  await before.fake.settle()
+
+  const after = plugin()
+  await after.listen('tracer')
+  await after.start('resume')
+  const appended = { uuid: 'p1', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Go on' }] } }
+  await after.router.dispatch('session.append', appended as never, async () => appended as never)
+  await after.router.dispatch('session.compact', { trigger: 'manual', messages: [] } as never, async () => ({ messages: [] }))
+  await after.fake.settle()
+
+  expect({ reported: after.reported, told: after.told.sort() }).toEqual({
+    reported: [],
+    told: [`tracer ${conversationMethods.before}`, `tracer ${conversationMethods.changed}`, `watcher ${conversationMethods.before}`, `watcher ${conversationMethods.changed}`],
+  })
+  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/test-session.json'))).toEqual({ tracer: { 'test-session': [{ event: 'prompt' }] }, watcher: { 'test-session': [{ event: 'prompt' }] } })
+  expect((JSON.parse(await disk.read('/store/data/cmod/before/test-session.json')) as { mod: string }[]).map(({ mod }) => mod).sort()).toEqual(['tracer', 'watcher'])
+})
+
 test("one compaction of a task moves its context once, and one of the session moves the session's once", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
@@ -640,6 +762,38 @@ test("a compaction a mod's summary answers, where no model runs, still moves the
   expect(compacted).toEqual({ messages: [{ role: 'user', text: 'The tree pane is drawn in src/tree.tsx.', toolUses: [] }] })
   const contexts = (await served.answer({ to: 'cmod', method: conversationMethods.contexts, input: { session: 'mine' }, caller: 'history' }))?.value as { number: number }[]
   expect(contexts.map((each) => each.number)).toEqual([2])
+})
+
+test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and one asked of a mod that is not installed still says why", async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  const reported: string[] = []
+  const pressedEsc = new AbortController()
+  let isInstalled = true
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.process.spawn = () => printed('[]')
+  fake.fakes.cmod.call = async ({ to, method }) => {
+    if (method !== conversationMethods.before) return null
+    if (isInstalled) await new Promise((resolve) => pressedEsc.signal.addEventListener('abort', () => resolve(undefined)))
+    throw new Error(notInstalled(to))
+  }
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message, error) => void reported.push(`${message}: ${messageOf(error)}`), clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
+  await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'mine', subscriptions: [{ event: 'instructionFile' }] }, caller: 'tracer' })
+  const instructionFile = { type: 'nested_memory', text: 'Contents of /work/src/CLAUDE.md:\n\nUse spaces.', origin: { kind: 'engine' } } as never
+  const readAsIs = async (e: { readonly text: string }) => ({ text: e.text }) as never
+
+  const cancelled = router.dispatch('prompt.attachment', instructionFile, readAsIs, pressedEsc.signal)
+  await fake.settle()
+  pressedEsc.abort()
+
+  expect(await cancelled).toEqual({ text: 'Contents of /work/src/CLAUDE.md:\n\nUse spaces.' })
+  expect(reported).toEqual([])
+
+  isInstalled = false
+  await router.dispatch('prompt.attachment', instructionFile, readAsIs, new AbortController().signal)
+
+  expect(reported).toEqual(["Passed the instructionFile on without a mod's answer: tracer is not installed. Install it in Plugins."])
 })
 
 test("a running task of the cmod plugin's session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {

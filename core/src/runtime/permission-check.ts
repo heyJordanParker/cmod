@@ -3,7 +3,7 @@ import type { HookFields } from './hooks.js'
 import { defined, processPayloadOf, recordOf, type HookOn, type RouteOn, type ToolCheck } from './sessions.js'
 
 export type PermissionUse = {
-  readonly raise: (method: string, payload: HookFields) => Promise<HookFields | undefined>
+  readonly raise: (method: string, payload: HookFields, cancel: AbortSignal) => Promise<HookFields | undefined>
   readonly refusalFor: (method: string, payload: HookFields, error: Error) => { readonly refuse: string } | undefined
   readonly hookOn: HookOn
   readonly routeOn: RouteOn
@@ -35,10 +35,10 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
         const below = (await next(e)) as Verdict
         const payload = payloadOf(e, below)
         if (!isBefore) {
-          void raise(method, payload)
+          void raise(method, payload, next.signal)
           return below
         }
-        const answer = await raise(method, payload)
+        const answer = await raise(method, payload, next.signal)
         if (answer === undefined || below.decision === 'deny') return below
         if (typeof answer['refuse'] === 'string') return { decision: 'deny', reason: answer['refuse'] }
         if (!(globalThis as BuildFlags).cmodWithoutApprove) {
@@ -53,13 +53,13 @@ export const permissionRoutes: PermissionRoutes = (method, { raise, refusalFor, 
   const refused = (refuse: string, interrupt?: unknown) => ({ decision: defined({ behavior: 'deny', message: refuse, interrupt }) })
   return hookOn(
     'PermissionRequest',
-    async (input) => {
+    async (input, signal) => {
       const payload = processPayloadOf('PermissionRequest', input)
       if (!isBefore) {
-        void raise(method, payload)
+        void raise(method, payload, signal)
         return undefined
       }
-      const answer = await raise(method, payload)
+      const answer = await raise(method, payload, signal)
       if (answer === undefined) return undefined
       if (typeof answer['refuse'] === 'string') return refused(answer['refuse'], answer['interrupt'])
       if (!(globalThis as BuildFlags).cmodWithoutApprove) {

@@ -22,10 +22,10 @@ Runs the mod's saved uninstall step, then removes the key bindings it added
 that still run its commands and the Claude Code settings it set that still
 hold its values, and deletes its install record, the saved step,
 every version of its program with its links, its data
-folder, the addresses of its single-instance programs, and its approvals in
+folder, its secrets, the addresses of its single-instance programs, and its approvals in
 consent.json. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
 the files there are yours. Claude Code has already deleted the plugin's folder by then. A mod with
-no install record has only its data folder and approvals deleted. While a setup
+no install record has only its data folder, secrets, and approvals deleted. While a setup
 or another teardown of the mod runs, a teardown waits for it. A teardown whose
 process is gone is taken over at once. Ctrl+C, a closed terminal, or SIGTERM
 while it waits stops it. Once it runs, they wait for the uninstall step and the

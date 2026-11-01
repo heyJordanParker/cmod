@@ -26,7 +26,11 @@ marketplace Claude Code has added, installs that plugin. Given the name of a
 plugin Claude Code already holds, such as four-step or four-step@market, runs
 a mod's install step again, and installs any other plugin through Claude Code
 again. A linked plugin that is not a mod is skipped, because saving its files
-updates it. A path holds a "/", such as ./my-mod.
+updates it. A path holds a "/", such as ./my-mod. A folder's marketplace is
+declared in that folder's .claude/settings.local.json, so the settings.json you
+share between computers holds no path of this one, and the folder's
+.git/info/exclude lists that file. An owner/repo marketplace is declared in
+settings.json.
 
 Options:
   --option key=value    Set one of the plugin's options, as /config does. Repeat it for each option`

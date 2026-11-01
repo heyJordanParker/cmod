@@ -62,7 +62,7 @@ test("a turn hears only its own messages, a session only its own agent's, and th
   await tested.add({ type: Reply, text: 'Looked.' }, { task })
 
   expect(inTurn).toEqual(['one'])
-  expect(inMain).toEqual([Prompt, Reply, Prompt, Reply])
+  expect(inMain).toEqual([Note, Prompt, Reply, Prompt, Reply])
   expect(inSession).toEqual([Reply])
 })
 
@@ -146,6 +146,49 @@ test("a task's owner keeps its context through a compaction and its turn through
 
   expect(await claudeCodeOf(tested).fire('session.compact', { trigger: 'auto', agentId: id } as never)).toEqual({ skip: 'Keep the findings' })
   expect(await claudeCodeOf(tested).fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ block: 'Name the file first' })
+})
+
+test('a stop the person cut off with Esc asks no beforeTurnEnd listener and refuses nothing, one cut off mid-ask stops its listener at once, and an answered stop still asks', async () => {
+  const tested = testMod(defineMod({ name: 'reviewer', setup() {} }))
+  await tested.start()
+  await tested.add({ type: Prompt, text: 'Rename the tree pane' })
+  const id = await tested.startTask({ title: 'Find the pane' })
+  await tested.add({ type: Prompt, text: 'Find where the tree pane is drawn.' }, { task: id })
+  const [task] = await sessions.current.goal.tasks()
+  const asked: string[] = []
+  let checking: (signal: AbortSignal) => void = () => undefined
+  const slowCheck = new Promise<AbortSignal>((resolve) => (checking = resolve))
+  sessions.current.beforeTurnEnd(async (turn, { signal }) => {
+    asked.push(turn.prompt.text)
+    if (turn.prompt.text !== 'Run the slow checks') return { refuse: 'Run the tests first.' }
+    checking(signal)
+    await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()))
+    return { refuse: 'Run the tests first.' }
+  })
+  task!.owner.beforeTurnEnd(() => (asked.push('task'), { refuse: 'Name the file first' }))
+  await tested.settle()
+  const code = claudeCodeOf(tested)
+  const pressed = () => {
+    const esc = new AbortController()
+    esc.abort(new Error('user-cancel'))
+    return esc.signal
+  }
+
+  expect(await code.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never, {}, pressed())).toEqual({})
+  expect(await code.fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose', stop_hook_active: false, last_assistant_message: 'In tree.ts.' } as never, {}, pressed())).toEqual({})
+  expect(asked).toEqual([])
+
+  await tested.add({ type: Prompt, text: 'Run the slow checks' })
+  const esc = new AbortController()
+  const stopping = code.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Checking.' } as never, {}, esc.signal)
+  const listening = await slowCheck
+  esc.abort(new Error('user-cancel'))
+  expect(await stopping).toEqual({})
+  expect(listening.aborted).toBe(true)
+
+  await tested.add({ type: Prompt, text: 'Ship it' })
+  expect(await code.fire('Stop', { stop_hook_active: false, last_assistant_message: 'Shipped.' } as never)).toEqual({ block: 'Run the tests first.' })
+  expect(asked).toEqual(['Run the slow checks', 'Ship it'])
 })
 
 test("a summary answer to a compaction becomes the conversation that replaces it, so no model writes one, and a refusal still keeps the context", async () => {
@@ -679,7 +722,7 @@ test('a task heard starting in another running session is running, and a send re
   client.sessions.onTaskStart((task) => void owners.push(task.owner))
   await fake.settle()
 
-  client.changed('other', { type: TaskStart, task: { id: 'task-1', title: 'Look', agentType: 'Explore', openedBy: 'toolu_1', openedAt: '2026-10-14T10:00:00.000Z', context: 1 } }, true)
+  client.changed('other', { type: TaskStart, task: { id: 'task-1', title: 'Look', agentType: 'Explore', openedBy: 'toolu_1', openedAt: '2026-10-14T10:00:00.000Z', context: 1 } }, true, new AbortController().signal)
   await fake.settle()
   await owners[0]?.send({ type: Note, text: 'Check tree.ts too.' })
 
@@ -695,7 +738,7 @@ test("a session of another project reaches a mod's listener on that session, nev
   client.sessions.onPrompt((prompt) => void heard.push(`every: ${prompt.text}`))
   await fake.settle()
 
-  client.changed('b', { type: Message, message: { id: 'b1', type: Prompt, at: '2026-10-14T10:00:00.000Z', session: 'b', context: 1, text: 'Private B', from: { type: 'person' } } }, false)
+  client.changed('b', { type: Message, message: { id: 'b1', type: Prompt, at: '2026-10-14T10:00:00.000Z', session: 'b', context: 1, text: 'Private B', from: { type: 'person' } } }, false, new AbortController().signal)
   await fake.settle()
 
   expect(heard).toEqual([])

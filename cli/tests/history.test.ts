@@ -92,7 +92,7 @@ test('readers of a session longer than several write batches, running at once, e
     }
   })
   const expected = rows.map((row) => row.uuid).flatMap((id) => (id === 'a3' ? ['a3:0', 'a3:1'] : [id]))
-  const db = new Database(join(home, '.local/share/cmod/history-11.sqlite'), { readonly: true })
+  const db = new Database(join(home, '.local/share/cmod/history-12.sqlite'), { readonly: true })
   const counts = db.query<{ total: number; ids: number; unordered: number }, []>("select count(*) as total, count(distinct id) as ids, (select count(*) from messages where seq is null) as unordered from messages where session = 's1'").get()
   db.close()
 
@@ -121,6 +121,33 @@ test("each mod's note in a hook row is indexed as a Note from that mod", async (
   await writeFiles(home, { [`${projectFolder(project)}/s1.jsonl`]: lines([conversation(project)[0] as object, hookRow]) })
 
   expect(await json(home, 'messages', 's1', '--project', project)).toEqual([firstTurn(), { id: 'h1', type: 'note', at: at(2), session: 's1', context: 1, turn: 'u1', text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'tracer' } }])
+})
+
+test("each turn ran on the device the cmod plugin's last note before it names, and a transcript without such a note has turns without a device", async () => {
+  const home = await temporaryHome()
+  const project = join(home, 'work/app')
+  const mac = { id: '6649fe3715ce42ba91d9ea8ff5b8f67f', name: 'Jordans-Mac-mini', os: 'darwin', arch: 'arm64' }
+  const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' }
+  const noted = (uuid: string, second: number, device: typeof mac) => ({
+    type: 'attachment',
+    uuid,
+    timestamp: at(second),
+    attachment: { type: 'hook_additional_context', hookName: 'SessionStart', content: [`<cmod_mod>\nAs of ${at(second)}, this session runs on ${device.name}, a ${device.os} ${device.arch} computer with the cmod device id ${device.id}.\n\nThe house-style mod adds these rules from now on:\n\nWrite a test first.\n</cmod_mod>`] },
+  })
+  const prompt = (uuid: string, second: number, text: string) => ({ type: 'user', uuid, timestamp: at(second), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: text } })
+  const agentCall = { type: 'assistant', uuid: 'a3', timestamp: at(7), cwd: project, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'toolu_3', name: 'Agent', input: { prompt: 'look' } }] } }
+  await writeFiles(home, {
+    [`${projectFolder(project)}/moved.jsonl`]: lines([noted('n1', 0, mac), prompt('u1', 1, 'Plan it'), prompt('u2', 3, 'Build it'), noted('n2', 5, devbox), prompt('u3', 6, 'Ship it'), agentCall, noted('n3', 9, mac), prompt('u4', 10, 'Check it')]),
+    [`${projectFolder(project)}/moved/subagents/agent-t3.jsonl`]: lines([{ type: 'user', uuid: 'x3', timestamp: at(8), message: { role: 'user', content: 'look' } }]),
+    [`${projectFolder(project)}/moved/subagents/agent-t3.meta.json`]: JSON.stringify({ agentType: 'explorer', description: 'Look', toolUseId: 'toolu_3' }),
+    [`${projectFolder(project)}/older.jsonl`]: lines([prompt('o1', 1, 'Plan it'), prompt('o2', 3, 'Build it')]),
+  })
+
+  const devices = async (...args: string[]) => ((await json(home, 'turns', ...args, '--project', project)) as { prompt: { id: string }; device?: unknown }[]).map((turn) => [turn.prompt.id, turn.device])
+
+  expect(await devices('moved')).toEqual([['u1', mac], ['u2', mac], ['u3', devbox], ['u4', mac]])
+  expect(await devices('moved', '--task', 't3')).toEqual([['x3', devbox]])
+  expect(await devices('older')).toEqual([['o1', undefined], ['o2', undefined]])
 })
 
 test('turns, contexts, tasks, and goal read the shape of a conversation', async () => {
@@ -401,15 +428,15 @@ test('sessions leaves out a session no one prompted, and lists one whose first p
   expect(await json(home, 'sessions', '--project', project)).toEqual([late])
 })
 
-test('an index made by an older cmod is deleted, and the index is history-11.sqlite', async () => {
+test('an index made by an older cmod is deleted, and the index is history-12.sqlite', async () => {
   const home = await temporaryHome()
   const { project } = await writeHistory(home)
-  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite']
+  const older = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite']
   await writeFiles(home, Object.fromEntries(older.map((name) => [`.local/share/cmod/${name}`, 'an older index\n'])))
 
   await json(home, 'sessions', '--project', project)
 
-  expect([...older, 'history-11.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
+  expect([...older, 'history-12.sqlite'].map((name) => existsSync(join(home, '.local/share/cmod', name)))).toEqual([...older.map(() => false), true])
 })
 
 test('the README names the conversation index cmod writes', async () => {

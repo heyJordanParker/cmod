@@ -163,13 +163,15 @@ A listener that throws shows the error toast `The <method> listener failed`, suc
 
 ### Give a listener time
 
-A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, so a slow call such as `http.fetch` can stop with it. Time a listener spends waiting on a call, such as `process.run`, never counts against the 10 seconds Claude Code gives a hook's own code, so a listener that waits can use its whole `timeoutMs`:
+A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, or as soon as the person cancels the work the listener runs for, as Esc does during a tool call, so a slow call such as `http.fetch` can stop with it. Time a listener spends waiting on a call, such as `process.run`, never counts against the 10 seconds Claude Code gives a hook's own code, so a listener that waits can use its whole `timeoutMs`:
 
 ```ts
 sessions.current.onTurnEnd(async (turn, { signal }) => {
   await http.fetch('https://hooks.example.com/turn', { method: 'POST', body: turn.answer ?? '', signal })
 }, { timeoutMs: 30_000 })
 ```
+
+A cancel stops the listener quietly. Claude Code stops the programs its `process.run` and `process.spawn` calls started, cmod goes on without its answer, and nothing it throws shows a toast.
 
 An `on` listener that passes its time stops quietly. A `before` listener that passes its time shows the error toast, and what was about to happen goes on as it was. With `onFailure: 'refuse'`, a `before` listener that throws or passes its time refuses instead, with the error as the reason, for a gate that must hold even when it breaks. The gate holds when Claude Code stops the mod's hook too, as it does when the listener's own code runs past 10 seconds without waiting on a call, and the toast `Claude Code stopped its <hook> hook` says so. On another session, it holds when that session does not answer within 5 seconds, or within what is left of the 8 seconds cmod waits on other sessions for one event, for what the listener's matcher and part cover. A `beforePermissionRequest` listener always refuses when it fails.
 
@@ -396,6 +398,7 @@ type Turn = {
   readonly answer?: string
   readonly reason?: 'answer' | 'error'
   readonly failure?: { readonly type: string; readonly text: string }
+  readonly device?: Device
   messages(): Promise<Message[]>
   abort(): Promise<void>
   search; on…; before…
@@ -432,6 +435,7 @@ sessions.current.onTurnEnd((turn) => {
   if (turn.failure !== undefined) mod.toast.error(`Claude stopped: ${turn.failure.text}`)
 })
 ```
+- A turn's `device` is the computer it ran on ([mod.md](mod.md#device-the-computer-the-session-runs-on)). At each start, resume, `/clear`, and compaction, the cmod plugin adds a note Claude reads and the person never sees, naming the computer the session runs on and the time, so a session resumed on another computer names that one from then on. A turn runs on the device the last such note before it names, and a task's turns on the device its session ran on when it started the task, so the note a subagent's compaction puts in its own window changes no turn's device. A turn with no such note before it, such as one from a session an older cmod ran, has no `device`.
 - `abort()` stops a turn while it runs, a task's turn included. It throws on a turn that has ended. Claude Code shows no marker, so a mod that aborts tells the person with a toast.
 - A context's `number` counts from 1. Its `closedAt` is set at the compaction that ended it.
 - A goal's text starts as the session's first prompt, and `text()` reads it. `update` replaces it, and `onGoalChange` hears the goal, whose `text()` reads the new text.

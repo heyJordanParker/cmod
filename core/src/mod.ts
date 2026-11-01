@@ -21,6 +21,7 @@ import { checkHotkeys, type Hotkey, type HotkeyInit, type Hotkeys } from './hotk
 import { checkSteps, type Step } from './installer.js'
 import { checkOptions, type Option, type Options, type OptionValues } from './options.js'
 import { bound } from './runtime/bound.js'
+import type { Device } from './session/context/turn/device.js'
 import { Mod as modSender } from './session/context/turn/message/sender.js'
 import { sessionEvents, type BeforeMethod, type CommandRun, type CommandRunAnswer, type OnMethod, type OnMethods, type Sessions } from './session/session.js'
 import type { Widget, WidgetInit } from './ui/areas.js'
@@ -137,6 +138,7 @@ export type Imports = {
     spawn(argv: readonly string[], init?: Omit<ProcessSpawnRequest, 'argv'>): HookStream<ProcessSpawnChunk, ProcessSpawnResult>
   }
   readonly http: { fetch(url: string, init?: HttpInit): Promise<HttpResponse> }
+  readonly device: { read(): Promise<Device> }
   readonly clipboard: { write(text: string): Promise<void> }
 }
 
@@ -195,6 +197,10 @@ export const http: Imports['http'] = {
   fetch: (url, init) => bound().http.fetch(url, init),
 }
 
+export const device: Imports['device'] = {
+  read: () => bound().device.read(),
+}
+
 export const clipboard: Imports['clipboard'] = {
   write: (text) => bound().clipboard.write(text),
 }
@@ -203,6 +209,11 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly name: string
   readonly folder: string
   readonly dataFolder: string
+  readonly secrets: {
+    get(key: string): Promise<string | undefined>
+    store(key: string, value: string): Promise<void>
+    delete(key: string): Promise<void>
+  }
   readonly state: Readonly<State>
   readonly options: OptionValues<Declared>
   readonly hotkeys: { readonly [Key in keyof Keys]: Hotkey }
@@ -280,6 +291,7 @@ export type { Tool } from './jobs/tool.js'
 export { Session, type AnswerOptions, type BeforeMethods, type Surface, type Listener, type ListenerTime, type OnMethods, type ReadOptions, type RecordPart, type Refusal, type SearchOptions, type SessionScope, type SessionSend, type Sessions, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type Notification, type Elicitation, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionRequest, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage, type RateLimit, type CommandRun, type CommandRunAnswer } from './session/session.js'
 export type { Context } from './session/context/context.js'
 export type { Turn } from './session/context/turn/turn.js'
+export type { Device } from './session/context/turn/device.js'
 export type { Message, MessageType } from './session/context/turn/message/message.js'
 export { Prompt } from './session/context/turn/message/prompt.js'
 export { Note } from './session/context/turn/message/note.js'

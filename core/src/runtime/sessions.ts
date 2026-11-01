@@ -60,10 +60,10 @@ export type Scope = { readonly session?: string; readonly context?: number; read
 
 export type SessionsClient = {
   readonly sessions: Sessions
-  changed(session: string, change: SessionChange, isInProject: boolean): void
-  answerBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean): Promise<unknown>
+  changed(session: string, change: SessionChange, isInProject: boolean, cancel: AbortSignal): void
+  answerBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, cancel: AbortSignal): Promise<unknown>
   failedBefore(session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, error: Error): { readonly refuse: string } | undefined
-  raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
+  raise(method: string, payload: Readonly<Record<string, unknown>>, cancel: AbortSignal): Promise<unknown>
   listen(method: string, args: readonly unknown[]): Subscription
   turn(data: TurnData): Turn
   /** An empty title keeps the title the session already has. */
@@ -137,7 +137,7 @@ export function withoutPermissionCheck(name: string, hearer: string): string {
   return `${name}: ${hearer} hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod.`
 }
 
-export type HookOn = (hook: string, listener: (input: unknown) => HookFields | undefined | Promise<HookFields | undefined>, failed?: (input: unknown, error: Error) => HookFields | undefined) => Subscription
+export type HookOn = (hook: string, listener: (input: unknown, signal: AbortSignal) => HookFields | undefined | Promise<HookFields | undefined>, failed?: (input: unknown, error: Error) => HookFields | undefined) => Subscription
 
 export function createSessionsClient({ name, claude, report, hookOn, routeOn, permissionRoutes }: { readonly name: string; readonly claude: Claude; readonly report: (id: string, message: string, error: unknown) => void; readonly hookOn?: HookOn; readonly routeOn?: RouteOn; readonly permissionRoutes?: () => PermissionRoutes | undefined }): SessionsClient {
   const call = <Answer>(method: string, input: unknown) => claude.cmod.call({ to: cmodPluginName, method, input }) as Promise<Answer>
@@ -206,9 +206,9 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
 
   const refusalOf = (options: ListenOptions, takes: readonly string[], error: unknown) => (options.onFailure === 'refuse' && takes.includes('refuse') ? { refuse: `${name}: ${messageOf(error)}` } : undefined)
 
-  const invoke = (method: string, options: ListenOptions, run: (time: ListenTime) => unknown, takes: readonly string[] = []): Promise<unknown> =>
-    withinTime(claude.clock, method, options, run).catch((error: unknown) => {
-      if (error instanceof PassedTimeout && !method.startsWith('before')) return undefined
+  const invoke = (method: string, options: ListenOptions, cancel: AbortSignal, run: (time: ListenTime) => unknown, takes: readonly string[] = []): Promise<unknown> =>
+    withinTime(claude.clock, method, options, cancel, run).catch((error: unknown) => {
+      if (cancel.aborted || (error instanceof PassedTimeout && !method.startsWith('before'))) return undefined
       report(`session:${method}`, `The ${method} listener failed`, error)
       return refusalOf(options, takes, error)
     })
@@ -217,12 +217,12 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
 
   const decides = (entry: Listening, session: string, change: SessionChange) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher))
 
-  const combined = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean): Promise<Partial<Answers> | undefined> => {
+  const combined = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, cancel: AbortSignal): Promise<Partial<Answers> | undefined> => {
     const askers = decidersOf(session, event, isInProject)
       .map((entry) => async (latest: SessionChange) => {
         if (!decides(entry, session, latest)) return undefined
         const payload = await payloadFor(session, latest)
-        return invoke(entry.method, entry.options, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
+        return invoke(entry.method, entry.options, cancel, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
       })
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf('before', event)}`, `The ${methodOf('before', event)} listener failed`, error))
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) }
@@ -453,14 +453,14 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
 
   const processHearers = (method: string, payload: HookFields) => [...(processListeners.get(method) ?? [])].filter(({ matcher, isEveryAgent }) => (payload['task'] === undefined || isEveryAgent) && (matcher === undefined || matches(payload, matcher)))
 
-  const raise = async (method: string, payload: HookFields): Promise<HookFields | undefined> => {
+  const raise = async (method: string, payload: HookFields, cancel: AbortSignal): Promise<HookFields | undefined> => {
     const heard = processHearers(method, payload)
     if (!method.startsWith('before')) {
-      await Promise.all(heard.map(({ listener, options }) => invoke(method, options, (time) => listener(payload, time))))
+      await Promise.all(heard.map(({ listener, options }) => invoke(method, options, cancel, (time) => listener(payload, time))))
       return undefined
     }
     const takes = takesOf(method)
-    const askers = heard.map(({ listener, options }) => () => invoke(method, options, async (time) => takenAnswer(method, takes, await listener(payload, time)), takes))
+    const askers = heard.map(({ listener, options }) => () => invoke(method, options, cancel, async (time) => takenAnswer(method, takes, await listener(payload, time)), takes))
     return foldAnswers<undefined, HookFields>(method, takes, ['refuse'], undefined, askers, (error) => report(`session:${method}`, `The ${method} listener failed`, error))
   }
 
@@ -478,12 +478,12 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   routeOn?.('command.run', async (e, next) => {
     if (commandListeners.beforeRun.size === 0 && commandListeners.onRun.size === 0) return next(e)
     const run = await commandRun(e)
-    const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise('beforeRun', run)
+    const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise('beforeRun', run, next.signal)
     if (typeof answer?.['refuse'] === 'string') return { text: answer['refuse'] }
     if (typeof answer?.['result'] === 'string') return { text: answer['result'], ...(typeof answer['exitCode'] === 'number' ? { exitCode: answer['exitCode'] } : {}) }
     const args = typeof answer?.['args'] === 'string' ? answer['args'] : e.args
     const ran = await next(args === e.args ? e : { ...e, args })
-    void raise('onRun', { ...run, args })
+    void raise('onRun', { ...run, args }, next.signal)
     return typeof answer?.['note'] === 'string' ? { ...ran, context: [...(ran.context ?? []), modNote(name, answer['note'])] } : ran
   }, async (e, error) => {
     const refusal = commandListeners.beforeRun.size === 0 ? undefined : refusalFor('beforeRun', await commandRun(e), error)
@@ -511,22 +511,22 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     }
     return hookOn(
       hook,
-      async (input: unknown) => {
+      async (input: unknown, signal: AbortSignal) => {
         const payload = processPayloadOf(named as ProcessFieldsName, input)
         if (named === 'SessionStart' && payload['source'] === 'compact') {
           if (!isBefore) return undefined
           const task = compacting?.agentId
           const model = task === undefined ? await claude.session.model() : undefined
-          const answer = await raise(method, { ...payload, ...defined({ task, model, title: current.title || undefined }) })
+          const answer = await raise(method, { ...payload, ...defined({ task, model, title: current.title || undefined }) }, signal)
           if (answer === undefined) return undefined
           return hookAnswerOf(name, named, task === undefined ? answer : defined({ note: answer['note'] }))
         }
         if (!isBefore) {
-          void raise(method, payload)
+          void raise(method, payload, signal)
           return undefined
         }
         if (named === 'ModelChange') modelNotes.splice(0)
-        const answer = await raise(method, payload)
+        const answer = await raise(method, payload, signal)
         if (answer === undefined) return undefined
         if (named === 'ModelChange' && typeof answer['note'] === 'string' && answer['refuse'] === undefined) modelNotes.push(modNote(name, answer['note']))
         return hookAnswerOf(name, named, answer)
@@ -598,7 +598,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       search: (text, matcher, options = {}) => searched({ text, ...searchOptionsOf(options) }, matcher),
       ...every,
     },
-    changed(session, change, isInProject) {
+    changed(session, change, isInProject, cancel) {
       remember(session, change)
       let payload: Promise<unknown> | undefined
       for (const key of isInProject ? [session, everySession] : [session]) {
@@ -606,7 +606,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
           if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session))) continue
           payload ??= payloadFor(session, change)
           void payload
-            .then((heard) => invoke(method, options, (time) => listener(heard as never, time)))
+            .then((heard) => invoke(method, options, cancel, (time) => listener(heard as never, time)))
             .catch((error: unknown) => report(`session:${method}`, `The ${method} listener failed`, error))
         }
       }
@@ -642,8 +642,8 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
 export type ToolCheck = { readonly tool: string; readonly input: unknown; readonly tool_use_id?: string; readonly agentId?: string; readonly ceiling?: 'allow' | 'ask' | 'deny' }
 
 export type RouteOn = {
-  (event: 'tool.check', hook: (e: ToolCheck, next: (e: ToolCheck) => Promise<unknown>) => Promise<unknown>, failed?: (e: ToolCheck, error: Error, next: (e: ToolCheck) => Promise<unknown>) => Promise<{ readonly decision: 'deny'; readonly reason: string } | undefined>): Subscription
-  (event: 'command.run', hook: (e: Args<'command.run'>, next: (e: Args<'command.run'>) => Promise<CommandRunResult>) => Promise<CommandRunResult>, failed?: (e: Args<'command.run'>, error: Error) => Promise<CommandRunResult | undefined>): Subscription
+  (event: 'tool.check', hook: (e: ToolCheck, next: ((e: ToolCheck) => Promise<unknown>) & { readonly signal: AbortSignal }) => Promise<unknown>, failed?: (e: ToolCheck, error: Error, next: (e: ToolCheck) => Promise<unknown>) => Promise<{ readonly decision: 'deny'; readonly reason: string } | undefined>): Subscription
+  (event: 'command.run', hook: (e: Args<'command.run'>, next: ((e: Args<'command.run'>) => Promise<CommandRunResult>) & { readonly signal: AbortSignal }) => Promise<CommandRunResult>, failed?: (e: Args<'command.run'>, error: Error) => Promise<CommandRunResult | undefined>): Subscription
   (event: 'session.compact', hook: (e: Args<'session.compact'>, next: (e: Args<'session.compact'>) => Promise<SessionCompactResult>) => Promise<SessionCompactResult>): Subscription
 }
 

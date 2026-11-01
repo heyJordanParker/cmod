@@ -43,6 +43,7 @@ import type {
   UiScrollArgs,
   UiScrollResult,
 } from 'claude-code'
+import type { Device } from '../session/context/turn/device.js'
 
 export type Claude = {
   readonly plugin: { readonly name: string; readonly root: string }
@@ -110,5 +111,6 @@ export type Claude = {
     dataHome(): Promise<string | undefined>
     configHome(): Promise<string | undefined>
   }
+  readonly device: { read(): Promise<Device> }
   readonly cmod: { call(input: Args<'cmod.call'>): Promise<unknown> }
 }

@@ -1,7 +1,10 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
-import { defineMod, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
 import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
+import type { Pages } from '../node_modules/@cmodjs/core/runtime/pages.js'
+import { MissingMachineId } from '../node_modules/@cmodjs/core/runtime/device.js'
+import { deviceNote } from '../node_modules/@cmodjs/core/session/context/turn/device.js'
 import { failedMethod } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
@@ -26,6 +29,16 @@ const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, 
 type InstalledCopy = { readonly version: string; readonly installPath: string; readonly projectPath?: string }
 
 type Versions = Readonly<Record<string, string>>
+
+const nameOf = (id: string) => id.replace(/@[^@]*$/, '')
+
+let loaded: Versions = {}
+
+const unloaded = new Set<string>()
+
+let toldParts: Pick<Pages, 'declared'> | undefined
+
+export const isLoaded = (name: string): boolean => Object.keys(loaded).some((id) => nameOf(id) === name) || (!unloaded.has(name) && toldParts?.declared().some((told) => told.mod === name) === true)
 
 const newestMessages = 8
 
@@ -69,8 +82,11 @@ export const cmodPlugin = defineMod({
 
   async setup(mod) {
     const triedRemovals = new Set<string>()
-    const { claude, router, report, widgets } = engineOf(mod)
+    const { claude, router, report, widgets, pages } = engineOf(mod)
     if (widgets === undefined) throw new Error('cmod draws no widgets, because the cmod plugin started without them.')
+    toldParts = pages
+    loaded = {}
+    unloaded.clear()
 
     addClaudeTools(mod)
     const shown = sidebar(mod, settingsView(mod))
@@ -126,7 +142,6 @@ export const cmodPlugin = defineMod({
       )
       return Object.fromEntries(versions.flat())
     }
-    let loaded: Versions = {}
     const takeVersionsBeforeReload = async () => {
       const key = await sessionKey('versions-before-reload')
       const before = (await claude.store.get(key)) as Versions | undefined
@@ -135,11 +150,14 @@ export const cmodPlugin = defineMod({
     }
     const showUpdates = async (isAfterOwnReload: boolean) => {
       const before = await takeVersionsBeforeReload()
+      const previous = loaded
       loaded = await loadedVersions()
+      for (const id of Object.keys(previous)) if (!Object.hasOwn(loaded, id)) unloaded.add(nameOf(id))
+      for (const id of Object.keys(loaded)) unloaded.delete(nameOf(id))
       if (!isAfterOwnReload || before === undefined) return
       const updates = Object.entries(loaded)
         .filter(([id, version]) => before[id] !== undefined && before[id] !== version)
-        .map(([id, version]) => `${id.replace(/@[^@]*$/, '')} updated to ${version}`)
+        .map(([id, version]) => `${nameOf(id)} updated to ${version}`)
       if (updates.length > shownUpdates) claude.ui.toast(`${updates.length} plugins updated`)
       else for (const update of updates) claude.ui.toast(update)
     }
@@ -201,7 +219,6 @@ export const cmodPlugin = defineMod({
       return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reloadNote }] } })
     })
 
-    const nameOf = (id: string) => id.replace(/@[^@]*$/, '')
     const isCmod = (id: string) => nameOf(id) === mod.name
     const updatedFor = 'cmod:cmod-updated-for'
     let isCheckingPlugins = false
@@ -309,7 +326,7 @@ export const cmodPlugin = defineMod({
 
     const watchRemovals = async () => {
       const enabledPlugins = (await settings.user.read())['enabledPlugins'] as Record<string, unknown> | undefined
-      const current = [...new Set(Object.keys(enabledPlugins ?? {}).map((key) => key.replace(/@[^@]*$/, '')))]
+      const current = [...new Set(Object.keys(enabledPlugins ?? {}).map(nameOf))]
       const previous = mod.state.global.installedPlugins
       const removed = (previous ?? []).filter((name) => !current.includes(name))
       const installed = [...current, ...removed]
@@ -362,6 +379,15 @@ export const cmodPlugin = defineMod({
       const notes = await keepRules()
       return notes.length === 0 ? undefined : { note: notes.join('\n\n') }
     }
+    sessions.current.beforeSessionStart(async () => {
+      try {
+        return { note: deviceNote(await device.read(), new Date(await claude.clock.now()).toISOString()) }
+      } catch (error) {
+        if (!(error instanceof MissingMachineId)) throw error
+        mod.log(`this start's note names no device, because ${error.message}`)
+        return undefined
+      }
+    })
     sessions.current.beforeSessionStart(rulesNote)
     sessions.current.beforePrompt(rulesNote, { timeoutMs: 60_000 })
 

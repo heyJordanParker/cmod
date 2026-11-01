@@ -223,8 +223,9 @@ export function updatesToTurnOn(marketplace: string | undefined, settings: unkno
   const declared = isObject(settings) && isObject(settings['extraKnownMarketplaces']) ? settings['extraKnownMarketplaces'][marketplace] : undefined
   const fetched = isObject(known) ? known[marketplace] : undefined
   const isDecided = [declared, fetched].some((entry) => isObject(entry) && typeof entry['autoUpdate'] === 'boolean')
-  const hasSource = [declared, fetched].some((entry) => isObject(entry) && isObject(entry['source']))
-  return isDecided || !hasSource ? undefined : marketplace
+  const sources = [declared, fetched].flatMap((entry) => (isObject(entry) && isObject(entry['source']) ? [entry['source']] : []))
+  const isFolder = sources.some((source) => source['source'] === 'directory')
+  return isDecided || isFolder || sources.length === 0 ? undefined : marketplace
 }
 
 export function consentPath(store: string): string {
@@ -306,9 +307,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.1.1'
+export const coreVersion = '5.2.0'
 
-export const oldestCmodVersion = '5.1.0'
+export const oldestCmodVersion = '5.2.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`

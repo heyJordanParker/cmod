@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { Args, Frozen } from 'claude-code'
-import { defineMod, sessions } from '../../src/mod.js'
+import { defineMod, process, sessions } from '../../src/mod.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
@@ -142,4 +142,54 @@ test("a mod's note before a tool call reaches the cmod plugin, with nothing decl
 
   expect(answer).toEqual({ value: { note: '<tracer_mod>\nRun it from the project root.\n</tracer_mod>' } })
   expect(lifecycle.toasts).toEqual([])
+})
+
+const startSession = { session_id: 'test-session', transcript_path: '/t', cwd: '/work', hook_event_name: 'SessionStart', source: 'startup' } as unknown as Frozen<Args<'classic.SessionStart'>>
+
+const askAbout = (event: 'toolCall' | 'toolResult') => {
+  const message = { id: 't1', at: '', type: event, session: 'test-session', context: 1, callId: 't1', name: 'Bash', input: { command: 'make test' }, cwd: '/work', files: { read: [], changed: [] }, ...(event === 'toolResult' ? { output: 'Interrupted by user', isError: true } : {}) }
+  return { to: 'tracer', caller: 'cmod', method: conversationMethods.before, input: { session: 'test-session', event, change: { type: 'message', message } } } as unknown as Frozen<Args<'cmod.call'>>
+}
+
+type RunsTrace = (time: { readonly signal: AbortSignal }) => Promise<undefined>
+
+const listeners: readonly (readonly ['beforeToolCall' | 'beforeToolResult', 'toolCall' | 'toolResult', (listener: RunsTrace) => void])[] = [
+  ['beforeToolCall', 'toolCall', (listener) => void sessions.current.beforeToolCall((_call, time) => listener(time))],
+  ['beforeToolResult', 'toolResult', (listener) => void sessions.current.beforeToolResult((_result, time) => listener(time))],
+]
+
+for (const [method, event, listen] of listeners) {
+  test(`a ${method} listener whose process.run Claude Code kills when the person presses Esc shows no toast, and its signal aborts`, async () => {
+    const pressedEsc = new AbortController()
+    const signals: AbortSignal[] = []
+    const { fake, lifecycle } = await installedMod(() =>
+      listen(async ({ signal }) => {
+        signals.push(signal)
+        await process.run(['trace', 'hook', 'PostToolUseFailure'])
+        return undefined
+      }),
+    )
+    fake.fakes.process.run = () => new Promise((_resolve, reject) => pressedEsc.signal.addEventListener('abort', () => reject(new Error('tracer: $.process.run(/home/.local/share/cmod/programs/trace) aborted'))))
+    await lifecycle.route('classic.SessionStart', startSession, async () => ({}))
+
+    const answer = lifecycle.route('cmod.call', askAbout(event), async () => ({ deny: 'unanswered' }), pressedEsc.signal)
+    await fake.settle()
+    pressedEsc.abort()
+
+    expect(await answer).toEqual({ value: null })
+    await fake.settle()
+    expect(lifecycle.toasts).toEqual([])
+    expect(signals.map((signal) => signal.aborted)).toEqual([true])
+  })
+}
+
+test('a beforeToolCall listener that passes its timeoutMs still shows its toast, though Claude Code gave the ask a signal', async () => {
+  const { fake, lifecycle } = await installedMod(() => void sessions.current.beforeToolCall(() => new Promise<undefined>(() => undefined), { timeoutMs: 20 }))
+  await lifecycle.route('classic.SessionStart', startSession, async () => ({}))
+
+  const answer = await lifecycle.route('cmod.call', askAbout('toolCall'), async () => ({ deny: 'unanswered' }), new AbortController().signal)
+  await fake.settle()
+
+  expect(answer).toEqual({ value: null })
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The beforeToolCall listener failed', description: 'beforeToolCall passed its 0.02 s timeout' }])
 })

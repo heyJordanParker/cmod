@@ -4,7 +4,7 @@ import type { Fakes, TestCall } from '@cmodjs/core/testing.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
-import { BelowPrompt, Dashboard, defineMod, fs, process, Prompt, Reply, sessions, TurnEnd, type Mod, type PaneInit } from '../src/mod.js'
+import { BelowPrompt, Dashboard, defineMod, fs, Note, process, Prompt, Reply, sessions, TurnEnd, type Mod, type PaneInit } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type TestOptions } from '../src/testing.js'
@@ -29,6 +29,47 @@ const tickets = defineMod({
       }),
     )
   },
+})
+
+test("a mod's own test reads each turn's device, as the cmod plugin's note names it in a live session at each start, resume, and compaction", async () => {
+  const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' } as const
+  const where = defineMod({
+    name: 'where',
+    setup: () => ({ ranOn: async () => (await sessions.current.turn())?.device ?? null }),
+  })
+  const tested = testMod(where)
+
+  await tested.add({ type: Prompt, text: 'Plan it' })
+  const first = await tested.api['ranOn']?.()
+  tested.fakes.device.read = async () => devbox
+  await tested.startSession({ source: 'resume' })
+  await tested.add({ type: Prompt, text: 'Build it' })
+  const resumed = await tested.api['ranOn']?.()
+  delete tested.fakes.device.read
+  await tested.compact()
+  await tested.add({ type: Prompt, text: 'Ship it' })
+  const compacted = await tested.api['ranOn']?.()
+
+  expect(first).toEqual({ id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' })
+  expect(resumed).toEqual(devbox)
+  expect(compacted).toEqual(first)
+})
+
+test("a test that starts its session with startup sees one device note, as a live startup has, and a computer with no machine id sees none", async () => {
+  const notes = defineMod({
+    name: 'notes',
+    setup: () => ({ notes: async () => (await sessions.current.messages()).filter((message) => message.type === Note).length }),
+  })
+  const once = testMod(notes)
+  await once.startSession({ source: 'startup' })
+  const bare = testMod(notes)
+  bare.fakes.device.read = async () => {
+    throw new Error('cmod could not read this computer: neither /etc/machine-id nor /var/lib/dbus/machine-id holds a machine id.')
+  }
+  await bare.startSession({ source: 'startup' })
+
+  expect(await once.api['notes']?.()).toBe(1)
+  expect(await bare.api['notes']?.()).toBe(0)
 })
 
 test("callTool runs the mod's permission rules before its tool", async () => {

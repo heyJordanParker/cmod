@@ -8,7 +8,7 @@ import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { isLinked } from './settings.js'
-import { storePath, takeLock } from './store.js'
+import { deleteSecrets, storePath, takeLock } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
 
@@ -249,6 +249,7 @@ export async function removeData(name: string): Promise<void> {
     if (target?.startsWith(`${folder}/`)) await rm(join(programsFolder(), entry))
   }
   await rm(folder, { recursive: true, force: true })
+  await deleteSecrets(name)
 }
 
 export async function restoreProgram(name: string, record: InstallRecord | undefined): Promise<void> {

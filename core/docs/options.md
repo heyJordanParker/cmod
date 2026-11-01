@@ -2,7 +2,7 @@
 
 An option is a value a person sets for a mod and the mod reads, such as a token, a URL, or how often to check. The mod declares its options in `defineMod`, and `mod.options` holds their values, typed from the declaration. Claude Code stores them: it shows each one in `/config`, keeps a secret in the system keychain, and reloads the mod when one changes.
 
-`mod.state` is the other kind of value: what the mod owns and changes as it runs ([state.md](state.md)).
+`mod.state` is the other kind of value: what the mod owns and changes as it runs ([state.md](state.md)). A secret the mod gets by itself, such as the token a sign-in returns, goes in `mod.secrets` instead ([mod.md](mod.md#mod-secrets)).
 
 ## Declare the options
 

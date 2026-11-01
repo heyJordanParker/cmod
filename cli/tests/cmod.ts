@@ -14,14 +14,41 @@ exec "${process.execPath}" "${main}" "$@"
 
 export const cmodPluginListed = [{ id: 'cmod@cmod', version: '0.1.0', scope: 'user', enabled: true, installPath: '/cmod' }]
 
-const knownMarketplaces = `const [action, value] = process.argv.slice(1)
+const marketplaces = `const [action, value, flag, scope] = process.argv.slice(1)
 const fs = require("node:fs")
-const file = (process.env.CLAUDE_CONFIG_DIR || process.env.HOME + "/.claude") + "/plugins/known_marketplaces.json"
-const known = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}
-if (action === "add") known[JSON.parse(fs.readFileSync(value + "/.claude-plugin/marketplace.json", "utf8")).name] = { source: { source: "directory", path: value }, installLocation: value }
-else delete known[value]
-fs.mkdirSync(require("node:path").dirname(file), { recursive: true })
-fs.writeFileSync(file, JSON.stringify(known))`
+const path = require("node:path")
+const config = process.env.CLAUDE_CONFIG_DIR || process.env.HOME + "/.claude"
+const knownFile = config + "/plugins/known_marketplaces.json"
+const userFile = config + "/settings.json"
+const localFile = path.join(process.cwd(), ".claude", "settings.local.json")
+const read = (file) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {})
+const write = (file, value) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\\n")
+}
+const known = read(knownFile)
+if (action === "list") {
+  console.log(JSON.stringify(Object.entries(known).map(([name, entry]) => ({ name, source: entry.source.source, path: entry.source.path, repo: entry.source.repo, installLocation: entry.installLocation }))))
+  process.exit(0)
+}
+if (action === "add") {
+  const isFolder = value.startsWith("/")
+  const name = isFolder ? JSON.parse(fs.readFileSync(value + "/.claude-plugin/marketplace.json", "utf8")).name : value.split("/").pop()
+  const source = isFolder ? { source: "directory", path: value } : { source: "github", repo: value }
+  const file = flag === "--scope" && scope === "local" ? localFile : userFile
+  const settings = read(file)
+  known[name] = { source, installLocation: isFolder ? value : config + "/plugins/marketplaces/" + name }
+  write(file, { ...settings, extraKnownMarketplaces: { ...settings.extraKnownMarketplaces, [name]: { source } } })
+} else {
+  delete known[value]
+  for (const file of [userFile, localFile]) {
+    if (!fs.existsSync(file) || !fs.readFileSync(file, "utf8").includes(JSON.stringify(value))) continue
+    const settings = read(file)
+    delete settings.extraKnownMarketplaces[value]
+    write(file, settings)
+  }
+}
+write(knownFile, known)`
 
 const validates = `const fs = require("node:fs")
 const path = require("node:path")
@@ -39,10 +66,9 @@ echo "$*" >> "$HOME/claude-calls"
 case "$*" in
   "plugin list --json") if grep -q '^plugin update ' "$HOME/claude-calls"; then echo '${JSON.stringify(updated)}'; else echo '${JSON.stringify(listed)}'; fi ;;
   "plugin update "*" --json") echo '{"outcome":"ok"}' ;;
-  "plugin marketplace list --json") echo '[]' ;;
-  "plugin marketplace add heyJordanParker/cmod") ;;
-  "plugin marketplace add /"*) "${process.execPath}" -e '${knownMarketplaces}' add "$4" ;;
-  "plugin marketplace remove "*"-linked") "${process.execPath}" -e '${knownMarketplaces}' remove "$4" ;;
+  "plugin marketplace list --json") "${process.execPath}" -e '${marketplaces}' list ;;
+  "plugin marketplace add "*) "${process.execPath}" -e '${marketplaces}' add "$4" "$5" "$6" ;;
+  "plugin marketplace remove "*"-linked") "${process.execPath}" -e '${marketplaces}' remove "$4" ;;
   "plugin marketplace update "*"-linked") ;;
   "plugin install cmod@"*" --json"|"plugin install "*"-linked --json"|"plugin uninstall "*"-linked --json") echo '{"outcome":"ok","message":"Installed '"$3"'"}' ;;
   "plugin validate "*" --strict") "${process.execPath}" -e '${validates}' "$3" ;;

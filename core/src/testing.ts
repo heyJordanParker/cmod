@@ -35,6 +35,7 @@ import { createLifecycle } from './runtime/lifecycle.js'
 import { MissingOptions } from './runtime/options.js'
 import { conversationMethods, pickedColor, type SessionColor } from './runtime/sessions.js'
 import type { ShownToast } from './runtime/toaster.js'
+import { deviceNote } from './session/context/turn/device.js'
 import { Message } from './session/context/turn/message/message.js'
 import { Note, untagged } from './session/context/turn/message/note.js'
 import { Prompt } from './session/context/turn/message/prompt.js'
@@ -83,6 +84,7 @@ export type TestOptions<State extends object, Declared extends Options = Options
   readonly dependencies?: { readonly [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
   readonly links?: Readonly<Record<string, string>>
+  readonly secrets?: Readonly<Record<string, string>>
   readonly sessions?: readonly FakeSession[]
 }
 
@@ -175,7 +177,7 @@ export function testMod<State extends object, Declared extends Options = Options
     project: () => projectRoot,
     cwd: () => cwd,
     given: options.sessions ?? [],
-    decide: (event, change) => decide(event, change),
+    decide: (event, change) => decide()(event, change),
     push: (mod, session, change) => {
       if (mod !== name) return
       const pushed = { to: mod, method: conversationMethods.changed, input: { session, change }, caller: cmodPluginName } as unknown as Frozen<Args<'cmod.call'>>
@@ -285,6 +287,18 @@ export function testMod<State extends object, Declared extends Options = Options
     conversations.add({ type: Prompt, text: args.text, from: { type: Mod, name, ...(args.asUser === true ? { as: Person } : {}) } })
     return submitted
   }
+  const secrets = new Map(Object.entries(options.secrets ?? {}))
+  const runProcess = fake.claude.process.run
+  fake.claude.process.run = async (argv, init) => {
+    const [program, command, action, mod, key] = argv
+    if (program?.split('/').at(-1) !== 'cmod' || command !== 'secret' || mod !== name || key === undefined) return runProcess(argv, init)
+    const answer = (stdout: string, stderr = '') => ({ exitCode: stderr === '' ? 0 : 1, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
+    if (action === 'get') return answer(secrets.get(key) ?? '')
+    if (action === 'delete') secrets.delete(key)
+    else if (init?.stdin === undefined || init.stdin === '') return answer('', `cmod secret: cmod secret store read no value from stdin. cmod secret delete ${name} ${key} deletes the secret.\n`)
+    else secrets.set(key, init.stdin)
+    return answer('')
+  }
   const firedAgents = new Map<string, string>()
   const listAgents = fake.claude.agent.list
   fake.claude.agent.list = async () => {
@@ -299,6 +313,18 @@ export function testMod<State extends object, Declared extends Options = Options
   const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => permissionRoutes,(options.options ?? {}) as PluginOptions, false)
   let started: Promise<void> | undefined
   let isColorTold = false
+  let deviceNoted: Promise<void> | undefined
+  let hasSessionStarted = false
+  const noteDevice = async () => {
+    const at = new Date(await fake.claude.clock.now()).toISOString()
+    const found = await fake.claude.device.read().catch((error: unknown) => {
+      if (!(error instanceof Error)) throw error
+      return undefined
+    })
+    if (found === undefined) return
+    conversations.add({ type: Note, text: deviceNote(found, at), from: { type: Mod, name: cmodPluginName } })
+    await fake.settle()
+  }
 
   const start = async () => {
     started ??= lifecycle.start(fake.claude, async (claude) => ({
@@ -318,28 +344,35 @@ export function testMod<State extends object, Declared extends Options = Options
       throw new Error(`${name} needs ${listed(failure.titles)}, which a person sets in /config. Give ${failure.keys.length === 1 ? 'it' : 'them'} to the tested mod: testMod(mod, { options: { ${given} } }).`)
     }
     if (lifecycle.phase !== 'active') throw failure ?? new Error(`${name} did not start: the lifecycle is ${lifecycle.phase}.`)
+    deviceNoted ??= noteDevice()
+    await deviceNoted
     if (isColorTold) return
     isColorTold = true
     await tellHeldColor()
   }
 
   const cmodPlugin = createRouter()
-  const askMod = async (event: BeforeEvent, change: SessionChange) => {
+  const askMod = async (event: BeforeEvent, change: SessionChange, signal?: AbortSignal) => {
     const asked = { to: name, method: conversationMethods.before, input: { session: sessionId, event, change }, caller: cmodPluginName } as unknown as Frozen<Args<'cmod.call'>>
-    return calledAnswer(cmodPluginName, await lifecycle.route('cmod.call', asked, async () => ({ deny: notInstalled(name) })))
+    return calledAnswer(cmodPluginName, await lifecycle.route('cmod.call', asked, async () => ({ deny: notInstalled(name) }), signal))
   }
-  const decide: Decide = (event, change) => foldBefore(event, change, [(latest) => askMod(event, latest)], (error) => fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' }))
+  const decide =
+    (cancel?: AbortSignal): Decide =>
+    (event, change) =>
+      foldBefore(event, change, [(latest) => askMod(event, latest, cancel)], (error) => {
+        if (cancel?.aborted !== true) fake.claude.ui.log(`cmod: passed the ${event} on without ${name}'s answer: ${messageOf(error)}`, { to: 'debug' })
+      })
   installBefore({
     claude: fake.claude,
     router: cmodPlugin,
     hooks: {
       place: async () => conversations.place(),
       wants: async (event) => conversations.wants(name, event),
-      fold: () => decide,
+      fold: decide,
     },
   })
 
-  const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown): Promise<EventResult<N>> => {
+  const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown, signal?: AbortSignal): Promise<EventResult<N>> => {
     await start()
     if (event === 'ui.render') {
       const { component, requestId } = input as Args<'ui.render'>
@@ -347,7 +380,7 @@ export function testMod<State extends object, Declared extends Options = Options
       await widgetsOf()
       await fake.settle()
     }
-    const answer = await cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (await claudeCodeRuns(event, e, below)) as EventResult<N>))
+    const answer = await cmodPlugin.dispatch(event, input as Frozen<Args<N>>, (passed) => lifecycle.route(event, passed, async (e) => (await claudeCodeRuns(event, e, below)) as EventResult<N>, signal), signal)
     await fake.settle()
     if (event === 'ui.render') checkKeys(answer as RenderElement, name, (input as Args<'ui.render'>).component)
     return answer
@@ -502,8 +535,8 @@ export function testMod<State extends object, Declared extends Options = Options
     return { drawing, columns: defaultColumns }
   }
 
-  const fire = ((event: string, input: object, below?: unknown) => {
-    if (event.includes('.')) return route(event as RoutedEvent, input, below)
+  const fire = ((event: string, input: object, below?: unknown, signal?: AbortSignal) => {
+    if (event.includes('.')) return route(event as RoutedEvent, input, below, signal)
     if (event === 'SessionStart') {
       sessionId = (input as { session_id?: string }).session_id ?? sessionId
       conversations.start(sessionId)
@@ -517,10 +550,13 @@ export function testMod<State extends object, Declared extends Options = Options
     const filled = { session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event, ...toolUse, ...input }
     if (event === 'SessionStart') {
       const source = (input as { readonly source?: string }).source
-      const started = 'transcript_path' in input ? route('classic.SessionStart', filled, below) : files.write(transcript, '').then(() => route('classic.SessionStart', filled, below))
+      const isStartNote = source === 'startup' && !hasSessionStarted
+      hasSessionStarted = true
+      const noted = start().then(() => (isStartNote ? undefined : noteDevice()))
+      const started = 'transcript_path' in input ? noted.then(() => route('classic.SessionStart', filled, below)) : Promise.all([noted, files.write(transcript, '')]).then(() => route('classic.SessionStart', filled, below))
       return source === 'startup' || source === 'clear' ? started : started.then(async (answer) => (await tellHeldColor(), answer))
     }
-    if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below)
+    if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below, signal)
     return firePreToolUse(filled as ClassicHookInputs['PreToolUse'], below as { deny?: string } | undefined)
   }) as ClaudeCode['fire']
 
@@ -605,7 +641,8 @@ export function testMod<State extends object, Declared extends Options = Options
     },
     compact: async () => {
       await start()
-      await settled(conversations.compact())
+      conversations.compact()
+      await noteDevice()
     },
     startSession: async ({ source, id }) => {
       await start()

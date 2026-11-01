@@ -1147,9 +1147,9 @@ test('sessions.current.messages reads this conversation, and each message names 
   const messages = await sessions.current.messages()
   const [turn] = await sessions.current.turns()
 
-  expect(messages.map((message) => message.type)).toEqual([Prompt, ToolCall, ToolResult, Reply])
+  expect(messages.map((message) => message.type)).toEqual([Note, Prompt, ToolCall, ToolResult, Reply])
   expect(messages.find((message) => message.type === ToolResult)).toMatchObject({ name: 'Read', input: { file_path: '/work/tree.ts' }, output: 'export function Tree() {}', isError: false })
-  expect(messages.every((message) => message.turn === prompt?.id)).toBe(true)
+  expect(messages.map((message) => message.turn)).toEqual([undefined, prompt?.id, prompt?.id, prompt?.id, prompt?.id])
   expect(turn?.prompt.text).toBe('Rename the tree pane')
   expect(turn?.closedAt).toBeDefined()
   expect((await sessions.current.messages({ last: 1 })).map((message) => message.type)).toEqual([Reply])
@@ -1190,7 +1190,7 @@ test('a compact starts a new context, and a task keeps its own messages', async 
   expect(contexts.map((context) => context.number)).toEqual([1, 2])
   expect(found?.title).toBe('Find the pane')
   expect((await found!.messages()).map((message) => message.task)).toEqual([task])
-  expect((await sessions.current.messages()).map((message) => message.type)).toEqual([Prompt])
+  expect((await sessions.current.messages()).map((message) => message.type)).toEqual([Note, Prompt, Note])
 })
 
 test('sessions.search finds messages of the project newest first, and sessions.list lists its sessions', async () => {
@@ -1493,6 +1493,41 @@ test('mod.dataFolder is the cmod store folder of the plugin, the one a step gets
   await tested.start()
 
   expect(folder).toBe('/test/home/.local/share/cmod/data/diagrams')
+})
+
+test('a mod stores, gets, and deletes its secrets, gets undefined once one is deleted, and the test kit records no value', async () => {
+  let secrets: Mod['secrets'] | undefined
+  const tested = testMod(defineMod({ name: 'anyhost', setup: (mod) => void (secrets = mod.secrets) }), { secrets: { refresh: 'seeded-refresh' } })
+  await tested.start()
+
+  await secrets?.store('token', 'ghp_s3cret')
+  const stored = await secrets?.get('token')
+  await secrets?.delete('token')
+
+  expect([stored, await secrets?.get('token'), await secrets?.get('refresh')]).toEqual(['ghp_s3cret', undefined, 'seeded-refresh'])
+  expect(JSON.stringify(tested.calls)).not.toContain('ghp_s3cret')
+  await expect(secrets?.store('token', '')).rejects.toThrow('anyhost: mod.secrets.store: cmod secret store read no value from stdin. cmod secret delete anyhost token deletes the secret.')
+})
+
+test('mod.secrets runs the cmod program with its own mod name, hands it the value on stdin, and the value is in no argument', async () => {
+  const lifecycle = createLifecycle(defineMod({ name: 'anyhost', setup() {} }))
+  const fake = fakeClaude({ name: 'anyhost', root: '/test/plugins/anyhost' })
+  const ran: { argv: readonly string[]; stdin: string | undefined }[] = []
+  fake.fakes.process.run = async (argv, init) => (ran.push({ argv, stdin: init?.stdin }), { exitCode: 0, stdout: argv[2] === 'get' ? 'ghp_s3cret' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  await lifecycle.start(fake.claude, async () => ({ name: 'anyhost', root: '/test/plugins/anyhost', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+
+  await lifecycle.mod?.secrets.store('token', 'ghp_s3cret')
+  const got = await lifecycle.mod?.secrets.get('token')
+  await lifecycle.mod?.secrets.delete('token')
+
+  const cmod = '/test/home/.local/share/cmod/programs/cmod'
+  expect(got).toBe('ghp_s3cret')
+  expect(ran).toEqual([
+    { argv: [cmod, 'secret', 'store', 'anyhost', 'token'], stdin: 'ghp_s3cret' },
+    { argv: [cmod, 'secret', 'get', 'anyhost', 'token'], stdin: undefined },
+    { argv: [cmod, 'secret', 'delete', 'anyhost', 'token'], stdin: undefined },
+  ])
+  expect(ran.flatMap((run) => run.argv).join(' ')).not.toContain('ghp_s3cret')
 })
 
 const drawingPane: PaneInit = {

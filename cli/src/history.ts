@@ -3,6 +3,7 @@ import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, read
 import { basename, dirname, join, sep } from 'node:path'
 import { dataFolder, isAtLeast, isObject, storeFolder } from '@cmodjs/core/src/records.js'
 import { ContextEnd, ContextStart } from '@cmodjs/core/src/session/context/context.js'
+import type { Device } from '@cmodjs/core/src/session/context/turn/device.js'
 import { Message, messagesOf, rowOfLine, searchText, type Message as SessionMessage, type Unplaced } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
 import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
@@ -42,15 +43,15 @@ create index messages_by_task on messages (session, task, seq);
 create index messages_by_turn on messages (session, turn, seq);
 create index messages_by_time on messages (at);
 create index messages_by_folder on messages (folder, at);
-create table turns (session text not null, task text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, primary key (session, prompt));
+create table turns (session text not null, task text not null, prompt text not null, context integer not null, opened_at text not null, closed_at text, device text, primary key (session, prompt));
 create table contexts (session text not null, task text not null default '', number integer not null, opened_at text not null, closed_at text, primary key (session, task, number));
 create table tasks (session text not null, id text not null, title text not null, agent_type text, forked_from text, model text, opened_by text not null, opened_at text not null, closed_at text, parent text, context integer not null, primary key (session, id));
 create virtual table message_text using fts5 (text, tokenize = 'trigram', content = '', contentless_delete = 1);
 `
 
-const indexFile = 'history-11.sqlite'
+const indexFile = 'history-12.sqlite'
 
-const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite']
+const olderIndexes: readonly string[] = ['history.sqlite', 'history-2.sqlite', 'history-3.sqlite', 'history-4.sqlite', 'history-5.sqlite', 'history-6.sqlite', 'history-7.sqlite', 'history-8.sqlite', 'history-9.sqlite', 'history-10.sqlite', 'history-11.sqlite']
 
 const chunkBytes = 65_536
 
@@ -328,7 +329,7 @@ function saveChanges(db: Database, place: { readonly session: string; readonly f
       const text = searchText(message)
       if (added.changes > 0 && text !== '') db.query('insert into message_text (rowid, text) values (?, ?)').run(added.lastInsertRowid, text)
     } else if (change.type === TurnStart) {
-      db.query('insert or replace into turns (session, task, prompt, context, opened_at, closed_at) values (?, ?, ?, ?, ?, ?)').run(session, change.turn.prompt.task ?? '', change.turn.prompt.id, change.turn.context, change.turn.openedAt, change.turn.closedAt ?? null)
+      db.query('insert or replace into turns (session, task, prompt, context, opened_at, closed_at, device) values (?, ?, ?, ?, ?, ?, ?)').run(session, change.turn.prompt.task ?? '', change.turn.prompt.id, change.turn.context, change.turn.openedAt, change.turn.closedAt ?? null, change.turn.device === undefined ? null : JSON.stringify(change.turn.device))
     } else if (change.type === TurnEnd) {
       db.query('update turns set closed_at = ? where session = ? and prompt = ?').run(change.turn.closedAt ?? null, session, change.turn.prompt.id)
     } else if (change.type === ContextStart) {
@@ -574,7 +575,7 @@ export function readTurns(db: Database, request: { readonly session: string; rea
     readSession(db, sessionTranscripts(request.session, request.project))
     const inContext = request.context === undefined ? '' : 'and context = ?3'
     const rows = db
-      .query<{ prompt: string; context: number; opened_at: string; closed_at: string | null }, (string | number)[]>(`select prompt, context, opened_at, closed_at from turns where session = ?1 and task = ?2 ${inContext} order by opened_at`)
+      .query<{ prompt: string; context: number; opened_at: string; closed_at: string | null; device: string | null }, (string | number)[]>(`select prompt, context, opened_at, closed_at, device from turns where session = ?1 and task = ?2 ${inContext} order by opened_at`)
       .all(request.session, request.task ?? '', ...(request.context === undefined ? [] : [request.context]))
     const kept = request.last === undefined ? rows : rows.slice(-request.last)
     const placeOf = db.query<Place, [string, string, string]>(`select ${placeColumns} from messages where session = ?1 and task = ?2 and id = ?3`)
@@ -589,7 +590,7 @@ export function readTurns(db: Database, request: { readonly session: string; rea
     const byId = new Map(prompts.map((message) => [message.id, message]))
     return kept.flatMap((turn) => {
       const prompt = byId.get(turn.prompt)
-      return prompt?.type === Prompt ? [{ prompt, context: turn.context, openedAt: turn.opened_at, ...(turn.closed_at === null ? {} : { closedAt: turn.closed_at }) }] : []
+      return prompt?.type === Prompt ? [{ prompt, context: turn.context, openedAt: turn.opened_at, ...(turn.closed_at === null ? {} : { closedAt: turn.closed_at }), ...(turn.device === null ? {} : { device: JSON.parse(turn.device) as Device }) }] : []
     })
   })
 }

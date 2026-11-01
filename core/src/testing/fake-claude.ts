@@ -2,6 +2,7 @@ import type { EventResult, Timer } from 'claude-code'
 import { isObject } from '../records.js'
 import type { Claude } from '../runtime/claude.js'
 import { cmodPluginName } from '../runtime/dependencies.js'
+import type { Device } from '../session/context/turn/device.js'
 import { partMethods } from '../runtime/ui.js'
 import { untagged } from '../session/context/turn/message/note.js'
 import { elements } from './fake-elements.js'
@@ -27,7 +28,10 @@ export type Fakes = {
   clock: { now?: Claude['clock']['now']; after?: Claude['clock']['after']; every?: Claude['clock']['every'] }
   cmod: { call?: Claude['cmod']['call'] }
   tool: { call?: Claude['tool']['call'] }
+  device: { read?: Claude['device']['read'] }
 }
+
+const testDevice: Device = { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' }
 
 export type ShownSchedule = { readonly id: string; readonly cron: string; readonly prompt: string }
 
@@ -59,7 +63,7 @@ export function calledAnswer(caller: string, answer: EventResult<'cmod.call'>): 
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {} }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {}, device: {} }
   const emptyDisk = fakeFiles({})
   const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
@@ -230,6 +234,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       dataHome: async () => undefined,
       configHome: async () => undefined,
     },
+    device: { read: rejected('device.read', () => fakes.device.read ?? (async () => testDevice)) },
     cmod: { call: async (args) => cmodCall(clonedAsClaudeCodeDoes(args)) },
   }
 

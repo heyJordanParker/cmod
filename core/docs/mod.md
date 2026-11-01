@@ -150,6 +150,7 @@ type Mod<State, Options, Hotkeys> = {
   readonly name: string
   readonly folder: string
   readonly dataFolder: string
+  readonly secrets: { get(key): Promise<string | undefined>; store(key, value): Promise<void>; delete(key): Promise<void> }
   readonly state: Readonly<State>
   readonly options: OptionValues<Options>
   readonly hotkeys: { readonly [name in keyof Hotkeys]: Hotkey }
@@ -171,6 +172,7 @@ type Mod<State, Options, Hotkeys> = {
 - `name` is the mod's name from `defineMod`.
 - `folder` is the plugin's own folder, where the files the mod ships live.
 - `dataFolder` is the mod's own folder in the cmod store: `$XDG_DATA_HOME/cmod/data/<plugin name>`, or `~/.local/share/cmod/data/<plugin name>` when `XDG_DATA_HOME` is not set. The install step gets the same folder as `CMOD_DATA`. cmod deletes it when the mod is removed ([install-steps.md](install-steps.md)).
+- `secrets` keeps the mod's own keys, such as a token it got from a sign-in, out of its files ([mod.secrets](#mod-secrets)).
 - `state` holds the mod's values. Assign to a key to change it ([state.md](state.md)).
 - `options` holds the values a person set for the mod's options, typed from their declaration. Read-only ([options.md](options.md)).
 - `hotkeys` holds each hotkey `defineMod` declared ([Hotkeys](#hotkeys)).
@@ -183,7 +185,7 @@ type Mod<State, Options, Hotkeys> = {
 Everything that is Claude Code's or the computer's rather than the mod's is an import from `mod.js`, so a function in any file calls it without being handed `mod`:
 
 ```ts
-import { clipboard, commands, config, fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
+import { clipboard, commands, config, device, fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
 ```
 
 - `sessions` is the conversations: the one the mod runs in, every other one, and search across them. Everything that happens in a session, from a prompt to a permission dialog, is a method on it ([session.md](session.md)).
@@ -195,6 +197,7 @@ import { clipboard, commands, config, fs, http, metadata, model, process, sessio
 - `metadata` reads and changes the mod's keys in one file's metadata.
 - `process` runs a program.
 - `http` fetches a URL.
+- `device` is the computer the session runs on.
 - `clipboard` puts text on the person's clipboard ([ui.md](ui.md#toasts)).
 
 Each import works once the mod has started, in `setup` and anything it adds.
@@ -211,6 +214,27 @@ type Subscription = { remove(): void }
 const watching = sessions.current.onToolCall({ name: 'Edit' }, () => void (mod.state.session.edits += 1))
 mod.use(slashCommand({ name: 'stop-counting', description: 'Stop counting edits', reply: () => watching.remove() }))
 ```
+
+### mod.secrets
+
+```ts
+mod.secrets.get(key: string): Promise<string | undefined>
+mod.secrets.store(key: string, value: string): Promise<void>
+mod.secrets.delete(key: string): Promise<void>
+```
+
+`secrets` keeps a key the mod gets by itself, such as the token a sign-in returns, apart from its files, as VS Code's `SecretStorage` does. `get` answers `undefined` for a secret the mod never stored or deleted, `store` replaces the value a key had, and `delete` of a missing key does nothing. A key the person types in is an option instead: `option.secret` shows it in `/config`, where Claude Code keeps it ([options.md](options.md)).
+
+```ts
+const token = (await mod.secrets.get('token')) ?? (await signIn())
+await mod.secrets.store('token', token)
+```
+
+- Every mod's secrets live in `secrets.json` in the cmod store, which only you can read and write. On macOS each value there is encrypted with AES-256-GCM, under one random key cmod keeps in your login keychain as the `cmod Safe Storage` item, as Chrome keeps `Chrome Safe Storage` and VS Code keeps `Code Safe Storage`. On Linux the values are plain, as Claude Code keeps its own login in `~/.claude/.credentials.json`.
+- Each mod gets only its own secrets. They are kept apart, not locked away: any program you run can read your keychain items through `security` and your files.
+- A value never goes in a command's arguments, a log, a toast, or an error. `mod.secrets` hands it to `cmod secret` on stdin, and a mod's own program reads it from stdout of `cmod secret get <mod> <key>`, run as `programs/cmod` in the cmod store, such as `~/.local/share/cmod/programs/cmod` ([commands.md](commands.md#cmod-secret)).
+- `store` of an empty value fails, because `delete` removes a secret.
+- cmod deletes the mod's secrets with its data folder when the mod is removed.
 
 ### mod.every and mod.after
 
@@ -503,6 +527,25 @@ http.fetch(url: string, init?: HttpInit): Promise<HttpResponse>
 - `init` takes `method` (`GET` by default), `headers`, `body` as text, and `socketPath`, the absolute path of a Unix socket the request goes over.
 - The response is `{ status, ok, headers, text }`. `ok` is true for a 2xx status. Header names are lower case.
 - A mod reaches the address its own `program` job answers on the same way ([jobs.md](jobs.md#program)).
+
+## device: the computer the session runs on
+
+```ts
+device.read(): Promise<Device>
+
+type Device = { id: string; name: string; os: 'darwin' | 'linux'; arch: 'arm64' | 'x64' }
+```
+
+- `id` is the same on one computer for every session, mod, and reinstall, and differs between computers. cmod reads it from the operating system and stores nothing: the IOPlatformUUID on macOS, and on Linux `/etc/machine-id`, or `/var/lib/dbus/machine-id` when that holds none, as systemd and D-Bus read them, hashed for cmod the way systemd's `sd_id128_get_machine_app_specific` hashes a machine id for an app, so the id never shows the computer's own.
+- `name` is the name the computer goes by on its network: its LocalHostName on macOS, such as `Jordans-Mac-mini`, and its hostname on Linux.
+- `os` and `arch` are the names cmod's builds use, such as `darwin` and `arm64`.
+- `read` reads the computer the first time the mod calls it, and answers the same device after that. It rejects on a computer other than macOS or Linux on arm64 or x64. It also rejects on a Linux computer where neither `/etc/machine-id` nor `/var/lib/dbus/machine-id` holds a machine id, as in many containers, with a sentence that names both files.
+- Each turn names the device it ran on, as `turn.device` ([session.md](session.md#turn-context-goal-and-task)), so a mod tells which computer ran each turn of a session that moved between computers. A start on a computer without a machine id names no device, so the turns after it keep the device of the start before, or have none.
+
+```ts
+const here = await device.read()
+const elsewhere = (await sessions.current.turns()).filter((turn) => turn.device !== undefined && turn.device.id !== here.id)
+```
 
 ## messageOf
 

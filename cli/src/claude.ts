@@ -1,7 +1,7 @@
 import { existsSync, readlinkSync } from 'node:fs'
 import { mkdtemp, readdir, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isObject } from '@cmodjs/core/src/records.js'
 import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
@@ -70,7 +70,12 @@ export async function listMarketplaces(): Promise<Marketplace[]> {
 }
 
 export async function addMarketplace(source: string): Promise<void> {
-  await run([claudeCode(), 'plugin', 'marketplace', 'add', source])
+  if (!isAbsolute(source)) {
+    await run([claudeCode(), 'plugin', 'marketplace', 'add', source])
+    return
+  }
+  await run([claudeCode(), 'plugin', 'marketplace', 'add', source, '--scope', 'local'], { cwd: source })
+  await excludeFromGit(source, ['.claude/settings.local.json'], true)
 }
 
 export async function linkPlugin(plugin: Plugin): Promise<string> {
@@ -84,7 +89,7 @@ export async function linkPlugin(plugin: Plugin): Promise<string> {
     const entry = { name: plugin.name, source: `./${basename(plugin.root)}`, description: plugin.description ?? plugin.name }
     await writeLinkedMarketplace(parent, name, [...(await linkedEntries(parent)).filter((each) => each.name !== plugin.name), entry])
     links.marketplaces[name] = parent
-    if (owned === undefined) await excludeFromGit(parent, true)
+    if (owned === undefined) await excludeFromGit(parent, ['.claude-plugin/marketplace.json'], true)
     if (marketplaces.some((marketplace) => marketplace.name === name)) await run([claudeCode(), 'plugin', 'marketplace', 'update', name])
     else await addMarketplace(parent)
     const id = `${plugin.name}@${name}`
@@ -110,11 +115,11 @@ export async function unlinkPlugin(plugin: Plugin): Promise<boolean> {
     } else {
       const dependency = `${cmodPluginEntry.name}@${name}`
       if ((await listPlugins()).some((each) => each.id === dependency)) await changePlugin('uninstall', dependency)
-      await run([claudeCode(), 'plugin', 'marketplace', 'remove', name])
+      await run([claudeCode(), 'plugin', 'marketplace', 'remove', name], { cwd: parent })
       const file = linkedMarketplaceFile(parent)
       await rm(file, { force: true })
       if ((await readdir(dirname(file))).length === 0) await rmdir(dirname(file))
-      await excludeFromGit(parent, false)
+      await excludeFromGit(parent, ['.claude-plugin/marketplace.json', '.claude/settings.local.json'], false)
       delete links.marketplaces[name]
     }
     const installed = new Set((await listPlugins()).map((each) => each.id))
@@ -146,16 +151,18 @@ async function writeLinkedMarketplace(folder: string, name: string, checkouts: r
   await writeAtomically(linkedMarketplaceFile(folder), `${JSON.stringify({ name, owner: { name: 'cmod link' }, plugins }, null, 2)}\n`)
 }
 
-async function excludeFromGit(folder: string, isExcluded: boolean): Promise<void> {
+async function excludeFromGit(folder: string, files: readonly string[], isExcluded: boolean): Promise<void> {
   const git = await capture(['git', '-C', folder, 'rev-parse', '--git-path', 'info/exclude', '--show-prefix'])
   if (git.exitCode !== 0) return
   const [excludes = '', prefix = ''] = git.stdout.split('\n')
   const path = resolve(folder, excludes)
-  const line = `/${prefix}.claude-plugin/marketplace.json`
+  const lineOf = (file: string) => `/${prefix}${file}`
   const text = (await readText(path)) ?? ''
   const lines = text.split('\n')
-  if (isExcluded && !lines.includes(line)) await writeAtomically(path, `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}${line}\n`)
-  if (!isExcluded && lines.includes(line)) await writeAtomically(path, lines.filter((each) => each !== line).join('\n'))
+  const missing = files.map(lineOf).filter((line) => !lines.includes(line))
+  const gone = files.filter((file) => !existsSync(join(folder, file))).map(lineOf)
+  if (isExcluded && missing.length > 0) await writeAtomically(path, `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}${missing.join('\n')}\n`)
+  if (!isExcluded && gone.some((line) => lines.includes(line))) await writeAtomically(path, lines.filter((each) => !gone.includes(each)).join('\n'))
 }
 
 export async function addClaudeApi(plugin: Plugin): Promise<void> {

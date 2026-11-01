@@ -6,8 +6,8 @@ type FilledField = 'session_id' | 'transcript_path' | 'cwd' | 'hook_event_name' 
 export type HookInputOf<H extends Hook | 'PreToolUse'> = Omit<ClassicHookInputs[H], FilledField> & Partial<Pick<ClassicHookInputs[H], FilledField & keyof ClassicHookInputs[H]>>
 
 export type ClaudeCode = {
-  fire<H extends Hook | 'PreToolUse'>(hook: H, input: HookInputOf<H>, below?: EventResult<`classic.${H}`>): Promise<EventResult<`classic.${H}`>>
-  fire<N extends RoutedEvent>(event: N, input: Args<N>, below?: EventResult<N>): Promise<EventResult<N>>
+  fire<H extends Hook | 'PreToolUse'>(hook: H, input: HookInputOf<H>, below?: EventResult<`classic.${H}`>, signal?: AbortSignal): Promise<EventResult<`classic.${H}`>>
+  fire<N extends RoutedEvent>(event: N, input: Args<N>, below?: EventResult<N>, signal?: AbortSignal): Promise<EventResult<N>>
 }
 
 const drivers = new WeakMap<object, ClaudeCode>()

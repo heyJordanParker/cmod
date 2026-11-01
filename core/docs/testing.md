@@ -33,6 +33,7 @@ type TestOptions<State, Options> = {
   readonly dependencies?: { [Name in keyof CmodDependencies]?: CmodDependencies[Name] }
   readonly files?: Readonly<Record<string, string>>
   readonly links?: Readonly<Record<string, string>>
+  readonly secrets?: Readonly<Record<string, string>>
   readonly sessions?: readonly FakeSession[]
 }
 ```
@@ -47,6 +48,7 @@ type TestOptions<State, Options> = {
 | `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Install it in Plugins.` |
 | `files` | The fake file system, absolute path to text | no files |
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
+| `secrets` | The mod's secrets `mod.secrets` starts with, key to value. The fake keeps what the mod stores in memory, and `tested.calls` never holds a value | no secrets |
 | `sessions` | The earlier conversations `sessions.list` and `sessions.search` read, each `{ id, messages?, goal?, … }` ([Build a conversation](#build-a-conversation)) | none: only the current session, `test-session` |
 
 A project plugin finds its repository through a `.git` entry at `projectRoot`, so a test of one puts it in `files`, such as `files: { '/test/project/.git': '' }`. Without it the project plugin has no repository, and its rules match calls in every folder, as a user mod's do.
@@ -175,12 +177,12 @@ Waits until the work a listener started without awaiting it has run, such as a `
 
 ### Build a conversation
 
-The current session, `test-session`, starts empty. A test builds the conversation the mod reads through `sessions` ([session.md](session.md)), the way Claude Code would write it:
+The current session, `test-session`, starts with one message: the cmod plugin's note naming the device, from `fakes.device.read`, as a live session starts with it. So each turn's `device` is `test-computer` unless the test sets `fakes.device.read` ([session.md](session.md#turn-context-goal-and-task)). A test builds the rest of the conversation the mod reads through `sessions` ([session.md](session.md)), the way Claude Code would write it:
 
 - `add(message, { task? })` adds a message and returns it, placed in its context and turn. A `Prompt` opens a new turn. With `task`, the message is that task's.
 - `endTurn({ answer?, failure? })` ends the open turn, as Claude stopping does. `answer` is Claude's last words, and `failure` ends it on an error, such as `{ type: 'rate_limit', text: 'Rate limited' }`. `{ task }` ends the open turn of that task's owner instead, and the first one a background task's session ends also ends the task.
-- `compact()` records a compaction boundary, which ends the context and starts the next, as a compaction does.
-- `startSession({ source, id? })` starts a session as `/clear`, `/resume`, or a fork does, under `id` when it names one. The mod's `session` values are that session's, so a `resume` to `test-session` brings the first session's values back, and `onSessionStart` hears the `source`.
+- `compact()` records a compaction boundary, which ends the context and starts the next, then the cmod plugin's device note, as a compaction does.
+- `startSession({ source, id? })` starts a session as `/clear`, `/resume`, or a fork does, under `id` when it names one, and adds the cmod plugin's device note. A first `startup` is the session the test already started, so it adds no second note. The mod's `session` values are that session's, so a `resume` to `test-session` brings the first session's values back, and `onSessionStart` hears the `source`. Set `fakes.device.read` before a `resume` to test a session that moved to another computer.
 - `startTask({ title, agentType?, model?, openedBy?, parent?, isBackground?, forkedFrom? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn. `forkedFrom: 'test-session'` starts a fork, `isBackground: true` a background task whose owner is a session of its own, and both together a clone. A message added with a background task's `task` goes into its owner's session.
 
 Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: InstructionFile, path, text }`, `{ type: AttachedFile, path, attachmentType, text }`, or `{ type: Notice, text }`.
@@ -298,12 +300,14 @@ type Fakes = {
   clock: { now?, after?, every? }
   cmod: { call? }
   tool: { call? }
+  device: { read? }
 }
 ```
 
 Set a fake to answer a call:
 
 - `session.surfaces` answers `['terminal']` unless set. Set it to `async () => []` to test a session no Claude app shows, such as `claude -p`.
+- `device.read` answers `{ id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' }` unless set, so `device.read()` and each turn's `device` answer the same in every test on every computer. Set it to test the mod on another computer, or to reject to test a computer cmod cannot read, where the cmod plugin's note is left out and turns have no `device`.
 - A call with no fake throws `<call>(<args>) has no fake answer. Set fakes.<call> on the tested mod.` So set `fakes.process.run` before a test runs a program, and `fakes.ui.ask` before the mod asks a question.
 - A `program` job is the exception: it catches the `process.spawn` error and retries after 1, 2, 4, 8 and 16 seconds on real timers, so its `ready()` waits past `bun test`'s 5-second timeout. Set `fakes.process.spawn` before a test starts a `program` job.
 - A `program` job with `singleInstance` spawns `/test/home/.local/share/cmod/programs/cmod program <mod> -- <command…>`, so `fakes.process.spawn` gets that `argv`. Each line the fake writes to standard output is the address of the copy that runs now, so a test fakes another session's copy taking over by writing a second line, and `ready()` resolves the new address.

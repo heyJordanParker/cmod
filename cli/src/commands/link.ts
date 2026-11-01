@@ -19,10 +19,12 @@ cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then
 installs the checkout's packages, builds the program cli/ declares and links it
 into cmod's programs folder and ~/.local/bin, and lists the checkout in the
 marketplace cmod keeps in the checkout's parent folder, at
-.claude-plugin/marketplace.json beside the cmod plugin. It installs the
-checkout from that marketplace through Claude Code, turns off the installed
-copy of the mod, and runs the checkout's install step. cmod watch reloads
-every session once a change builds.
+.claude-plugin/marketplace.json beside the cmod plugin, and declares that
+marketplace in the parent folder's .claude/settings.local.json, so the
+settings.json you share between computers holds no path of this one. It
+installs the checkout from that marketplace through Claude Code, turns off the
+installed copy of the mod, and runs the checkout's install step. cmod watch
+reloads every session once a change builds.
 
 Options:
   --option key=value    Set one of the mod's options, as /config does. Repeat it for each option`

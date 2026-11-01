@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { version as cmodVersion } from '../../package.json'
-import { isAtLeast, readRecord, storeFolder } from '@cmodjs/core/src/records.js'
+import { dataFolder, isAtLeast, readRecord, storeFolder } from '@cmodjs/core/src/records.js'
 import { listPlugins } from '../claude.js'
 import { readText } from '../files.js'
 import { readPlugin, usesCmod, type Plugin } from '../plugin.js'
@@ -20,13 +20,17 @@ Code enabled it. A plugin Claude Code turned off shows why. Also lists every
 mod Claude Code removed whose uninstall step has not run yet.
 
 Options:
-  --json  Print the list as JSON, with the dependencies Claude Code turned each
-          plugin off for, because they are older than the plugin needs`
+  --json  Print the list as JSON, with each plugin's folder, the one it runs
+          from, each mod's dataFolder, the one mod.dataFolder names, and the
+          dependencies Claude Code turned each plugin off for, because they are
+          older than the plugin needs`
 
-type Row = { name: string; version: string; state: string; unsatisfied: readonly string[] }
+type Row = { name: string; version: string; state: string; unsatisfied: readonly string[]; folder?: string; dataFolder?: string }
 
 export async function run(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, allowPositionals: false, options: { json: { type: 'boolean', default: false } } })
+  const store = storeFolder(process.env)
+  const foldersOf = (folder: string, mod: Plugin | undefined) => (mod === undefined ? { folder } : { folder, dataFolder: dataFolder(store, mod.name) })
   const rows: Row[] = []
   const shown = new Set<string>()
   const loadedRoots = new Set<string>()
@@ -44,7 +48,7 @@ export async function run(argv: string[]): Promise<number> {
     const origin = installed.isLinked ? `linked from ${root}, ` : ''
     const errors = installed.errors.join('; ')
     const state = !installed.enabled ? `disabled${errors === '' ? '' : `: ${errors}`}` : errors !== '' ? `Claude Code turned it off: ${errors}` : mod === undefined ? 'enabled' : await setupState(mod)
-    rows.push({ name: installed.id, version: mod?.version ?? installed.version, state: `${origin}${state}`, unsatisfied: installed.unsatisfied })
+    rows.push({ name: installed.id, version: mod?.version ?? installed.version, state: `${origin}${state}`, unsatisfied: installed.unsatisfied, ...foldersOf(root, mod) })
   }
   for (const folder of await linkedFolders()) {
     if (!existsSync(`${folder}/.claude-plugin/plugin.json`)) {
@@ -54,12 +58,13 @@ export async function run(argv: string[]): Promise<number> {
     const plugin = await readPlugin(folder)
     if (loadedRoots.has(plugin.root)) continue
     shown.add(plugin.name)
-    rows.push({ name: plugin.name, version: plugin.version, state: `linked from ${plugin.root}, but claude plugin list does not show it`, unsatisfied: [] })
+    const mod = (await usesCmod(plugin.root, plugin.name)) ? plugin : undefined
+    rows.push({ name: plugin.name, version: plugin.version, state: `linked from ${plugin.root}, but claude plugin list does not show it`, unsatisfied: [], ...foldersOf(plugin.root, mod) })
   }
   for (const name of await recordNames()) {
     if (shown.has(name)) continue
-    const record = await readRecord(readText, storeFolder(process.env), name)
-    rows.push({ name, version: record?.version ?? '', state: `removed: run cmod teardown ${name}`, unsatisfied: [] })
+    const record = await readRecord(readText, store, name)
+    rows.push({ name, version: record?.version ?? '', state: `removed: run cmod teardown ${name}`, unsatisfied: [], dataFolder: dataFolder(store, name) })
   }
 
   if (values.json) {

@@ -10,7 +10,7 @@ A mod is a Claude Code plugin built with `@cmodjs/core`. Claude Mod Manager (cmo
 
 ```text
 my-mod/
-├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=5.1.0" }]
+├── .claude-plugin/plugin.json          name, version, and "dependencies": [{ "name": "cmod", "version": ">=5.2.0" }]
 ├── .claude/CLAUDE.md                   facts for coding agents, starting with these docs
 ├── .gitignore                          node_modules/ and .claude-plugin/types/
 ├── .oxlintrc.json                      leaves .claude-plugin/types/ out of the lint
@@ -63,6 +63,7 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | How does a mod give Claude a prompt on a schedule, like `/loop`? | [jobs.md](jobs.md#schedule) |
 | How do I keep values across prompts, sessions, and projects? | [state.md](state.md) |
 | How does a person set a token, a URL, or a setting for my mod, for themselves or their team? | [options.md](options.md) |
+| Where does my mod keep a token it gets by itself, such as from a sign-in, out of its files? | [mod.md](mod.md#mod-secrets) |
 | How does my mod find files and keep its own keys on each one, such as on a Skill? | [mod.md](mod.md#metadata-a-file-s-own-keys) |
 | How does the person finish a setup step only they can do, such as signing in? | [install-steps.md](install-steps.md#steps-in-claude-code) |
 | How do I add my mod's own page to Settings, or change Claude Code's settings? | [ui.md](ui.md#settings-pages), [mod.md](mod.md#settings-claude-code-s-settings-files) |

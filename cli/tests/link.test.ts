@@ -55,8 +55,8 @@ test("link lists the checkout in a marketplace in its parent folder beside the c
       { name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' } },
     ],
   })
-  expect(await readFile(excludes, 'utf8')).toBe(`${excludedBefore}/.claude-plugin/marketplace.json\n`)
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`plugin marketplace add ${join(home, 'Developer')}\nplugin install demo@Developer-linked --json\nplugin list --json\nplugin disable demo@market --json\n`)
+  expect(await readFile(excludes, 'utf8')).toBe(`${excludedBefore}/.claude-plugin/marketplace.json\n/.claude/settings.local.json\n`)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`plugin marketplace add ${join(home, 'Developer')} --scope local\nplugin install demo@Developer-linked --json\nplugin list --json\nplugin disable demo@market --json\n`)
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/links.json'), 'utf8'))).toEqual({ marketplaces: { 'Developer-linked': join(home, 'Developer') }, turnedOff: { demo: ['demo@market'] } })
   expect(await readFile(target, 'utf8')).toBe(settings)
   expect((await lstat(link)).isSymbolicLink()).toBe(true)
@@ -67,9 +67,28 @@ test("link lists the checkout in a marketplace in its parent folder beside the c
   expect(unlinked.exitCode).toBe(0)
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin uninstall demo@Developer-linked --json\nplugin list --json\nplugin marketplace remove Developer-linked\nplugin list --json\nplugin enable demo@market --json\n')
   expect(existsSync(join(home, 'Developer', '.claude-plugin'))).toBe(false)
-  expect(await readFile(excludes, 'utf8')).toBe(excludedBefore)
+  expect(await readFile(join(home, 'Developer', '.claude', 'settings.local.json'), 'utf8')).toBe('{\n  "extraKnownMarketplaces": {}\n}\n')
+  expect(await readFile(excludes, 'utf8')).toBe(`${excludedBefore}/.claude/settings.local.json\n`)
   expect(existsSync(join(home, '.local/share/cmod/links.json'))).toBe(false)
   expect(await readFile(target, 'utf8')).toBe(settings)
+})
+
+test("link declares its marketplace in the parent folder's .claude/settings.local.json, so the settings.json other computers share holds no path of this one, and unlink takes the declaration out", async () => {
+  const shared = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "tracer@market": true\n  }\n}\n'
+  const { home, checkout, target } = await linkedHome(shared)
+  const parent = join(home, 'Developer')
+  const local = join(parent, '.claude', 'settings.local.json')
+
+  expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
+
+  expect(await readFile(target, 'utf8')).toBe(shared)
+  expect(JSON.parse(await readFile(local, 'utf8'))).toEqual({ extraKnownMarketplaces: { 'Developer-linked': { source: { source: 'directory', path: parent } } } })
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`plugin marketplace add ${parent} --scope local\n`)
+
+  expect((await cmod(home, 'unlink', checkout)).exitCode).toBe(0)
+
+  expect(await readFile(target, 'utf8')).toBe(shared)
+  expect(JSON.parse(await readFile(local, 'utf8'))).toEqual({ extraKnownMarketplaces: {} })
 })
 
 test('two checkouts in one folder share its marketplace, and unlinking one keeps the other listed', async () => {
@@ -106,7 +125,42 @@ test('cmod update and cmod list name a linked install by its checkout, not the c
   expect(updated.stdout).toBe(`– demo@Developer-linked is linked from ${checkout}, so saving its files updates it.\n`)
   expect(JSON.parse(listed.stdout)).toEqual([
     { name: 'cmod@cmod', version: '0.1.0', state: '/cmod is missing: run claude plugin update cmod@cmod', unsatisfied: [] },
-    { name: 'demo@Developer-linked', version: '0.1.0', state: `linked from ${checkout}, enabled`, unsatisfied: [] },
+    { name: 'demo@Developer-linked', version: '0.1.0', state: `linked from ${checkout}, enabled`, unsatisfied: [], folder: checkout },
+  ])
+})
+
+test('cmod list --json names the folder each plugin runs from, and for each mod the folder its mod.dataFolder names', async () => {
+  const home = await temporaryHome()
+  const store = join(home, '.local/share/cmod')
+  const published = join(home, 'cache/notes/0.1.0')
+  const checkout = join(home, 'Developer/demo')
+  const plain = join(home, 'cache/plain/1.0.0')
+  const modPackage = (name: string) => JSON.stringify({ name, cmod: { install: './setup/install.sh' } })
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering([
+      ...cmodPluginListed,
+      { id: 'notes@market', version: '0.1.0', scope: 'user', enabled: true, installPath: published },
+      { id: 'demo@Developer-linked', version: '0.1.0', scope: 'user', enabled: true, installPath: join(home, 'cache/demo') },
+      { id: 'plain@market', version: '1.0.0', scope: 'user', enabled: true, installPath: plain },
+    ]),
+    'cache/notes/0.1.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'notes', version: '0.1.0' }),
+    'cache/notes/0.1.0/package.json': modPackage('notes'),
+    'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'Developer/demo/package.json': modPackage('demo'),
+    'cache/plain/1.0.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'plain', version: '1.0.0' }),
+    '.local/share/cmod/records/gone.json': JSON.stringify({ name: 'gone', version: '0.2.0', root: join(home, 'cache/gone'), installedAt: '2026-10-30T10:00:00.000Z', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+  })
+  await writeLinked(home, checkout)
+
+  const listed = await cmod(home, 'list', '--json')
+
+  expect(listed.exitCode).toBe(0)
+  expect(JSON.parse(listed.stdout)).toEqual([
+    { name: 'cmod@cmod', version: '0.1.0', state: '/cmod is missing: run claude plugin update cmod@cmod', unsatisfied: [] },
+    { name: 'notes@market', version: '0.1.0', state: `not set up: run cmod setup ${published}`, unsatisfied: [], folder: published, dataFolder: join(store, 'data/notes') },
+    { name: 'demo@Developer-linked', version: '0.1.0', state: `linked from ${checkout}, not set up: run cmod setup ${checkout}`, unsatisfied: [], folder: checkout, dataFolder: join(store, 'data/demo') },
+    { name: 'plain@market', version: '1.0.0', state: 'enabled', unsatisfied: [], folder: plain },
+    { name: 'gone', version: '0.2.0', state: 'removed: run cmod teardown gone', unsatisfied: [], dataFolder: join(store, 'data/gone') },
   ])
 })
 
@@ -158,7 +212,7 @@ test('cmod setup links each folder an older cmod put in CLAUDE_CODE_PLUGIN_DIRS 
   expect(setUp.exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(home, '.claude/settings.json'), 'utf8'))).toEqual({ env: { FOO: '1', CLAUDE_CODE_PLUGIN_DIRS: '~/Developer/missing', CLAUDE_CODE_PLUGIN_DIR_WATCH: 'false' } })
   expect(setUp.stderr).toBe(`cmod kept ~/Developer/missing in CLAUDE_CODE_PLUGIN_DIRS, because linking it as a marketplace failed: ${join(home, 'Developer/missing')} does not exist.\n`)
-  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`plugin marketplace add ${join(home, 'Developer')}\nplugin install demo@Developer-linked --json\n`)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain(`plugin marketplace add ${join(home, 'Developer')} --scope local\nplugin install demo@Developer-linked --json\n`)
   expect(JSON.parse(await readFile(linkedMarketplace(home), 'utf8')).plugins[0]).toEqual({ name: 'demo', source: './demo', description: 'demo' })
 })
 
@@ -303,7 +357,7 @@ test('link --option names the options a mod has when the key is not one of them'
   expect(existsSync(join(home, 'configured'))).toBe(false)
 })
 
-const claudeBeforeCmodIsLinked = claudeAnswering([]).replace('  "plugin marketplace add heyJordanParker/cmod") ;;', "  \"plugin marketplace add heyJordanParker/cmod\") echo 'Repository not found' >&2; exit 1 ;;")
+const claudeBeforeCmodIsLinked = claudeAnswering([]).replace('  "plugin marketplace add "*)', "  \"plugin marketplace add heyJordanParker/cmod\") echo 'Repository not found' >&2; exit 1 ;;\n  \"plugin marketplace add \"*)")
 
 test('cmod link of a mod before cmod is linked lists nothing', async () => {
   const home = await temporaryHome()
