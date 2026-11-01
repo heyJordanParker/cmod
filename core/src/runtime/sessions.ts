@@ -145,6 +145,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   const deciding = new Map<string, Set<Listening>>()
   const queued = new Set<string>()
   const parents = new Map<string, Map<string, string | undefined>>()
+  const readingParents = new Map<string, Promise<Map<string, string | undefined>>>()
   const known = new Map<string, SessionData>()
   let current: SessionData = { id: '', title: '', project: '', cwd: '', model: '', startedAt: '', lastAt: '', isRunning: true }
   let told: SessionColor = { session: '' }
@@ -161,28 +162,50 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       const heard = (from: Map<string, Set<Listening>>): Listened[] =>
         [...(from.get(key) ?? [])].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...(options.onFailure === 'refuse' ? { onFailure: 'refuse' as const, scope } : {}) }))
       const tracksTasks = [...(listening.get(key) ?? []), ...(deciding.get(key) ?? [])].some(({ scope }) => scope.task !== undefined || scope.isGoal === true)
-      if (tracksTasks) void learnTasks(key).catch((error: unknown) => report(`tasks:${key}`, 'Could not read the tasks it listens under', error))
       const subscriptions = [...heard(listening), ...(tracksTasks ? [{ event: TaskStart }] : [])]
       await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error: unknown) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
       await call(conversationMethods.watchBefore, { session: key, subscriptions: heard(deciding) }).catch((error: unknown) => report(`before:${key}`, `Changes nothing in ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
     })
   }
 
-  const learnTasks = async (session: string) => {
-    if (parents.has(session)) return
-    const tree = new Map<string, string | undefined>()
-    parents.set(session, tree)
-    for (const task of await call<TaskData[]>(conversationMethods.tasks, { session, all: true })) tree.set(task.id, task.parent)
+  const parentsOf = (session: string) => {
+    const known = parents.get(session)
+    if (known !== undefined) return known
+    const reading = readingParents.get(session)
+    if (reading !== undefined) return reading
+    const read = call<TaskData[]>(conversationMethods.tasks, { session, all: true })
+      .then((tasks) => {
+        const tree = new Map(tasks.map((task) => [task.id, task.parent]))
+        parents.set(session, tree)
+        return tree
+      })
+      .finally(() => readingParents.delete(session))
+    readingParents.set(session, read)
+    return read
   }
 
-  const isUnderIn = (session: string) => (task: string, ancestor: string) => {
-    const tree = parents.get(session)
+  const isUnderIn = (tree: ReadonlyMap<string, string | undefined> | undefined) => (task: string, ancestor: string) => {
     for (let at: string | undefined = task, steps = 0; at !== undefined && steps < 64; at = tree?.get(at), steps += 1) if (at === ancestor) return true
     return false
   }
 
+  const inScope = ({ scope }: Listening, session: string, change: SessionChange): boolean | Promise<boolean> => {
+    if (scope.task === undefined || scope.isAgent === true) return isInScope(scope, session, change, isUnderIn(undefined))
+    const tree = parentsOf(session)
+    if (tree instanceof Map) return isInScope(scope, session, change, isUnderIn(tree))
+    return tree.then(
+      (read) => isInScope(scope, session, change, isUnderIn(read)),
+      (error: unknown) => (report(`tasks:${session}`, 'Could not read the tasks it listens under', error), false),
+    )
+  }
+
   const remember = (session: string, change: SessionChange) => {
-    if (change.type === TaskStart) parents.get(session)?.set(change.task.id, change.task.parent)
+    if (change.type !== TaskStart) return
+    parents.get(session)?.set(change.task.id, change.task.parent)
+    void readingParents.get(session)?.then(
+      (tree) => tree.set(change.task.id, change.task.parent),
+      (error: unknown) => claude.ui.log(`${name}: the tasks of ${session} stay unread until the next change: ${messageOf(error)}`, { to: 'debug' }),
+    )
   }
 
   const add = (into: Map<string, Set<Listening>>, scope: Scope, event: SessionEvent, method: string, args: readonly unknown[], onChange: (key: string) => void): Subscription => {
@@ -215,12 +238,12 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
 
   const decidersOf = (session: string, event: BeforeEvent, isInProject: boolean) => [...(deciding.get(session) ?? []), ...(isInProject ? (deciding.get(everySession) ?? []) : [])].filter((entry) => entry.event === event)
 
-  const decides = (entry: Listening, session: string, change: SessionChange) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher))
+  const decides = async (entry: Listening, session: string, change: SessionChange) => (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)) && (await inScope(entry, session, change))
 
   const combined = async (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, cancel: AbortSignal): Promise<Partial<Answers> | undefined> => {
     const askers = decidersOf(session, event, isInProject)
       .map((entry) => async (latest: SessionChange) => {
-        if (!decides(entry, session, latest)) return undefined
+        if (!(await decides(entry, session, latest))) return undefined
         const payload = await payloadFor(session, latest)
         return invoke(entry.method, entry.options, cancel, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload as never, time)), beforeAnswerKeys[event])
       })
@@ -577,7 +600,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
   const every = eventMethods(() => ({}), false)
 
   const failedBefore = (session: string, event: BeforeEvent, change: SessionChange, isInProject: boolean, error: Error) => {
-    const asked = decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change))
+    const asked = decidersOf(session, event, isInProject).filter((entry) => isInScope(entry.scope, session, change, isUnderIn(parents.get(session))) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)))
     return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined)
   }
 
@@ -602,12 +625,17 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       remember(session, change)
       let payload: Promise<unknown> | undefined
       for (const key of isInProject ? [session, everySession] : [session]) {
-        for (const { scope, event, method, matcher, listener, options } of listening.get(key) ?? []) {
-          if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session))) continue
-          payload ??= payloadFor(session, change)
-          void payload
-            .then((heard) => invoke(method, options, cancel, (time) => listener(heard as never, time)))
-            .catch((error: unknown) => report(`session:${method}`, `The ${method} listener failed`, error))
+        for (const entry of listening.get(key) ?? []) {
+          const { event, method, matcher, listener, options } = entry
+          const deliver = () => {
+            payload ??= payloadFor(session, change)
+            void payload
+              .then((heard) => invoke(method, options, cancel, (time) => listener(heard as never, time)))
+              .catch((error: unknown) => report(`session:${method}`, `The ${method} listener failed`, error))
+          }
+          const isHeard = isHeardBy(event, matcher, change) && inScope(entry, session, change)
+          if (isHeard === true) deliver()
+          else if (isHeard !== false) void isHeard.then((isIn) => isIn && deliver())
         }
       }
     },

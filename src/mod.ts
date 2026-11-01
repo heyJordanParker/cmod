@@ -107,7 +107,7 @@ export const cmodPlugin = defineMod({
       let isBound = true
       for (const [name, hotkey] of Object.entries(cmodPlugin.hotkeys ?? {})) {
         if (mod.hotkeys[name as keyof typeof mod.hotkeys].combo !== undefined) continue
-        const { exitCode, stderr } = await process.run(['cmod', 'hotkey', mod.name, name, hotkey.default])
+        const { exitCode, stderr } = await process.run(['cmod', 'hotkey', claude.plugin.root, name, hotkey.default])
         if (exitCode === 0) continue
         isBound = false
         report({ id: `hotkey:${name}`, message: `Could not bind ${hotkey.default} to ${hotkey.title}`, description: `cmod hotkey ${formatExit(exitCode, cmodError(stderr, 'hotkey'))}` })

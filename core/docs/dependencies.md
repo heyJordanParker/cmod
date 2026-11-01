@@ -98,14 +98,14 @@ A call that cannot answer rejects with one of these reasons:
 
 ```text
 tracer is not installed. Install it in Plugins.
-tracer is not set up. Its toast says why.
+tracer is not set up: <why its setup failed>
 tracer is installing. Try again when it's ready.
 tracer has no method signatures.
 tracer: <the message of the error the method threw>
 ```
 
 - `tracer is not installed` covers a provider whose code did not load. The caller's error toast shows a `Plugins` button, which opens Claude Code's `/plugin`.
-- `tracer is not set up` covers a provider the person declined to install and one whose install failed. Its own toast shows why, with `Retry` or `Install`.
+- `tracer is not set up` covers a provider the person declined to install and one whose install failed, and names why. The provider's own toast shows the same reason, with `Retry` or `Install`.
 - `tracer is installing` covers a provider that is still running its install step. A provider that is only starting makes the call wait for it, up to 9 seconds.
 - When tracer is disabled, Claude Code unloads the mod that lists it, with its own error: `Dependency "tracer" is disabled — enable it or remove the dependency`.
 - A call fails with `mod.dependencies.tracer.signatures passed its 30 s deadline` when the other mod takes longer than 30 seconds. A job bounds the whole function that makes the call by its own deadline ([jobs.md](jobs.md)), so a slow call inside `slashCommand` can fail the command first, with `/outline passed the 30 s deadline of slashCommand`.

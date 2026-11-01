@@ -264,10 +264,10 @@ Runs a removed mod's saved uninstall step, then deletes its install record, the 
 ### cmod hotkey
 
 ```text
-cmod hotkey <mod> <hotkey> <combo>
+cmod hotkey <mod | plugin-root> <hotkey> <combo>
 ```
 
-Binds one hotkey of a mod to a new combo in Claude Code's `keybindings.json`, such as `cmod hotkey notes toggle ctrl+shift+n`, and removes the combo it had. It binds a hotkey without a default combo the same way. A combo in Settings, under the mod, Hotkeys, runs it, and so does the cmod plugin for its own two hotkeys at its first start. It refuses a combo that is not one, and a combo the person already bound to something else, with `<combo> already runs something else in ~/.claude/keybindings.json. Pick another combo.` The mod's next update keeps the combo ([mod.md](mod.md#hotkeys)).
+Binds one hotkey of a mod to a new combo in Claude Code's `keybindings.json`, such as `cmod hotkey notes toggle ctrl+shift+n`, and removes the combo it had. It binds a hotkey without a default combo the same way. A plugin root holds a `/`, such as `./notes`, so a mod Claude Code loads with `--plugin-dir`, which has no install record, binds its hotkeys too. A combo in Settings, under the mod, Hotkeys, runs it, and so does the cmod plugin for its own two hotkeys at its first start, with its own plugin folder. It refuses a combo that is not one, and a combo the person already bound to something else, with `<combo> already runs something else in ~/.claude/keybindings.json. Pick another combo.` The mod's next update keeps the combo ([mod.md](mod.md#hotkeys)).
 
 ### cmod secret
 

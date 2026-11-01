@@ -84,9 +84,10 @@ jobs:
           version=${{ steps.version.outputs.version }}
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f bun.lock
           until grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
             rm -f bun.lock
-            bun install --no-cache || true
+            npx -y bun@1.2.21 install --no-cache || true
             sleep 10
           done
           bun test

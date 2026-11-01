@@ -336,7 +336,7 @@ test("a call that comes before the mod's session.start waits for the start, then
   expect(await answer).toEqual({ value: ['a.ts'] })
 })
 
-test('a call to a mod whose install failed fails and points at its toast', async () => {
+test('a call to a mod whose install failed fails with the reason the install failed', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   installCmod(fake)
   fake.fakes.process.spawn = () => finished(['failed 1\tThe install step of safe-delete exited 1: brew: command not found.'], 1)
@@ -346,7 +346,7 @@ test('a call to a mod whose install failed fails and points at its toast', async
   await fake.settle()
 
   expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: [] })).toEqual({
-    deny: 'safe-delete is not set up. Its toast says why.',
+    deny: 'safe-delete is not set up: The install step of safe-delete exited 1: brew: command not found.',
   })
 })
 

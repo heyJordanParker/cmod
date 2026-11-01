@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.2.1] - 2026-11-01
+
+### Fixed
+- cmod 5.2.0 did not start on a computer whose Bun is older than 1.4, and every mod that calls cmod failed with it. Claude Code installs the cmod plugin's packages with the `bun` on your PATH, and Bun 1.3 and older could not read the lockfile 5.2.0 shipped, so the plugin had no packages and its setup stopped with `bootstrap exited 1`. The cmod plugin ships a lockfile every Bun reads again.
+- The first session after a cmod update no longer shows `Could not read the tasks it listens under` for each mod that listens under a task while cmod installs. A mod reads the tasks when a change first reaches such a listener, which happens only once cmod is ready, and reads them again after a failed read, so the listener hears its task's subtasks for the whole session.
+- A call to a mod that is not set up now says why, as in `tracer is not set up: The install step of tracer exited 1: brew: command not found.`, instead of `Its toast says why.`, so the caller's own error makes sense alone.
+- A cmod run from its checkout with `--plugin-dir` binds its own hotkeys, `meta+0` and `meta+m`, instead of showing `Could not bind` twice at every start. `cmod hotkey` takes a mod's plugin folder in place of its name, as `cmod hotkey ./my-mod toggle ctrl+e`, so a mod with no install record binds its hotkeys too.
+
 ## [5.2.0] - 2026-11-01
 
 ### Added

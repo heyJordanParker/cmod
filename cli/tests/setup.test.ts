@@ -1253,6 +1253,17 @@ test('cmod hotkey moves a hotkey to another combo, an update keeps it, and a com
   expect((await readRecord(readText, join(home, '.local/share/cmod'), 'modes'))?.keys).toEqual({ 'ctrl+e': 'modes--cycle', 'alt+m': 'modes--review' })
 })
 
+test('cmod hotkey given a plugin folder binds the hotkey of a mod that has no install record, as a --plugin-dir cmod plugin', async () => {
+  const home = await temporaryHome()
+  const root = await createHotkeysMod(home, { cycle })
+
+  const bound = await cmod(home, 'hotkey', root, 'cycle', 'ctrl+e')
+
+  expect(bound).toMatchObject({ stdout: 'Bound ctrl+e to Switch mode for modes.\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(keybindings(home), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'ctrl+e': 'command:modes--cycle' } }] })
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'modes')).toBeUndefined()
+})
+
 test('an update whose new hotkey defaults to a combo the person rebound keeps the person’s combo and leaves the new hotkey unbound', async () => {
   const home = await temporaryHome()
   const root = await createHotkeysMod(home, { cycle })

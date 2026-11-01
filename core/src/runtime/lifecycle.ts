@@ -232,6 +232,12 @@ export function createLifecycle<State extends object, Declared extends Options =
     watchRecord()
   }
 
+  const notSetUp = () => {
+    const why = failure === undefined ? '' : messageOf(failure)
+    const own = `${definition.name}: `
+    return why === '' ? `${definition.name} is not set up.` : `${definition.name} is not set up: ${why.startsWith(own) ? why.slice(own.length) : why}`
+  }
+
   const installAgain = () => install()
   const updateAgain = () => claude().store.delete(cmodUpdatedKey).then(installAgain)
 
@@ -647,7 +653,7 @@ export function createLifecycle<State extends object, Declared extends Options =
           heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
           return { value: null } as EventResult<N>
         }
-        return { deny: phase === 'failed' ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
+        return { deny: phase === 'failed' ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
       }
       const call = e as Frozen<Args<'cmod.call'>>
       if (event === 'cmod.call' && call.to === definition.name && mod !== undefined) {

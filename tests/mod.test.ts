@@ -769,14 +769,14 @@ async function ownLog(tested: ReturnType<typeof testMod>): Promise<string[]> {
   return logged.map(({ message }) => message)
 }
 
-test('on its first start cmod binds its own hotkeys, meta+0 for the Sidebar and meta+m for Settings, and never again', async () => {
+test('on its first start cmod binds its own hotkeys by its plugin folder, meta+0 for the Sidebar and meta+m for Settings, and never again', async () => {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: [] } } })
   const ran: string[] = []
   tested.fakes.process.run = async (argv) => (ran.push(argv.join(' ')), { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
   await tested.start()
 
-  expect(ran).toEqual([`${cmodProgram} hotkey cmod sidebar meta+0`, `${cmodProgram} hotkey cmod settings meta+m`])
+  expect(ran).toEqual([`${cmodProgram} hotkey /test/plugins/cmod sidebar meta+0`, `${cmodProgram} hotkey /test/plugins/cmod settings meta+m`])
   expect(tested.state.global.areHotkeysBound).toBe(true)
   expect(tested.shown.commands).toEqual(expect.arrayContaining(['cmod--sidebar', 'cmod--settings', 'mods']))
 })
