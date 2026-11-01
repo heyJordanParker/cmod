@@ -9,7 +9,7 @@ A consumer runs what was packed, never what is in `core/src/`. Prove the package
 
 - The consumers are the Claude Mod Manager (cmod) plugin at the repository root and the sample mods. Each depends on `@cmodjs/core` from npm, so `bun install` gives them the published version, never this change.
 - A mod reaches `@cmodjs/core` only as real files in its own `node_modules`, because Claude Code refuses a symbolic link there.
-- The cmod program is the exception: `cli/` depends on the `core/` folder through those per-file links, so it reads `core/src/` edits with no repack.
+- The cmod program is the exception: `cli/tsconfig.json` maps `@cmodjs/core/*` to `../core/*`, so it reads `core/src/` edits with no repack.
 
 ## 1. Register a new source folder
 

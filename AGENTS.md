@@ -9,7 +9,7 @@ Claude Mod Manager (cmod) installs Claude Code mods, runs their install and unin
 - `core/` publishes as `@cmodjs/core` on npm, the library mods import.
 - `cli/` publishes as `@cmodjs/cli` on npm, which ships only the launcher in `cli/bin/cmod`. `cli/src/` is the cmod program's source, compiled into the binaries each GitHub release carries.
 - The cmod program is the one runner of a mod's steps, and the library never runs them.
-- The cmod program in `cli/` imports the `src/` modules of `@cmodjs/core` as a dev dependency. The library never imports the cmod program.
+- The cmod program in `cli/` imports the `src/` modules of `@cmodjs/core` through the `paths` entry in `cli/tsconfig.json`, which maps `@cmodjs/core/*` to `../core/*` for `tsc`, `bun test`, and `bun build`, so it reads `core/src/` edits with no repack and each core module resolves its packages from `core/node_modules`. A `file:../core` dependency did that through per-file links on Bun 1.2.21, and Bun 1.4.4 copies the folder instead, which left core's own packages, such as `pathe`, unresolvable. The library never imports the cmod program.
 - `.claude-plugin/plugin.json`, `core/package.json`, and `cli/package.json` share one version, which is the version of the cmod program too. `coreVersion` in `core/src/records.ts` holds it as well, because a published mod bundles `@cmodjs/core` and ships no `node_modules` to read it from.
 - Raising that version in all three files, with the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges, and pushing to `main` releases both npm packages and the cmod plugin. CONTRIBUTING.md has the release steps.
 - `core/docs/` ships inside `@cmodjs/core` as the mod author docs, so a change to the Public API changes `core/docs/` in the same commit.
