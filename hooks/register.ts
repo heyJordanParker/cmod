@@ -1,7 +1,7 @@
 import type { On, PluginOptions } from 'claude-code'
 import { notInstalled } from '../node_modules/@cmodjs/core/mod.js'
 import { registerMod } from '../node_modules/@cmodjs/core/register.js'
-import { cmodPlugin } from '../src/mod.js'
+import { cmodPlugin, isLoaded } from '../src/mod.js'
 import type { Cmod } from '../types/index.js'
 
 export function register(addHook: On, options: PluginOptions): void {
@@ -9,7 +9,7 @@ export function register(addHook: On, options: PluginOptions): void {
     const built = await passOn(eventInput)
     const cmod: Cmod = {
       async call(input) {
-        return { deny: notInstalled(input.to) }
+        throw new Error(isLoaded(input.to) ? `${input.to} did not answer in time, so Claude Code went on without it.` : notInstalled(input.to))
       },
     }
     return { ...built, cmod }
