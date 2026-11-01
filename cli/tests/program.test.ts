@@ -7,8 +7,8 @@ import { cmod, cmodFromSource, cmodWith, deleteTemporaryHomes, environment, star
 afterAll(deleteTemporaryHomes)
 
 const fakeServer = `#!/bin/sh
-echo "start $$" >> "$HOME/server-log"
 trap 'echo "stop $$" >> "$HOME/server-log"; exit 0' TERM
+echo "start $$" >> "$HOME/server-log"
 echo "unix:$HOME/$$.sock"
 while :; do sleep 0.1; done
 `
