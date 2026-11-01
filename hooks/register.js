@@ -347,7 +347,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.2.0";
+var coreVersion = "5.2.1";
 var oldestCmodVersion = "5.2.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -6235,6 +6235,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
   const deciding = new Map;
   const queued = new Set;
   const parents = new Map;
+  const readingParents = new Map;
   const known = new Map;
   let current = { id: "", title: "", project: "", cwd: "", model: "", startedAt: "", lastAt: "", isRunning: true };
   let told = { session: "" };
@@ -6248,31 +6249,45 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       queued.delete(key);
       const heard = (from) => [...from.get(key) ?? []].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...options.onFailure === "refuse" ? { onFailure: "refuse", scope } : {} }));
       const tracksTasks = [...listening.get(key) ?? [], ...deciding.get(key) ?? []].some(({ scope }) => scope.task !== undefined || scope.isGoal === true);
-      if (tracksTasks)
-        learnTasks(key).catch((error) => report(`tasks:${key}`, "Could not read the tasks it listens under", error));
       const subscriptions = [...heard(listening), ...tracksTasks ? [{ event: TaskStart }] : []];
       await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? "the other sessions" : `session ${key}`}`, error));
       await call(conversationMethods.watchBefore, { session: key, subscriptions: heard(deciding) }).catch((error) => report(`before:${key}`, `Changes nothing in ${key === everySession ? "the other sessions" : `session ${key}`}`, error));
     });
   };
-  const learnTasks = async (session) => {
-    if (parents.has(session))
-      return;
-    const tree = new Map;
-    parents.set(session, tree);
-    for (const task of await call(conversationMethods.tasks, { session, all: true }))
-      tree.set(task.id, task.parent);
+  const parentsOf = (session) => {
+    const known = parents.get(session);
+    if (known !== undefined)
+      return known;
+    const reading = readingParents.get(session);
+    if (reading !== undefined)
+      return reading;
+    const read = call(conversationMethods.tasks, { session, all: true }).then((tasks) => {
+      const tree = new Map(tasks.map((task) => [task.id, task.parent]));
+      parents.set(session, tree);
+      return tree;
+    }).finally(() => readingParents.delete(session));
+    readingParents.set(session, read);
+    return read;
   };
-  const isUnderIn = (session) => (task, ancestor) => {
-    const tree = parents.get(session);
+  const isUnderIn = (tree) => (task, ancestor) => {
     for (let at = task, steps = 0;at !== undefined && steps < 64; at = tree?.get(at), steps += 1)
       if (at === ancestor)
         return true;
     return false;
   };
+  const inScope = ({ scope }, session, change) => {
+    if (scope.task === undefined || scope.isAgent === true)
+      return isInScope(scope, session, change, isUnderIn(undefined));
+    const tree = parentsOf(session);
+    if (tree instanceof Map)
+      return isInScope(scope, session, change, isUnderIn(tree));
+    return tree.then((read) => isInScope(scope, session, change, isUnderIn(read)), (error) => (report(`tasks:${session}`, "Could not read the tasks it listens under", error), false));
+  };
   const remember = (session, change) => {
-    if (change.type === TaskStart)
-      parents.get(session)?.set(change.task.id, change.task.parent);
+    if (change.type !== TaskStart)
+      return;
+    parents.get(session)?.set(change.task.id, change.task.parent);
+    readingParents.get(session)?.then((tree) => tree.set(change.task.id, change.task.parent), (error) => claude.ui.log(`${name}: the tasks of ${session} stay unread until the next change: ${messageOf(error)}`, { to: "debug" }));
   };
   const add = (into, scope, event, method, args, onChange) => {
     const key = keyOf(scope);
@@ -6302,10 +6317,10 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     return refusalOf(options, takes, error);
   });
   const decidersOf = (session, event, isInProject) => [...deciding.get(session) ?? [], ...isInProject ? deciding.get(everySession) ?? [] : []].filter((entry) => entry.event === event);
-  const decides = (entry, session, change) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher));
+  const decides = async (entry, session, change) => (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)) && await inScope(entry, session, change);
   const combined = async (session, event, change, isInProject, cancel) => {
     const askers = decidersOf(session, event, isInProject).map((entry) => async (latest) => {
-      if (!decides(entry, session, latest))
+      if (!await decides(entry, session, latest))
         return;
       const payload = await payloadFor(session, latest);
       return invoke(entry.method, entry.options, cancel, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time)), beforeAnswerKeys[event]);
@@ -6653,7 +6668,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
   });
   const every = eventMethods(() => ({}), false);
   const failedBefore = (session, event, change, isInProject, error) => {
-    const asked = decidersOf(session, event, isInProject).filter((entry) => decides(entry, session, change));
+    const asked = decidersOf(session, event, isInProject).filter((entry) => isInScope(entry.scope, session, change, isUnderIn(parents.get(session))) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher)));
     return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined);
   };
   return {
@@ -6677,11 +6692,17 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       remember(session, change);
       let payload;
       for (const key of isInProject ? [session, everySession] : [session]) {
-        for (const { scope, event, method, matcher, listener, options } of listening.get(key) ?? []) {
-          if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session)))
-            continue;
-          payload ??= payloadFor(session, change);
-          payload.then((heard) => invoke(method, options, cancel, (time) => listener(heard, time))).catch((error) => report(`session:${method}`, `The ${method} listener failed`, error));
+        for (const entry of listening.get(key) ?? []) {
+          const { event, method, matcher, listener, options } = entry;
+          const deliver = () => {
+            payload ??= payloadFor(session, change);
+            payload.then((heard) => invoke(method, options, cancel, (time) => listener(heard, time))).catch((error) => report(`session:${method}`, `The ${method} listener failed`, error));
+          };
+          const isHeard = isHeardBy(event, matcher, change) && inScope(entry, session, change);
+          if (isHeard === true)
+            deliver();
+          else if (isHeard !== false)
+            isHeard.then((isIn) => isIn && deliver());
         }
       }
     },
@@ -10387,6 +10408,11 @@ function createLifecycle(definition, permissionRoutes = () => {
     toastFailure({ id: installId, message: reason, ...fix === undefined ? {} : { description: fix }, ...error === undefined ? {} : { error }, ...again, isCritical: true });
     watchRecord();
   };
+  const notSetUp = () => {
+    const why = failure === undefined ? "" : messageOf(failure);
+    const own = `${definition.name}: `;
+    return why === "" ? `${definition.name} is not set up.` : `${definition.name} is not set up: ${why.startsWith(own) ? why.slice(own.length) : why}`;
+  };
   const installAgain = () => install();
   const updateAgain = () => claude().store.delete(cmodUpdatedKey).then(installAgain);
   let retrying;
@@ -10816,7 +10842,7 @@ ${asked.method}
 ${String(asked.input.session)}`, asked);
           return { value: null };
         }
-        return { deny: phase === "failed" ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` };
+        return { deny: phase === "failed" ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` };
       }
       const call = e;
       if (event === "cmod.call" && call.to === definition.name && mod !== undefined) {
@@ -11492,7 +11518,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-K8YneS/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11957,7 +11983,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-K8YneS/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12212,7 +12238,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-K8YneS/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12266,7 +12292,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-K8YneS/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12321,7 +12347,7 @@ var cmodPlugin = defineMod({
       for (const [name, hotkey] of Object.entries(cmodPlugin.hotkeys ?? {})) {
         if (mod.hotkeys[name].combo !== undefined)
           continue;
-        const { exitCode, stderr } = await process.run(["cmod", "hotkey", mod.name, name, hotkey.default]);
+        const { exitCode, stderr } = await process.run(["cmod", "hotkey", claude.plugin.root, name, hotkey.default]);
         if (exitCode === 0)
           continue;
         isBound = false;
@@ -12652,7 +12678,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-K8YneS/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

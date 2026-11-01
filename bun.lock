@@ -1,21 +1,20 @@
 {
-  "lockfileVersion": 2,
-  "configVersion": 1,
+  "lockfileVersion": 1,
   "workspaces": {
     "": {
       "name": "cmod",
       "dependencies": {
-        "@cmodjs/cli": "^5.2.0",
-        "@cmodjs/core": "^5.2.0",
+        "@cmodjs/cli": "^5.2.1",
+        "@cmodjs/core": "^5.2.1",
       },
     },
   },
   "packages": {
     "@babel/runtime": ["@babel/runtime@7.29.10", "", {}, "sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA=="],
 
-    "@cmodjs/cli": ["@cmodjs/cli@5.2.0", "", { "bin": { "cmod": "bin/cmod" } }, "sha512-2Sb8+d1wiy5/QOO/c4ZAy/xm47QOZTd8AAYr63tD2Yr4JPWRdVnG7ZIL8RtkRcXXNeO3ukAOWeNlL6lCWUb01Q=="],
+    "@cmodjs/cli": ["@cmodjs/cli@5.2.1", "", { "bin": { "cmod": "bin/cmod" } }, "sha512-w4XdE9aZCrwWGFsgwjwHOB8M+h7vb7svM7oBKKYbcPV4xeThT+ZD3taik4JE/WU0Hth6/AZBBtOkUXtKU4Fl5Q=="],
 
-    "@cmodjs/core": ["@cmodjs/core@5.2.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-v2G06JCrG+qyeWAZ1jvd+OANbHVxV5W6rtnBvnVmJOHe2RPR3aLMunmwnCnVk0dlh9aUTnw9ubkH8EnvdYo8/Q=="],
+    "@cmodjs/core": ["@cmodjs/core@5.2.1", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-504m2hcnP94L5k1lDCFSaNw0Obk4G6VevwLij4I7hUQfPG8ZmrM/R17hZIZIKi4mpjwFmFsBr5KZH3/v588DPg=="],
 
     "@types/node": ["@types/node@26.6.6", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog=="],
 
@@ -25,6 +24,8 @@
 
     "ts-algebra": ["ts-algebra@2.0.0", "", {}, "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw=="],
 
-    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+    "undici-types": ["undici-types@8.12.3", "", {}, "sha512-EXE4ydL3S76dFb27UFjNVZHTyv/TLdATj/KUe29ptdcg6qXL48J2tZ3126E5kICj5jn781OR+XlVH1N6Mz8jbA=="],
+
+    "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }
 }
