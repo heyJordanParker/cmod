@@ -7,6 +7,7 @@ import { ifMissing, listFiles, readText } from '../src/files.js'
 
 const main = join(import.meta.dir, '..', 'src', 'main.ts')
 const homes: string[] = []
+const temporaryRoot = await realpath(tmpdir())
 
 export const cmodFromSource = `#!/bin/sh
 exec "${process.execPath}" "${main}" "$@"
@@ -81,11 +82,16 @@ esac
 `
 
 export async function deleteTemporaryHomes(): Promise<void> {
-  for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true })
+  for (const home of homes.splice(0)) await removeTemporary(home)
+}
+
+async function removeTemporary(folder: string): Promise<void> {
+  if (!folder.startsWith(join(temporaryRoot, 'cmod-'))) throw new Error(`${folder} is not a folder the cmod program's tests made in ${temporaryRoot}, so they leave it.`)
+  await rm(folder, { recursive: true, force: true })
 }
 
 export async function temporaryHome(): Promise<string> {
-  const home = await realpath(await mkdtemp(join(tmpdir(), 'cmod-test-')))
+  const home = await mkdtemp(join(temporaryRoot, 'cmod-test-'))
   homes.push(home)
   await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed) })
   return home

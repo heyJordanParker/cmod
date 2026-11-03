@@ -12,21 +12,32 @@ import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js
 setDefaultTimeout(15_000)
 afterAll(deleteTemporaryHomes)
 
-test("cmod new writes a CHANGELOG.md whose section for the first version cmod publish releases", async () => {
+const made = newMod()
+
+async function newMod(): Promise<{ result: { exitCode: number; stdout: string; stderr: string }; root: string }> {
   const home = await temporaryHome()
+  return { result: await cmod(home, 'new', 'my-mod'), root: join(home, 'my-mod') }
+}
 
-  expect(await cmod(home, 'new', 'my-mod')).toMatchObject({ exitCode: 0 })
+async function copyOfNewMod(): Promise<string> {
+  const { root } = await made
+  const copy = join(await temporaryHome(), 'my-mod')
+  await cp(root, copy, { recursive: true, verbatimSymlinks: true })
+  return copy
+}
 
-  const sections = changelogSections(await readFile(join(home, 'my-mod/CHANGELOG.md'), 'utf8'))
+test("cmod new writes a CHANGELOG.md whose section for the first version cmod publish releases", async () => {
+  const { result, root } = await made
+
+  expect(result).toMatchObject({ exitCode: 0 })
+
+  const sections = changelogSections(await readFile(join(root, 'CHANGELOG.md'), 'utf8'))
   expect(sections.map(({ version }) => version)).toEqual(['Unreleased', '0.1.0'])
   expect(sections[1]?.text).toStartWith('### Added\n- ')
 })
 
 test('new writes the repository layout with a defineMod that has one listener and one pane, and installs its packages', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-
-  const result = await cmod(home, 'new', 'my-mod')
+  const { result, root } = await made
 
   expect(result.exitCode).toBe(0)
   for (const path of ['.claude-plugin/plugin.json', '.claude/CLAUDE.md', '.gitignore', '.oxlintrc.json', 'hooks/hooks.json', 'hooks/register.ts', 'skills/my-mod/SKILL.md', 'src/mod.tsx', 'tests/mod.test.ts', 'package.json', 'tsconfig.json', 'bun.lock', 'node_modules/@cmodjs/core/package.json']) {
@@ -51,11 +62,8 @@ test('new writes the repository layout with a defineMod that has one listener an
 })
 
 test('cmod new writes mod.tsx, state.ts, a Sidebar page, a widget, a hotkey, and a component', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
+  const { root } = await made
   const read = (path: string) => readFile(join(root, path), 'utf8')
-
-  await cmod(home, 'new', 'my-mod')
 
   expect(existsSync(join(root, 'src/mod.ts'))).toBe(false)
   const mod = await read('src/mod.tsx')
@@ -84,9 +92,7 @@ test('cmod new writes mod.tsx, state.ts, a Sidebar page, a widget, a hotkey, and
 })
 
 test('a new mod runs its tests before Claude Code has loaded it', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-  await cmod(home, 'new', 'my-mod')
+  const { root } = await made
 
   const tests = Bun.spawn([process.execPath, 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
   const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
@@ -97,9 +103,7 @@ test('a new mod runs its tests before Claude Code has loaded it', async () => {
 })
 
 test('a new mod runs its tests through bun run test', async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-  await cmod(home, 'new', 'my-mod')
+  const { root } = await made
 
   const tests = Bun.spawn([process.execPath, 'run', 'test'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
   const [output, exitCode] = await Promise.all([new Response(tests.stderr).text(), tests.exited])
@@ -109,9 +113,7 @@ test('a new mod runs its tests through bun run test', async () => {
 })
 
 test("a new mod's tests pass the type check", async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-  await cmod(home, 'new', 'my-mod')
+  const root = await copyOfNewMod()
 
   const result = await typeCheck(root)
 
@@ -119,9 +121,7 @@ test("a new mod's tests pass the type check", async () => {
 })
 
 test("a new mod's type check fails on a test that misuses expect", async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-  await cmod(home, 'new', 'my-mod')
+  const root = await copyOfNewMod()
   await writeFiles(root, { 'tests/count.test.ts': "import { expect, test } from 'bun:test'\n\ntest('a count is a number', () => {\n  expect(1).toBe('one')\n})\n" })
 
   const result = await typeCheck(root)
@@ -132,9 +132,7 @@ test("a new mod's type check fails on a test that misuses expect", async () => {
 })
 
 test("a new mod's tests use Bun and node: modules, and its src cannot", async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-  await cmod(home, 'new', 'my-mod')
+  const root = await copyOfNewMod()
   await writeFiles(root, {
     'tests/program.test.ts': "import { expect, test } from 'bun:test'\nimport { existsSync } from 'node:fs'\n\ntest('the program runs', async () => {\n  const child = Bun.spawn(['true'])\n  expect(await child.exited).toBe(0)\n  expect(existsSync('/')).toBe(true)\n})\n",
     'src/clock.ts': 'export const startedAt = Bun.nanoseconds()\n',
@@ -166,9 +164,7 @@ test('cmod new with CMOD_CORE set names its value when the install fails', async
 })
 
 test("a new mod's widget test fails when the widget's render throws", async () => {
-  const home = await temporaryHome()
-  const root = join(home, 'my-mod')
-  await cmod(home, 'new', 'my-mod')
+  const root = await copyOfNewMod()
   const widget = join(root, 'src/widgets/prompts.tsx')
   await Bun.write(widget, (await readFile(widget, 'utf8')).replace('render: (mod) =>', "render: (mod) => mod.state.session.prompts > 0 ? (() => { throw new Error('the widget broke') })() :"))
 
@@ -181,9 +177,7 @@ test("a new mod's widget test fails when the widget's render throws", async () =
 })
 
 test("the README's 30-second mod is the template", async () => {
-  const home = await temporaryHome()
-  const source = join(home, 'my-mod/src')
-  await cmod(home, 'new', 'my-mod')
+  const source = join((await made).root, 'src')
   const readme = await readFile(join(import.meta.dir, '..', '..', 'README.md'), 'utf8')
   const start = readme.indexOf('## Make a mod in 30 seconds')
   const section = readme.slice(start, readme.indexOf('\n## ', start))
