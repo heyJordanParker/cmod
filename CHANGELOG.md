@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.4.2] - 2026-11-03
+
+### Fixed
+- An idle session reloads by itself after an edit to a linked mod, or any other plugin change, when its last turn was stopped with Esc. It waited for that turn to end until the next prompt, and showed only Claude Code's `Plugins changed` notice.
+- A `mod.every` run that never ends, such as one awaiting a request that never answers, writes a warning to the Log in Settings once it has gone on past three ticks and a minute. The timer skipped every tick after it with no word.
+
 ## [5.4.1] - 2026-11-03
 
 ### Fixed

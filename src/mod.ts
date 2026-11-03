@@ -179,14 +179,15 @@ export const cmodPlugin = defineMod({
       quietWait = mod.after(ms, reloadWhenIdle)
     }
     let reloading = Promise.resolve()
+    let isWorking = false
     const reloadWhenIdle = () => {
       reloading = reloading
         .then(async () => {
-          if (!isReloadDue || (await sessions.current.turn()) !== undefined) return
+          if (!isReloadDue || isWorking) return
           isReloadDue = false
           await reload()
         })
-        .catch((error: unknown) => report({ id: reloadToast, message: 'Could not tell whether a turn runs, so the plugins did not reload', error, retry: reload, isCritical: true }))
+        .catch((error: unknown) => report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload, isCritical: true }))
     }
     const reloadIfChanged = async () => {
       const change = await pluginsState()
@@ -211,8 +212,19 @@ export const cmodPlugin = defineMod({
         report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload, isCritical: true })
       }
     }
-    sessions.current.onTurnEnd(() => {
+    const stopWorking = () => {
+      isWorking = false
       if (isReloadDue && quietWait?.isRunning !== true) reloadAfter(reloadDelayMs)
+    }
+    sessions.current.onTurnEnd(stopWorking)
+    router.add('turn.start', async (e, next) => {
+      if ((e as typeof e & { readonly agentId?: string }).agentId === undefined) isWorking = true
+      return next(e)
+    })
+    router.add('turn.complete', async (e, next) => {
+      const completed = await next(e)
+      if (e.agentId === undefined) stopWorking()
+      return completed
     })
     router.add('session.append', async (e, next) => {
       if (e.door !== 'command' || e.message.isMeta === true) return next(e)

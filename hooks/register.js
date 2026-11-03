@@ -295,7 +295,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.4.1";
+var coreVersion = "5.4.2";
 var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -10351,6 +10351,8 @@ var cmodSlowCheckMs = 1e4;
 var hookMs = 1e4;
 var startHoldMs = hookMs - 1000;
 var dependencyCallMs = 30000;
+var stallTicks = 3;
+var stallMs = 60000;
 var shellTools = ["Bash", "PowerShell"];
 async function readPlugin(claude) {
   const { name, root } = claude.plugin;
@@ -11108,13 +11110,26 @@ async function createMod(definition, runtime) {
   const timer = (ms, subject, repeats, listener) => {
     let isFiring = false;
     let isRunning = true;
+    let firedAt = 0;
+    let isStallTold = false;
+    const tellStall = async () => {
+      const ranMs = await claude.clock.now() - firedAt;
+      if (isStallTold || ranMs < Math.max(checked * stallTicks, stallMs))
+        return;
+      isStallTold = true;
+      claude.ui.warn(`${subject}:${ms}:stalled`, `${definition.name}: one run of its ${subject} ${ms} ms timer has gone on for ${Math.round(ranMs / 1000)} s, so the timer skipped every tick since. Give what the listener awaits a deadline.`);
+    };
     const fire = () => {
       if (!repeats)
         isRunning = false;
-      if (isFiring)
+      if (isFiring) {
+        tellStall();
         return;
+      }
       isFiring = true;
-      Promise.resolve().then(() => {
+      isStallTold = false;
+      Promise.resolve().then(async () => {
+        firedAt = await claude.clock.now();
         bind(imports);
         return listener();
       }).catch((error) => report({ id: `${subject}:${ms}`, message: `The ${subject} ${ms} ms timer failed`, error })).finally(() => {
@@ -11532,6 +11547,7 @@ function registerMod(addHook, definition, options) {
   addHook("agent.spawn", routeToMod).catch(routeFailure);
   addHook("prompt.attachment", routeToMod).catch(routeFailure);
   addHook("turn.start", routeToMod).catch(routeFailure);
+  addHook("turn.complete", routeToMod).catch(routeFailure);
 }
 
 // node_modules/@cmodjs/core/jobs/context.js
@@ -11615,7 +11631,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hJENe6/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12116,7 +12132,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hJENe6/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12371,7 +12387,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hJENe6/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12425,7 +12441,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hJENe6/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12556,13 +12572,14 @@ var cmodPlugin = defineMod({
       quietWait = mod.after(ms, reloadWhenIdle);
     };
     let reloading = Promise.resolve();
+    let isWorking = false;
     const reloadWhenIdle = () => {
       reloading = reloading.then(async () => {
-        if (!isReloadDue || await sessions.current.turn() !== undefined)
+        if (!isReloadDue || isWorking)
           return;
         isReloadDue = false;
         await reload();
-      }).catch((error) => report({ id: reloadToast, message: "Could not tell whether a turn runs, so the plugins did not reload", error, retry: reload, isCritical: true }));
+      }).catch((error) => report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true }));
     };
     const reloadIfChanged = async () => {
       const change = await pluginsState();
@@ -12589,9 +12606,22 @@ var cmodPlugin = defineMod({
         report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true });
       }
     };
-    sessions.current.onTurnEnd(() => {
+    const stopWorking = () => {
+      isWorking = false;
       if (isReloadDue && quietWait?.isRunning !== true)
         reloadAfter(reloadDelayMs);
+    };
+    sessions.current.onTurnEnd(stopWorking);
+    router.add("turn.start", async (e, next) => {
+      if (e.agentId === undefined)
+        isWorking = true;
+      return next(e);
+    });
+    router.add("turn.complete", async (e, next) => {
+      const completed = await next(e);
+      if (e.agentId === undefined)
+        stopWorking();
+      return completed;
     });
     router.add("session.append", async (e, next) => {
       if (e.door !== "command" || e.message.isMeta === true)
@@ -12818,7 +12848,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-hJENe6/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
