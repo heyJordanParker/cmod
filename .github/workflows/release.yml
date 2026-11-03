@@ -89,10 +89,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f bun.lock
-          until npx -y bun@1.2.21 install --no-cache && grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
-            rm -f bun.lock
+          until npm install --package-lock-only --ignore-scripts --before=2099-01-01 && npx -y bun@1.2.21 install --no-cache && grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
+            rm -f bun.lock package-lock.json
             sleep 5
           done
+          rm package-lock.json
           bun test
           bun x tsc --noEmit
           OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
