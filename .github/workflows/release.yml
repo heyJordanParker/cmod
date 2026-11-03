@@ -15,9 +15,9 @@ env:
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
 
 jobs:
-  test:
+  version:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
       core: ${{ steps.version.outputs.core }}
@@ -38,6 +38,12 @@ jobs:
           if npm view "@cmodjs/core@$version" version > /dev/null 2>&1; then echo "core=done" >> "$GITHUB_OUTPUT"; fi
           if npm view "@cmodjs/cli@$version" version > /dev/null 2>&1; then echo "cli=done" >> "$GITHUB_OUTPUT"; fi
           if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then echo "release=done" >> "$GITHUB_OUTPUT"; fi
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -79,7 +85,7 @@ jobs:
           (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")
           rm -rf node_modules/@cmodjs/core
           mkdir node_modules/@cmodjs/core
-          tar -xzf "$RUNNER_TEMP/cmodjs-core-${{ steps.version.outputs.version }}.tgz" -C node_modules/@cmodjs/core --strip-components=1
+          tar -xzf "$RUNNER_TEMP"/cmodjs-core-*.tgz -C node_modules/@cmodjs/core --strip-components=1
           bun test
           bun x tsc --noEmit
           OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
@@ -103,8 +109,8 @@ jobs:
           printf '%s\n' tests/install.test.ts tests/launcher.test.ts tests/secret.test.ts tests/try.test.ts | xargs -P 0 -n 1 bun test --timeout 30000
 
   release:
-    needs: [test, macos]
-    if: needs.test.outputs.core != 'done' || needs.test.outputs.cli != 'done' || needs.test.outputs.release != 'done'
+    needs: [version, test, macos]
+    if: needs.version.outputs.core != 'done' || needs.version.outputs.cli != 'done' || needs.version.outputs.release != 'done'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -148,20 +154,20 @@ jobs:
           (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")
           rm -rf node_modules/@cmodjs/core
           mkdir node_modules/@cmodjs/core
-          tar -xzf "$RUNNER_TEMP/cmodjs-core-${{ needs.test.outputs.version }}.tgz" -C node_modules/@cmodjs/core --strip-components=1
+          tar -xzf "$RUNNER_TEMP/cmodjs-core-${{ needs.version.outputs.version }}.tgz" -C node_modules/@cmodjs/core --strip-components=1
 
       - name: Publish @cmodjs/core to npm
-        if: needs.test.outputs.core != 'done' && steps.main.outputs.changed != 'true'
+        if: needs.version.outputs.core != 'done' && steps.main.outputs.changed != 'true'
         working-directory: core
         run: npm publish --provenance
 
       - name: Publish @cmodjs/cli to npm
-        if: needs.test.outputs.cli != 'done' && steps.main.outputs.changed != 'true'
+        if: needs.version.outputs.cli != 'done' && steps.main.outputs.changed != 'true'
         working-directory: cli
         run: npm publish --provenance
 
       - name: Release the cmod plugin and the cmod program on GitHub
-        if: needs.test.outputs.release != 'done' && steps.main.outputs.changed != 'true'
+        if: needs.version.outputs.release != 'done' && steps.main.outputs.changed != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
