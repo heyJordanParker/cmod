@@ -23,7 +23,7 @@ import type { CommandReply } from './jobs/slash-command.js'
 import type { ModDefinition } from './mod.js'
 import type { Options, OptionValues } from './options.js'
 import { hotkeyCommand, readSteps, storeFolder, type Steps } from './records.js'
-import type { Claude } from './runtime/claude.js'
+import { heldInput, type Claude } from './runtime/claude.js'
 import { answerCall, cmodPluginName, loadedMethod, notInstalled } from './runtime/dependencies.js'
 import { closingContext, foldBefore, installBefore, withAnswer, type Answers, type Decide } from './runtime/before.js'
 import { permissionRoutes } from './runtime/permission-check.js'
@@ -282,6 +282,12 @@ export function testMod<State extends object, Declared extends Options = Options
     if (added.deny === undefined) conversations.add({ type: Note, text: args.message.content.map((block) => (typeof block['text'] === 'string' ? block['text'] : '')).join(''), from: { type: Mod, name } })
     return added
   }
+  let isInputHeld = false
+  const runUnlessHeld = fake.claude.command.run
+  fake.claude.command.run = async (args) => {
+    if (isInputHeld) throw new Error(`${name}: $.command.run: ${heldInput}`)
+    return runUnlessHeld(args)
+  }
   const submitRow = fake.claude.prompt.submit
   fake.claude.prompt.submit = async (args) => {
     const submitted = await submitRow(args)
@@ -375,6 +381,8 @@ export function testMod<State extends object, Declared extends Options = Options
 
   const route = async <N extends RoutedEvent>(event: N, input: unknown, below: unknown, signal?: AbortSignal): Promise<EventResult<N>> => {
     await start()
+    if ((event === 'turn.complete' && (input as Args<'turn.complete'>).isAborted) || (event === 'classic.Stop' && signal?.aborted === true)) isInputHeld = true
+    if ((event === 'prompt.submit' || event === 'command.run' || event === 'ui.press') && (input as { readonly origin?: { readonly kind?: string } }).origin?.kind !== 'plugin') isInputHeld = false
     if (event === 'ui.render') {
       const { component, requestId } = input as Args<'ui.render'>
       if (component === 'Pane') fake.placePane(requestId)
@@ -408,6 +416,7 @@ export function testMod<State extends object, Declared extends Options = Options
 
   const runCommand = async (command: string, args: string, builtIn: CommandRunResult = {}): Promise<CommandRunResult> => {
     await start()
+    isInputHeld = false
     const reached: Set<string> = new Set()
     const ownRun = async (): Promise<CommandRunResult> => (reached.add(command), builtIn)
     const answer = await cmodPlugin.dispatch('command.run', { command, args, origin: { kind: 'composer' }, presentation }, (passed) => lifecycle.route('command.run', passed, (e) => cmodBeneath.dispatch('command.run', e, ownRun)))
@@ -486,6 +495,7 @@ export function testMod<State extends object, Declared extends Options = Options
         const { id, props } = await drawnElement(link === undefined ? 'Button' : 'Markdown', key)
         if (link !== undefined && props['onLinkPress'] === undefined) throw new Error(`The Markdown "${key}" in the ${kind} "${id}" of ${name} has no onLinkPress, so Claude Code opens its links itself.`)
         const pressed: UiPressArgument = { ...eventIn(id, String(props['key'])), ...(link === undefined ? {} : { link: { href: link } }) }
+        isInputHeld = false
         const run = async (e: Frozen<UiPressArgument>) => {
           if (e.link === undefined) await (props['onPress'] as (e: Frozen<UiPressArgument>) => unknown)(e)
           else await (props['onLinkPress'] as (link: PressedLink, e: Frozen<UiPressArgument>) => unknown)(e.link, e)

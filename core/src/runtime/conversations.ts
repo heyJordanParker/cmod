@@ -14,7 +14,7 @@ import { ifMissing } from '../utils/paths.js'
 import { formatExit, messageOf } from '../utils/text.js'
 import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type Place } from './before.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName } from './dependencies.js'
+import { cmodPluginName, isNotInstalled } from './dependencies.js'
 import { readLines, runCmod, spawnCmod } from './programs.js'
 import type { RoutedHook, Router } from './router.js'
 import { PassedTimeout } from './deadline.js'
@@ -68,6 +68,8 @@ export type Conversations = {
 const keptClosings = 200
 
 const keptMessages = 200
+
+const noWatches = '[]'
 
 export function serveConversations({
   claude,
@@ -170,7 +172,7 @@ export function serveConversations({
         if (!subscriptions.some(({ event, matcher }) => isHeardBy(event, matcher, change))) continue
         void claude.cmod.call({ to: mod, method: conversationMethods.changed, input: { session: to, change, isInProject } }).then(
           () => clear(`changed:${mod}`),
-          (error: unknown) => report(`changed:${mod}`, `Could not tell ${mod} about session ${to}`, error),
+          (error: unknown) => (isNotInstalled(mod, error) ? forgetListeners(mod) : report(`changed:${mod}`, `Could not tell ${mod} about session ${to}`, error)),
         )
       }
     }
@@ -287,6 +289,14 @@ export function serveConversations({
     subscribed.set(caller, lists)
   }
 
+  const forgetListeners = (mod: string) => {
+    if (!heard.delete(mod)) return
+    subscribed.delete(mod)
+    clear(`changed:${mod}`)
+    follow()
+    void saveListeners().catch((error: unknown) => report('listeners', `Kept the listeners of ${mod}, which left this session`, error))
+  }
+
   const onListenerFiles = <Value>(work: () => Promise<Value>) => {
     const next = listenerFiles.then(work)
     listenerFiles = next.catch((error: unknown) => claude.ui.warn('listeners:files', `cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`))
@@ -295,7 +305,7 @@ export function serveConversations({
 
   const clearListeners = (at: string) => onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, '{}'))
 
-  const clearWatches = (at: string) => onListenerFiles(() => claude.fs.write(`${watches}/${at}.json`, '[]'))
+  const clearWatches = (at: string) => onListenerFiles(() => claude.fs.write(`${watches}/${at}.json`, noWatches))
 
   const saveListeners = (isEnding = false) => {
     const at = session
@@ -314,12 +324,12 @@ export function serveConversations({
 
   const readWatchers = () =>
     onListenerFiles(async () => {
-      const files = await claude.fs.list(watches).catch(ifMissing([]))
+      const files = (await claude.fs.list(watches).catch(ifMissing([]))).filter((file) => file.name.endsWith('.json') && file.size !== noWatches.length)
+      const texts = await Promise.all(files.map((file) => claude.fs.read(`${watches}/${file.name}`).catch(ifMissing(noWatches))))
       const found: Watcher[] = []
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
         const from = file.name.replace(/\.json$/, '')
-        if (!file.name.endsWith('.json')) continue
-        const text = await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing('[]'))
+        const text = texts[index] ?? noWatches
         let list: readonly Watch[]
         try {
           list = JSON.parse(text) as readonly Watch[]
@@ -354,7 +364,19 @@ export function serveConversations({
     return [...new Map(all.filter((watcher) => watcher.events.includes(event)).map((watcher) => [`${watcher.from}\n${watcher.mod}`, watcher])).values()]
   }
 
-  const askHere = async (mod: string, event: BeforeEvent, change: SessionChange, from = session, isInProject = true) => claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } })
+  const askHere = async (mod: string, event: BeforeEvent, change: SessionChange, from = session, isInProject = true) =>
+    claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } }).catch((error: unknown) => {
+      if (!isNotInstalled(mod, error)) throw error
+      forgetWatches(mod)
+      return undefined
+    })
+
+  const forgetWatches = (mod: string) => {
+    const left = [...ownWatches].filter(([, watch]) => watch.mod === mod)
+    if (left.length === 0) return
+    for (const [key] of left) ownWatches.delete(key)
+    void publishWatches().catch((error: unknown) => report('before', `Kept the before listeners of ${mod}, which left this session`, error))
+  }
 
   const isUnderHere = (task: string, ancestor: string) => {
     for (let at: string | undefined = task, steps = 0; at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1) if (at === ancestor) return true
@@ -370,6 +392,10 @@ export function serveConversations({
       if (leftMs <= 0) throw new PassedTimeout(`the ${awayFoldMs / 1000} s cmod waits on other sessions ran out before session ${watcher.from} was asked`)
       return await ask(watcher.from, { kind: 'before', mod: watcher.mod, event, change, project: project() }, leftMs)
     } catch (error) {
+      if (isNotInstalled(watcher.mod, error)) {
+        watchers = watchers.filter((each) => each.from !== watcher.from || each.mod !== watcher.mod)
+        return undefined
+      }
       if (await isRunning(watcher.from)) {
         if (error instanceof PassedTimeout && refuses(watcher, event, change)) return { refuse: `${watcher.mod}: ${error.message}` }
         throw error

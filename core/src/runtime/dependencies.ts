@@ -51,3 +51,7 @@ export function answeringOwnCalls(claude: Claude, router: Router): Claude {
 export function notInstalled(name: string): string {
   return `${name} is not installed. ${installFix}`
 }
+
+export function isNotInstalled(name: string, error: unknown): boolean {
+  return messageOf(error).endsWith(notInstalled(name))
+}

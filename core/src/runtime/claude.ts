@@ -45,6 +45,8 @@ import type {
 } from 'claude-code'
 import type { Device } from '../session/context/turn/device.js'
 
+export const heldInput = 'the session was stopped and nobody has sent input since'
+
 export type Claude = {
   readonly plugin: { readonly name: string; readonly root: string }
   readonly ui: {

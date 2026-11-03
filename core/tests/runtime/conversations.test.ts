@@ -485,6 +485,22 @@ test("a new session's first prompt waits for the project's guards to load, and a
   expect(await submitted).toEqual({ drop: 'Guarded' })
 })
 
+test("a session start reads only the before files that hold a listener, because every session that ended leaves an empty one behind", async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  const ended = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`/store/data/cmod/before/ended-${index}.json`, '[]']))
+  const disk = fakeFiles({ ...ended, '/store/data/cmod/before/guarding.json': JSON.stringify([{ mod: 'guard', target: '*', project: '/work/app', events: ['prompt'] }]) })
+  const read: string[] = []
+  fake.fakes.fs.read = async (path) => (read.push(path), disk.read(path))
+  fake.fakes.fs.list = disk.list
+  fake.fakes.process.spawn = () => printed('[]')
+  serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'new-session', source: 'startup' } as never, async () => ({}))
+  await fake.settle()
+
+  expect(read.filter((path) => path.includes('/before/'))).toEqual(['/store/data/cmod/before/guarding.json'])
+})
+
 test("a guard of a session that ended without saying so lets the prompt in quietly, and is cleared for every later session", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
@@ -764,18 +780,22 @@ test("a compaction a mod's summary answers, where no model runs, still moves the
   expect(contexts.map((each) => each.number)).toEqual([2])
 })
 
-test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and one asked of a mod that is not installed still says why", async () => {
+test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and a mod that left the session is asked once, quietly, and its before listener goes with it", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
   const reported: string[] = []
   const pressedEsc = new AbortController()
   let isInstalled = true
-  fake.fakes.fs = fakeFiles({})
+  const asked: string[] = []
+  const disk = fakeFiles({})
+  fake.fakes.fs = disk
   fake.fakes.process.spawn = () => printed('[]')
   fake.fakes.cmod.call = async ({ to, method }) => {
     if (method !== conversationMethods.before) return null
-    if (isInstalled) await new Promise((resolve) => pressedEsc.signal.addEventListener('abort', () => resolve(undefined)))
-    throw new Error(notInstalled(to))
+    asked.push(to)
+    if (!isInstalled) throw new Error(notInstalled(to))
+    await new Promise((resolve) => pressedEsc.signal.addEventListener('abort', () => resolve(undefined)))
+    throw new Error(`${to} did not answer in time, so Claude Code went on without it.`)
   }
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message, error) => void reported.push(`${message}: ${messageOf(error)}`), clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
@@ -791,9 +811,44 @@ test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and o
   expect(reported).toEqual([])
 
   isInstalled = false
+  expect(await router.dispatch('prompt.attachment', instructionFile, readAsIs, new AbortController().signal)).toEqual({ text: 'Contents of /work/src/CLAUDE.md:\n\nUse spaces.' })
   await router.dispatch('prompt.attachment', instructionFile, readAsIs, new AbortController().signal)
+  await fake.settle()
 
-  expect(reported).toEqual(["Passed the instructionFile on without a mod's answer: tracer is not installed. Install it in Plugins."])
+  expect(reported).toEqual([])
+  expect(asked).toEqual(['tracer', 'tracer'])
+  expect(JSON.parse(await disk.read('/store/data/cmod/before/mine.json'))).toEqual([])
+})
+
+test('a mod that left the session is told of a change once, quietly, and its listeners go with it', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  const disk = fakeFiles({})
+  fake.fakes.fs = disk
+  fake.fakes.process.spawn = () => printed('[]')
+  const told: string[] = []
+  fake.fakes.cmod.call = async ({ to }) => {
+    told.push(to)
+    if (to === 'history') throw new Error(notInstalled(to))
+    return null
+  }
+  const reported: string[] = []
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (id) => void reported.push(id), clear: () => {} })
+  await router.dispatch('classic.SessionStart', { session_id: 'here', source: 'startup' } as never, async () => ({}))
+  for (const caller of ['history', 'notes']) await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller })
+  const prompt = (uuid: string, text: string) => {
+    const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
+    return router.dispatch('session.append', appended as never, async () => appended as never)
+  }
+
+  await prompt('p1', 'First')
+  await fake.settle()
+  await prompt('p2', 'Second')
+  await fake.settle()
+
+  expect(reported).toEqual([])
+  expect(told).toEqual(['history', 'notes', 'notes'])
+  expect(Object.keys(JSON.parse(await disk.read('/store/data/cmod/listeners/here.json')) as object)).toEqual(['notes'])
 })
 
 test("a running task of the cmod plugin's session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {

@@ -3,7 +3,7 @@ import { isObject } from '../records.js'
 import { Text } from '../ui/elements.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName } from './dependencies.js'
+import { cmodPluginName, isNotInstalled } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
 import { partMethods, stalePress, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
@@ -90,7 +90,9 @@ export function servePages({
         .call({ to: mod, method: partMethods.list, input: null })
         .then(
           (parts) => void declared.set(mod, pagesOf(parts)),
-          (error: unknown) => claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`),
+          (error: unknown) => {
+            if (!isNotInstalled(mod, error)) claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`)
+          },
         )
         .finally(() => asking.delete(mod))
     asking.set(mod, pending)

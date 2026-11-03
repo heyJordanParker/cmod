@@ -124,6 +124,7 @@ fire(event: 'tool.check' | 'prompt.context' | 'cmod.call' | 'ui.render' | 'ui.sc
 - `fire('cmod.call', { to, method, input })` calls a method `setup` returned, as another mod's `mod.dependencies` does, and returns `{ value }` with what the method returned, or `{ deny }` with the reason it failed. `tested.api.<method>(input)` does the same and resolves the value, or rejects with the reason.
 - `ui.render`, `ui.scroll`, and `ui.close` are what `lines` and a pane's own events raise. `shown.pane.lines()` and `lines` are the way to draw.
 - `fire('ui.close', { id, origin: { kind: 'person' } })` closes the pane as Escape or its ✕ does, and draws it once more before it closes, as Claude Code does. A pane's `ui.render` shows a pane Claude Code held back, as Claude Code does when the terminal widens.
+- `claudeCodeOf(tested).fire('turn.complete', { …, isAborted: true })`, and a Stop fired with an aborted signal, are the person's Esc. From then on `claude.command.run` refuses with `the session was stopped and nobody has sent input since` until the person's next prompt, command, or press, as Claude Code holds every plugin's input after an Esc.
 
 ```ts
 expect(await tested.fire('cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } })).toEqual({ value: { restored: true } })

@@ -1747,10 +1747,11 @@ test('a plugins-changed mark during a running turn runs /reload-plugins only aft
   expect(reloads).toEqual(['reload-plugins'])
 })
 
-test('a plugins-changed mark during a turn the person stops with Esc, which raises no Stop, runs /reload-plugins once the turn completes', async () => {
+test('a plugins-changed mark during a turn the person stops with Esc reloads after the next turn, because Claude Code holds plugin input until the person sends some', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  tested.fakes.session.messages = async () => []
   const { tick } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
@@ -1759,11 +1760,43 @@ test('a plugins-changed mark during a turn the person stops with Esc, which rais
   await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
   await tick()
-  expect(reloads).toEqual([])
-
   await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
   await tick()
+  expect(reloads).toEqual([])
+
+  await prompt(tested, 'Go on')
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await tick()
   expect(reloads).toEqual(['reload-plugins'])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
+})
+
+test('a reload refused because the person pressed Esc while it waited to run shows no toast, logs nothing, and reloads at the next idle point', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  tested.fakes.session.messages = async () => []
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+  await prompt(tested, 'Rename the parser')
+  await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  await tick()
+  expect(reloads).toEqual([])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
+
+  await prompt(tested, 'Go on')
+  await tick()
+  expect(reloads).toEqual([])
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await tick()
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
 
 const installedJson = (versions: Readonly<Record<string, string>>) => JSON.stringify({ version: 2, plugins: Object.fromEntries(Object.entries(versions).map(([id, version]) => [id, [{ scope: 'user', installPath: `/test/home/.claude/plugins/cache/${id}`, version }]])) })
@@ -2059,7 +2092,7 @@ test("a change cmod marks while cmod's reload runs reloads the session again aft
   expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
 })
 
-test('a reload the session refuses shows why, and Retry reloads', async () => {
+test('a reload the session refuses for a reason the person did not cause shows why, and Retry reloads', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const changed = `${store}/plugins-changed`
   const reloads: string[] = []
@@ -2068,7 +2101,7 @@ test('a reload the session refuses shows why, and Retry reloads', async () => {
     reloads.push(command)
     if (refusals > 0) {
       refusals -= 1
-      throw new Error('the session was stopped and nobody has sent input since')
+      throw new Error('no command /reload-plugins')
     }
     return {}
   }
@@ -2080,7 +2113,7 @@ test('a reload the session refuses shows why, and Retry reloads', async () => {
   await tick()
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'Could not reload the plugins', description: 'the session was stopped and nobody has sent input since' }])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'Could not reload the plugins', description: 'no command /reload-plugins' }])
 
   const band = await tested.fire('ui.render', { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } } as never, { type: 'Text', children: ['>'] } as never)
   const retry = findElement(band, 'Button', 'Retry')

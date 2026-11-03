@@ -514,18 +514,21 @@ test('a draw that was still running when its mod changed is dropped, and the nex
   expect(answers).toHaveLength(1)
 })
 
-test('a mod that stops answering after a reload loses its widgets, and one that answers keeps them', async () => {
+test('a mod a reload took out of the session loses its widgets quietly, one that answers keeps them, and one that fails to answer says so', async () => {
   const { fake, widgets, tell } = servedLayout(layout({}))
   tell('git', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
   tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
+  tell('todo', [{ id: 'open', title: 'Open', areas: [BelowPrompt] }])
   fake.fakes.cmod.call = async ({ to }) => {
     if (to === 'notes') throw new Error('notes is not installed. Install it in Plugins.')
+    if (to === 'todo') throw new Error('todo: the list is not JSON')
     return { widgets: [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }], pages: [] }
   }
 
   await widgets.recheck()
 
   expect(widgets.widgets().filter((widget) => widget.mod !== 'claude').map((widget) => widget.key)).toEqual(['git/branch'])
+  expect(fake.shown.debug).toEqual(['cmod: todo did not list its widgets: todo: the list is not JSON'])
 })
 
 test('the dashboard stops asking for a redraw when a widget placed there has no running mod', async () => {
