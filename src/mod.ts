@@ -210,8 +210,8 @@ export const cmodPlugin = defineMod({
         await claude.store.set(await sessionKey('versionsBeforeReload'), loaded)
         await claude.store.set(await sessionKey('hidingReload'), true)
         await claude.command.run({ command: 'reload-plugins' })
+        loading = announceUpdates(true)
         await widgets.recheck()
-        void announceUpdates(true)
       } catch (error) {
         await claude.store.delete(await sessionKey('hidingReload'))
         await takeVersionsBeforeReload()

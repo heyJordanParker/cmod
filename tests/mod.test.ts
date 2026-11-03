@@ -1046,6 +1046,19 @@ test('cmod:isLoaded answers true for a mod this Claude Code loaded or that told 
   expect(await isLoaded(3)).toEqual({ deny: "cmod: cmod:isLoaded takes the name of a mod, as { name: 'anyhost' }." })
 })
 
+test('a reload that takes out a mod with widgets asks it for no widgets, so nothing reaches the Log', async () => {
+  const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [{ id: 'count', title: 'Count', areas: ['belowPrompt'] }], pages: [] } }, caller: 'notes' } as never)
+  tested.fakes.cmod.call = await unansweredCall()
+
+  await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
+  await tick()
+  await tick()
+
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(tested.shown.debug.filter((line) => line.includes('did not list'))).toEqual([])
+})
+
 test('cmod.call rejects a call to a mod removed after it told cmod its parts with the install command, once the reload took it out', async () => {
   const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.0.0' })
   await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
