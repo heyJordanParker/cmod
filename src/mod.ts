@@ -94,6 +94,8 @@ export const cmodPlugin = defineMod({
     const { claude, router, report, widgets, pages } = engineOf(mod)
     if (widgets === undefined) throw new Error('cmod draws no widgets, because the cmod plugin started without them.')
     toldParts = pages
+    let finishRead = () => {}
+    loading = new Promise<void>((resolve) => (finishRead = resolve))
     loaded = {}
     unloaded.clear()
 
@@ -174,8 +176,10 @@ export const cmodPlugin = defineMod({
       if (updates.length > shownUpdates) claude.ui.toast(`${updates.length} plugins updated`)
       else for (const update of updates) claude.ui.toast(update)
     }
-    const announceUpdates = (isAfterOwnReload: boolean) => showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
-    loading = announceUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
+    const reportUpdates = (error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error })
+    const announceUpdates = (isAfterOwnReload: boolean) => showUpdates(isAfterOwnReload).catch(reportUpdates)
+    const announceStartUpdates = async () => showUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
+    void announceStartUpdates().catch(reportUpdates).finally(finishRead)
 
     let seenChange = await pluginsState()
     let isReloadDue = false
@@ -210,8 +214,8 @@ export const cmodPlugin = defineMod({
         await claude.store.set(await sessionKey('versionsBeforeReload'), loaded)
         await claude.store.set(await sessionKey('hidingReload'), true)
         await claude.command.run({ command: 'reload-plugins' })
+        loading = announceUpdates(true)
         await widgets.recheck()
-        void announceUpdates(true)
       } catch (error) {
         await claude.store.delete(await sessionKey('hidingReload'))
         await takeVersionsBeforeReload()

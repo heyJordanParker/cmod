@@ -329,7 +329,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.5.2";
+var coreVersion = "5.5.4";
 var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -6975,6 +6975,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   let published = new Set;
   let publishing = Promise.resolve();
   let session = "";
+  const left = new Set;
   let asks = 0;
   let conversation = createConversation(emptyConversation(""));
   let starting = Promise.resolve();
@@ -7152,8 +7153,11 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     const targets = new Set([...published, ...list.map((watch) => watch.target)]);
     published = new Set(list.map((watch) => watch.target));
     const running = targets.has(everySession) ? (await json(["history", "sessions", "--running"])).map((each) => each.id) : [];
-    const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session));
-    await Promise.all([...told].map((id) => post(id, { kind: "watch" }).catch((error) => claude.ui.warn("before:tell", `cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`))));
+    const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session && !left.has(id)));
+    await Promise.all([...told].map((id) => post(id, { kind: "watch" }).catch((error) => {
+      if (messageOf(error) !== ended(id).message)
+        claude.ui.warn("before:tell", `cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`);
+    })));
   };
   const hear = (caller, id, list) => {
     const sessions = heard.get(caller) ?? new Map;
@@ -7202,6 +7206,8 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     const found = [];
     for (const [index, file] of files.entries()) {
       const from = file.name.replace(/\.json$/, "");
+      if (left.has(from))
+        continue;
       const text = texts[index] ?? noWatches;
       let list;
       try {
@@ -7325,6 +7331,9 @@ ${watcher.mod}`, watcher])).values()];
     if (id === session)
       return;
     const previous = session;
+    if (previous !== "")
+      left.add(previous);
+    left.delete(id);
     session = id;
     live = [];
     liveIds.clear();
@@ -11700,7 +11709,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12178,7 +12187,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12433,7 +12442,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12487,7 +12496,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12529,6 +12538,8 @@ var cmodPlugin = defineMod({
     if (widgets === undefined)
       throw new Error("cmod draws no widgets, because the cmod plugin started without them.");
     toldParts = pages;
+    let finishRead = () => {};
+    loading = new Promise((resolve) => finishRead = resolve);
     loaded = {};
     unloaded.clear();
     addClaudeTools(mod);
@@ -12612,8 +12623,10 @@ var cmodPlugin = defineMod({
         for (const update of updates)
           claude.ui.toast(update);
     };
-    const announceUpdates = (isAfterOwnReload) => showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
-    loading = announceUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
+    const reportUpdates = (error) => report({ id: "updates", message: "Could not show which plugins updated", error });
+    const announceUpdates = (isAfterOwnReload) => showUpdates(isAfterOwnReload).catch(reportUpdates);
+    const announceStartUpdates = async () => showUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
+    announceStartUpdates().catch(reportUpdates).finally(finishRead);
     let seenChange = await pluginsState();
     let isReloadDue = false;
     let quietWait;
@@ -12648,8 +12661,8 @@ var cmodPlugin = defineMod({
         await claude.store.set(await sessionKey("versionsBeforeReload"), loaded);
         await claude.store.set(await sessionKey("hidingReload"), true);
         await claude.command.run({ command: "reload-plugins" });
+        loading = announceUpdates(true);
         await widgets.recheck();
-        announceUpdates(true);
       } catch (error) {
         await claude.store.delete(await sessionKey("hidingReload"));
         await takeVersionsBeforeReload();
@@ -12901,7 +12914,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

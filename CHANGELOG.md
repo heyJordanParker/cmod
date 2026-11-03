@@ -4,6 +4,16 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.5.4] - 2026-11-03
+
+### Fixed
+- `/clear` no longer leaves `session <id> ended without clearing its before listeners` or `did not hear of a before listener` in the Log. cmod mistook the conversation it had just left for another session that had crashed.
+
+## [5.5.3] - 2026-11-03
+
+### Fixed
+- Removing, unlinking, or turning off a mod that has widgets no longer leaves `<mod> did not list its widgets` in the Log. The automatic reload asked the mod for its widgets before it saw the mod was gone.
+
 ## [5.5.2] - 2026-11-03
 
 ### Fixed
