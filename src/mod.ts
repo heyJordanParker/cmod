@@ -1,6 +1,7 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
 import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { heldInput } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { loadedMethod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import type { Pages } from '../node_modules/@cmodjs/core/runtime/pages.js'
@@ -168,8 +169,8 @@ export const cmodPlugin = defineMod({
       if (updates.length > shownUpdates) claude.ui.toast(`${updates.length} plugins updated`)
       else for (const update of updates) claude.ui.toast(update)
     }
-    const announceUpdates = (isAfterOwnReload: boolean) => void showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
-    announceUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
+    const announceUpdates = (isAfterOwnReload: boolean) => showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
+    await announceUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
 
     let seenChange = await pluginsState()
     let isReloadDue = false
@@ -205,11 +206,12 @@ export const cmodPlugin = defineMod({
         await claude.store.set(await sessionKey('hidingReload'), true)
         await claude.command.run({ command: 'reload-plugins' })
         await widgets.recheck()
-        announceUpdates(true)
+        void announceUpdates(true)
       } catch (error) {
         await claude.store.delete(await sessionKey('hidingReload'))
         await takeVersionsBeforeReload()
-        report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload, isCritical: true })
+        if (messageOf(error).includes(heldInput)) isReloadDue = true
+        else report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload, isCritical: true })
       }
     }
     const stopWorking = () => {

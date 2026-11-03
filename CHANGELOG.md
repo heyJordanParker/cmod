@@ -4,6 +4,18 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.5.1] - 2026-11-03
+
+### Fixed
+- A mod you uninstalled or turned off no longer fills the Log. Every session it had listened to kept asking it at each tool call and logged `<mod> is not installed` each time, hundreds of times in a long session, and a resumed session did the same. cmod now forgets a mod's listeners in a session the moment the mod is gone from it, and says nothing.
+- Pressing Esc no longer leaves `Could not reload the plugins` on screen for good. Claude Code holds every plugin's input after an Esc until you type, so cmod's automatic reload was refused, showed the toast, and never ran again. The reload now waits, and runs once your next turn ends.
+- A session starts faster on a computer that has run many sessions: cmod reads only the listener files of sessions that still listen, where it read one file for every session that ever ran.
+
+## [5.5.0] - 2026-11-03
+
+### Added
+- `cmod log [<mod>]` prints the Log in a terminal: each failure and warning a mod or cmod met in any session on this computer, newest first, with the versions it happened on and how often it repeated. An agent working on a mod reads what went wrong in every session without opening Settings, and `--json` gives it as data.
+
 ## [5.4.2] - 2026-11-03
 
 ### Fixed

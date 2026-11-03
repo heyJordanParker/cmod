@@ -287,6 +287,40 @@ function parsePreferences(value, path) {
     throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`);
   return { showsInstalledModErrors: value["showsInstalledModErrors"] === true };
 }
+var loggedFailures = 100;
+function logFolder(store) {
+  return `${dataFolder(store, "cmod")}/log`;
+}
+function isLogEntry(value) {
+  return isObject(value) && ["mod", "id", "message", "details", "at"].every((key) => typeof value[key] === "string");
+}
+function parseLog(value, path) {
+  if (value === undefined)
+    return [];
+  if (!Array.isArray(value) || !value.every(isLogEntry))
+    throw new Error(`${path} is not a list of mod failures. Delete it, and cmod starts it again.`);
+  return value;
+}
+function newestLog(entries) {
+  const newest = new Map;
+  for (const entry of entries) {
+    const key = `${entry.mod}
+${entry.id}`;
+    if ((newest.get(key)?.at ?? "") < entry.at)
+      newest.set(key, entry);
+  }
+  return [...newest.values()].toSorted((left, right) => right.at.localeCompare(left.at)).slice(0, loggedFailures);
+}
+function versionsLine({ mod, core, cmod, program, claudeCode }) {
+  return [mod === undefined ? undefined : `mod ${mod}`, core === undefined ? undefined : `@cmodjs/core ${core}`, `cmod ${cmod}`, program === undefined ? undefined : `cmod program ${program}`, `Claude Code ${claudeCode}`].filter((part) => part !== undefined).join(" · ");
+}
+function logReport(entry) {
+  const seen = (entry.count ?? 1) > 1 ? `
+${entry.count} times in session ${entry.session ?? "unknown"}, first at ${entry.firstAt ?? entry.at}` : "";
+  return entry.versions === undefined ? entry.details : `${entry.details}
+
+${versionsLine(entry.versions)}${seen}`;
+}
 function readHotkeys(hotkeys) {
   if (hotkeys === undefined)
     return {};
@@ -295,7 +329,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.4.2";
+var coreVersion = "5.5.1";
 var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -764,6 +798,9 @@ function answeringOwnCalls(claude, router) {
 }
 function notInstalled(name) {
   return `${name} is not installed. ${installFix}`;
+}
+function isNotInstalled(name, error) {
+  return messageOf(error).endsWith(notInstalled(name));
 }
 
 // node_modules/@cmodjs/core/mod.js
@@ -6921,6 +6958,7 @@ var awayFoldMs = 8000;
 var livenessMs = 5000;
 var keptClosings = 200;
 var keptMessages = 200;
+var noWatches = "[]";
 function serveConversations({ claude, router, store, project, report, clear }) {
   const folder = dataFolder(store, cmodPluginName);
   const goals = `${folder}/goals`;
@@ -7007,7 +7045,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
         const subscriptions = [...sessions.get(to) ?? [], ...isInProject ? sessions.get(everySession) ?? [] : []];
         if (!subscriptions.some(({ event, matcher }) => isHeardBy(event, matcher, change)))
           continue;
-        claude.cmod.call({ to: mod, method: conversationMethods.changed, input: { session: to, change, isInProject } }).then(() => clear(`changed:${mod}`), (error) => report(`changed:${mod}`, `Could not tell ${mod} about session ${to}`, error));
+        claude.cmod.call({ to: mod, method: conversationMethods.changed, input: { session: to, change, isInProject } }).then(() => clear(`changed:${mod}`), (error) => isNotInstalled(mod, error) ? forgetListeners(mod) : report(`changed:${mod}`, `Could not tell ${mod} about session ${to}`, error));
       }
     }
   };
@@ -7125,13 +7163,21 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     lists.set(id, list);
     subscribed.set(caller, lists);
   };
+  const forgetListeners = (mod) => {
+    if (!heard.delete(mod))
+      return;
+    subscribed.delete(mod);
+    clear(`changed:${mod}`);
+    follow();
+    saveListeners().catch((error) => report("listeners", `Kept the listeners of ${mod}, which left this session`, error));
+  };
   const onListenerFiles = (work) => {
     const next = listenerFiles.then(work);
     listenerFiles = next.catch((error) => claude.ui.warn("listeners:files", `cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`));
     return next;
   };
   const clearListeners = (at) => onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, "{}"));
-  const clearWatches = (at) => onListenerFiles(() => claude.fs.write(`${watches}/${at}.json`, "[]"));
+  const clearWatches = (at) => onListenerFiles(() => claude.fs.write(`${watches}/${at}.json`, noWatches));
   const saveListeners = (isEnding = false) => {
     const at = session;
     if (at === "")
@@ -7151,13 +7197,12 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     });
   };
   const readWatchers = () => onListenerFiles(async () => {
-    const files = await claude.fs.list(watches).catch(ifMissing([]));
+    const files = (await claude.fs.list(watches).catch(ifMissing([]))).filter((file) => file.name.endsWith(".json") && file.size !== noWatches.length);
+    const texts = await Promise.all(files.map((file) => claude.fs.read(`${watches}/${file.name}`).catch(ifMissing(noWatches))));
     const found = [];
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
       const from = file.name.replace(/\.json$/, "");
-      if (!file.name.endsWith(".json"))
-        continue;
-      const text = await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing("[]"));
+      const text = texts[index] ?? noWatches;
       let list;
       try {
         list = JSON.parse(text);
@@ -7193,7 +7238,20 @@ ${watch.target}`, watch);
     return [...new Map(all.filter((watcher) => watcher.events.includes(event)).map((watcher) => [`${watcher.from}
 ${watcher.mod}`, watcher])).values()];
   };
-  const askHere = async (mod, event, change, from = session, isInProject = true) => claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } });
+  const askHere = async (mod, event, change, from = session, isInProject = true) => claude.cmod.call({ to: mod, method: conversationMethods.before, input: { session: from, event, change, isInProject } }).catch((error) => {
+    if (!isNotInstalled(mod, error))
+      throw error;
+    forgetWatches(mod);
+    return;
+  });
+  const forgetWatches = (mod) => {
+    const left = [...ownWatches].filter(([, watch]) => watch.mod === mod);
+    if (left.length === 0)
+      return;
+    for (const [key] of left)
+      ownWatches.delete(key);
+    publishWatches().catch((error) => report("before", `Kept the before listeners of ${mod}, which left this session`, error));
+  };
   const isUnderHere = (task, ancestor) => {
     for (let at = task, steps = 0;at !== undefined && steps < 64; at = conversation.state.tasks[at]?.parent, steps += 1)
       if (at === ancestor)
@@ -7208,6 +7266,10 @@ ${watcher.mod}`, watcher])).values()];
         throw new PassedTimeout(`the ${awayFoldMs / 1000} s cmod waits on other sessions ran out before session ${watcher.from} was asked`);
       return await ask(watcher.from, { kind: "before", mod: watcher.mod, event, change, project: project() }, leftMs);
     } catch (error) {
+      if (isNotInstalled(watcher.mod, error)) {
+        watchers = watchers.filter((each) => each.from !== watcher.from || each.mod !== watcher.mod);
+        return;
+      }
       if (await isRunning(watcher.from)) {
         if (error instanceof PassedTimeout && refuses(watcher, event, change))
           return { refuse: `${watcher.mod}: ${error.message}` };
@@ -9876,7 +9938,10 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
   router.add("command.run", (e, next) => wrapped(async () => waiting.length > 0 ? {} : next(e)));
   router.add("ui.press", (e, next) => wrapped(() => next(e)));
   const ask = (mod) => {
-    const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((parts) => void declared.set(mod, pagesOf(parts)), (error) => claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`)).finally(() => asking.delete(mod));
+    const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((parts) => void declared.set(mod, pagesOf(parts)), (error) => {
+      if (!isNotInstalled(mod, error))
+        claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`);
+    }).finally(() => asking.delete(mod));
     asking.set(mod, pending);
     return pending;
   };
@@ -10213,7 +10278,8 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
       declared.set(mod, declarationsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })));
     } catch (error) {
       declared.delete(mod);
-      claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`);
+      if (!isNotInstalled(mod, error))
+        claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`);
     }
   };
   const recheck = async () => {
@@ -11613,6 +11679,9 @@ function oneLine(error) {
   return messageOf(error).replace(/\s*\n\s*/g, " ");
 }
 
+// node_modules/@cmodjs/core/runtime/claude.js
+var heldInput = "the session was stopped and nobody has sent input since";
+
 // node_modules/@cmodjs/core/utils/changelog.js
 var unreleased = "Unreleased";
 var heading = /^##\s+\[?([^\]\s]+)\]?(?:\s+-\s+(\S+))?\s*$/;
@@ -11631,7 +11700,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11647,7 +11716,6 @@ var moves = [
   { move: "up", hotkey: "k", label: "↑ up" },
   { move: "right", hotkey: "l", label: "→ right" }
 ];
-var loggedFailures = 100;
 var preferenceTitles = {
   showsInstalledModErrors: "Show errors from installed mods"
 };
@@ -11675,50 +11743,28 @@ async function readJson2(path) {
   return text === undefined ? undefined : JSON.parse(text);
 }
 var isText = (value) => typeof value === "string";
-var isLogEntry = (value) => isObject(value) && ["mod", "id", "message", "details", "at"].every((key) => isText(value[key]));
 var sameFailure = (left) => (right) => left.mod === right.mod && left.id === right.id;
-function versionsLine({ mod, core, cmod, program, claudeCode }) {
-  return [mod === undefined ? undefined : `mod ${mod}`, core === undefined ? undefined : `@cmodjs/core ${core}`, `cmod ${cmod}`, program === undefined ? undefined : `cmod program ${program}`, `Claude Code ${claudeCode}`].filter((part) => part !== undefined).join(" · ");
-}
-function reportedOf(entry) {
-  const seen = (entry.count ?? 1) > 1 ? `
-${entry.count} times in session ${entry.session ?? "unknown"}, first at ${entry.firstAt ?? entry.at}` : "";
-  return entry.versions === undefined ? entry.details : `${entry.details}
-
-${versionsLine(entry.versions)}${seen}`;
-}
 async function readEntries(path) {
   const value = await readJson2(path).catch((error) => {
     throw new Error(`${path} is not JSON (${messageOf(error)}). Delete it, and cmod starts it again.`);
   });
-  if (value === undefined)
-    return [];
-  if (!Array.isArray(value) || !value.every(isLogEntry))
-    throw new Error(`${path} is not a list of mod failures. Delete it, and cmod starts it again.`);
-  return value;
+  return parseLog(value, path);
 }
-var logFolder = (mod) => `${mod.dataFolder}/log`;
 async function readLog(mod) {
-  const folder = logFolder(mod);
+  const folder = logFolder(await storeOf(mod));
   const files = (await fs.list(folder).catch(ifMissing([]))).filter((file) => file.isFile && file.name.endsWith(".json")).toSorted((left, right) => right.modifiedAt - left.modifiedAt);
-  const newest = new Map;
-  const newestFirst = () => [...newest.values()].toSorted((left, right) => right.at.localeCompare(left.at));
+  const read = [];
   for (const file of files) {
-    const oldestKept = newestFirst()[loggedFailures - 1];
+    const oldestKept = newestLog(read)[loggedFailures - 1];
     if (oldestKept !== undefined && Date.parse(oldestKept.at) > file.modifiedAt)
       break;
     const entries = await readEntries(`${folder}/${file.name}`).catch((error) => {
       engineOf(mod).claude.ui.warn("log:read", `cmod: the Log skips a file: ${messageOf(error)}`);
       return [];
     });
-    for (const entry of entries) {
-      const key = `${entry.mod}
-${entry.id}`;
-      if ((newest.get(key)?.at ?? "") < entry.at)
-        newest.set(key, entry);
-    }
+    read.push(...entries);
   }
-  return newestFirst().slice(0, loggedFailures);
+  return newestLog(read);
 }
 async function readPreferences(mod) {
   const path = preferencesPath(await storeOf(mod));
@@ -11741,7 +11787,7 @@ function failureLog(mod) {
     return { ...failure.version === undefined ? {} : { mod: failure.version }, ...failure.core === undefined ? {} : { core: failure.core }, cmod: await cmodVersion, ...program === undefined ? {} : { program }, claudeCode };
   };
   const add = async (entry) => {
-    const path = `${logFolder(mod)}/${entry.session}.json`;
+    const path = `${logFolder(await storeOf(mod))}/${entry.session}.json`;
     const earlier = await readEntries(path);
     const same = earlier.find(sameFailure(entry));
     const counted = { ...entry, count: (same?.count ?? 0) + 1, firstAt: same?.firstAt ?? same?.at ?? entry.at };
@@ -11901,12 +11947,12 @@ function settings2(mod) {
       if (log.length === 0)
         return Text({ dimColor: true, children: "No mod has failed." });
       const copy = (entry) => act(async () => {
-        await clipboard.write(reportedOf(entry));
+        await clipboard.write(logReport(entry));
         return "Copied the error.";
       });
       const askClaude = (entry) => act(async () => {
         mod.state.memory.reporting = null;
-        await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, reportedOf(entry)), asUser: true });
+        await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, logReport(entry)), asUser: true });
         return;
       });
       return Box({
@@ -11916,7 +11962,7 @@ function settings2(mod) {
           const key = `${entry.mod}/${entry.id}`;
           const choices = reporting === key ? [
             Button({ plain: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
-            ...entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, reportedOf(entry))],
+            ...entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, logReport(entry))],
             Button({ plain: true, dimColor: true, key: `back:${key}`, label: "Back", onPress: () => void (mod.state.memory.reporting = null) })
           ] : [
             Button({ plain: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
@@ -12132,7 +12178,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12387,7 +12433,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12441,7 +12487,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12562,8 +12608,8 @@ var cmodPlugin = defineMod({
         for (const update of updates)
           claude.ui.toast(update);
     };
-    const announceUpdates = (isAfterOwnReload) => void showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
-    announceUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
+    const announceUpdates = (isAfterOwnReload) => showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
+    await announceUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
     let seenChange = await pluginsState();
     let isReloadDue = false;
     let quietWait;
@@ -12603,7 +12649,10 @@ var cmodPlugin = defineMod({
       } catch (error) {
         await claude.store.delete(await sessionKey("hidingReload"));
         await takeVersionsBeforeReload();
-        report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true });
+        if (messageOf(error).includes(heldInput))
+          isReloadDue = true;
+        else
+          report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true });
       }
     };
     const stopWorking = () => {
@@ -12848,7 +12897,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-3dyWKO/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

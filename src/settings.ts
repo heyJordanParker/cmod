@@ -1,11 +1,11 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { finishStepsMethod, hotkeyCommand, isObject, marketplaceOf, parsePreferences, pendingStepsMethod, preferencesPath, readCmodVersion, readRecord, readSteps, storeChangedPath, storeFolder, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readCmodVersion, readRecord, readSteps, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
 import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
-import { failedMethod, reportLink, reportPrompt, type Contact, type LoggedFailure, type LogLevel } from '../node_modules/@cmodjs/core/runtime/toaster.js'
+import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
@@ -52,24 +52,6 @@ export type ModView = {
   readonly changelog: readonly ChangelogSection[]
 }
 
-type LogVersions = { readonly mod?: string; readonly core?: string; readonly cmod: string; readonly program?: string; readonly claudeCode: string }
-
-type LogEntry = {
-  readonly mod: string
-  readonly id: string
-  readonly level?: LogLevel
-  readonly message: string
-  readonly details: string
-  readonly at: string
-  readonly firstAt?: string
-  readonly count?: number
-  readonly session?: string
-  readonly versions?: LogVersions
-  readonly contact?: Contact
-}
-
-const loggedFailures = 100
-
 const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
 } satisfies Partial<Record<keyof Preferences, string>>
@@ -109,48 +91,29 @@ export async function readJson(path: string): Promise<unknown> {
 
 const isText = (value: unknown) => typeof value === 'string'
 
-const isLogEntry = (value: unknown): value is LogEntry => isObject(value) && ['mod', 'id', 'message', 'details', 'at'].every((key) => isText(value[key]))
-
 const sameFailure = (left: Pick<LogEntry, 'mod' | 'id'>) => (right: LogEntry) => left.mod === right.mod && left.id === right.id
-
-function versionsLine({ mod, core, cmod, program, claudeCode }: LogVersions): string {
-  return [mod === undefined ? undefined : `mod ${mod}`, core === undefined ? undefined : `@cmodjs/core ${core}`, `cmod ${cmod}`, program === undefined ? undefined : `cmod program ${program}`, `Claude Code ${claudeCode}`].filter((part) => part !== undefined).join(' · ')
-}
-
-function reportedOf(entry: LogEntry): string {
-  const seen = (entry.count ?? 1) > 1 ? `\n${entry.count} times in session ${entry.session ?? 'unknown'}, first at ${entry.firstAt ?? entry.at}` : ''
-  return entry.versions === undefined ? entry.details : `${entry.details}\n\n${versionsLine(entry.versions)}${seen}`
-}
 
 async function readEntries(path: string): Promise<LogEntry[]> {
   const value = await readJson(path).catch((error: unknown) => {
     throw new Error(`${path} is not JSON (${messageOf(error)}). Delete it, and cmod starts it again.`)
   })
-  if (value === undefined) return []
-  if (!Array.isArray(value) || !value.every(isLogEntry)) throw new Error(`${path} is not a list of mod failures. Delete it, and cmod starts it again.`)
-  return value
+  return parseLog(value, path)
 }
 
-const logFolder = (mod: Mod<object>) => `${mod.dataFolder}/log`
-
 export async function readLog(mod: Mod<object>): Promise<LogEntry[]> {
-  const folder = logFolder(mod)
+  const folder = logFolder(await storeOf(mod))
   const files = (await fs.list(folder).catch(ifMissing([]))).filter((file) => file.isFile && file.name.endsWith('.json')).toSorted((left, right) => right.modifiedAt - left.modifiedAt)
-  const newest = new Map<string, LogEntry>()
-  const newestFirst = () => [...newest.values()].toSorted((left, right) => right.at.localeCompare(left.at))
+  const read: LogEntry[] = []
   for (const file of files) {
-    const oldestKept = newestFirst()[loggedFailures - 1]
+    const oldestKept = newestLog(read)[loggedFailures - 1]
     if (oldestKept !== undefined && Date.parse(oldestKept.at) > file.modifiedAt) break
     const entries = await readEntries(`${folder}/${file.name}`).catch((error: unknown) => {
       engineOf(mod).claude.ui.warn('log:read', `cmod: the Log skips a file: ${messageOf(error)}`)
       return []
     })
-    for (const entry of entries) {
-      const key = `${entry.mod}\n${entry.id}`
-      if ((newest.get(key)?.at ?? '') < entry.at) newest.set(key, entry)
-    }
+    read.push(...entries)
   }
-  return newestFirst().slice(0, loggedFailures)
+  return newestLog(read)
 }
 
 async function readPreferences(mod: Mod<object>): Promise<Preferences> {
@@ -182,7 +145,7 @@ export function failureLog<State extends SettingsState>(mod: Mod<State>): (failu
     return { ...(failure.version === undefined ? {} : { mod: failure.version }), ...(failure.core === undefined ? {} : { core: failure.core }), cmod: await cmodVersion, ...(program === undefined ? {} : { program }), claudeCode }
   }
   const add = async (entry: Omit<LogEntry, 'count' | 'firstAt'>) => {
-    const path = `${logFolder(mod)}/${entry.session}.json`
+    const path = `${logFolder(await storeOf(mod))}/${entry.session}.json`
     const earlier = await readEntries(path)
     const same = earlier.find(sameFailure(entry))
     const counted: LogEntry = { ...entry, count: (same?.count ?? 0) + 1, firstAt: same?.firstAt ?? same?.at ?? entry.at }
@@ -362,13 +325,13 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       if (log.length === 0) return Text({ dimColor: true, children: 'No mod has failed.' })
       const copy = (entry: LogEntry) =>
         act(async () => {
-          await clipboard.write(reportedOf(entry))
+          await clipboard.write(logReport(entry))
           return 'Copied the error.'
         })
       const askClaude = (entry: LogEntry) =>
         act(async () => {
           mod.state.memory.reporting = null
-          await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, reportedOf(entry)), asUser: true })
+          await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, logReport(entry)), asUser: true })
           return undefined
         })
       return Box({
@@ -380,7 +343,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             reporting === key
               ? [
                   Button({ plain: true, key: `ask-claude:${key}`, label: 'Ask Claude to report it', onPress: () => askClaude(entry) }),
-                  ...(entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, reportedOf(entry))]),
+                  ...(entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, logReport(entry))]),
                   Button({ plain: true, dimColor: true, key: `back:${key}`, label: 'Back', onPress: () => void (mod.state.memory.reporting = null) }),
                 ]
               : [
