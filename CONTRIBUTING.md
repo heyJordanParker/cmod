@@ -64,8 +64,8 @@ env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 
 1. It fails when the three versions differ.
-2. It installs Claude Code to write `.claude-plugin/types/`, then tests the lint rules in `lint/`, checks and tests `@cmodjs/core` and `@cmodjs/cli`, and builds `@cmodjs/core`.
-3. It unpacks that `@cmodjs/core` into the cmod plugin's `node_modules` and tests the cmod plugin on it.
+2. It installs Claude Code to write `.claude-plugin/types/`, builds `@cmodjs/core`, and unpacks it into the cmod plugin's `node_modules`.
+3. It runs every command of the gate at once, the cmod plugin's suite on that `@cmodjs/core`, and prints each one's output and time once it ends.
 4. It publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.
 5. It releases the cmod plugin on GitHub with `cmod publish`, which bundles that `@cmodjs/core` into the plugin's hooks module, builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
 

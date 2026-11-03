@@ -52,28 +52,43 @@ jobs:
           CLAUDE_CODE_PLUGIN_DIR_WATCH=1 "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
           test -d .claude-plugin/types
 
-      - name: Test and build @cmodjs/core and @cmodjs/cli
+      - name: Build @cmodjs/core and put it in the cmod plugin
         run: |
           bun install --cwd lint --frozen-lockfile
           bun install --cwd core --frozen-lockfile
           bun install --cwd cli --frozen-lockfile
-          bun run --cwd lint test
-          bun run --cwd core check
-          (cd core && bun test)
-          bun run --cwd core build
-          bun run --cwd cli check
-          bun run --cwd cli test
-
-      - name: Test the cmod plugin on this @cmodjs/core
-        run: |
           bun install --frozen-lockfile
+          bun run --cwd core build
           (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")
           rm -rf node_modules/@cmodjs/core
           mkdir node_modules/@cmodjs/core
           tar -xzf "$RUNNER_TEMP/cmodjs-core-${{ steps.version.outputs.version }}.tgz" -C node_modules/@cmodjs/core --strip-components=1
-          bun test
-          bun x tsc --noEmit
-          OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
+
+      - name: Run every suite at once
+        run: |
+          suites=(
+            'bun run --cwd lint test'
+            'bun run --cwd cli check'
+            'bun run --cwd core check'
+            'bun x tsc --noEmit'
+            'OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests'
+            'bun test'
+            'cd core && bun test'
+            'bun run --cwd cli test'
+          )
+          for index in "${!suites[@]}"; do
+            bash -ec "time { ${suites[$index]}; }" > "$RUNNER_TEMP/suite-$index.log" 2>&1 &
+            pids[$index]=$!
+          done
+          failed=0
+          for index in "${!suites[@]}"; do
+            code=0
+            wait "${pids[$index]}" || code=$?
+            echo "\$ ${suites[$index]}"
+            cat "$RUNNER_TEMP/suite-$index.log"
+            if [ "$code" != 0 ]; then echo "::error::${suites[$index]} exited $code"; failed=1; fi
+          done
+          exit "$failed"
 
       - name: Publish @cmodjs/core to npm
         if: steps.version.outputs.core != 'done'
