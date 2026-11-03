@@ -40,7 +40,12 @@ const unloaded = new Set<string>()
 
 let toldParts: Pick<Pages, 'declared'> | undefined
 
-export const isLoaded = (name: string): boolean => Object.keys(loaded).some((id) => nameOf(id) === name) || (!unloaded.has(name) && toldParts?.declared().some((told) => told.mod === name) === true)
+let loading: Promise<unknown> = Promise.resolve()
+
+export const isLoaded = async (name: string): Promise<boolean> => {
+  await loading
+  return Object.keys(loaded).some((id) => nameOf(id) === name) || (!unloaded.has(name) && toldParts?.declared().some((told) => told.mod === name) === true)
+}
 
 const newestMessages = 8
 
@@ -170,7 +175,7 @@ export const cmodPlugin = defineMod({
       else for (const update of updates) claude.ui.toast(update)
     }
     const announceUpdates = (isAfterOwnReload: boolean) => showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
-    await announceUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
+    loading = announceUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
 
     let seenChange = await pluginsState()
     let isReloadDue = false

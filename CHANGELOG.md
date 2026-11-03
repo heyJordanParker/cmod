@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.5.2] - 2026-11-03
+
+### Fixed
+- The cmod plugin starts without waiting to read the version of every plugin you have installed, which 5.5.1 made it do. A call between mods still waits for that read, so a mod you have installed never counts as uninstalled while cmod starts.
+
 ## [5.5.1] - 2026-11-03
 
 ### Fixed

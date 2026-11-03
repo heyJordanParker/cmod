@@ -329,7 +329,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.5.1";
+var coreVersion = "5.5.2";
 var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -11700,7 +11700,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12178,7 +12178,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12433,7 +12433,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12487,14 +12487,18 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
 var loaded = {};
 var unloaded = new Set;
 var toldParts;
-var isLoaded = (name) => Object.keys(loaded).some((id) => nameOf2(id) === name) || !unloaded.has(name) && toldParts?.declared().some((told) => told.mod === name) === true;
+var loading = Promise.resolve();
+var isLoaded = async (name) => {
+  await loading;
+  return Object.keys(loaded).some((id) => nameOf2(id) === name) || !unloaded.has(name) && toldParts?.declared().some((told) => told.mod === name) === true;
+};
 var newestMessages = 8;
 var reloadDelayMs = 500;
 var changesQuietMs = 2000;
@@ -12609,7 +12613,7 @@ var cmodPlugin = defineMod({
           claude.ui.toast(update);
     };
     const announceUpdates = (isAfterOwnReload) => showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
-    await announceUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
+    loading = announceUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
     let seenChange = await pluginsState();
     let isReloadDue = false;
     let quietWait;
@@ -12897,13 +12901,13 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-fLfA4L/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-7NMVUK/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
     const cmod = {
       async call(input) {
-        throw new Error(isLoaded(input.to) ? `${input.to} did not answer in time, so Claude Code went on without it.` : notInstalled(input.to));
+        throw new Error(await isLoaded(input.to) ? `${input.to} did not answer in time, so Claude Code went on without it.` : notInstalled(input.to));
       }
     };
     return { ...built, cmod };
