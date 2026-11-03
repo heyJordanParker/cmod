@@ -110,6 +110,10 @@ const startHoldMs = hookMs - 1_000
 
 const dependencyCallMs = 30_000
 
+const stallTicks = 3
+
+const stallMs = 60_000
+
 
 const shellTools: readonly string[] = ['Bash', 'PowerShell']
 
@@ -864,12 +868,25 @@ async function createMod<State extends object, Declared extends Options>(definit
   const timer = (ms: number, subject: string, repeats: boolean, listener: () => unknown): ModTimer => {
     let isFiring = false
     let isRunning = true
+    let firedAt = 0
+    let isStallTold = false
+    const tellStall = async () => {
+      const ranMs = (await claude.clock.now()) - firedAt
+      if (isStallTold || ranMs < Math.max(checked * stallTicks, stallMs)) return
+      isStallTold = true
+      claude.ui.warn(`${subject}:${ms}:stalled`, `${definition.name}: one run of its ${subject} ${ms} ms timer has gone on for ${Math.round(ranMs / 1000)} s, so the timer skipped every tick since. Give what the listener awaits a deadline.`)
+    }
     const fire = () => {
       if (!repeats) isRunning = false
-      if (isFiring) return
+      if (isFiring) {
+        void tellStall()
+        return
+      }
       isFiring = true
+      isStallTold = false
       void Promise.resolve()
-        .then(() => {
+        .then(async () => {
+          firedAt = await claude.clock.now()
           bind(imports)
           return listener()
         })

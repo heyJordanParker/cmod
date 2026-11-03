@@ -40,6 +40,7 @@ async function prompt(tested: ReturnType<typeof testMod>, text: string): Promise
   const answered = (await claudeCodeOf(tested).fire('prompt.submit', { text, origin: { kind: 'composer' } } as never)) as { readonly context?: readonly string[] }
   const appended = { uuid: `prompt-${text}`, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+  await claudeCodeOf(tested).fire('turn.start', { text, turnId: `turn-${text}` } as never)
   return answered.context ?? []
 }
 
@@ -1742,6 +1743,25 @@ test('a plugins-changed mark during a running turn runs /reload-plugins only aft
   expect(reloads).toEqual([])
 
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await tick()
+  expect(reloads).toEqual(['reload-plugins'])
+})
+
+test('a plugins-changed mark during a turn the person stops with Esc, which raises no Stop, runs /reload-plugins once the turn completes', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
+  const reloads: string[] = []
+  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+  await prompt(tested, 'Rename the parser')
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  await tick()
+  expect(reloads).toEqual([])
+
+  await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
 })

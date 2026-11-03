@@ -588,6 +588,47 @@ test('AssistantMessage draws that pass one requestId grow one streamed reply', a
   ])
 })
 
+test('a mod.every run that never ends writes one warning to the Log once it outlasts three ticks and a minute, and the timer runs again after it ends', async () => {
+  let finish = () => {}
+  let runs = 0
+  const status = defineMod({
+    name: 'status',
+    setup(mod) {
+      mod.every(30_000, () => {
+        runs += 1
+        return new Promise<void>((resolve) => (finish = resolve))
+      })
+    },
+  })
+  const tested = testMod(status)
+  let now = 0
+  const ticks: (() => void)[] = []
+  tested.fakes.clock.now = async () => now
+  tested.fakes.clock.every = (ms, tick) => {
+    if (ms === 30_000) ticks.push(tick)
+    return { cancel: () => undefined }
+  }
+  await tested.start()
+  const tick = async (at: number) => {
+    now = at
+    for (const fire of ticks) fire()
+    await tested.settle()
+  }
+  const stalls = () => tested.shown.debug.filter((line) => line.includes('so the timer skipped every tick since'))
+
+  await tick(0)
+  await tick(60_000)
+  expect(stalls()).toEqual([])
+  await tick(90_000)
+  await tick(120_000)
+  expect(stalls()).toEqual(['status: one run of its every 30000 ms timer has gone on for 90 s, so the timer skipped every tick since. Give what the listener awaits a deadline.'])
+
+  finish()
+  await tested.settle()
+  await tick(150_000)
+  expect(runs).toBe(2)
+})
+
 test('clock.every in testMod fires only when the test ticks it', async () => {
   let branch = 'main'
   const branchLine = defineMod({

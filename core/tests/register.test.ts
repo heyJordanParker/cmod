@@ -130,7 +130,7 @@ test("only the cmod plugin registers command.describe, so Claude Code never send
   expect(cmod.registrations.map((registration) => registration.pattern)).toContain('command.describe')
 })
 
-test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code events once each and no permission check, and the cmod plugin 48', () => {
+test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code events once each and no permission check, and the cmod plugin 49', () => {
   const bare = fakeOn()
   const cmod = fakeOn()
 
@@ -182,8 +182,8 @@ test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code
     'session.compact',
   ]
   expect(bare.registrations.map((registration) => registration.pattern)).toEqual(everyMod)
-  expect(cmod.registrations.map((registration) => registration.pattern)).toEqual([...everyMod, 'command.describe', 'session.append', 'session.receive', 'agent.spawn', 'prompt.attachment', 'turn.start'])
-  expect([bare.registrations.length, cmod.registrations.length]).toEqual([42, 48])
+  expect(cmod.registrations.map((registration) => registration.pattern)).toEqual([...everyMod, 'command.describe', 'session.append', 'session.receive', 'agent.spawn', 'prompt.attachment', 'turn.start', 'turn.complete'])
+  expect([bare.registrations.length, cmod.registrations.length]).toEqual([42, 49])
 })
 
 test("the cmod plugin's ui.render matches only the components it draws, so its redraws never reach the transcript, and a mod's matches every component", () => {

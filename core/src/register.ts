@@ -190,6 +190,7 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('agent.spawn', routeToMod).catch(routeFailure)
   addHook('prompt.attachment', routeToMod).catch(routeFailure)
   addHook('turn.start', routeToMod).catch(routeFailure)
+  addHook('turn.complete', routeToMod).catch(routeFailure)
 }
 
 export function registerPermissionCheck(addHook: On): void {

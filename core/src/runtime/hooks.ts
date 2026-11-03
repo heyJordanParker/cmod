@@ -35,6 +35,7 @@ export type RoutedEvent =
   | 'session.receive'
   | 'agent.spawn'
   | 'turn.start'
+  | 'turn.complete'
 
 type CallFiles = { readonly read: string[]; readonly changed: string[] }
 
