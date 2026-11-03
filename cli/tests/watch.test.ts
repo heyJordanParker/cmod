@@ -9,7 +9,7 @@ afterAll(deleteTemporaryHomes)
 
 const store = (home: string, file: string) => join(home, '.local/share/cmod', file)
 
-test('cmod watch reloads every session once a linked mod builds after it stops changing, and names a build still failing 10 seconds after the last change', async () => {
+test.concurrent('cmod watch reloads every session once a linked mod builds after it stops changing, and names a build still failing 10 seconds after the last change', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')
   await writeFiles(root, {
@@ -38,7 +38,7 @@ test('cmod watch reloads every session once a linked mod builds after it stops c
   watching.child.kill()
 }, 60000)
 
-test('cmod watch reloads no session for a change only to files git ignores, such as the types Claude Code writes each time it loads the mod', async () => {
+test.concurrent('cmod watch reloads no session for a change only to files git ignores, such as the types Claude Code writes each time it loads the mod', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')
   await writeFiles(root, {
@@ -71,7 +71,7 @@ async function until(isDone: () => boolean): Promise<void> {
   }
 }
 
-test('cmod watch links a folder an older cmod put in CLAUDE_CODE_PLUGIN_DIRS as a marketplace, takes it out of the list, and watches it', async () => {
+test.concurrent('cmod watch links a folder an older cmod put in CLAUDE_CODE_PLUGIN_DIRS as a marketplace, takes it out of the list, and watches it', async () => {
   const home = await temporaryHome()
   await writeFiles(home, {
     '.claude/settings.json': JSON.stringify({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/Developer/demo', CLAUDE_CODE_PLUGIN_DIR_WATCH: 'false' } }),
@@ -91,7 +91,7 @@ test('cmod watch links a folder an older cmod put in CLAUDE_CODE_PLUGIN_DIRS as 
   watching.child.kill()
 }, 60000)
 
-test('a second cmod watch exits at once while the first one watches, and the first touches its lock file every 5 seconds', async () => {
+test.concurrent('a second cmod watch exits at once while the first one watches, and the first touches its lock file every 5 seconds', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { '.local/share/cmod/records/.keep': '' })
   const lockFile = (pid: number) => join(home, '.local/share/cmod/watch.lock', String(pid))
@@ -106,7 +106,7 @@ test('a second cmod watch exits at once while the first one watches, and the fir
   first.child.kill()
 }, 60000)
 
-test('a cmod watch older than the newest cmod installed exits within one touch and lets go of watch.lock, so the cmod plugin starts the newer one', async () => {
+test.concurrent('a cmod watch older than the newest cmod installed exits within one touch and lets go of watch.lock, so the cmod plugin starts the newer one', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { '.local/share/cmod/records/.keep': '' })
   const watching = startCmod(home, 'watch')
@@ -118,7 +118,7 @@ test('a cmod watch older than the newest cmod installed exits within one touch a
   expect(existsSync(store(home, 'watch.lock'))).toBe(false)
 }, 60000)
 
-test('a cmod watch as new as the newest cmod installed keeps watching and touching its lock file', async () => {
+test.concurrent('a cmod watch as new as the newest cmod installed keeps watching and touching its lock file', async () => {
   const home = await temporaryHome()
   await writeFiles(home, {
     '.local/share/cmod/records/.keep': '',
@@ -138,7 +138,7 @@ test('a cmod watch as new as the newest cmod installed keeps watching and touchi
   watching.child.kill()
 }, 60000)
 
-test('a cmod watch checks each build failure it finds at its start again, so a failure an older cmod wrote goes once the mod builds', async () => {
+test.concurrent('a cmod watch checks each build failure it finds at its start again, so a failure an older cmod wrote goes once the mod builds', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')
   await writeFiles(root, {

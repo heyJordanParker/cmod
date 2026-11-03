@@ -9,7 +9,7 @@ import { cmod, createMod, deleteTemporaryHomes, goneProcessId, hashOf, isGone, l
 
 afterAll(deleteTemporaryHomes)
 
-test('concurrent setups of eight mods keep every approval', async () => {
+test.concurrent('concurrent setups of eight mods keep every approval', async () => {
   const home = await temporaryHome()
   const names = Array.from({ length: 8 }, (_, index) => `mod-${index}`)
   const roots = names.map((name) => join(home, name))
@@ -28,7 +28,7 @@ test('concurrent setups of eight mods keep every approval', async () => {
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/consent.json'), 'utf8'))).toEqual(Object.fromEntries(names.map((name, index) => [name, [hashes[index]]])))
 }, 15_000)
 
-test('six concurrent setups of one mod run the install step once and all exit 0', async () => {
+test.concurrent('six concurrent setups of one mod run the install step once and all exit 0', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\nsleep 0.3\necho ran >> "$CMOD_DATA/runs"\n')
   const store = join(home, '.local/share/cmod')
@@ -41,7 +41,7 @@ test('six concurrent setups of one mod run the install step once and all exit 0'
   expect(await readdir(join(store, 'records'))).toEqual(['demo.json'])
 }, 15_000)
 
-test('a setup deletes the staged uninstall folders a killed setup left', async () => {
+test.concurrent('a setup deletes the staged uninstall folders a killed setup left', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
@@ -55,7 +55,7 @@ test('a setup deletes the staged uninstall folders a killed setup left', async (
   expect(await readdir(join(store, 'uninstall'))).toEqual(['demo'])
 })
 
-test('a setup takes over a lock whose process is gone', async () => {
+test.concurrent('a setup takes over a lock whose process is gone', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
@@ -68,7 +68,7 @@ test('a setup takes over a lock whose process is gone', async () => {
   expect(existsSync(lock)).toBe(false)
 })
 
-test('a stale consent lock whose process is gone does not stall setup', async () => {
+test.concurrent('a stale consent lock whose process is gone does not stall setup', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const lock = join(home, '.local/share/cmod/consent.json.lock')
@@ -81,7 +81,7 @@ test('a stale consent lock whose process is gone does not stall setup', async ()
   expect(existsSync(lock)).toBe(false)
 }, 5_000)
 
-test('a lock held by a live process that is not its holder is taken over', async () => {
+test.concurrent('a lock held by a live process that is not its holder is taken over', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
@@ -93,7 +93,7 @@ test('a lock held by a live process that is not its holder is taken over', async
   expect(existsSync(lock)).toBe(false)
 })
 
-test('a setup that waits for a lock names the lock after a few seconds', async () => {
+test.concurrent('a setup that waits for a lock names the lock after a few seconds', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const holder = Bun.spawn(['sleep', '30'])
@@ -109,7 +109,7 @@ test('a setup that waits for a lock names the lock after a few seconds', async (
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
 }, 10_000)
 
-test('the spinner resumes after the lock-wait notice', async () => {
+test.concurrent('the spinner resumes after the lock-wait notice', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\n')
   const holder = Bun.spawn(['sleep', '30'])
@@ -125,7 +125,7 @@ test('the spinner resumes after the lock-wait notice', async () => {
   expect(shown.slice(shown.indexOf('which process'))).toContain('Installing demo…')
 }, 10_000)
 
-test('a lock whose holder recorded no start time is held while its process lives', async () => {
+test.concurrent('a lock whose holder recorded no start time is held while its process lives', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const holder = Bun.spawn(['sleep', '30'])
@@ -141,7 +141,7 @@ test('a lock whose holder recorded no start time is held while its process lives
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
 }, 10_000)
 
-test("a holder file with cmod's own process ID is not held", async () => {
+test.concurrent("a holder file with cmod's own process ID is not held", async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const lock = join(home, '.local/share/cmod/records/demo.json.lock')
@@ -158,7 +158,7 @@ test("a holder file with cmod's own process ID is not held", async () => {
   expect(existsSync(lock)).toBe(false)
 }, 10_000)
 
-test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async () => {
+test.concurrent('Ctrl+C while cmod remove waits for the lock prints a cancel line', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
@@ -177,7 +177,7 @@ test('Ctrl+C while cmod remove waits for the lock prints a cancel line', async (
   expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
 }, 10_000)
 
-test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
+test.concurrent('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
@@ -201,7 +201,7 @@ test('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   }
 }, 10_000)
 
-test('a mod whose scripts change while its setup waits runs the changed scripts once the first setup ends', async () => {
+test.concurrent('a mod whose scripts change while its setup waits runs the changed scripts once the first setup ends', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\ntouch "$HOME/installing"\nwhile [ -d "$HOME" ] && [ ! -e "$HOME/finish" ]; do sleep 0.01; done\necho ran >> "$CMOD_DATA/runs"\n')
   const first = startCmod(home, 'setup', root, '--events')

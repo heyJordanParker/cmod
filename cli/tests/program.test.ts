@@ -48,7 +48,7 @@ async function until(isDone: () => boolean): Promise<void> {
   }
 }
 
-test('two cmod program processes started together run one copy, and both print its address', async () => {
+test.concurrent('two cmod program processes started together run one copy, and both print its address', async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
   const second = startCmod(home, 'program', 'tools', '--', 'fake-server')
@@ -65,7 +65,7 @@ test('two cmod program processes started together run one copy, and both print i
   await Promise.all([first.done, second.done])
 }, 60000)
 
-test("SIGTERM to the owner stops its copy, and the waiter starts the next copy and prints that copy's address", async () => {
+test.concurrent("SIGTERM to the owner stops its copy, and the waiter starts the next copy and prints that copy's address", async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
   await until(() => serverIds(home, 'start').length === 1)
@@ -84,7 +84,7 @@ test("SIGTERM to the owner stops its copy, and the waiter starts the next copy a
   await second.done
 }, 60000)
 
-test('cmod program --no-wait with no holder runs the copy and prints its address', async () => {
+test.concurrent('cmod program --no-wait with no holder runs the copy and prints its address', async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'tools', '--no-wait', '--', 'fake-server')
   await until(() => serverIds(home, 'start').length === 1)
@@ -96,7 +96,7 @@ test('cmod program --no-wait with no holder runs the copy and prints its address
   await first.done
 }, 60000)
 
-test("cmod program --no-wait beside a holder touches the holder's lock file, prints held, and exits 0 without a second copy", async () => {
+test.concurrent("cmod program --no-wait beside a holder touches the holder's lock file, prints held, and exits 0 without a second copy", async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
   await until(() => serverIds(home, 'start').length === 1)
@@ -115,7 +115,7 @@ test("cmod program --no-wait beside a holder touches the holder's lock file, pri
   await first.done
 }, 60000)
 
-test('the holder touches its file in the lock every 5 seconds', async () => {
+test.concurrent('the holder touches its file in the lock every 5 seconds', async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
   await until(() => serverIds(home, 'start').length === 1)
@@ -129,7 +129,7 @@ test('the holder touches its file in the lock every 5 seconds', async () => {
   await first.done
 }, 60000)
 
-test('after the owner is killed with SIGKILL, the next owner stops the orphaned copy before it starts its own', async () => {
+test.concurrent('after the owner is killed with SIGKILL, the next owner stops the orphaned copy before it starts its own', async () => {
   const home = await serverHome()
   const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
   await until(() => serverIds(home, 'start').length === 1)
@@ -148,7 +148,7 @@ test('after the owner is killed with SIGKILL, the next owner stops the orphaned 
   await second.done
 }, 60000)
 
-test('the owner stops its copy and gives up the election when its parent process dies', async () => {
+test.concurrent('the owner stops its copy and gives up the election when its parent process dies', async () => {
   const home = await serverHome()
   await writeFiles(home, { 'bin/cmod': cmodFromSource })
   const parent = Bun.spawn(['sh', '-c', 'cmod program tools -- fake-server & wait'], { cwd: home, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
@@ -163,7 +163,7 @@ test('the owner stops its copy and gives up the election when its parent process
   expect(existsSync(join(instances(home), 'fake-server.json'))).toBe(false)
 }, 60000)
 
-test("SIGTERM stops the owner's copy even after the session's working folder is deleted", async () => {
+test.concurrent("SIGTERM stops the owner's copy even after the session's working folder is deleted", async () => {
   const home = await serverHome()
   await writeFiles(home, { 'bin/cmod': cmodFromSource, 'project/.keep': '' })
   const first = Bun.spawn([join(home, 'bin/cmod'), 'program', 'tools', '--', 'fake-server'], { cwd: join(home, 'project'), env: environment(home), stdout: 'ignore', stderr: 'ignore' })
@@ -176,7 +176,7 @@ test("SIGTERM stops the owner's copy even after the session's working folder is 
   expect(serverIds(home, 'stop')).toEqual(serverIds(home, 'start'))
 }, 60000)
 
-test('the copy runs without CLAUDE_CODE_SESSION_ID, because it serves every session', async () => {
+test.concurrent('the copy runs without CLAUDE_CODE_SESSION_ID, because it serves every session', async () => {
   const home = await serverHome()
   await writeFiles(home, { 'bin/session-server': '#!/bin/sh\necho "session ${CLAUDE_CODE_SESSION_ID:-none}" >> "$HOME/server-log"\necho "unix:$HOME/$$.sock"\n' })
 
@@ -186,7 +186,7 @@ test('the copy runs without CLAUDE_CODE_SESSION_ID, because it serves every sess
   expect(serverLog(home)).toEqual(['session none'])
 }, 60000)
 
-test("cmod teardown deletes the removed mod's instances folder and keeps another mod's", async () => {
+test.concurrent("cmod teardown deletes the removed mod's instances folder and keeps another mod's", async () => {
   const home = await temporaryHome()
   await writeFiles(home, { '.local/share/cmod/instances/tools/fake-server.json': '{}\n', '.local/share/cmod/instances/notes/fake-server.json': '{}\n' })
 
@@ -197,7 +197,7 @@ test("cmod teardown deletes the removed mod's instances folder and keeps another
   expect(existsSync(join(home, '.local/share/cmod/instances/notes/fake-server.json'))).toBe(true)
 }, 60000)
 
-test("a copy that crashes makes the owner exit with the copy's exit code and pass its standard error through", async () => {
+test.concurrent("a copy that crashes makes the owner exit with the copy's exit code and pass its standard error through", async () => {
   const home = await serverHome()
 
   const { exitCode, stderr } = await cmod(home, 'program', 'tools', '--', 'crash-server')
