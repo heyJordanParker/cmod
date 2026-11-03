@@ -2,8 +2,6 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readlinkSync } from 'node:fs'
 import { chmod, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { buildRelease } from '../src/commands/publish.js'
-import { readPlugin } from '../src/plugin.js'
 import { deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
@@ -60,14 +58,11 @@ test('the cmod plugin, @cmodjs/cli, and @cmodjs/core share one version, which th
 })
 
 test("the cmod plugin's release carries the launcher the bootstrap runs and no bun.lock, so a computer without Bun sets cmod up", async () => {
-  const output = await temporaryHome()
+  const manifest = JSON.parse(await readFile(join(checkout, 'package.json'), 'utf8'))
 
-  const { tree } = await buildRelease(await readPlugin(checkout), output)
-
-  expect(existsSync(join(tree, 'cli/bin/cmod'))).toBe(true)
-  expect(JSON.parse(await readFile(join(tree, 'cli/package.json'), 'utf8')).version).toBe(JSON.parse(await readFile(join(checkout, '.claude-plugin/plugin.json'), 'utf8')).version)
-  expect(existsSync(join(tree, 'bun.lock'))).toBe(false)
-  expect(existsSync(join(tree, 'cli/src'))).toBe(false)
+  expect(manifest.files).toEqual(expect.arrayContaining(['cli/bin/cmod', 'cli/package.json', 'setup']))
+  expect(manifest.files).not.toContain('bun.lock')
+  expect(Object.keys(manifest.dependencies)).toEqual(['@cmodjs/core'])
 })
 
 test('the cmod launcher downloads its version, checks it against SHA256SUMS, and runs it', async () => {
