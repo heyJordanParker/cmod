@@ -11,13 +11,18 @@ permissions:
 concurrency:
   group: release
 
+env:
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+
 jobs:
-  release:
-    runs-on: macos-latest
-    timeout-minutes: 60
-    env:
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
-      GH_TOKEN: ${{ github.token }}
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      core: ${{ steps.version.outputs.core }}
+      cli: ${{ steps.version.outputs.cli }}
+      release: ${{ steps.version.outputs.release }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,7 +48,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       - name: Write Claude Code's types while the suites that need none run
         run: |
@@ -82,9 +86,38 @@ jobs:
           bun x tsc --noEmit
           OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
 
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Test what runs only on macOS
+        run: |
+          bun install --cwd core --frozen-lockfile
+          bun install --cwd cli --frozen-lockfile
+          (cd core && bun test tests/register.test.ts)
+          cd cli
+          printf '%s\n' tests/install.test.ts tests/launcher.test.ts tests/secret.test.ts tests/try.test.ts | xargs -P 0 -n 1 bun test --timeout 30000
+
+  release:
+    needs: [test, macos]
+    if: needs.test.outputs.core != 'done' || needs.test.outputs.cli != 'done' || needs.test.outputs.release != 'done'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Leave the release to main's run when main's workflows changed
         id: main
-        if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
         run: |
           git fetch --quiet origin main
           if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- .github/workflows; then
@@ -92,18 +125,45 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: oven-sh/setup-bun@v2
+        if: steps.main.outputs.changed != 'true'
+        with:
+          bun-version: 1.4.4
+
+      - uses: actions/setup-node@v7
+        if: steps.main.outputs.changed != 'true'
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Build @cmodjs/core into the cmod plugin, with Claude Code's types
+        if: steps.main.outputs.changed != 'true'
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s latest
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          CLAUDE_CODE_PLUGIN_DIR_WATCH=1 "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
+          test -d .claude-plugin/types
+          bun install --cwd core --frozen-lockfile
+          bun install --cwd cli --frozen-lockfile
+          bun install --frozen-lockfile
+          bun run --cwd core build
+          (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")
+          rm -rf node_modules/@cmodjs/core
+          mkdir node_modules/@cmodjs/core
+          tar -xzf "$RUNNER_TEMP/cmodjs-core-${{ needs.test.outputs.version }}.tgz" -C node_modules/@cmodjs/core --strip-components=1
+
       - name: Publish @cmodjs/core to npm
-        if: steps.version.outputs.core != 'done' && steps.main.outputs.changed != 'true'
+        if: needs.test.outputs.core != 'done' && steps.main.outputs.changed != 'true'
         working-directory: core
         run: npm publish --provenance
 
       - name: Publish @cmodjs/cli to npm
-        if: steps.version.outputs.cli != 'done' && steps.main.outputs.changed != 'true'
+        if: needs.test.outputs.cli != 'done' && steps.main.outputs.changed != 'true'
         working-directory: cli
         run: npm publish --provenance
 
       - name: Release the cmod plugin and the cmod program on GitHub
-        if: steps.version.outputs.release != 'done' && steps.main.outputs.changed != 'true'
+        if: needs.test.outputs.release != 'done' && steps.main.outputs.changed != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
