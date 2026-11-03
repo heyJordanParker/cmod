@@ -45,23 +45,30 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Write Claude Code's types, which the build reads
+      - name: Write Claude Code's types while the suites that need none run
         run: |
-          curl -fsSL https://claude.ai/install.sh | bash -s latest
+          (
+            curl -fsSL https://claude.ai/install.sh | bash -s latest
+            CLAUDE_CODE_PLUGIN_DIR_WATCH=1 "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
+          ) > "$RUNNER_TEMP/claude-code.log" 2>&1 &
+          claude_code=$!
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          CLAUDE_CODE_PLUGIN_DIR_WATCH=1 "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
-          test -d .claude-plugin/types
-
-      - name: Test and build @cmodjs/core and @cmodjs/cli
-        run: |
           bun install --cwd lint --frozen-lockfile
           bun install --cwd core --frozen-lockfile
           bun install --cwd cli --frozen-lockfile
           bun run --cwd lint test
-          bun run --cwd core check
           (cd core && bun test)
-          bun run --cwd core build
           bun run --cwd cli check
+          code=0
+          wait "$claude_code" || code=$?
+          cat "$RUNNER_TEMP/claude-code.log"
+          [ "$code" = 0 ]
+          test -d .claude-plugin/types
+
+      - name: Test and build @cmodjs/core and @cmodjs/cli
+        run: |
+          bun run --cwd core check
+          bun run --cwd core build
           bun run --cwd cli test
 
       - name: Test the cmod plugin on this @cmodjs/core
@@ -75,24 +82,29 @@ jobs:
           bun x tsc --noEmit
           OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
 
+      - name: Leave the release to main's run when main's workflows changed
+        id: main
+        if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
+        run: |
+          git fetch --quiet origin main
+          if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- .github/workflows; then
+            echo "::notice::main's .github/workflows changed since $GITHUB_SHA, and GitHub refuses this run's token a tag whose workflows differ from main's, so the run for main releases"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish @cmodjs/core to npm
-        if: steps.version.outputs.core != 'done'
+        if: steps.version.outputs.core != 'done' && steps.main.outputs.changed != 'true'
         working-directory: core
         run: npm publish --provenance
 
       - name: Publish @cmodjs/cli to npm
-        if: steps.version.outputs.cli != 'done'
+        if: steps.version.outputs.cli != 'done' && steps.main.outputs.changed != 'true'
         working-directory: cli
         run: npm publish --provenance
 
       - name: Release the cmod plugin and the cmod program on GitHub
-        if: steps.version.outputs.release != 'done'
+        if: steps.version.outputs.release != 'done' && steps.main.outputs.changed != 'true'
         run: |
-          main=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$main" != "$GITHUB_SHA" ]; then
-            echo "::notice::main moved from $GITHUB_SHA to $main during this run, so the run for $main releases the cmod plugin"
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           bun cli/src/main.ts publish

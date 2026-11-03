@@ -64,12 +64,12 @@ env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 
 1. It fails when the three versions differ.
-2. It installs Claude Code to write `.claude-plugin/types/`, then tests the lint rules in `lint/`, checks and tests `@cmodjs/core` and `@cmodjs/cli`, and builds `@cmodjs/core`.
+2. It installs Claude Code to write `.claude-plugin/types/` while it tests the lint rules in `lint/` and `@cmodjs/core` and checks `@cmodjs/cli`, which read no types, then checks and builds `@cmodjs/core` and tests `@cmodjs/cli`.
 3. It unpacks that `@cmodjs/core` into the cmod plugin's `node_modules` and tests the cmod plugin on it.
 4. It publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.
 5. It releases the cmod plugin on GitHub with `cmod publish`, which bundles that `@cmodjs/core` into the plugin's hooks module, builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
 
-Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway. Step 5 also skips when `main` moved past the run's commit, because GitHub refuses the workflow token a tag whose `.github/workflows/` differs from `main`'s, and `concurrency: release` queues the run for the newer `main`, which releases instead. A push that releases nothing still runs steps 2 and 3, so every push to `main` runs every suite.
+Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway. Steps 4 and 5 also skip when `main`'s `.github/workflows/` changed since the run's commit, because GitHub refuses the workflow token a tag whose `.github/workflows/` differs from `main`'s, and `concurrency: release` queues the run for that `main`, which releases instead. A push that releases nothing still runs steps 2 and 3, so every push to `main` runs every suite.
 
 The workflow's GitHub release holds a link to the commits, opened by a `## Breaking changes` list that `cmod publish` builds from each `BREAKING CHANGE:` footer and each `!` commit, such as `feat!:`, since the last tag. A commit that changes what a mod author writes carries both. Once the workflow finishes, write what the version lets people do from the commits since the last tag, with each breaking change's before and after, and set it with `gh release edit v<version> --notes-file <file>`. The `/release` Skill in `.claude/skills/` runs every step, the changelog included.
 
