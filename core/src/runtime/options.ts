@@ -44,7 +44,7 @@ export function createOptions({
   const readLocked = async () => {
     if (Object.keys(declared).length === 0) return new Set<string>()
     const rows = await claude.config.list().catch((error: unknown) => {
-      claude.ui.log(`${name} could not read /config, so a project's options.json may override a value your organization set: ${messageOf(error)}`, { to: 'debug' })
+      claude.ui.warn('options:config', `${name} could not read /config, so a project's options.json may override a value your organization set: ${messageOf(error)}`)
       return []
     })
     return new Set(rows.filter((row) => row.isLocked && row.key.startsWith(`${name}.`)).map((row) => row.key.slice(name.length + 1)))

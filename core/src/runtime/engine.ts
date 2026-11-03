@@ -4,6 +4,7 @@ import type { Pages } from './pages.js'
 import type { Router } from './router.js'
 import type { Failure } from './toaster.js'
 import type { ToolCalls } from './tool-calls.js'
+import type { Watches } from './watches.js'
 import type { Widgets } from './widgets.js'
 
 export type Engine = {
@@ -14,6 +15,7 @@ export type Engine = {
   readonly hasPermissionCheck: () => boolean
   readonly answerInput: <Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>) => Promise<Answer>
   readonly spawnCmod: (args: readonly string[], env?: Readonly<Record<string, string>>) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  readonly watches: Watches
   readonly widgets?: Widgets
   readonly pages?: Pages
 }

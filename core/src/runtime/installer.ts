@@ -43,7 +43,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
     await withBareRefusals(claude()).cmod.call({ to: cmodPluginName, method: partMethods.changed, input: update })
   }
 
-  const log = (what: string) => (error: unknown) => claude().ui.log(`${name}: ${what}: ${messageOf(error)}`, { to: 'debug' })
+  const log = (what: string) => (error: unknown) => claude().ui.warn('installer:page', `${name}: ${what}: ${messageOf(error)}`)
 
   const open = (isAsked: boolean) => send({ requests: [{ open: installPage, focus: true }], ...(isAsked ? { isAsked: true } : {}) })
 

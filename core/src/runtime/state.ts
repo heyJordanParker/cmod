@@ -42,8 +42,12 @@ export function onStateChange(state: object, listener: () => void): Subscription
   return { remove: () => void own.delete(listener) }
 }
 
+export function sessionKeyOf(name: string, key: string, session: string): string {
+  return `${name}.${key}.sessions.${session}`
+}
+
 export async function sessionsWith(claude: Pick<Claude, 'store'>, name: string, key: string, value: unknown): Promise<string[]> {
-  const prefix = `${name}.${key}.sessions.`
+  const prefix = sessionKeyOf(name, key, '')
   const found: string[] = []
   for (const stored of (await claude.store.keys()).filter((each) => each.startsWith(prefix))) {
     if ((await claude.store.get(stored)) === value) found.push(stored.slice(prefix.length))
@@ -68,7 +72,7 @@ export function createState<State extends object>({ name, initial, session, root
     return run
   }
 
-  const ownersKey = (lifetime: Exclude<SavedLifetime, 'global'>, key: string) => `${name}.${key}.${lifetime === 'project' ? 'projects' : 'sessions'}.`
+  const ownersKey = (lifetime: Exclude<SavedLifetime, 'global'>, key: string) => (lifetime === 'project' ? `${name}.${key}.projects.` : sessionKeyOf(name, key, ''))
 
   const storeKey = (lifetime: SavedLifetime, key: string, owner: string) => (lifetime === 'global' ? `${name}.${key}` : `${ownersKey(lifetime, key)}${owner}`)
 
@@ -131,7 +135,7 @@ export function createState<State extends object>({ name, initial, session, root
         if (lifetime !== 'memory') {
           const owner = lifetime === 'project' ? projectRoot : sessionId
           inTurn(() => write(lifetime, key, value, owner)).catch((error: unknown) => {
-            report({ id: `state:${lifetime}.${key}`, message: `Could not keep state.${lifetime}.${key}. Keep only JSON data in mod.state`, error })
+            report({ id: `state:${lifetime}.${key}`, message: `Could not keep state.${lifetime}.${key}`, error })
           })
         }
         changed()

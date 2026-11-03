@@ -49,6 +49,7 @@ export type Claude = {
   readonly plugin: { readonly name: string; readonly root: string }
   readonly ui: {
     log(text: string, options?: UiLogOptions): void
+    warn(id: string, text: string): void
     notice(toolUseId: string, text: string | undefined): void
     toast(text: string, options?: ToastOptions): void
     invalidate(event: InvalidatableEventName): void
@@ -93,6 +94,7 @@ export type Claude = {
     model(): Promise<string>
     usage(): Promise<SessionUsage>
     surfaces(): Promise<readonly RenderSurface[]>
+    version(): Promise<string>
     messages: EngineInterface['session']['messages']
     append: EngineInterface['session']['append']
     send: EngineInterface['session']['send']

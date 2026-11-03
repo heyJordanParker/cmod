@@ -11,7 +11,21 @@ export type ShownToast = { readonly type: ToastType; readonly message: string; r
 
 export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown; readonly isCritical?: boolean }
 
-export type LoggedFailure = { readonly mod: string; readonly id: string; readonly message: string; readonly details: string; readonly at: string; readonly isCritical: boolean; readonly root: string; readonly contact?: Contact }
+export type LogLevel = 'error' | 'warning'
+
+export type LoggedFailure = {
+  readonly mod: string
+  readonly id: string
+  readonly message: string
+  readonly details: string
+  readonly at: string
+  readonly isCritical: boolean
+  readonly root: string
+  readonly contact?: Contact
+  readonly level?: LogLevel
+  readonly version?: string
+  readonly core?: string
+}
 
 export const failedMethod = 'cmod:failed'
 
@@ -19,6 +33,7 @@ export type Toaster = {
   readonly toast: Toast
   copy(text: string): Promise<void>
   fail(failure: Failure): ToastId
+  warn(id: string, text: string): void
   readonly shown: readonly ShownToast[]
   draw(drawn: RenderElement, table: ElementTable, band: RenderPropsOf['AbovePrompt'], bandId: string): RenderElement
 }
@@ -75,7 +90,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
       if (typeof saved !== 'object' || saved === null) return
       for (const [id, hides] of Object.entries(saved)) if (typeof hides === 'string' && !hidden.has(id)) hidden.set(id, hides)
     },
-    (error: unknown) => claude.ui.log(`${name}: could not read the failures you hid: ${messageOf(error)}`, { to: 'debug' }),
+    (error: unknown) => warn('hidden:read', `${name}: could not read the failures you hid: ${messageOf(error)}`),
   )
   let lastId = 0
   let frame = 0
@@ -157,7 +172,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     dismiss(entry.id)
     if (entry.hides === undefined) return
     hidden.set(String(entry.id), entry.hides)
-    void claude.store.set(hiddenKey, Object.fromEntries(hidden)).catch((error: unknown) => claude.ui.log(`${name}: could not remember the failure you hid: ${messageOf(error)}`, { to: 'debug' }))
+    void claude.store.set(hiddenKey, Object.fromEntries(hidden)).catch((error: unknown) => warn('hidden:write', `${name}: could not remember the failure you hid: ${messageOf(error)}`))
   }
 
   const toast: Toast = Object.assign(show('default'), {
@@ -198,6 +213,30 @@ export function createToaster(claude: Claude, name: string, version: () => strin
 
   const logFailure = (failure: LoggedFailure) => claude.cmod.call({ to: cmodPluginName, method: failedMethod, input: failure })
 
+  const modVersion = () =>
+    claude.fs
+      .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
+      .then((text) => String((JSON.parse(text) as { version?: unknown }).version))
+      .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
+
+  const detailsOf = (version: string, at: Date, text: string) => `${name} ${version}, @cmodjs/core ${coreVersion}, at ${at.toISOString()}\n${text}`
+
+  const warned = new Map<string, string>()
+
+  const warn = (id: string, text: string) => {
+    claude.ui.log(text, { to: 'debug' })
+    const at = new Date()
+    const repeat = `${text}\n${at.toISOString().slice(0, 16)}`
+    if (warned.get(id) === repeat) return
+    warned.set(id, repeat)
+    claude.clock.after(0, () => {
+      void (async () => {
+        const version = await modVersion()
+        await logFailure({ mod: name, id, message: text, details: detailsOf(version, at, text), at: at.toISOString(), isCritical: false, root: claude.plugin.root, level: 'warning', version, core: coreVersion })
+      })().catch(() => undefined)
+    })
+  }
+
   const showsToast = async (failure: LoggedFailure, isShown: boolean): Promise<boolean | undefined> => {
     try {
       const logged = logFailure(failure)
@@ -217,16 +256,11 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     if (sent.get(id) === repeat) return id
     sent.set(id, repeat)
     const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
-    const details = async (failedAt: Date) => {
-      const modVersion = await claude.fs
-        .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
-        .then((text) => String((JSON.parse(text) as { version?: unknown }).version))
-        .catch((failure: unknown) => `unknown (${messageOf(failure)})`)
-      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${failedAt.toISOString()}\n${message}${description === undefined ? '' : `\n${description}`}${stack}`
-    }
+    const details = async (failedAt: Date) => detailsOf(await modVersion(), failedAt, `${message}${description === undefined ? '' : `\n${description}`}${stack}`)
     const logged = async () => {
       const contact = await contactOf(claude)
-      const failure: LoggedFailure = { mod: name, id, message, details: await details(at), at: at.toISOString(), isCritical, root: claude.plugin.root, ...(contact === undefined ? {} : { contact }) }
+      const version = await modVersion()
+      const failure: LoggedFailure = { mod: name, id, message, details: detailsOf(version, at, `${message}${description === undefined ? '' : `\n${description}`}${stack}`), at: at.toISOString(), isCritical, root: claude.plugin.root, ...(contact === undefined ? {} : { contact }), level: 'error', version, core: coreVersion }
       const shows = await showsToast(failure, isCritical)
       if (isCritical) return
       if (shows !== false) return show()
@@ -253,7 +287,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
       changed()
       if (bandId === undefined) return
       const focused = await claude.ui.focus({ requestId: bandId, key: `toast:${id}:ask-claude` })
-      if ('deny' in focused) claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: 'debug' })
+      if ('deny' in focused) warn('report:focus', `${name}: the Report choices did not take the keys: ${String(focused.deny)}`)
     }
     const tryAgain = async () => {
       const shown = entries.get(id)
@@ -346,6 +380,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     toast,
     copy,
     fail,
+    warn,
     get shown() {
       return [...entries.values()].map(({ type, message, options }) => ({ type, message, ...(typeof options.description === 'string' ? { description: options.description } : {}) }))
     },

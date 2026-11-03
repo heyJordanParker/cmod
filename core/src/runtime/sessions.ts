@@ -204,7 +204,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     parents.get(session)?.set(change.task.id, change.task.parent)
     void readingParents.get(session)?.then(
       (tree) => tree.set(change.task.id, change.task.parent),
-      (error: unknown) => claude.ui.log(`${name}: the tasks of ${session} stay unread until the next change: ${messageOf(error)}`, { to: 'debug' }),
+      (error: unknown) => claude.ui.warn('tasks:read', `${name}: the tasks of ${session} stay unread until the next change: ${messageOf(error)}`),
     )
   }
 

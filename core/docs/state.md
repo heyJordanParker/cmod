@@ -79,7 +79,7 @@ export const reads = defineMod({
 })
 ```
 
-- Keep only JSON data in a saved group. A value cmod cannot save logs `<mod> could not keep state.<group>.<key>: <error>. Keep only JSON data in mod.state.`
+- Keep only JSON data in a saved group. A value cmod cannot save, such as one that is not JSON, fails as `Could not keep state.<group>.<key>`, with Claude Code's reason under it.
 - cmod saves values one at a time in the order they were assigned.
 
 ## Where the values come from

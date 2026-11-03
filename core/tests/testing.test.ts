@@ -151,6 +151,43 @@ test("startSession starts a new session that has its own session values, and a r
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
+test("after /resume to another session, sessions.current.id and the page name the resumed session, though Claude Code 2.1.317 answers the old id during the resume's SessionStart", async () => {
+  const heardAtStart: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'inbox',
+      setup(mod) {
+        sessions.current.onSessionStart(() => void heardAtStart.push(sessions.current.id))
+        void mod.sidebar.add({ id: 'scope', title: 'Scope', render: () => Text({ children: `This session: ${sessions.current.id}` }) }).open()
+      },
+    }),
+  )
+  await tested.start()
+
+  await tested.startSession({ source: 'resume', id: 'resumed-session' })
+
+  expect(sessions.current.id).toBe('resumed-session')
+  expect(heardAtStart).toEqual(['resumed-session'])
+  expect((await tested.shown.page.lines()).join('\n')).toContain('This session: resumed-session')
+})
+
+test("during a /resume's SessionStart, the session id the engine answers is the resumed one, though Claude Code 2.1.317's $.session.id() still answers the old one, so the cmod plugin acts on the resumed session in place instead of relaying to it", async () => {
+  const answered: string[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'relay',
+      setup(mod) {
+        sessions.current.beforeSessionStart(async () => void answered.push(await engineOf(mod).claude.session.id()))
+      },
+    }),
+  )
+  await tested.start()
+
+  await tested.startSession({ source: 'resume', id: 'resumed-session' })
+
+  expect(answered).toEqual(['resumed-session'])
+})
+
 test('type runs a slash command and returns its reply', async () => {
   const tested = testMod(
     defineMod({

@@ -233,3 +233,5 @@ A mod runs on macOS and Linux, on arm64 and x64, unless the `os` and `cpu` keys 
 Claude Code itself has no field for this, and installs the mod on any machine.
 
 The cmod repository ships the `cmod` program this way. Its `package.json` holds `"cmod": { "program": "cmod" }`, and its `cli/package.json` holds `"cmod": { "build": "bun run build", "output": "dist" }`.
+
+Its `build` script passes `--no-compile-autoload-dotenv --no-compile-autoload-bunfig` to `bun build --compile`, because a compiled Bun program otherwise loads the `.env` and `bunfig.toml` of the folder it runs in, and runs that `bunfig.toml`'s `preload` scripts inside itself. It starts with `trap 'rm -f .*.bun-build' EXIT;`, because Bun 1.4.4 leaves an 89 MB `.<hash>-00000000.bun-build` file beside every compile.

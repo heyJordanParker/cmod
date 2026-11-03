@@ -13,6 +13,7 @@ import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { permissionRoutes } from '../../src/runtime/permission-check.js'
+import { sessionKeyOf } from '../../src/runtime/state.js'
 import { oldestCmodVersion, readSteps, scriptsSha256 } from '../../src/records.js'
 import type { ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
@@ -82,7 +83,7 @@ function installCmod(fake: ReturnType<typeof fakeClaude>, version: string = olde
 
 
 const postToolUse: ClassicHookInputs['PostToolUse'] = {
-  session_id: 's',
+  session_id: 'test-session',
   transcript_path: '/t',
   cwd: '/work',
   hook_event_name: 'PostToolUse',
@@ -94,7 +95,7 @@ const postToolUse: ClassicHookInputs['PostToolUse'] = {
 
 const promptSubmit = { ...postToolUse, hook_event_name: 'UserPromptSubmit', prompt: 'hi' }
 
-const toolBatch = { session_id: 's', cwd: '/work', hook_event_name: 'PostToolBatch', tool_calls: [] }
+const toolBatch = { session_id: 'test-session', cwd: '/work', hook_event_name: 'PostToolBatch', tool_calls: [] }
 
 function failed(message: string, description?: string): ShownToast[] {
   return [{ type: 'error', message, ...(description === undefined ? {} : { description }) }]
@@ -839,9 +840,44 @@ test('a listener failure in an installed mod that is not linked goes to the Log,
       at: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/),
       isCritical: false,
       root,
+      level: 'error',
+      version: expect.stringMatching(/^unknown \(/),
+      core: expect.stringMatching(/^\d+\.\d+\.\d+$/),
     },
   ])
   expect(fake.shown.debug).toContain('safe-delete: The onSessionStart listener failed: the trash folder is missing')
+})
+
+test("a session start forgets every value an ended session kept under its session key, once the ended session's transcript is gone, and keeps the live ones", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  Object.assign(fake.fakes.fs, fakeFiles({ ...manifestOnly, '/transcripts/live.jsonl': '' }))
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  fake.store.set('safe-delete.$transcripts.ended', '/transcripts/ended.jsonl')
+  fake.store.set(sessionKeyOf('safe-delete', 'count', 'ended'), 3)
+  fake.store.set(sessionKeyOf('safe-delete', 'hidingReload', 'ended'), true)
+  fake.store.set('safe-delete.$transcripts.live', '/transcripts/live.jsonl')
+  fake.store.set(sessionKeyOf('safe-delete', 'count', 'live'), 5)
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', state: { session: { count: 0 } }, setup: () => undefined }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+
+  expect([...fake.store.keys()].filter((key) => key.startsWith('safe-delete.')).toSorted()).toEqual(['safe-delete.$transcripts.live', 'safe-delete.$transcripts.test-session', sessionKeyOf('safe-delete', 'count', 'live')])
+})
+
+test("a warning cmod writes for a mod reaches the cmod plugin's Log as a warning with the mod's versions, and never shows a toast", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const logged = loggingFailures(fake, { showsToast: true })
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: (mod) => engineOf(mod).claude.ui.warn('pages:list:notes', 'cmod: notes did not list its pages') }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged).toEqual([expect.objectContaining({ mod: 'safe-delete', id: 'pages:list:notes', message: 'cmod: notes did not list its pages', level: 'warning', version: '0.2.0', core: expect.stringMatching(/^\d+\.\d+\.\d+$/), isCritical: false })])
+  expect(fake.shown.debug).toContain('cmod: notes did not list its pages')
 })
 
 test('the same listener failure shows its toast as today when cmod refuses cmod:failed as a method it lacks', async () => {
@@ -2593,6 +2629,53 @@ test('a SessionStart answered before the limit cancels its timer', async () => {
   expect(await answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'] })
   expect(sources).toEqual(['startup'])
   expect(timers).toEqual([{ ms: 9_000, isCancelled: true }])
+})
+
+test("a prompt that arrives while a mod that just installed still runs its setup passes on at the start limit, as a SessionStart does, so Claude Code never stops the hook for running past its budget", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }', [`${root}/package.json`]: '{ "cmod": { "program": "safe-delete" } }' }))
+  installCmod(fake)
+  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  const timers: { ms: number; fire: () => void }[] = []
+  fake.fakes.clock.after = (ms, fire) => {
+    if (ms === 0) void Promise.resolve().then(fire)
+    else timers.push({ ms, fire })
+    return { cancel: () => undefined }
+  }
+  let finishSetup: () => void = () => undefined
+  const slowSetup = new Promise<void>((resolve) => (finishSetup = resolve))
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => slowSetup }))
+  await lifecycle.start(fake.claude, readPlugin)
+  await fake.settle()
+  let isAnswered = false
+
+  const answer = fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {}).finally(() => (isAnswered = true))
+  await fake.settle()
+  timers.find((made) => made.ms === 9_000)?.fire()
+  await fake.settle()
+
+  expect(isAnswered).toBe(true)
+  expect(await answer).toEqual({})
+  finishSetup()
+})
+
+test("a hook Claude Code aborts settles a second later even while its route still waits, so Claude Code never counts the mod as a runaway and restarts every mod's hooks", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      setup(mod) {
+        engineOf(mod).router.add('classic.UserPromptSubmit', () => new Promise<never>(() => undefined))
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  const aborted = new AbortController()
+
+  const answer = lifecycle.route('classic.UserPromptSubmit', promptSubmit as Frozen<Args<'classic.UserPromptSubmit'>>, async () => ({}), aborted.signal)
+  aborted.abort(new Error('safe-delete: ran past its 10s budget'))
+
+  await expect(answer).rejects.toThrow('safe-delete: ran past its 10s budget')
 })
 
 test('a late SessionStart replay that throws leaves the mod active', async () => {

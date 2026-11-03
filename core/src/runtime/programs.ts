@@ -39,6 +39,13 @@ export function spawnCmod(claude: Claude, args: readonly string[], session: stri
   return claude.process.spawn({ argv: ['cmod', ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } })
 }
 
+export async function isHeld(claude: Claude, lock: string, staleMs: number): Promise<boolean> {
+  const now = await claude.clock.now()
+  const holders = await claude.fs.list(lock).catch(ifMissing([]))
+  const touched = await Promise.all(holders.map(async ({ name }) => (await claude.fs.stat(`${lock}/${name}`).catch(ifMissing(undefined)))?.mtimeMs ?? 0))
+  return touched.some((at) => now - at < staleMs)
+}
+
 export async function runCmod(claude: Claude, args: readonly string[], session: string): Promise<string> {
   const lines: string[] = []
   const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line))

@@ -183,7 +183,7 @@ export function serveWidgets({
       declared.set(mod, declarationsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })))
     } catch (error) {
       declared.delete(mod)
-      claude.ui.log(`cmod: ${mod} did not list its widgets: ${messageOf(error)}`, { to: 'debug' })
+      claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`)
     }
   }
 

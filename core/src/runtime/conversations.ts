@@ -259,7 +259,7 @@ export function serveConversations({
 
   const publishWatches = (isEnding = false) => {
     const next = publishing.then(() => publishNow(isEnding))
-    publishing = next.catch((error: unknown) => claude.ui.log(`cmod: publishing before listeners failed: ${messageOf(error)}`, { to: 'debug' }))
+    publishing = next.catch((error: unknown) => claude.ui.warn('before:publish', `cmod: publishing before listeners failed: ${messageOf(error)}`))
     return next
   }
 
@@ -275,7 +275,7 @@ export function serveConversations({
     published = new Set(list.map((watch) => watch.target))
     const running = targets.has(everySession) ? (await json<SessionData[]>(['history', 'sessions', '--running'])).map((each) => each.id) : []
     const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session))
-    await Promise.all([...told].map((id) => post(id, { kind: 'watch' }).catch((error: unknown) => claude.ui.log(`cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`, { to: 'debug' }))))
+    await Promise.all([...told].map((id) => post(id, { kind: 'watch' }).catch((error: unknown) => claude.ui.warn('before:tell', `cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`))))
   }
 
   const hear = (caller: string, id: string, list: readonly Listened[]) => {
@@ -289,7 +289,7 @@ export function serveConversations({
 
   const onListenerFiles = <Value>(work: () => Promise<Value>) => {
     const next = listenerFiles.then(work)
-    listenerFiles = next.catch((error: unknown) => claude.ui.log(`cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`, { to: 'debug' }))
+    listenerFiles = next.catch((error: unknown) => claude.ui.warn('listeners:files', `cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`))
     return next
   }
 
@@ -325,7 +325,7 @@ export function serveConversations({
           list = JSON.parse(text) as readonly Watch[]
         } catch (error) {
           if (from === session || !(error instanceof SyntaxError)) throw error
-          claude.ui.log(`cmod: session ${from} was writing its before listeners, so it keeps the ones from before until it relays that it changed them`, { to: 'debug' })
+          claude.ui.warn('before:read', `cmod: session ${from} was writing its before listeners, so it keeps the ones from before until it relays that it changed them`)
           found.push(...watchers.filter((watch) => watch.from === from))
           continue
         }
@@ -375,7 +375,7 @@ export function serveConversations({
         throw error
       }
       watchers = watchers.filter((each) => each.from !== watcher.from)
-      claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: 'debug' })
+      claude.ui.warn('before:ended', `cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`)
       await clearWatches(watcher.from)
       return undefined
     }
@@ -640,7 +640,7 @@ export function serveConversations({
     const { session: from, ...task } = JSON.parse(asked) as TaskData & { readonly session: string }
     const ended: TaskData = { ...task, id: session, closedAt: new Date().toISOString() }
     await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended))
-    await post(from, { kind: 'taskEnd', task: ended }).catch((error: unknown) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: 'debug' }))
+    await post(from, { kind: 'taskEnd', task: ended }).catch((error: unknown) => claude.ui.warn('task:answered', `cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`))
   }
 
   const actElsewhere = async (caller: string, target: string, action: Act, input: unknown, task: string | undefined): Promise<unknown> => {
@@ -741,7 +741,7 @@ export function serveConversations({
       if (id !== session) return saved
       await starting
       const kept = liveTasks().filter((task) => isNested || task.parent === request['task'])
-      const running = await claude.agent.list().catch((error: unknown) => (claude.ui.log(`cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`, { to: 'debug' }), []))
+      const running = await claude.agent.list().catch((error: unknown) => (claude.ui.warn('tasks:status', `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []))
       const background = saved.flatMap(({ id, status }) => (status === undefined ? [] : [{ id, status }]))
       return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background])
     },
@@ -764,7 +764,7 @@ export function serveConversations({
       if (id === session) changeGoal(task, text)
       else {
         dispatch(id, [{ type: GoalChange, goal: { text, ...(task === undefined ? {} : { task }) } }])
-        await post(id, { kind: 'goal', ...(task === undefined ? {} : { task }), text }).catch((error: unknown) => claude.ui.log(`cmod: session ${id} keeps its goal until it starts again: ${messageOf(error)}`, { to: 'debug' }))
+        await post(id, { kind: 'goal', ...(task === undefined ? {} : { task }), text }).catch((error: unknown) => claude.ui.warn('goal:tell', `cmod: session ${id} keeps its goal until it starts again: ${messageOf(error)}`))
       }
       return null
     },

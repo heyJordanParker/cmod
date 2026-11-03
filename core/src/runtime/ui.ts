@@ -204,7 +204,7 @@ export type UiArea<State extends object> = {
   restorePanes(): Promise<void>
 }
 
-const keptDrawInputs = 200
+export const keptDrawInputs = 200
 
 export function createUi<State extends object>({ name, claude, router, report, announce, mod, borrowed, nextDraw }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, AddedPane<State>>()
@@ -221,7 +221,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
       else paneStates.set(id, { isShown: open.isShown, isFocused: open.isFocused })
     }
   }
-  const readPanes = () => syncPanes().catch((error: unknown) => claude.ui.log(`${name} keeps its panes' open, shown, and focused state from before: ${messageOf(error)}`, { to: 'debug' }))
+  const readPanes = () => syncPanes().catch((error: unknown) => claude.ui.warn('panes:read', `${name} keeps its panes' open, shown, and focused state from before: ${messageOf(error)}`))
   const requestedSizes = new Map<string, PaneSize>()
   const styles = new Set<string>()
   const markdownRenders = new Map<string, MarkdownRender>()
@@ -273,7 +273,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
         try {
           if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree) return true
         } catch (error) {
-          claude.ui.log(`${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`, { to: 'debug' })
+          claude.ui.warn(`drawing:${key}`, `${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`)
           return true
         }
         const latest = sent.draws.at(-1)
@@ -302,7 +302,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
           if (isAsked && input.requests !== undefined && !(isObject(answer) && answer['isHeld'] === true)) unheldRequests += 1
           if (isObject(answer) && name !== cmodPluginName) hear(answer['stylers'], false)
         },
-        (error: unknown) => claude.ui.log(`${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`, { to: 'debug' }),
+        (error: unknown) => claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`),
       )
     }
     if (!isAsked) return Promise.resolve().then(tell)
@@ -436,7 +436,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
       if (requested?.columns === size.columns && requested?.rows === size.rows) return
       await openAt(pane, size)
     } catch (error) {
-      claude.ui.log(`${name}: the ${pane.title} pane kept its size: ${messageOf(error)}`, { to: 'debug' })
+      claude.ui.warn(`pane:resize:${pane.id}`, `${name}: the ${pane.title} pane kept its size: ${messageOf(error)}`)
     }
   }
 
@@ -531,7 +531,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
         if (panes.get(init.id) !== added) return
         panes.delete(init.id)
         paneLogs.delete(init.id)
-        if (openPanes.has(init.id)) void claude.ui.close({ id: init.id }).catch((error: unknown) => claude.ui.log(`${name}: the ${init.title} pane stayed open: ${messageOf(error)}`, { to: 'debug' }))
+        if (openPanes.has(init.id)) void claude.ui.close({ id: init.id }).catch((error: unknown) => claude.ui.warn(`pane:close:${init.id}`, `${name}: the ${init.title} pane stayed open: ${messageOf(error)}`))
         openPanes.delete(init.id)
         paneStates.delete(init.id)
       },

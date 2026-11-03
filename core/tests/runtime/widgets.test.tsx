@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { AbovePrompt, BelowPrompt, Dashboard, defineMod, Prompt, TurnEnd, Working, type Mod, type WidgetInit } from '../../src/mod.js'
 import { storeChangedPath, widgetsPath } from '../../src/records.js'
 import { createRouter } from '../../src/runtime/router.js'
-import { partMethods } from '../../src/runtime/ui.js'
+import { keptDrawInputs, partMethods } from '../../src/runtime/ui.js'
 import { drawnParts } from '../../src/runtime/parts.js'
 import { claudeHint, claudeModes, layoutOf, moved, serveWidgets, toggled, type PlacedWidget, type WidgetLayout } from '../../src/runtime/widgets.js'
 import { testMod } from '../../src/testing.js'
@@ -473,8 +473,8 @@ test("a widget's button keeps working however many other drawings come after it"
   const drawn = (await tested.fire('cmod.call', { to: 'pick', method: partMethods.draw, input: { widget: 'choice', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }
   const turnEnd = (turn: number) => tested.fire('cmod.call', { to: 'pick', method: partMethods.draw, input: { widget: 'clock', area: TurnEnd, columns: 80, turn: { prompt: { id: `p${turn}` } } }, caller: 'cmod' } as never) as Promise<{ readonly value: { readonly draw: number } }>
   const first = await turnEnd(0)
-  for (let turn = 1; turn < 600; turn += 1) await turnEnd(turn)
-  const recent = await turnEnd(600)
+  for (let turn = 1; turn <= keptDrawInputs; turn += 1) await turnEnd(turn)
+  const recent = await turnEnd(keptDrawInputs + 1)
 
   await tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: drawn.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
   await tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: recent.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)

@@ -166,9 +166,10 @@ export function testMod<State extends object, Declared extends Options = Options
   let cwd = options.cwd ?? projectRoot
   let cwdAfterPrompt: string | undefined
   let sessionId = 'test-session'
+  let answeredId = sessionId
   let toolUses = 0
   let slotDraws = 0
-  fake.claude.session.id = async () => sessionId
+  fake.claude.session.id = async () => answeredId
   fake.claude.session.root = async () => projectRoot
   fake.claude.session.cwd = async () => cwd
   const conversations = fakeSessions({
@@ -551,9 +552,12 @@ export function testMod<State extends object, Declared extends Options = Options
     if (event === 'SessionStart') {
       const source = (input as { readonly source?: string }).source
       const isStartNote = source === 'startup' && !hasSessionStarted
+      const startedAs = sessionId
       hasSessionStarted = true
+      if (source !== 'resume') answeredId = startedAs
       const noted = start().then(() => (isStartNote ? undefined : noteDevice()))
-      const started = 'transcript_path' in input ? noted.then(() => route('classic.SessionStart', filled, below)) : Promise.all([noted, files.write(transcript, '')]).then(() => route('classic.SessionStart', filled, below))
+      const routed = 'transcript_path' in input ? noted.then(() => route('classic.SessionStart', filled, below)) : Promise.all([noted, files.write(transcript, '')]).then(() => route('classic.SessionStart', filled, below))
+      const started = routed.then((answer) => ((answeredId = startedAs), answer))
       return source === 'startup' || source === 'clear' ? started : started.then(async (answer) => (await tellHeldColor(), answer))
     }
     if (event !== 'PreToolUse') return route(`classic.${event}` as RoutedEvent, filled, below, signal)

@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { cmod, cmodFromSource, cmodWith, deleteTemporaryHomes, environment, startCmod, temporaryHome, writeFiles } from './cmod.js'
@@ -82,6 +82,51 @@ test("SIGTERM to the owner stops its copy, and the waiter starts the next copy a
   expect(serverLog(home)).toEqual([`start ${copy}`, `stop ${copy}`, `start ${next}`])
   second.child.kill()
   await second.done
+}, 60000)
+
+test('cmod program --no-wait with no holder runs the copy and prints its address', async () => {
+  const home = await serverHome()
+  const first = startCmod(home, 'program', 'tools', '--no-wait', '--', 'fake-server')
+  await until(() => serverIds(home, 'start').length === 1)
+  const [copy] = serverIds(home, 'start')
+
+  await first.waitForOutput(`unix:${home}/${copy}.sock`)
+  expect(owner(home)).toBe(first.child.pid)
+  first.child.kill()
+  await first.done
+}, 60000)
+
+test("cmod program --no-wait beside a holder touches the holder's lock file, prints held, and exits 0 without a second copy", async () => {
+  const home = await serverHome()
+  const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
+  await until(() => serverIds(home, 'start').length === 1)
+  const [copy] = serverIds(home, 'start')
+  await first.waitForOutput(`unix:${home}/${copy}.sock`)
+  const holder = join(instances(home), 'fake-server.json.lock', String(first.child.pid))
+  utimesSync(holder, new Date(0), new Date(0))
+
+  const { exitCode, stdout } = await cmod(home, 'program', 'tools', '--no-wait', '--', 'fake-server')
+
+  expect(exitCode).toBe(0)
+  expect(stdout.trim()).toBe('held')
+  expect(Date.now() - statSync(holder).mtimeMs).toBeLessThan(5000)
+  expect(serverIds(home, 'start')).toEqual([copy as string])
+  first.child.kill()
+  await first.done
+}, 60000)
+
+test('the holder touches its file in the lock every 5 seconds', async () => {
+  const home = await serverHome()
+  const first = startCmod(home, 'program', 'tools', '--', 'fake-server')
+  await until(() => serverIds(home, 'start').length === 1)
+  const holder = join(instances(home), 'fake-server.json.lock', String(first.child.pid))
+  utimesSync(holder, new Date(0), new Date(0))
+
+  await until(() => statSync(holder).mtimeMs > 0)
+
+  expect(Date.now() - statSync(holder).mtimeMs).toBeLessThan(5000)
+  first.child.kill()
+  await first.done
 }, 60000)
 
 test('after the owner is killed with SIGKILL, the next owner stops the orphaned copy before it starts its own', async () => {

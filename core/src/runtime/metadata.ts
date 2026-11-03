@@ -71,7 +71,7 @@ export function createModFiles({
   const skipped = <Value>(path: string, value: Value) => (error: unknown): Value => {
     if (isMissing(error)) return value
     const reason = `${name}: fs.find skipped ${path}: ${messageOf(error)}`
-    if (!logged.has(reason)) claude.ui.log(reason, { to: 'debug' })
+    if (!logged.has(reason)) claude.ui.warn('fs:find', reason)
     logged.add(reason)
     return value
   }

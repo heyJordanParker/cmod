@@ -90,13 +90,13 @@ export async function callFiles(name: string, claude: Claude, folders: Promise<H
     const { shell, reads, writes } = callEffects(use, { cwd, home, ...(configRoot === undefined ? {} : { configRoot }), fs: claude.fs })
     const known = (accesses: FileAccess[]) => accesses.map(({ path }) => path).filter((path) => shell === undefined || !dynamicPattern.test(path))
     const unchecked = (path: string) => (error: unknown) => {
-      if (!isMissing(error)) claude.ui.log(`${name}: the ${use.tool} call reads ${path}, which could not be checked: ${messageOf(error)}`, { to: 'debug' })
+      if (!isMissing(error)) claude.ui.warn('call:files', `${name}: the ${use.tool} call reads ${path}, which could not be checked: ${messageOf(error)}`)
       return undefined
     }
     const read = await Promise.all(known(reads).map(async (path) => ((await claude.fs.stat(path).catch(unchecked(path)))?.kind === 'file' ? [path] : [])))
     return { read: read.flat(), changed: known(writes) }
   } catch (error) {
-    claude.ui.log(`${name}: the ${use.tool} call lists no files: ${messageOf(error)}`, { to: 'debug' })
+    claude.ui.warn('call:files', `${name}: the ${use.tool} call lists no files: ${messageOf(error)}`)
     return { read: [], changed: [] }
   }
 }

@@ -3,10 +3,12 @@ import type { ModDefinition } from './mod.js'
 import type { Options } from './options.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
+import { settledAfterAbort } from './runtime/deadline.js'
 import { cmodPluginName } from './runtime/dependencies.js'
 import { readDevice } from './runtime/device.js'
 import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle.js'
 import { permissionRoutes, type PermissionRoutes } from './runtime/permission-check.js'
+import { messageOf } from './utils/text.js'
 
 let lifecycle: Lifecycle<object>
 
@@ -18,11 +20,30 @@ export function registeredMod(): ModDefinition<object> | undefined {
   return registered
 }
 
+const lockedRetryMs = [100, 300, 600] as const
+
+const heldLock = 'Lock file is already being held'
+
+const timers = globalThis as unknown as { setTimeout(run: () => void, ms: number): unknown }
+
+async function whenUnlocked(write: () => Promise<void>): Promise<void> {
+  for (const waitMs of lockedRetryMs) {
+    try {
+      return await write()
+    } catch (error) {
+      if (!messageOf(error).includes(heldLock)) throw error
+      await new Promise<void>((resolve) => void timers.setTimeout(resolve, waitMs))
+    }
+  }
+  return write()
+}
+
 async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.start'>>, passOn: Next<'session.start'>): Promise<EventResult<'session.start'>> {
   const claude: Claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
     ui: {
       log: (text, options) => $.ui.log(text, options),
+      warn: (_id, text) => $.ui.log(text, { to: 'debug' }),
       notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
       toast: (text, options) => $.ui.toast(text, options),
       invalidate: (event) => $.ui.invalidate(event),
@@ -51,8 +72,8 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     config: { list: () => $.config.list() },
     store: {
       get: (key) => $.store.get(key),
-      set: (key, value) => $.store.set(key, value),
-      delete: (key) => $.store.delete(key),
+      set: (key, value) => whenUnlocked(() => $.store.set(key, value)),
+      delete: (key) => whenUnlocked(() => $.store.delete(key)),
       keys: () => $.store.keys(),
     },
     clock: {
@@ -67,6 +88,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       model: () => $.session.model(),
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
+      version: async () => (await $.session.version()).version,
       messages: ((args?: Parameters<Claude['session']['messages']>[0]) => (args === undefined ? $.session.messages() : $.session.messages(args))) as Claude['session']['messages'],
       append: (args) => $.session.append(args),
       send: (args) => $.session.send(args),
@@ -88,7 +110,7 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) },
   }
-  const [, answer] = await Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)])
+  const [, answer] = await settledAfterAbort(Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)]), passOn.signal)
   return answer
 }
 

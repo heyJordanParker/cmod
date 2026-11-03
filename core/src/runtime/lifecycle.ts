@@ -7,7 +7,7 @@ import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVer
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { beforeDeadline } from './deadline.js'
+import { beforeDeadline, settledAfterAbort } from './deadline.js'
 import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
@@ -299,7 +299,7 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   const record = () => {
     recording ??= recordThroughCmod()
-      .catch((error: unknown) => claude().ui.log(`${definition.name} has no cmod record yet: ${messageOf(error)}`, { to: 'debug' }))
+      .catch((error: unknown) => claude().ui.warn('record', `${definition.name} has no cmod record yet: ${messageOf(error)}`))
       .finally(() => {
         recording = undefined
       })
@@ -414,10 +414,10 @@ export function createLifecycle<State extends object, Declared extends Options =
     const { additionalContext, ...unread } = answer as { readonly additionalContext?: readonly string[] } & Record<string, unknown>
     for (const text of additionalContext ?? []) {
       const added = await claude().session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
-      if (added.deny !== undefined) claude().ui.log(`${definition.name}: Claude Code refused its SessionStart note: ${added.deny}`, { to: 'debug' })
+      if (added.deny !== undefined) claude().ui.warn('session-start:note', `${definition.name}: Claude Code refused its SessionStart note: ${added.deny}`)
     }
     if (Object.keys(unread).length > 0) {
-      claude().ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read ${Object.keys(unread).join(', ')} from its SessionStart hooks.`, { to: 'debug' })
+      claude().ui.warn('session-start:late', `${definition.name} started after Claude Code's SessionStart, so Claude Code did not read ${Object.keys(unread).join(', ')} from its SessionStart hooks.`)
     }
   }
 
@@ -550,11 +550,12 @@ export function createLifecycle<State extends object, Declared extends Options =
   }
   let recordCheck: Timer | undefined
   let checking: Promise<void> | undefined
+  let startingSession: string | undefined
   const watchRecord = () => {
     recordCheck ??= claude().clock.every(recordCheckMs, () => {
       checking ??= recover()
         .then(() => undefined)
-        .catch((error: unknown) => claude().ui.log(`${definition.name} could not read whether another cmod installed it: ${messageOf(error)}`, { to: 'debug' }))
+        .catch((error: unknown) => claude().ui.warn('record:watch', `${definition.name} could not read whether another cmod installed it: ${messageOf(error)}`))
         .finally(() => {
           checking = undefined
         })
@@ -570,16 +571,78 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (activation !== undefined && phase !== 'active') await activation
   }
 
-  const holdUntilStarted = (): Promise<void> =>
+  const held = (work: Promise<void>, signal: AbortSignal | undefined): Promise<void> =>
     runtime === undefined
-      ? startSettled.then(whenActive)
+      ? work
       : new Promise<void>((resolve) => {
           const limit = claude().clock.after(startHoldMs, resolve)
-          void startSettled.then(whenActive).then(() => {
+          if (signal?.aborted === true) resolve()
+          signal?.addEventListener('abort', () => resolve(), { once: true })
+          void work.then(() => {
             limit.cancel()
             resolve()
           })
         })
+
+  const holdUntilStarted = (signal?: AbortSignal): Promise<void> => held(startSettled.then(whenActive), signal)
+
+  const holdUntilActive = (signal: AbortSignal | undefined): Promise<void> => {
+    const activating = whenActive()
+    return activation !== undefined && phase !== 'active' ? held(activating, signal) : activating
+  }
+
+  const routed = async <N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, signal?: AbortSignal): Promise<EventResult<N>> => {
+    if (imports !== undefined) bind(imports)
+    const asked = e as Frozen<Args<'cmod.call'>> & { readonly caller?: string }
+    if (event === 'cmod.call' && asked.to === definition.name && asked.caller === cmodPluginName) {
+      if (asked.method === partMethods.shown) installer.hear(asked.input as ShownPages)
+      const answered = installer.answer(asked.method, asked.input)
+      if (answered !== undefined) return (await answered.catch((error: unknown) => ({ deny: `${definition.name}: ${messageOf(error)}` }))) as EventResult<N>
+      if (asked.method === partMethods.shown && phase !== 'active') return { value: null } as EventResult<N>
+    }
+    if (event === 'classic.SessionStart') {
+      missedSessionStart = undefined
+      hasHeardSessionStart = true
+    }
+    if (event === 'classic.SessionStart' && runtime === undefined) {
+      missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
+      return next(e)
+    }
+    if (shouldRecord && event === 'classic.UserPromptSubmit') record()
+    if (event === 'classic.UserPromptSubmit' || event === 'classic.SessionStart') await recover().catch((error: unknown) => claude().ui.warn('recover', `${definition.name} stays stopped: ${messageOf(error)}`))
+    const tool = (e as { readonly tool?: unknown }).tool
+    const isCallToThisMod = (event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) || (event === 'tool.call' && typeof tool === 'string' && tool.startsWith(`mcp__${definition.name}__`))
+    if (event === 'cmod.call' && !isCallToThisMod) return next(e)
+    await (event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal))
+    if (event === 'classic.SessionStart' && phase !== 'active') {
+      missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
+      return next(e)
+    }
+    if (isCallToThisMod && phase !== 'active') {
+      if (event === 'cmod.call' && listenMethods.includes(asked.method)) {
+        heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
+        return { value: null } as EventResult<N>
+      }
+      return { deny: phase === 'failed' ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
+    }
+    const call = e as Frozen<Args<'cmod.call'>>
+    if (event === 'cmod.call' && call.to === definition.name && mod !== undefined) {
+      if (call.method === pendingStepsMethod) return { value: await pendingSteps(mod) } as EventResult<N>
+      if (call.method === finishStepsMethod) {
+        const active = mod
+        const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error: unknown) => void toastFailure({ id: 'cmod:steps', message: 'Could not finish the setup', error, isCritical: true })), installer.shown()]))
+        return { value: opened } as EventResult<N>
+      }
+    }
+    if (event === 'classic.UserPromptSubmit' && phase === 'active' && !hasHeardSessionStart) {
+      const { session_id, transcript_path, cwd } = e as Frozen<Args<'classic.UserPromptSubmit'>>
+      await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: 'SessionStart', source: 'resume' })
+    }
+    const answer = router.dispatch(event, e, next, signal)
+    const render = e as Frozen<Args<'ui.render'>>
+    if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined) return answer
+    return runtime.toaster.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.props, render.requestId) as EventResult<N>
+  }
 
   return {
     get phase() {
@@ -601,9 +664,14 @@ export function createLifecycle<State extends object, Declared extends Options =
     },
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
-      programs = locatingPrograms(claudeCalls)
-      const callingCmod: Claude = {
+      const naming: Claude = {
         ...claudeCalls,
+        ui: { ...claudeCalls.ui, warn: (id, text) => (runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text)) },
+        session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() },
+      }
+      programs = locatingPrograms(naming)
+      const callingCmod: Claude = {
+        ...naming,
         cmod: {
           async call(input) {
             if (input.to === definition.name) await holdUntilStarted()
@@ -622,56 +690,14 @@ export function createLifecycle<State extends object, Declared extends Options =
       }
     },
     async route<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, signal?: AbortSignal): Promise<EventResult<N>> {
-      if (imports !== undefined) bind(imports)
-      const asked = e as Frozen<Args<'cmod.call'>> & { readonly caller?: string }
-      if (event === 'cmod.call' && asked.to === definition.name && asked.caller === cmodPluginName) {
-        if (asked.method === partMethods.shown) installer.hear(asked.input as ShownPages)
-        const answered = installer.answer(asked.method, asked.input)
-        if (answered !== undefined) return (await answered.catch((error: unknown) => ({ deny: `${definition.name}: ${messageOf(error)}` }))) as EventResult<N>
-        if (asked.method === partMethods.shown && phase !== 'active') return { value: null } as EventResult<N>
+      if (event !== 'classic.SessionStart') return settledAfterAbort(routed(event, e, next, signal), signal)
+      const started = (e as Frozen<Args<'classic.SessionStart'>>).session_id
+      startingSession = started
+      try {
+        return await settledAfterAbort(routed(event, e, next, signal), signal)
+      } finally {
+        if (startingSession === started) startingSession = undefined
       }
-      if (event === 'classic.SessionStart') {
-        missedSessionStart = undefined
-        hasHeardSessionStart = true
-      }
-      if (event === 'classic.SessionStart' && runtime === undefined) {
-        missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
-        return next(e)
-      }
-      if (shouldRecord && event === 'classic.UserPromptSubmit') record()
-      if (event === 'classic.UserPromptSubmit' || event === 'classic.SessionStart') await recover().catch((error: unknown) => claude().ui.log(`${definition.name} stays stopped: ${messageOf(error)}`, { to: 'debug' }))
-      const tool = (e as { readonly tool?: unknown }).tool
-      const isCallToThisMod = (event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) || (event === 'tool.call' && typeof tool === 'string' && tool.startsWith(`mcp__${definition.name}__`))
-      if (event === 'cmod.call' && !isCallToThisMod) return next(e)
-      await (event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted() : whenActive())
-      if (event === 'classic.SessionStart' && phase !== 'active') {
-        missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
-        return next(e)
-      }
-      if (isCallToThisMod && phase !== 'active') {
-        if (event === 'cmod.call' && listenMethods.includes(asked.method)) {
-          heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
-          return { value: null } as EventResult<N>
-        }
-        return { deny: phase === 'failed' ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
-      }
-      const call = e as Frozen<Args<'cmod.call'>>
-      if (event === 'cmod.call' && call.to === definition.name && mod !== undefined) {
-        if (call.method === pendingStepsMethod) return { value: await pendingSteps(mod) } as EventResult<N>
-        if (call.method === finishStepsMethod) {
-          const active = mod
-          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error: unknown) => void toastFailure({ id: 'cmod:steps', message: 'Could not finish the setup', error, isCritical: true })), installer.shown()]))
-          return { value: opened } as EventResult<N>
-        }
-      }
-      if (event === 'classic.UserPromptSubmit' && phase === 'active' && !hasHeardSessionStart) {
-        const { session_id, transcript_path, cwd } = e as Frozen<Args<'classic.UserPromptSubmit'>>
-        await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: 'SessionStart', source: 'resume' })
-      }
-      const answer = router.dispatch(event, e, next, signal)
-      const render = e as Frozen<Args<'ui.render'>>
-      if (event !== 'ui.render' || render.component !== 'AbovePrompt' || runtime === undefined) return answer
-      return runtime.toaster.draw((await answer) as EventResult<'ui.render'>, runtime.claude.ui.resolve(render), render.props, render.requestId) as EventResult<N>
     },
     async caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, { error: { kind, message }, called }: Caught): Promise<EventResult<N>> {
       const call = e as Frozen<Args<'cmod.call'>>
@@ -719,7 +745,7 @@ async function createMod<State extends object, Declared extends Options>(definit
       const parent = await claude.cmod.call({ to: cmodPluginName, method: 'forkParent', input: null })
       return typeof parent === 'string' ? parent : undefined
     } catch (error) {
-      claude.ui.log(`${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`, { to: 'debug' })
+      claude.ui.warn('fork:values', `${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`)
       return undefined
     }
   }
@@ -921,8 +947,8 @@ async function createMod<State extends object, Declared extends Options>(definit
       report({ id: 'cmod:follow', message: `Keeps the state of ${modState.root} until the next prompt or folder move`, error })
     }
   }
-  const followCurrent = async (title: string | undefined) => {
-    const [id, model, usage] = await Promise.all([claude.session.id(), claude.session.model(), claude.session.usage()])
+  const followCurrent = async (id: string, title: string | undefined) => {
+    const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()])
     followed = { id, title: title ?? '', project: modState.root, cwd, model, startedAt: new Date(usage.startedAt).toISOString(), ...(forkedFrom === undefined ? {} : { forkedFrom }), ...(agentType === undefined ? {} : { agentType }) }
     client.follow(followed)
   }
@@ -935,17 +961,17 @@ async function createMod<State extends object, Declared extends Options>(definit
       parentAsked = undefined
     }
     hasEarlierPrompts = e.source !== 'startup' && e.source !== 'clear'
+    await followCurrent(e.session_id, e.session_title).catch((error: unknown) => report({ id: 'cmod:current', message: 'Kept the details of the session from before', error }))
     await modState.switchSession(e.session_id, e.source, e.transcript_path).catch((error: unknown) => {
       report({ id: 'cmod:session', message: `Kept its session values from before the ${e.source}`, error })
     })
-    await followCurrent(e.session_title).catch((error: unknown) => report({ id: 'cmod:current', message: 'Kept the details of the session from before', error }))
     return next(e)
   })
   router.add('classic.UserPromptSubmit', async (e, next) => {
     staleCwd = undefined
     await followSession()
     const isPerson = e.source === undefined || e.source === 'user' || e.source === 'sdk'
-    await followCurrent(e.session_title || (isPerson && !hasEarlierPrompts && client.sessions.current.title === '' ? firstLine(e.prompt) : undefined)).catch((error: unknown) => report({ id: 'cmod:current', message: 'Kept the details of the session from before', error }))
+    await followCurrent(e.session_id, e.session_title || (isPerson && !hasEarlierPrompts && client.sessions.current.title === '' ? firstLine(e.prompt) : undefined)).catch((error: unknown) => report({ id: 'cmod:current', message: 'Kept the details of the session from before', error }))
     return next(e)
   })
   for (const event of ['classic.PostToolUse', 'classic.PostToolUseFailure'] as const) {
@@ -979,7 +1005,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   pages = widgets === undefined ? undefined : servePages({ claude, router, report: reportPart, widgets, parts, tellStylers: area.restyled })
   const tellColor = (to: string, told: SessionColor) => {
     if (told.session === '' || to === cmodPluginName) return
-    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error: unknown) => claude.ui.log(`cmod: ${to} did not hear the session's color: ${messageOf(error)}`, { to: 'debug' })))
+    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error: unknown) => claude.ui.warn('color:tell', `cmod: ${to} did not hear the session's color: ${messageOf(error)}`)))
   }
   conversations?.onColor((told) => {
     client.recolor(told)
@@ -1025,6 +1051,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     hasPermissionCheck: () => runtime.permissionRoutes() !== undefined,
     answerInput: area.answerInput,
     spawnCmod: (args, env) => spawnCmod(claude, args, session, env),
+    watches,
     ...(widgets === undefined ? {} : { widgets }),
     ...(pages === undefined ? {} : { pages }),
   })
@@ -1039,7 +1066,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   await failsAs('its options did not load', () => modOptions.load(root))
   const missing = modOptions.missing
   if (missing.length > 0) throw new MissingOptions(missing, missing.map((key) => definition.options?.[key]?.title ?? key))
-  await failsAs('the details of its session did not load', () => followCurrent(undefined))
+  await failsAs('the details of its session did not load', () => followCurrent(session, undefined))
   const returned = await failsAs('its setup function threw', () => definition.setup(mod))
   api = apiOf(definition.name, returned)
   await failsAs('its open panes did not load', () => area.restorePanes())

@@ -13,7 +13,7 @@ export async function readCombos(claude: Claude, configRoot: string | undefined)
   try {
     return boundCombos(JSON.parse(text))
   } catch (error) {
-    claude.ui.log(`${configRoot}/keybindings.json is not JSON, so cmod reads no combos from it: ${messageOf(error)}`, { to: 'debug' })
+    claude.ui.warn('hotkeys:read', `${configRoot}/keybindings.json is not JSON, so cmod reads no combos from it: ${messageOf(error)}`)
     return new Map()
   }
 }

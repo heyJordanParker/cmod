@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-11-03
+
+### Added
+- The Log in Settings keeps cmod's warnings as well as its errors, and each entry names the versions it happened on: the mod's, its `@cmodjs/core`, the cmod plugin, the cmod program, and Claude Code. It also counts how often the failure repeated in its session and since when. Copy and Report carry the versions too, so a report says whether a failure still happens on the version that fixed it. Before, about 40 kinds of trouble, such as a mod that did not list its pages or a session that missed a before listener, went only to Claude Code's debug log, which keeps nothing once the session ends. A mod gets its warnings in the Log once it is built on this `@cmodjs/core`.
+
+### Changed
+- A `program` job with `singleInstance` costs no memory in the sessions that only use its copy. Before, every other session kept a `cmod program` process of about 30 MB waiting to take over, so 40 sessions spent about 1.2 GB. Now only the session that runs the copy keeps one, and every other session reads the copy's address from the cmod store and starts `cmod program` only to take over. A mod gets this once it is built on this `@cmodjs/core`, which needs cmod 5.3.0 or later. A test that checks the spawned `argv` now sees `cmod program <mod> --no-wait -- <command…>`, and a fake that writes `held` tests a session another session runs the copy for.
+
+### Fixed
+- A new session no longer shows `Claude Code stopped its prompt.submit hook` for every mod, with `cmod ignored its signal 2 times in a row: a runaway plugin in the hooks worker`. Claude Code restarts the hooks worker when a plugin's hook is still running 5 s after its 10 s budget, twice in a row, and the restart stops every mod's running hook. cmod waited for its own start with no limit in some hooks, such as the first prompt after a mod finished installing, and kept waiting after Claude Code gave up on the hook. Now every hook waits for the mod's start for at most 9 seconds, as a SessionStart already did, and settles within a second of Claude Code stopping it, whatever it still waits on.
+- `Lock file is already being held` no longer fails a mod's state, or the cmod plugin's hook that hides a `/reload-plugins` row. Every Claude Code on the computer writes a plugin's store under one lock and gives up after about 0.7 s, so with many sessions open a write sometimes found the lock held. cmod now tries such a write again three times over a second. The failure that remains says `Could not keep state.<group>.<key>` with Claude Code's reason, instead of advice to keep only JSON in `mod.state`.
+- An ended session no longer leaves the cmod plugin's reload flags in Claude Code's store, which every store write rewrites. The flags now go with the session's other values once its transcript is gone, and cmod deletes the ones earlier versions left. The first reload after the update can show one `/reload-plugins` row, because the cmod that ran it named its flag the old way.
+- After `/resume` into another session, `sessions.current.id` names the resumed session at once, so a page that shows "this session" draws it right away. Before, it named the session you left until the next prompt, because Claude Code still answers the old id while the resume's SessionStart hooks run. A `before` listener that acts on its own session during that start, and the Log entry of a failure there, name the resumed session as well.
+- The `cmod` program no longer loads the `.env` and `bunfig.toml` of the folder it runs in. Before, a project's `.env` changed the environment cmod ran with, and a `preload` in a project's `bunfig.toml` ran inside cmod, which runs at every session start in that project. A mod that compiles its own program with `bun build --compile` passes `--no-compile-autoload-dotenv --no-compile-autoload-bunfig` for the same reason, as the docs on shipping a program now say.
+
 ## [5.2.1] - 2026-11-01
 
 ### Fixed

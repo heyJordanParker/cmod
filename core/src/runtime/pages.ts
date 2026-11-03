@@ -90,7 +90,7 @@ export function servePages({
         .call({ to: mod, method: partMethods.list, input: null })
         .then(
           (parts) => void declared.set(mod, pagesOf(parts)),
-          (error: unknown) => claude.ui.log(`cmod: ${mod} did not list its pages: ${messageOf(error)}`, { to: 'debug' }),
+          (error: unknown) => claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`),
         )
         .finally(() => asking.delete(mod))
     asking.set(mod, pending)
@@ -104,7 +104,7 @@ export function servePages({
     const listed = [...stylers]
     tellStylers(listed)
     for (const told of declared.keys()) {
-      if (told !== cmodPluginName) void claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error: unknown) => claude.ui.log(`cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`, { to: 'debug' }))
+      if (told !== cmodPluginName) void claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error: unknown) => claude.ui.warn(`pages:stylers:${told}`, `cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`))
     }
   }
 
@@ -162,7 +162,7 @@ export function servePages({
     press,
     update,
     tell(mod, shown) {
-      void claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error: unknown) => claude.ui.log(`cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`, { to: 'debug' }))
+      void claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error: unknown) => claude.ui.warn(`pages:shown:${mod}`, `cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`))
     },
     apply(listener) {
       applyTo = listener

@@ -132,6 +132,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
         const lines = options?.to === 'debug' ? shown.debug : shown.logs
         lines.push(text)
       },
+      warn: (_id, text) => void shown.debug.push(text),
       notice: () => undefined,
       toast: (...args) => void calls.push({ call: 'ui.toast', args }),
       invalidate: (event) => void calls.push({ call: 'ui.invalidate', args: [event] }),
@@ -206,6 +207,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       model: async () => 'test-model',
       usage: () => fakes.session.usage?.() ?? Promise.resolve({ startedAt: Date.parse('2026-01-01T00:00:00.000Z'), context: { window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
       surfaces: () => fakes.session.surfaces?.() ?? Promise.resolve(['terminal']),
+      version: async () => '2.1.317',
       messages: rejected('session.messages', () => fakes.session.messages as ((args?: unknown) => Promise<unknown>) | undefined) as Claude['session']['messages'],
       append: rejected('session.append', () => fakes.session.append ?? appendNote),
       send: rejected('session.send', () => fakes.session.send ?? (async () => ({ isDelivered: true as const }))),

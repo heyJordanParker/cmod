@@ -765,8 +765,8 @@ test('a start whose hotkey bind fails tries again at the next start', async () =
 })
 
 async function ownLog(tested: ReturnType<typeof testMod>): Promise<string[]> {
-  const logged = JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as { message: string }[]
-  return logged.map(({ message }) => message)
+  const logged = JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as { readonly message: string; readonly level: string }[]
+  return logged.filter(({ level }) => level === 'error').map(({ message }) => message)
 }
 
 test('on its first start cmod binds its own hotkeys by its plugin folder, meta+0 for the Sidebar and meta+m for Settings, and never again', async () => {
@@ -1229,7 +1229,10 @@ test('cmod:failed answers show for a mod run from its checkout and a critical fa
   expect(log.split("ci-watch's onPrompt listener failed")).toHaveLength(2)
   expect(log).toContain('Copy')
   expect(log).toContain('Report')
-  expect(tested.calls.filter((call) => call.call === 'ui.copy').map((call) => call.args[0])).toEqual([{ text: failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z').details }])
+  const copied = tested.calls.filter((call) => call.call === 'ui.copy').map((call) => (call.args[0] as { readonly text: string }).text)
+  expect(copied).toHaveLength(1)
+  expect(copied[0]?.startsWith(`${failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z').details}\n\n`)).toBe(true)
+  expect(copied[0]).toContain('· Claude Code 2.1.317')
   expect(await shown()).toContain('Copied the error.')
 })
 
@@ -1245,8 +1248,19 @@ test('the Log keeps the failures of every session, and skips a session file that
   const log = await shown()
 
   expect(log.indexOf("ci-watch's onPrompt listener failed")).toBeLessThan(log.indexOf('The every 1000 ms timer failed'))
-  expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]')).toEqual([
-    { mod: 'ci-watch', id: 'session:onPrompt', message: "ci-watch's onPrompt listener failed", details: failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z').details, at: '2026-10-26T09:01:00.000Z' },
+  expect((JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'ci-watch')).toEqual([
+    {
+      mod: 'ci-watch',
+      id: 'session:onPrompt',
+      level: 'error',
+      message: "ci-watch's onPrompt listener failed",
+      details: failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z').details,
+      at: '2026-10-26T09:01:00.000Z',
+      session: 'test-session',
+      versions: expect.objectContaining({ claudeCode: '2.1.317' }),
+      count: 1,
+      firstAt: '2026-10-26T09:01:00.000Z',
+    },
   ])
 
   await tested.fakes.fs.write?.(`${store}/data/cmod/log/other-session.json`, '{}')
@@ -1259,6 +1273,39 @@ test('the Log keeps the failures of every session, and skips a session file that
   expect(skipped).not.toContain('The every 1000 ms timer failed')
   expect(skipped).not.toContain('did not load')
   expect(tested.shown.debug).toContain(`cmod: the Log skips a file: ${store}/data/cmod/log/other-session.json is not a list of mod failures. Delete it, and cmod starts it again.`)
+})
+
+test('a warning lands in the Log as a warning with the versions it ran on, counts each repeat, and never shows a toast', async () => {
+  const { tested, shown } = testSettings()
+  await tested.start()
+  const warning = { ...failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z'), id: 'pages:list:ci-watch', message: 'cmod: ci-watch did not list its pages', level: 'warning', version: '0.2.0', core: '5.3.0' }
+  const warn = (at: string) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: { ...warning, at }, caller: 'ci-watch' } as never)
+
+  const answers = [await warn('2026-10-26T09:01:00.000Z'), await warn('2026-10-26T09:05:00.000Z')]
+  const logged = (JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'ci-watch')
+  await tested.type('/mods cmod')
+  await tested.settle()
+  await tested.shown.pane.press('section:log')
+  const log = await shown()
+
+  expect(answers).toEqual([{ value: { showsToast: false } }, { value: { showsToast: false } }])
+  expect(logged).toEqual([
+    {
+      mod: 'ci-watch',
+      id: 'pages:list:ci-watch',
+      level: 'warning',
+      message: 'cmod: ci-watch did not list its pages',
+      details: warning.details,
+      at: '2026-10-26T09:05:00.000Z',
+      session: 'test-session',
+      versions: { mod: '0.2.0', core: '5.3.0', cmod: expect.any(String), claudeCode: '2.1.317' },
+      count: 2,
+      firstAt: '2026-10-26T09:01:00.000Z',
+    },
+  ])
+  expect(log).toContain('ci-watch warning')
+  expect(log).toContain('2 times since')
+  expect(log).toContain('mod 0.2.0 · @cmodjs/core 5.3.0 · cmod ')
 })
 
 test("another session's preference write reaches this session's Settings when store-changed changes", async () => {

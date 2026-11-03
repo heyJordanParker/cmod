@@ -409,6 +409,25 @@ test('session.start through the engine chain reads the plugin, runs setup, and a
   expect(shown.logs).toEqual([])
 })
 
+test("a store write that meets another Claude Code's lock on the store is tried again, so a busy store fails no write", async () => {
+  const fake = fakeOn()
+  const { $ } = engine(files)
+  const set = $.store.set.bind($.store)
+  let refusals = 2
+  Object.assign($.store, {
+    set: async (key: string, value: unknown) => {
+      if (refusals === 0) return set(key, value)
+      refusals -= 1
+      throw new Error('demo@inline: $.store.set failed: Lock file is already being held')
+    },
+  })
+  registerMod(fake.on, demo, {})
+
+  await fake.dispatch('session.start', $, {}, {})
+
+  expect([refusals, await $.store.get('cmod:announced')]).toEqual([0, { version: '1.0.0' }])
+})
+
 test('a mod starts while the plugins below it start, so its start can wait on one of them', async () => {
   const fake = fakeOn()
   const { $ } = engine(files)

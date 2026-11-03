@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code'
 import { program, type Program } from '../../src/jobs/program.js'
-import { defineMod, http } from '../../src/mod.js'
+import { defineMod } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 
 function written(chunks: readonly ProcessSpawnChunk[], exits: boolean, closed: () => void = () => undefined): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -17,7 +17,7 @@ function written(chunks: readonly ProcessSpawnChunk[], exits: boolean, closed: (
   return Object.assign(read(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
 }
 
-function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>, singleInstance = false) {
+function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>, singleInstance = false, files: Record<string, string> = {}) {
   let handle: Program | undefined
   const tested = testMod(
     defineMod({
@@ -26,6 +26,7 @@ function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpaw
         handle = mod.use(program({ command: ['preview-server', '--port', '0'], singleInstance }))
       },
     }),
+    { files },
   )
   tested.fakes.process.spawn = spawn
   const ready = async (): Promise<Program> => {
@@ -157,7 +158,7 @@ test('a program that has not exited is in backoff between starts, and ready() wa
   expect(await answer).toEqual({ url: 'http://localhost', socketPath: '/tmp/y.sock' })
 })
 
-test("a singleInstance program runs as the store's cmod program preview -- preview-server --port 0", async () => {
+test("a singleInstance program runs as the store's cmod program preview --no-wait -- preview-server --port 0", async () => {
   const spawned: (readonly string[])[] = []
   const { ready } = preview((request) => {
     spawned.push(request.argv)
@@ -165,32 +166,74 @@ test("a singleInstance program runs as the store's cmod program preview -- previ
   }, true)
 
   expect(await (await ready()).ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/x.sock' })
-  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'preview', '--', 'preview-server', '--port', '0']])
+  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'preview', '--no-wait', '--', 'preview-server', '--port', '0']])
 })
 
-test("a singleInstance program's next address line moves ready() to it", async () => {
-  let moveCopy = () => undefined as void
-  const { tested, ready } = preview(() => {
-    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-      yield { stream: 'stdout', text: 'unix:/tmp/first.sock\n' }
-      await new Promise<void>((resolve) => {
-        moveCopy = resolve
-      })
-      yield { stream: 'stdout', text: 'unix:/tmp/second.sock\n' }
-      return await new Promise<ProcessSpawnResult>(() => undefined)
-    }
-    return Object.assign(read(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
-  }, true)
-  tested.fakes.http.fetch = async () => ({ status: 200, headers: {}, body: '{}' }) as never
-  const started = await ready()
-  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/first.sock' })
-  expect((await http.fetch('http://localhost/status', { socketPath: '/tmp/first.sock' })).status).toBe(200)
+const instanceFile = '/test/home/.local/share/cmod/instances/preview/preview-server.json'
 
-  moveCopy()
+const heldCopy = { [instanceFile]: '{"address":"unix:/tmp/held.sock","pid":4242,"started":"Mon Nov  2 09:00:00 2026"}\n', [`${instanceFile}.lock/4242`]: 'Mon Nov  2 09:00:00 2026' }
+
+test('a singleInstance program another session holds answers held, and ready() resolves the address in the instance file with no process left running', async () => {
+  let isClosed = false
+  const { ready } = preview(
+    () =>
+      written([{ stream: 'stdout', text: 'held\n' }], true, () => {
+        isClosed = true
+      }),
+    true,
+    heldCopy,
+  )
+  const started = await ready()
+
+  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
+  expect(started.state).toBe('running')
+  expect(isClosed).toBe(true)
+})
+
+test('a singleInstance program whose holder touched its lock within 15 s reads the instance file and spawns nothing', async () => {
+  const spawned: (readonly string[])[] = []
+  const { tested, ready } = preview(
+    (request) => {
+      spawned.push(request.argv)
+      return written([], false)
+    },
+    true,
+    heldCopy,
+  )
+  tested.fakes.clock.now = async () => 14_999
+
+  expect(await (await ready()).ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
+  expect(spawned).toEqual([])
+})
+
+test("a following session starts cmod program once the holder's instance file is gone and its lock is stale, and ready() moves to the new copy", async () => {
+  const timers: (() => void)[] = []
+  let starts = 0
+  const { tested, ready } = preview(
+    () => {
+      starts += 1
+      return starts === 1 ? written([{ stream: 'stdout', text: 'held\n' }], true) : written([{ stream: 'stdout', text: 'unix:/tmp/next.sock\n' }], false)
+    },
+    true,
+    heldCopy,
+  )
+  tested.fakes.clock.every = (_ms, fn) => {
+    timers.push(fn)
+    return { cancel: () => undefined }
+  }
+  const started = await ready()
+  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
+  const read = tested.fakes.fs.read
+  tested.fakes.fs.read = async (path) => {
+    if (path === instanceFile) throw new Error(`ENOENT: no such file, read '${path}'`)
+    return (read as NonNullable<typeof read>)(path)
+  }
+
+  for (const fire of timers) fire()
   await tested.settle()
 
-  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/second.sock' })
-  expect((await http.fetch('http://localhost/status', { socketPath: '/tmp/second.sock' })).status).toBe(200)
+  expect(starts).toBe(2)
+  expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/next.sock' })
 })
 
 test('two singleInstance programs with one executable in a mod throw at mod.use', async () => {

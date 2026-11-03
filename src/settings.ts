@@ -1,11 +1,11 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { finishStepsMethod, hotkeyCommand, isObject, marketplaceOf, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, storeChangedPath, storeFolder, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { finishStepsMethod, hotkeyCommand, isObject, marketplaceOf, parsePreferences, pendingStepsMethod, preferencesPath, readCmodVersion, readRecord, readSteps, storeChangedPath, storeFolder, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
 import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
-import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
+import { failedMethod, reportLink, reportPrompt, type Contact, type LoggedFailure, type LogLevel } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
@@ -52,7 +52,21 @@ export type ModView = {
   readonly changelog: readonly ChangelogSection[]
 }
 
-type LogEntry = Omit<LoggedFailure, 'isCritical' | 'root'>
+type LogVersions = { readonly mod?: string; readonly core?: string; readonly cmod: string; readonly program?: string; readonly claudeCode: string }
+
+type LogEntry = {
+  readonly mod: string
+  readonly id: string
+  readonly level?: LogLevel
+  readonly message: string
+  readonly details: string
+  readonly at: string
+  readonly firstAt?: string
+  readonly count?: number
+  readonly session?: string
+  readonly versions?: LogVersions
+  readonly contact?: Contact
+}
 
 const loggedFailures = 100
 
@@ -97,7 +111,16 @@ const isText = (value: unknown) => typeof value === 'string'
 
 const isLogEntry = (value: unknown): value is LogEntry => isObject(value) && ['mod', 'id', 'message', 'details', 'at'].every((key) => isText(value[key]))
 
-const sameFailure = (left: LogEntry) => (right: LogEntry) => left.mod === right.mod && left.id === right.id
+const sameFailure = (left: Pick<LogEntry, 'mod' | 'id'>) => (right: LogEntry) => left.mod === right.mod && left.id === right.id
+
+function versionsLine({ mod, core, cmod, program, claudeCode }: LogVersions): string {
+  return [mod === undefined ? undefined : `mod ${mod}`, core === undefined ? undefined : `@cmodjs/core ${core}`, `cmod ${cmod}`, program === undefined ? undefined : `cmod program ${program}`, `Claude Code ${claudeCode}`].filter((part) => part !== undefined).join(' · ')
+}
+
+function reportedOf(entry: LogEntry): string {
+  const seen = (entry.count ?? 1) > 1 ? `\n${entry.count} times in session ${entry.session ?? 'unknown'}, first at ${entry.firstAt ?? entry.at}` : ''
+  return entry.versions === undefined ? entry.details : `${entry.details}\n\n${versionsLine(entry.versions)}${seen}`
+}
 
 async function readEntries(path: string): Promise<LogEntry[]> {
   const value = await readJson(path).catch((error: unknown) => {
@@ -119,7 +142,7 @@ export async function readLog(mod: Mod<object>): Promise<LogEntry[]> {
     const oldestKept = newestFirst()[loggedFailures - 1]
     if (oldestKept !== undefined && Date.parse(oldestKept.at) > file.modifiedAt) break
     const entries = await readEntries(`${folder}/${file.name}`).catch((error: unknown) => {
-      mod.log(`the Log skips a file: ${messageOf(error)}`)
+      engineOf(mod).claude.ui.warn('log:read', `cmod: the Log skips a file: ${messageOf(error)}`)
       return []
     })
     for (const entry of entries) {
@@ -140,19 +163,42 @@ export async function refreshPreferences<State extends SettingsState>(mod: Mod<S
 }
 
 export function failureLog<State extends SettingsState>(mod: Mod<State>): (failure: LoggedFailure) => Promise<{ readonly showsToast: boolean }> {
+  const { claude } = engineOf(mod)
   let writing: Promise<unknown> = Promise.resolve()
-  const add = async (entry: LogEntry) => {
-    const path = `${logFolder(mod)}/${await engineOf(mod).claude.session.id()}.json`
-    const kept = [entry, ...(await readEntries(path)).filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures)
+  const cmodVersion = fs
+    .read(`${claude.plugin.root}/.claude-plugin/plugin.json`)
+    .then((text) => String((JSON.parse(text) as { readonly version?: unknown }).version))
+    .catch((error: unknown) => `unknown (${messageOf(error)})`)
+  const versionsOf = async (failure: LoggedFailure): Promise<LogVersions> => {
+    const store = await storeOf(mod)
+    const program = await readCmodVersion(
+      {
+        list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
+        exists: async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined))) !== undefined,
+      },
+      store,
+    ).catch((error: unknown) => `unknown (${messageOf(error)})`)
+    const claudeCode = await claude.session.version().catch((error: unknown) => `unknown (${messageOf(error)})`)
+    return { ...(failure.version === undefined ? {} : { mod: failure.version }), ...(failure.core === undefined ? {} : { core: failure.core }), cmod: await cmodVersion, ...(program === undefined ? {} : { program }), claudeCode }
+  }
+  const add = async (entry: Omit<LogEntry, 'count' | 'firstAt'>) => {
+    const path = `${logFolder(mod)}/${entry.session}.json`
+    const earlier = await readEntries(path)
+    const same = earlier.find(sameFailure(entry))
+    const counted: LogEntry = { ...entry, count: (same?.count ?? 0) + 1, firstAt: same?.firstAt ?? same?.at ?? entry.at }
+    const kept = [counted, ...earlier.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures)
     await fs.write(path, `${JSON.stringify(kept, null, 2)}\n`)
-    mod.state.memory.log = [entry, ...mod.state.memory.log.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures)
+    mod.state.memory.log = [counted, ...mod.state.memory.log.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures)
   }
   return async (failure) => {
     if (!isLogEntry(failure) || !isText(failure.root) || typeof failure.isCritical !== 'boolean') throw new Error(`${failedMethod} takes the failure's mod, id, message, details, at, and root as text, and isCritical as true or false.`)
     const { mod: name, id, message, details, at, contact } = failure
-    const added = writing.then(() => add({ mod: name, id, message, details, at, ...(contact === undefined ? {} : { contact }) }))
+    const level: LogLevel = failure.level === 'warning' ? 'warning' : 'error'
+    const [session, versions] = await Promise.all([claude.session.id(), versionsOf(failure)])
+    const added = writing.then(() => add({ mod: name, id, level, message, details, at, session, versions, ...(contact === undefined ? {} : { contact }) }))
     writing = Promise.allSettled([added])
     await added
+    if (level === 'warning') return { showsToast: false }
     return { showsToast: failure.isCritical || marketplaceOf(failure.root, failure.mod) === undefined || (await readPreferences(mod)).showsInstalledModErrors }
   }
 }
@@ -221,7 +267,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       const ask = async (method: string): Promise<readonly string[]> => {
         if (name === mod.name) return []
         const answer = await claude.cmod.call({ to: name, method, input: null }).catch((error: unknown) => {
-          mod.log(`${name} did not answer ${method}: ${messageOf(error)}`)
+          claude.ui.warn(`settings:${name}:${method}`, `cmod: ${name} did not answer ${method}: ${messageOf(error)}`)
           return undefined
         })
         return Array.isArray(answer) ? (answer as string[]) : []
@@ -316,13 +362,13 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       if (log.length === 0) return Text({ dimColor: true, children: 'No mod has failed.' })
       const copy = (entry: LogEntry) =>
         act(async () => {
-          await clipboard.write(entry.details)
+          await clipboard.write(reportedOf(entry))
           return 'Copied the error.'
         })
       const askClaude = (entry: LogEntry) =>
         act(async () => {
           mod.state.memory.reporting = null
-          await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, entry.details), asUser: true })
+          await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, reportedOf(entry)), asUser: true })
           return undefined
         })
       return Box({
@@ -334,7 +380,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             reporting === key
               ? [
                   Button({ plain: true, key: `ask-claude:${key}`, label: 'Ask Claude to report it', onPress: () => askClaude(entry) }),
-                  ...(entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, entry.details)]),
+                  ...(entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, reportedOf(entry))]),
                   Button({ plain: true, dimColor: true, key: `back:${key}`, label: 'Back', onPress: () => void (mod.state.memory.reporting = null) }),
                 ]
               : [
@@ -345,8 +391,16 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             key: `log:${key}`,
             flexDirection: 'column',
             children: [
-              Text({ wrap: 'truncate-end', children: [Text({ bold: true, children: entry.mod }), Text({ dimColor: true, children: ` · ${timeOf(entry.at)}` })] }),
+              Text({
+                wrap: 'truncate-end',
+                children: [
+                  Text({ bold: true, children: entry.mod }),
+                  ...(entry.level === 'warning' ? [Text({ color: 'warning', children: ' warning' })] : []),
+                  Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ''}` }),
+                ],
+              }),
               Text({ wrap: 'wrap', children: entry.message }),
+              ...(entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: 'truncate-end', children: versionsLine(entry.versions) })]),
               Box({ gap: 2, flexWrap: 'wrap', children: choices }),
             ],
           })

@@ -49,6 +49,22 @@ export async function withinTime<Value>(clock: Pick<Claude['clock'], 'now'>, met
   }
 }
 
+export const abortGraceMs = 1000
+
+export function settledAfterAbort<Value>(work: Promise<Value>, signal: AbortSignal | undefined): Promise<Value> {
+  if (signal === undefined) return work
+  return new Promise<Value>((resolve, reject) => {
+    let timer: unknown
+    const giveUp = () => void (timer = timers.setTimeout(() => reject(signal.reason), abortGraceMs))
+    if (signal.aborted) giveUp()
+    else signal.addEventListener('abort', giveUp, { once: true })
+    work.then(resolve, reject).finally(() => {
+      timers.clearTimeout(timer)
+      signal.removeEventListener('abort', giveUp)
+    })
+  })
+}
+
 export function beforeDeadline<Value>(claude: Claude, { ms, job }: Deadline, call: string, task: Promise<Value>): Promise<Value> {
   return new Promise<Value>((resolve, reject) => {
     const passed = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`
