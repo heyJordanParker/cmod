@@ -103,6 +103,11 @@ jobs:
       - name: Release the cmod plugin and the cmod program on GitHub
         if: steps.version.outputs.release != 'done'
         run: |
+          main=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$main" != "$GITHUB_SHA" ]; then
+            echo "::notice::main moved from $GITHUB_SHA to $main during this run, so the run for $main releases the cmod plugin"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           bun cli/src/main.ts publish
