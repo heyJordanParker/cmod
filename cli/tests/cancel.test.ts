@@ -7,7 +7,7 @@ import { cmod, cmodInTerminal, cmodOfStep, createMod, createProgramMod, deleteTe
 
 afterAll(deleteTemporaryHomes)
 
-test.concurrent('Ctrl+C during the install step of cmod setup leaves no program link', async () => {
+test('Ctrl+C during the install step of cmod setup leaves no program link', async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
   const store = join(home, '.local/share/cmod')
@@ -29,7 +29,7 @@ test.concurrent('Ctrl+C during the install step of cmod setup leaves no program 
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
-test.concurrent('Ctrl+C during the install step runs the uninstall step and leaves nothing', async () => {
+test('Ctrl+C during the install step runs the uninstall step and leaves nothing', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n')
   const store = join(home, '.local/share/cmod')
@@ -46,7 +46,7 @@ test.concurrent('Ctrl+C during the install step runs the uninstall step and leav
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
-test.concurrent('a fresh install step that traps Ctrl+C and exits 1 runs the uninstall step', async () => {
+test('a fresh install step that traps Ctrl+C and exits 1 runs the uninstall step', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, `#!/bin/sh\ntrap 'exit 1' INT\necho partial >> "$CMOD_DATA/partial"\nkill -INT 0\nsleep 1\n`)
   const store = join(home, '.local/share/cmod')
@@ -61,7 +61,7 @@ test.concurrent('a fresh install step that traps Ctrl+C and exits 1 runs the uni
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
-test.concurrent('a fresh install step that fails runs the uninstall step and leaves nothing', async () => {
+test('a fresh install step that fails runs the uninstall step and leaves nothing', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho partial >> "$CMOD_DATA/partial"\necho "brew: no such formula" >&2\nexit 3\n')
   const store = join(home, '.local/share/cmod')
@@ -78,7 +78,7 @@ test.concurrent('a fresh install step that fails runs the uninstall step and lea
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
-test.concurrent('a fresh install whose uninstall step fails says parts may remain', async () => {
+test('a fresh install whose uninstall step fails says parts may remain', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho "curl: could not resolve host" >&2\nexit 7\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
@@ -91,7 +91,7 @@ test.concurrent('a fresh install whose uninstall step fails says parts may remai
   expect(result.exitCode).toBe(1)
 })
 
-test.concurrent('a fresh install that exits with no stderr and whose uninstall step fails names both exits in order', async () => {
+test('a fresh install that exits with no stderr and whose uninstall step fails names both exits in order', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\nexit 7\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\necho "zsh: no such file" >&2\nexit 2\n' })
@@ -102,7 +102,7 @@ test.concurrent('a fresh install that exits with no stderr and whose uninstall s
   expect(result.exitCode).toBe(1)
 })
 
-test.concurrent("Ctrl+C during the undo keeps the install step's exit code and reason", async () => {
+test("Ctrl+C during the undo keeps the install step's exit code and reason", async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho "brew: no such formula" >&2\nexit 3\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nkill -INT 0\nsleep 1\necho uninstalled >> "$HOME/uninstalls"\n' })
@@ -115,7 +115,7 @@ test.concurrent("Ctrl+C during the undo keeps the install step's exit code and r
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
 })
 
-test.concurrent("Ctrl+C during an upgrade's install step keeps the version its record names", async () => {
+test("Ctrl+C during an upgrade's install step keeps the version its record names", async () => {
   const home = await temporaryHome()
   const root = await createMod(home, '#!/bin/sh\necho "history the user built" > "$HOME/history.db"\n')
   await writeFiles(root, { 'setup/uninstall.sh': '#!/bin/sh\nrm -f "$HOME/history.db"\necho "uninstalled $CMOD_VERSION" >> "$HOME/uninstalls"\n' })
@@ -136,7 +136,7 @@ test.concurrent("Ctrl+C during an upgrade's install step keeps the version its r
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({ demo: [installed] })
 })
 
-test.concurrent('cleanup after a cancel revokes the approval while another process holds the consent lock', async () => {
+test('cleanup after a cancel revokes the approval while another process holds the consent lock', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, `#!/bin/sh
 (trap '' INT HUP TERM; exec sleep 2 </dev/null >/dev/null 2>&1) &
@@ -157,7 +157,7 @@ sleep 1
   }
 }, 15_000)
 
-test.concurrent("Ctrl+C during cmod remove's uninstall step still removes the mod", async () => {
+test("Ctrl+C during cmod remove's uninstall step still removes the mod", async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
   const store = join(home, '.local/share/cmod')
@@ -182,7 +182,7 @@ test.concurrent("Ctrl+C during cmod remove's uninstall step still removes the mo
 
 const blockRecordWrite = `#!/bin/sh\n${cmodOfStep}\nmkdir "$HOME/.local/share/cmod/records/demo.json.$cmod.tmp"\n`
 
-test.concurrent('a record write that fails after the uninstall step is saved deletes the saved step', async () => {
+test('a record write that fails after the uninstall step is saved deletes the saved step', async () => {
   const home = await temporaryHome()
   const root = await createMod(home, blockRecordWrite)
   const store = join(home, '.local/share/cmod')
@@ -194,7 +194,7 @@ test.concurrent('a record write that fails after the uninstall step is saved del
   expect(await readdir(join(store, 'uninstall')).catch(ifMissing([]))).toEqual([])
 })
 
-test.concurrent('a record write that fails in an upgrade keeps the new saved uninstall step, because the new install step ran', async () => {
+test('a record write that fails in an upgrade keeps the new saved uninstall step, because the new install step ran', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
@@ -210,7 +210,7 @@ test.concurrent('a record write that fails in an upgrade keeps the new saved uni
   expect(JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))).toMatchObject({ version: '0.1.0' })
 })
 
-test.concurrent('a crash between the saved step and the record leaves a record whose uninstall step exists', async () => {
+test('a crash between the saved step and the record leaves a record whose uninstall step exists', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
@@ -229,7 +229,7 @@ test.concurrent('a crash between the saved step and the record leaves a record w
   expect(await listFiles(join(dirname(record.uninstall), 'root/setup'))).toEqual(await listFiles(join(root, 'setup')))
 }, 30_000)
 
-test.concurrent('Ctrl+C while cmod setup downloads the program installs nothing', async () => {
+test('Ctrl+C while cmod setup downloads the program installs nothing', async () => {
   const home = await temporaryHome()
   using server = serveRelease({ ...helloBuild, SHA256SUMS: sha256Sums(helloBuild) }, 1000)
   const root = await createProgramMod(home, `${server.url.origin}/owner/hello-mod`)
@@ -249,7 +249,7 @@ test.concurrent('Ctrl+C while cmod setup downloads the program installs nothing'
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
-test.concurrent('SIGTERM to cmod setup --events during the install step leaves a recorded mod', async () => {
+test('SIGTERM to cmod setup --events during the install step leaves a recorded mod', async () => {
   const home = await temporaryHome()
   const root = join(home, 'hello-mod')
   const store = join(home, '.local/share/cmod')
@@ -274,7 +274,7 @@ test.concurrent('SIGTERM to cmod setup --events during the install step leaves a
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({ 'hello-mod': [await hashOf(root)] })
 })
 
-test.concurrent('SIGTERM to cmod teardown --events during the uninstall step still removes the mod', async () => {
+test('SIGTERM to cmod teardown --events during the uninstall step still removes the mod', async () => {
   const home = await temporaryHome()
   const root = await createMod(home)
   const store = join(home, '.local/share/cmod')
