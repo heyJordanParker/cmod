@@ -9,7 +9,7 @@ export function register(addHook: On, options: PluginOptions): void {
     const built = await passOn(eventInput)
     const cmod: Cmod = {
       async call(input) {
-        throw new Error(isLoaded(input.to) ? `${input.to} did not answer in time, so Claude Code went on without it.` : notInstalled(input.to))
+        throw new Error((await isLoaded(input.to)) ? `${input.to} did not answer in time, so Claude Code went on without it.` : notInstalled(input.to))
       },
     }
     return { ...built, cmod }

@@ -1001,6 +1001,26 @@ test('cmod.call rejects a call to a mod this Claude Code did not load with the i
   await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow('tracer is not installed. Install it in Plugins.')
 })
 
+test('cmod.call never calls a loaded mod not installed while the cmod plugin still reads which plugins this Claude Code loaded, because that answer makes cmod forget what the mod listens to', async () => {
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'tracer@market': true })
+  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'tracer@market': '1.0.0' }))
+  const read = tested.fakes.fs.read
+  let finishRead = () => {}
+  const slowDisk = new Promise<void>((resolve) => (finishRead = resolve))
+  tested.fakes.fs.read = async (path) => {
+    if (path.endsWith('tracer@market/.claude-plugin/plugin.json')) await slowDisk
+    return read?.(path) ?? ''
+  }
+  await tested.start()
+  const call = await unansweredCall()
+
+  const refusal = call({ to: 'tracer', method: 'signatures', input: {} }).catch((error: unknown) => error)
+  finishRead()
+
+  expect(String(await refusal)).toBe('Error: tracer did not answer in time, so Claude Code went on without it.')
+  await tested.settle()
+})
+
 test('cmod.call rejects a call to a loaded mod whose hook gave no answer with that reason, and no install command', async () => {
   await startedWith({ 'tracer@market': '1.0.0' })
   const call = await unansweredCall()
