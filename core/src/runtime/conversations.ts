@@ -101,6 +101,7 @@ export function serveConversations({
   let published = new Set<string>()
   let publishing: Promise<unknown> = Promise.resolve()
   let session = ''
+  const left = new Set<string>()
   let asks = 0
   let conversation: Conversation = createConversation(emptyConversation(''))
   let starting: Promise<void> = Promise.resolve()
@@ -276,8 +277,14 @@ export function serveConversations({
     const targets = new Set([...published, ...list.map((watch) => watch.target)])
     published = new Set(list.map((watch) => watch.target))
     const running = targets.has(everySession) ? (await json<SessionData[]>(['history', 'sessions', '--running'])).map((each) => each.id) : []
-    const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session))
-    await Promise.all([...told].map((id) => post(id, { kind: 'watch' }).catch((error: unknown) => claude.ui.warn('before:tell', `cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`))))
+    const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session && !left.has(id)))
+    await Promise.all(
+      [...told].map((id) =>
+        post(id, { kind: 'watch' }).catch((error: unknown) => {
+          if (messageOf(error) !== ended(id).message) claude.ui.warn('before:tell', `cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`)
+        }),
+      ),
+    )
   }
 
   const hear = (caller: string, id: string, list: readonly Listened[]) => {
@@ -329,6 +336,7 @@ export function serveConversations({
       const found: Watcher[] = []
       for (const [index, file] of files.entries()) {
         const from = file.name.replace(/\.json$/, '')
+        if (left.has(from)) continue
         const text = texts[index] ?? noWatches
         let list: readonly Watch[]
         try {
@@ -456,6 +464,8 @@ export function serveConversations({
   const start = (id: string, source: string) => {
     if (id === session) return
     const previous = session
+    if (previous !== '') left.add(previous)
+    left.delete(id)
     session = id
     live = []
     liveIds.clear()

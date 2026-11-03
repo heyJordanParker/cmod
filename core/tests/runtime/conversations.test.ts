@@ -631,6 +631,28 @@ test('another session hears when a before listener on it goes away, and when the
   expect(told).toEqual(Array(4).fill('{"sessionId":"other"}'))
 })
 
+test('a /clear, where the mods listen on the new session before cmod hears its start, asks no session that is gone and logs nothing', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const router = createRouter()
+  fake.fakes.fs = fakeFiles({})
+  fake.fakes.process.spawn = () => printed('[]')
+  const live = new Set<string>()
+  fake.fakes.session.send = async ({ to }) => (live.has((to as { readonly sessionId?: string }).sessionId ?? '') ? { isDelivered: true } : { isDelivered: false, reason: 'no live session on this machine has that id' })
+  fake.fakes.cmod.call = async () => null
+  const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
+  const watch = (session: string) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session, subscriptions: [{ event: 'prompt' }] }, caller: 'guard' })
+  await router.dispatch('classic.SessionStart', { session_id: 'before-clear', source: 'startup' } as never, async () => ({}))
+  await watch('before-clear')
+
+  await watch('after-clear')
+  await router.dispatch('classic.SessionStart', { session_id: 'after-clear', source: 'clear' } as never, async () => ({}))
+  live.add('after-clear')
+  await router.dispatch('prompt.submit', { text: 'First prompt', origin: { kind: 'composer' }, wait: false } as never, async () => ({ passed: true }) as never)
+  await fake.settle()
+
+  expect(fake.shown.debug).toEqual([])
+})
+
 test("two before listeners registered at once both stay registered", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
