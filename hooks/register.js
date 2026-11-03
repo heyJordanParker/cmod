@@ -347,8 +347,8 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.2.1";
-var oldestCmodVersion = "5.2.0";
+var coreVersion = "5.3.0";
+var oldestCmodVersion = "5.3.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -667,6 +667,23 @@ async function withinTime(clock, method, { timeoutMs = listenerMs }, cancel, run
     timers.clearTimeout(timer);
     cancel.removeEventListener("abort", cancelled);
   }
+}
+var abortGraceMs = 1000;
+function settledAfterAbort(work, signal) {
+  if (signal === undefined)
+    return work;
+  return new Promise((resolve, reject) => {
+    let timer;
+    const giveUp = () => void (timer = timers.setTimeout(() => reject(signal.reason), abortGraceMs));
+    if (signal.aborted)
+      giveUp();
+    else
+      signal.addEventListener("abort", giveUp, { once: true });
+    work.then(resolve, reject).finally(() => {
+      timers.clearTimeout(timer);
+      signal.removeEventListener("abort", giveUp);
+    });
+  });
 }
 function beforeDeadline(claude, { ms, job }, call, task) {
   return new Promise((resolve, reject) => {
@@ -4922,6 +4939,12 @@ async function readLines(stream, onLine) {
 function spawnCmod(claude, args, session, env = {}) {
   return claude.process.spawn({ argv: ["cmod", ...args], env: { ...env, CLAUDE_CODE_SESSION_ID: session } });
 }
+async function isHeld(claude, lock, staleMs) {
+  const now = await claude.clock.now();
+  const holders = await claude.fs.list(lock).catch(ifMissing([]));
+  const touched = await Promise.all(holders.map(async ({ name }) => (await claude.fs.stat(`${lock}/${name}`).catch(ifMissing(undefined)))?.mtimeMs ?? 0));
+  return touched.some((at) => now - at < staleMs);
+}
 async function runCmod(claude, args, session) {
   const lines = [];
   const { code, lastError } = await readLines(spawnCmod(claude, args, session), (line) => void lines.push(line));
@@ -6112,13 +6135,13 @@ async function callFiles(name, claude, folders, use, cwd) {
     const known = (accesses) => accesses.map(({ path }) => path).filter((path) => shell === undefined || !dynamicPattern.test(path));
     const unchecked = (path) => (error) => {
       if (!isMissing(error))
-        claude.ui.log(`${name}: the ${use.tool} call reads ${path}, which could not be checked: ${messageOf(error)}`, { to: "debug" });
+        claude.ui.warn("call:files", `${name}: the ${use.tool} call reads ${path}, which could not be checked: ${messageOf(error)}`);
       return;
     };
     const read = await Promise.all(known(reads).map(async (path) => (await claude.fs.stat(path).catch(unchecked(path)))?.kind === "file" ? [path] : []));
     return { read: read.flat(), changed: known(writes) };
   } catch (error) {
-    claude.ui.log(`${name}: the ${use.tool} call lists no files: ${messageOf(error)}`, { to: "debug" });
+    claude.ui.warn("call:files", `${name}: the ${use.tool} call lists no files: ${messageOf(error)}`);
     return { read: [], changed: [] };
   }
 }
@@ -6287,7 +6310,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     if (change.type !== TaskStart)
       return;
     parents.get(session)?.set(change.task.id, change.task.parent);
-    readingParents.get(session)?.then((tree) => tree.set(change.task.id, change.task.parent), (error) => claude.ui.log(`${name}: the tasks of ${session} stay unread until the next change: ${messageOf(error)}`, { to: "debug" }));
+    readingParents.get(session)?.then((tree) => tree.set(change.task.id, change.task.parent), (error) => claude.ui.warn("tasks:read", `${name}: the tasks of ${session} stay unread until the next change: ${messageOf(error)}`));
   };
   const add = (into, scope, event, method, args, onChange) => {
     const key = keyOf(scope);
@@ -7048,7 +7071,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   });
   const publishWatches = (isEnding = false) => {
     const next = publishing.then(() => publishNow(isEnding));
-    publishing = next.catch((error) => claude.ui.log(`cmod: publishing before listeners failed: ${messageOf(error)}`, { to: "debug" }));
+    publishing = next.catch((error) => claude.ui.warn("before:publish", `cmod: publishing before listeners failed: ${messageOf(error)}`));
     return next;
   };
   const publishNow = async (isEnding) => {
@@ -7064,7 +7087,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     published = new Set(list.map((watch) => watch.target));
     const running = targets.has(everySession) ? (await json(["history", "sessions", "--running"])).map((each) => each.id) : [];
     const told = new Set([...running, ...targets].filter((id) => id !== everySession && id !== session));
-    await Promise.all([...told].map((id) => post(id, { kind: "watch" }).catch((error) => claude.ui.log(`cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`, { to: "debug" }))));
+    await Promise.all([...told].map((id) => post(id, { kind: "watch" }).catch((error) => claude.ui.warn("before:tell", `cmod: session ${id} did not hear of a before listener: ${messageOf(error)}`))));
   };
   const hear = (caller, id, list) => {
     const sessions = heard.get(caller) ?? new Map;
@@ -7076,7 +7099,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   };
   const onListenerFiles = (work) => {
     const next = listenerFiles.then(work);
-    listenerFiles = next.catch((error) => claude.ui.log(`cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`, { to: "debug" }));
+    listenerFiles = next.catch((error) => claude.ui.warn("listeners:files", `cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`));
     return next;
   };
   const clearListeners = (at) => onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, "{}"));
@@ -7113,7 +7136,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
       } catch (error) {
         if (from === session || !(error instanceof SyntaxError))
           throw error;
-        claude.ui.log(`cmod: session ${from} was writing its before listeners, so it keeps the ones from before until it relays that it changed them`, { to: "debug" });
+        claude.ui.warn("before:read", `cmod: session ${from} was writing its before listeners, so it keeps the ones from before until it relays that it changed them`);
         found.push(...watchers.filter((watch) => watch.from === from));
         continue;
       }
@@ -7163,7 +7186,7 @@ ${watcher.mod}`, watcher])).values()];
         throw error;
       }
       watchers = watchers.filter((each) => each.from !== watcher.from);
-      claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: "debug" });
+      claude.ui.warn("before:ended", `cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`);
       await clearWatches(watcher.from);
       return;
     }
@@ -7445,7 +7468,7 @@ ${watcher.mod}`, watcher])).values()];
     const { session: from, ...task } = JSON.parse(asked);
     const ended = { ...task, id: session, closedAt: new Date().toISOString() };
     await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended));
-    await post(from, { kind: "taskEnd", task: ended }).catch((error) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: "debug" }));
+    await post(from, { kind: "taskEnd", task: ended }).catch((error) => claude.ui.warn("task:answered", `cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`));
   };
   const actElsewhere = async (caller, target, action, input, task) => {
     const isLive = await isRunning(target);
@@ -7548,7 +7571,7 @@ ${watcher.mod}`, watcher])).values()];
         return saved;
       await starting;
       const kept = liveTasks().filter((task) => isNested || task.parent === request["task"]);
-      const running = await claude.agent.list().catch((error) => (claude.ui.log(`cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`, { to: "debug" }), []));
+      const running = await claude.agent.list().catch((error) => (claude.ui.warn("tasks:status", `cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`), []));
       const background = saved.flatMap(({ id, status }) => status === undefined ? [] : [{ id, status }]);
       return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
     },
@@ -7573,7 +7596,7 @@ ${watcher.mod}`, watcher])).values()];
         changeGoal(task, text);
       else {
         dispatch(id, [{ type: GoalChange, goal: { text, ...task === undefined ? {} : { task } } }]);
-        await post(id, { kind: "goal", ...task === undefined ? {} : { task }, text }).catch((error) => claude.ui.log(`cmod: session ${id} keeps its goal until it starts again: ${messageOf(error)}`, { to: "debug" }));
+        await post(id, { kind: "goal", ...task === undefined ? {} : { task }, text }).catch((error) => claude.ui.warn("goal:tell", `cmod: session ${id} keeps its goal until it starts again: ${messageOf(error)}`));
       }
       return null;
     },
@@ -7957,7 +7980,7 @@ function createModFiles({ name, claude, places, report }) {
       return value;
     const reason = `${name}: fs.find skipped ${path}: ${messageOf(error)}`;
     if (!logged.has(reason))
-      claude.ui.log(reason, { to: "debug" });
+      claude.ui.warn("fs:find", reason);
     logged.add(reason);
     return value;
   };
@@ -8325,7 +8348,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
         paneStates.set(id, { isShown: open.isShown, isFocused: open.isFocused });
     }
   };
-  const readPanes = () => syncPanes().catch((error) => claude.ui.log(`${name} keeps its panes' open, shown, and focused state from before: ${messageOf(error)}`, { to: "debug" }));
+  const readPanes = () => syncPanes().catch((error) => claude.ui.warn("panes:read", `${name} keeps its panes' open, shown, and focused state from before: ${messageOf(error)}`));
   const requestedSizes = new Map;
   const styles = new Set;
   const markdownRenders = new Map;
@@ -8378,7 +8401,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
           if (JSON.stringify(treeOf(sent.render, handlers)) !== sent.tree)
             return true;
         } catch (error) {
-          claude.ui.log(`${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`, { to: "debug" });
+          claude.ui.warn(`drawing:${key}`, `${name}: the ${key} drawing threw, so the cmod plugin asks for it again: ${messageOf(error)}`);
           return true;
         }
         const latest = sent.draws.at(-1);
@@ -8412,7 +8435,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
           unheldRequests += 1;
         if (isObject(answer) && name !== cmodPluginName)
           hear(answer["stylers"], false);
-      }, (error) => claude.ui.log(`${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`, { to: "debug" }));
+      }, (error) => claude.ui.warn("parts:tell", `${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`));
     };
     if (!isAsked)
       return Promise.resolve().then(tell);
@@ -8542,7 +8565,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
         return;
       await openAt(pane, size);
     } catch (error) {
-      claude.ui.log(`${name}: the ${pane.title} pane kept its size: ${messageOf(error)}`, { to: "debug" });
+      claude.ui.warn(`pane:resize:${pane.id}`, `${name}: the ${pane.title} pane kept its size: ${messageOf(error)}`);
     }
   };
   const handle = async (pane, handler, run) => {
@@ -8642,7 +8665,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
         panes.delete(init.id);
         paneLogs.delete(init.id);
         if (openPanes.has(init.id))
-          claude.ui.close({ id: init.id }).catch((error) => claude.ui.log(`${name}: the ${init.title} pane stayed open: ${messageOf(error)}`, { to: "debug" }));
+          claude.ui.close({ id: init.id }).catch((error) => claude.ui.warn(`pane:close:${init.id}`, `${name}: the ${init.title} pane stayed open: ${messageOf(error)}`));
         openPanes.delete(init.id);
         paneStates.delete(init.id);
       }
@@ -8913,7 +8936,7 @@ function createInstaller(name, claude, waiting, nextDraw) {
       return void collected.push(update);
     await withBareRefusals(claude()).cmod.call({ to: cmodPluginName, method: partMethods.changed, input: update });
   };
-  const log = (what) => (error) => claude().ui.log(`${name}: ${what}: ${messageOf(error)}`, { to: "debug" });
+  const log = (what) => (error) => claude().ui.warn("installer:page", `${name}: ${what}: ${messageOf(error)}`);
   const open = (isAsked) => send({ requests: [{ open: installPage, focus: true }], ...isAsked ? { isAsked: true } : {} });
   const show = async (build, cancelled) => {
     question?.cancel();
@@ -9080,7 +9103,7 @@ function createOptions({ name, declared, fromClaude, claude, report, changed }) 
     if (Object.keys(declared).length === 0)
       return new Set;
     const rows = await claude.config.list().catch((error) => {
-      claude.ui.log(`${name} could not read /config, so a project's options.json may override a value your organization set: ${messageOf(error)}`, { to: "debug" });
+      claude.ui.warn("options:config", `${name} could not read /config, so a project's options.json may override a value your organization set: ${messageOf(error)}`);
       return [];
     });
     return new Set(rows.filter((row) => row.isLocked && row.key.startsWith(`${name}.`)).map((row) => row.key.slice(name.length + 1)));
@@ -9202,8 +9225,11 @@ function createRouter() {
 var lifetimes = ["memory", "session", "project", "global"];
 var keptProjects = 20;
 var listeners = new WeakMap;
+function sessionKeyOf(name, key, session) {
+  return `${name}.${key}.sessions.${session}`;
+}
 async function sessionsWith(claude, name, key, value) {
-  const prefix = `${name}.${key}.sessions.`;
+  const prefix = sessionKeyOf(name, key, "");
   const found = [];
   for (const stored of (await claude.store.keys()).filter((each) => each.startsWith(prefix))) {
     if (await claude.store.get(stored) === value)
@@ -9227,7 +9253,7 @@ function createState({ name, initial, session, root, claude, report, changed: re
     turn = Promise.allSettled([run]);
     return run;
   };
-  const ownersKey = (lifetime, key) => `${name}.${key}.${lifetime === "project" ? "projects" : "sessions"}.`;
+  const ownersKey = (lifetime, key) => lifetime === "project" ? `${name}.${key}.projects.` : sessionKeyOf(name, key, "");
   const storeKey = (lifetime, key, owner) => lifetime === "global" ? `${name}.${key}` : `${ownersKey(lifetime, key)}${owner}`;
   const read = (lifetime, key, owner) => claude.store.get(storeKey(lifetime, key, owner));
   const write = async (lifetime, key, value, owner) => {
@@ -9287,7 +9313,7 @@ function createState({ name, initial, session, root, claude, report, changed: re
       if (lifetime !== "memory") {
         const owner = lifetime === "project" ? projectRoot : sessionId;
         inTurn(() => write(lifetime, key, value, owner)).catch((error) => {
-          report({ id: `state:${lifetime}.${key}`, message: `Could not keep state.${lifetime}.${key}. Keep only JSON data in mod.state`, error });
+          report({ id: `state:${lifetime}.${key}`, message: `Could not keep state.${lifetime}.${key}`, error });
         });
       }
       changed();
@@ -9388,7 +9414,7 @@ function createToaster(claude, name, version) {
     for (const [id, hides] of Object.entries(saved))
       if (typeof hides === "string" && !hidden.has(id))
         hidden.set(id, hides);
-  }, (error) => claude.ui.log(`${name}: could not read the failures you hid: ${messageOf(error)}`, { to: "debug" }));
+  }, (error) => warn("hidden:read", `${name}: could not read the failures you hid: ${messageOf(error)}`));
   let lastId = 0;
   let frame = 0;
   let spinning;
@@ -9468,7 +9494,7 @@ function createToaster(claude, name, version) {
     if (entry.hides === undefined)
       return;
     hidden.set(String(entry.id), entry.hides);
-    claude.store.set(hiddenKey, Object.fromEntries(hidden)).catch((error) => claude.ui.log(`${name}: could not remember the failure you hid: ${messageOf(error)}`, { to: "debug" }));
+    claude.store.set(hiddenKey, Object.fromEntries(hidden)).catch((error) => warn("hidden:write", `${name}: could not remember the failure you hid: ${messageOf(error)}`));
   };
   const toast = Object.assign(show("default"), {
     success: show("success"),
@@ -9499,6 +9525,27 @@ function createToaster(claude, name, version) {
   };
   const press = (entry, run) => () => void Promise.resolve().then(run).catch((error) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error, isCritical: true }));
   const logFailure = (failure) => claude.cmod.call({ to: cmodPluginName, method: failedMethod, input: failure });
+  const modVersion = () => claude.fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text) => String(JSON.parse(text).version)).catch((failure) => `unknown (${messageOf(failure)})`);
+  const detailsOf = (version, at, text) => `${name} ${version}, @cmodjs/core ${coreVersion}, at ${at.toISOString()}
+${text}`;
+  const warned = new Map;
+  const warn = (id, text) => {
+    claude.ui.log(text, { to: "debug" });
+    const at = new Date;
+    const repeat = `${text}
+${at.toISOString().slice(0, 16)}`;
+    if (warned.get(id) === repeat)
+      return;
+    warned.set(id, repeat);
+    claude.clock.after(0, () => {
+      (async () => {
+        const version = await modVersion();
+        await logFailure({ mod: name, id, message: text, details: detailsOf(version, at, text), at: at.toISOString(), isCritical: false, root: claude.plugin.root, level: "warning", version, core: coreVersion });
+      })().catch(() => {
+        return;
+      });
+    });
+  };
   const showsToast = async (failure, isShown) => {
     try {
       const logged = logFailure(failure);
@@ -9525,15 +9572,13 @@ ${at.toISOString().slice(0, 16)}`;
     const stack = error instanceof Error && error.stack !== undefined ? `
 
 ${error.stack}` : "";
-    const details = async (failedAt) => {
-      const modVersion = await claude.fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text) => String(JSON.parse(text).version)).catch((failure) => `unknown (${messageOf(failure)})`);
-      return `${name} ${modVersion}, @cmodjs/core ${coreVersion}, at ${failedAt.toISOString()}
-${message}${description === undefined ? "" : `
-${description}`}${stack}`;
-    };
+    const details = async (failedAt) => detailsOf(await modVersion(), failedAt, `${message}${description === undefined ? "" : `
+${description}`}${stack}`);
     const logged = async () => {
       const contact = await contactOf(claude);
-      const failure = { mod: name, id, message, details: await details(at), at: at.toISOString(), isCritical, root: claude.plugin.root, ...contact === undefined ? {} : { contact } };
+      const version = await modVersion();
+      const failure = { mod: name, id, message, details: detailsOf(version, at, `${message}${description === undefined ? "" : `
+${description}`}${stack}`), at: at.toISOString(), isCritical, root: claude.plugin.root, ...contact === undefined ? {} : { contact }, level: "error", version, core: coreVersion };
       const shows = await showsToast(failure, isCritical);
       if (isCritical)
         return;
@@ -9567,7 +9612,7 @@ ${description}`}${stack}`;
         return;
       const focused = await claude.ui.focus({ requestId: bandId, key: `toast:${id}:ask-claude` });
       if ("deny" in focused)
-        claude.ui.log(`${name}: the Report choices did not take the keys: ${String(focused.deny)}`, { to: "debug" });
+        warn("report:focus", `${name}: the Report choices did not take the keys: ${String(focused.deny)}`);
     };
     const tryAgain = async () => {
       const shown = entries.get(id);
@@ -9659,6 +9704,7 @@ ${description ?? ""}`.includes(sentence));
     toast,
     copy,
     fail,
+    warn,
     get shown() {
       return [...entries.values()].map(({ type, message, options }) => ({ type, message, ...typeof options.description === "string" ? { description: options.description } : {} }));
     },
@@ -9734,7 +9780,7 @@ async function readCombos(claude, configRoot) {
   try {
     return boundCombos(JSON.parse(text));
   } catch (error) {
-    claude.ui.log(`${configRoot}/keybindings.json is not JSON, so cmod reads no combos from it: ${messageOf(error)}`, { to: "debug" });
+    claude.ui.warn("hotkeys:read", `${configRoot}/keybindings.json is not JSON, so cmod reads no combos from it: ${messageOf(error)}`);
     return new Map;
   }
 }
@@ -9826,7 +9872,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
   router.add("command.run", (e, next) => wrapped(async () => waiting.length > 0 ? {} : next(e)));
   router.add("ui.press", (e, next) => wrapped(() => next(e)));
   const ask = (mod) => {
-    const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((parts) => void declared.set(mod, pagesOf(parts)), (error) => claude.ui.log(`cmod: ${mod} did not list its pages: ${messageOf(error)}`, { to: "debug" })).finally(() => asking.delete(mod));
+    const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((parts) => void declared.set(mod, pagesOf(parts)), (error) => claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`)).finally(() => asking.delete(mod));
     asking.set(mod, pending);
     return pending;
   };
@@ -9840,7 +9886,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
     tellStylers(listed);
     for (const told of declared.keys()) {
       if (told !== cmodPluginName)
-        claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error) => claude.ui.log(`cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`, { to: "debug" }));
+        claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error) => claude.ui.warn(`pages:stylers:${told}`, `cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`));
     }
   };
   const update = (mod, { parts: listing, redraw, requests, isAsked }) => {
@@ -9898,7 +9944,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
     press,
     update,
     tell(mod, shown) {
-      claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error) => claude.ui.log(`cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`, { to: "debug" }));
+      claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error) => claude.ui.warn(`pages:shown:${mod}`, `cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`));
     },
     apply(listener) {
       applyTo = listener;
@@ -10163,7 +10209,7 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
       declared.set(mod, declarationsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })));
     } catch (error) {
       declared.delete(mod);
-      claude.ui.log(`cmod: ${mod} did not list its widgets: ${messageOf(error)}`, { to: "debug" });
+      claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`);
     }
   };
   const recheck = async () => {
@@ -10469,7 +10515,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     throw new Error(`cmod setup ${formatExit(code, lastError)}`);
   };
   const record = () => {
-    recording ??= recordThroughCmod().catch((error) => claude().ui.log(`${definition.name} has no cmod record yet: ${messageOf(error)}`, { to: "debug" })).finally(() => {
+    recording ??= recordThroughCmod().catch((error) => claude().ui.warn("record", `${definition.name} has no cmod record yet: ${messageOf(error)}`)).finally(() => {
       recording = undefined;
     });
   };
@@ -10587,10 +10633,10 @@ function createLifecycle(definition, permissionRoutes = () => {
     for (const text of additionalContext ?? []) {
       const added = await claude().session.append({ message: { type: "user", content: [{ type: "text", text }] } });
       if (added.deny !== undefined)
-        claude().ui.log(`${definition.name}: Claude Code refused its SessionStart note: ${added.deny}`, { to: "debug" });
+        claude().ui.warn("session-start:note", `${definition.name}: Claude Code refused its SessionStart note: ${added.deny}`);
     }
     if (Object.keys(unread).length > 0) {
-      claude().ui.log(`${definition.name} started after Claude Code's SessionStart, so Claude Code did not read ${Object.keys(unread).join(", ")} from its SessionStart hooks.`, { to: "debug" });
+      claude().ui.warn("session-start:late", `${definition.name} started after Claude Code's SessionStart, so Claude Code did not read ${Object.keys(unread).join(", ")} from its SessionStart hooks.`);
     }
   };
   const install = async (isQuiet = false) => {
@@ -10732,11 +10778,12 @@ function createLifecycle(definition, permissionRoutes = () => {
   };
   let recordCheck;
   let checking;
+  let startingSession;
   const watchRecord = () => {
     recordCheck ??= claude().clock.every(recordCheckMs, () => {
       checking ??= recover().then(() => {
         return;
-      }).catch((error) => claude().ui.log(`${definition.name} could not read whether another cmod installed it: ${messageOf(error)}`, { to: "debug" })).finally(() => {
+      }).catch((error) => claude().ui.warn("record:watch", `${definition.name} could not read whether another cmod installed it: ${messageOf(error)}`)).finally(() => {
         checking = undefined;
       });
     });
@@ -10751,13 +10798,84 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (activation !== undefined && phase !== "active")
       await activation;
   };
-  const holdUntilStarted = () => runtime === undefined ? startSettled.then(whenActive) : new Promise((resolve) => {
+  const held = (work, signal) => runtime === undefined ? work : new Promise((resolve) => {
     const limit = claude().clock.after(startHoldMs, resolve);
-    startSettled.then(whenActive).then(() => {
+    if (signal?.aborted === true)
+      resolve();
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+    work.then(() => {
       limit.cancel();
       resolve();
     });
   });
+  const holdUntilStarted = (signal) => held(startSettled.then(whenActive), signal);
+  const holdUntilActive = (signal) => {
+    const activating = whenActive();
+    return activation !== undefined && phase !== "active" ? held(activating, signal) : activating;
+  };
+  const routed = async (event, e, next, signal) => {
+    if (imports !== undefined)
+      bind(imports);
+    const asked = e;
+    if (event === "cmod.call" && asked.to === definition.name && asked.caller === cmodPluginName) {
+      if (asked.method === partMethods.shown)
+        installer.hear(asked.input);
+      const answered = installer.answer(asked.method, asked.input);
+      if (answered !== undefined)
+        return await answered.catch((error) => ({ deny: `${definition.name}: ${messageOf(error)}` }));
+      if (asked.method === partMethods.shown && phase !== "active")
+        return { value: null };
+    }
+    if (event === "classic.SessionStart") {
+      missedSessionStart = undefined;
+      hasHeardSessionStart = true;
+    }
+    if (event === "classic.SessionStart" && runtime === undefined) {
+      missedSessionStart = e;
+      return next(e);
+    }
+    if (shouldRecord && event === "classic.UserPromptSubmit")
+      record();
+    if (event === "classic.UserPromptSubmit" || event === "classic.SessionStart")
+      await recover().catch((error) => claude().ui.warn("recover", `${definition.name} stays stopped: ${messageOf(error)}`));
+    const tool = e.tool;
+    const isCallToThisMod = event === "cmod.call" && e.to === definition.name || event === "tool.call" && typeof tool === "string" && tool.startsWith(`mcp__${definition.name}__`);
+    if (event === "cmod.call" && !isCallToThisMod)
+      return next(e);
+    await (event === "classic.SessionStart" || event === "session.append" || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal));
+    if (event === "classic.SessionStart" && phase !== "active") {
+      missedSessionStart = e;
+      return next(e);
+    }
+    if (isCallToThisMod && phase !== "active") {
+      if (event === "cmod.call" && listenMethods.includes(asked.method)) {
+        heldListens.set(`${asked.caller}
+${asked.method}
+${String(asked.input.session)}`, asked);
+        return { value: null };
+      }
+      return { deny: phase === "failed" ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` };
+    }
+    const call = e;
+    if (event === "cmod.call" && call.to === definition.name && mod !== undefined) {
+      if (call.method === pendingStepsMethod)
+        return { value: await pendingSteps(mod) };
+      if (call.method === finishStepsMethod) {
+        const active = mod;
+        const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error) => void toastFailure({ id: "cmod:steps", message: "Could not finish the setup", error, isCritical: true })), installer.shown()]));
+        return { value: opened };
+      }
+    }
+    if (event === "classic.UserPromptSubmit" && phase === "active" && !hasHeardSessionStart) {
+      const { session_id, transcript_path, cwd } = e;
+      await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: "SessionStart", source: "resume" });
+    }
+    const answer = router.dispatch(event, e, next, signal);
+    const render = e;
+    if (event !== "ui.render" || render.component !== "AbovePrompt" || runtime === undefined)
+      return answer;
+    return runtime.toaster.draw(await answer, runtime.claude.ui.resolve(render), render.props, render.requestId);
+  };
   return {
     get phase() {
       return phase;
@@ -10780,9 +10898,14 @@ function createLifecycle(definition, permissionRoutes = () => {
     async start(claudeCalls, read) {
       if (runtime !== undefined)
         return;
-      programs = locatingPrograms(claudeCalls);
-      const callingCmod = {
+      const naming = {
         ...claudeCalls,
+        ui: { ...claudeCalls.ui, warn: (id, text) => runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text) },
+        session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() }
+      };
+      programs = locatingPrograms(naming);
+      const callingCmod = {
+        ...naming,
         cmod: {
           async call(input) {
             if (input.to === definition.name)
@@ -10802,67 +10925,16 @@ function createLifecycle(definition, permissionRoutes = () => {
       }
     },
     async route(event, e, next, signal) {
-      if (imports !== undefined)
-        bind(imports);
-      const asked = e;
-      if (event === "cmod.call" && asked.to === definition.name && asked.caller === cmodPluginName) {
-        if (asked.method === partMethods.shown)
-          installer.hear(asked.input);
-        const answered = installer.answer(asked.method, asked.input);
-        if (answered !== undefined)
-          return await answered.catch((error) => ({ deny: `${definition.name}: ${messageOf(error)}` }));
-        if (asked.method === partMethods.shown && phase !== "active")
-          return { value: null };
+      if (event !== "classic.SessionStart")
+        return settledAfterAbort(routed(event, e, next, signal), signal);
+      const started = e.session_id;
+      startingSession = started;
+      try {
+        return await settledAfterAbort(routed(event, e, next, signal), signal);
+      } finally {
+        if (startingSession === started)
+          startingSession = undefined;
       }
-      if (event === "classic.SessionStart") {
-        missedSessionStart = undefined;
-        hasHeardSessionStart = true;
-      }
-      if (event === "classic.SessionStart" && runtime === undefined) {
-        missedSessionStart = e;
-        return next(e);
-      }
-      if (shouldRecord && event === "classic.UserPromptSubmit")
-        record();
-      if (event === "classic.UserPromptSubmit" || event === "classic.SessionStart")
-        await recover().catch((error) => claude().ui.log(`${definition.name} stays stopped: ${messageOf(error)}`, { to: "debug" }));
-      const tool = e.tool;
-      const isCallToThisMod = event === "cmod.call" && e.to === definition.name || event === "tool.call" && typeof tool === "string" && tool.startsWith(`mcp__${definition.name}__`);
-      if (event === "cmod.call" && !isCallToThisMod)
-        return next(e);
-      await (event === "classic.SessionStart" || event === "session.append" || isCallToThisMod ? holdUntilStarted() : whenActive());
-      if (event === "classic.SessionStart" && phase !== "active") {
-        missedSessionStart = e;
-        return next(e);
-      }
-      if (isCallToThisMod && phase !== "active") {
-        if (event === "cmod.call" && listenMethods.includes(asked.method)) {
-          heldListens.set(`${asked.caller}
-${asked.method}
-${String(asked.input.session)}`, asked);
-          return { value: null };
-        }
-        return { deny: phase === "failed" ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` };
-      }
-      const call = e;
-      if (event === "cmod.call" && call.to === definition.name && mod !== undefined) {
-        if (call.method === pendingStepsMethod)
-          return { value: await pendingSteps(mod) };
-        if (call.method === finishStepsMethod) {
-          const active = mod;
-          const opened = await installer.collect(() => Promise.race([runSteps(active).catch((error) => void toastFailure({ id: "cmod:steps", message: "Could not finish the setup", error, isCritical: true })), installer.shown()]));
-          return { value: opened };
-        }
-      }
-      if (event === "classic.UserPromptSubmit" && phase === "active" && !hasHeardSessionStart) {
-        const { session_id, transcript_path, cwd } = e;
-        await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: "SessionStart", source: "resume" });
-      }
-      const answer = router.dispatch(event, e, next, signal);
-      const render = e;
-      if (event !== "ui.render" || render.component !== "AbovePrompt" || runtime === undefined)
-        return answer;
-      return runtime.toaster.draw(await answer, runtime.claude.ui.resolve(render), render.props, render.requestId);
     },
     async caught(event, e, next, { error: { kind, message }, called }) {
       const call = e;
@@ -10914,7 +10986,7 @@ async function createMod(definition, runtime) {
       const parent = await claude.cmod.call({ to: cmodPluginName, method: "forkParent", input: null });
       return typeof parent === "string" ? parent : undefined;
     } catch (error) {
-      claude.ui.log(`${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`, { to: "debug" });
+      claude.ui.warn("fork:values", `${definition.name} starts without the session values of the conversation it was forked from: ${messageOf(error)}`);
       return;
     }
   };
@@ -11122,8 +11194,8 @@ async function createMod(definition, runtime) {
       report({ id: "cmod:follow", message: `Keeps the state of ${modState.root} until the next prompt or folder move`, error });
     }
   };
-  const followCurrent = async (title) => {
-    const [id, model, usage] = await Promise.all([claude.session.id(), claude.session.model(), claude.session.usage()]);
+  const followCurrent = async (id, title) => {
+    const [model, usage] = await Promise.all([claude.session.model(), claude.session.usage()]);
     followed = { id, title: title ?? "", project: modState.root, cwd, model, startedAt: new Date(usage.startedAt).toISOString(), ...forkedFrom === undefined ? {} : { forkedFrom }, ...agentType === undefined ? {} : { agentType } };
     client.follow(followed);
   };
@@ -11137,17 +11209,17 @@ async function createMod(definition, runtime) {
       parentAsked = undefined;
     }
     hasEarlierPrompts = e.source !== "startup" && e.source !== "clear";
+    await followCurrent(e.session_id, e.session_title).catch((error) => report({ id: "cmod:current", message: "Kept the details of the session from before", error }));
     await modState.switchSession(e.session_id, e.source, e.transcript_path).catch((error) => {
       report({ id: "cmod:session", message: `Kept its session values from before the ${e.source}`, error });
     });
-    await followCurrent(e.session_title).catch((error) => report({ id: "cmod:current", message: "Kept the details of the session from before", error }));
     return next(e);
   });
   router.add("classic.UserPromptSubmit", async (e, next) => {
     staleCwd = undefined;
     await followSession();
     const isPerson = e.source === undefined || e.source === "user" || e.source === "sdk";
-    await followCurrent(e.session_title || (isPerson && !hasEarlierPrompts && client.sessions.current.title === "" ? firstLine(e.prompt) : undefined)).catch((error) => report({ id: "cmod:current", message: "Kept the details of the session from before", error }));
+    await followCurrent(e.session_id, e.session_title || (isPerson && !hasEarlierPrompts && client.sessions.current.title === "" ? firstLine(e.prompt) : undefined)).catch((error) => report({ id: "cmod:current", message: "Kept the details of the session from before", error }));
     return next(e);
   });
   for (const event of ["classic.PostToolUse", "classic.PostToolUseFailure"]) {
@@ -11182,7 +11254,7 @@ async function createMod(definition, runtime) {
   const tellColor = (to, told) => {
     if (told.session === "" || to === cmodPluginName)
       return;
-    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error) => claude.ui.log(`cmod: ${to} did not hear the session's color: ${messageOf(error)}`, { to: "debug" })));
+    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error) => claude.ui.warn("color:tell", `cmod: ${to} did not hear the session's color: ${messageOf(error)}`)));
   };
   conversations?.onColor((told) => {
     client.recolor(told);
@@ -11234,6 +11306,7 @@ async function createMod(definition, runtime) {
     hasPermissionCheck: () => runtime.permissionRoutes() !== undefined,
     answerInput: area.answerInput,
     spawnCmod: (args, env) => spawnCmod(claude, args, session, env),
+    watches,
     ...widgets === undefined ? {} : { widgets },
     ...pages === undefined ? {} : { pages }
   });
@@ -11250,7 +11323,7 @@ async function createMod(definition, runtime) {
   const missing = modOptions.missing;
   if (missing.length > 0)
     throw new MissingOptions(missing, missing.map((key) => definition.options?.[key]?.title ?? key));
-  await failsAs("the details of its session did not load", () => followCurrent(undefined));
+  await failsAs("the details of its session did not load", () => followCurrent(session, undefined));
   const returned = await failsAs("its setup function threw", () => definition.setup(mod));
   api = apiOf(definition.name, returned);
   await failsAs("its open panes did not load", () => area.restorePanes());
@@ -11291,11 +11364,27 @@ function progressOf({ done, total, label }) {
 var lifecycle;
 var permissionCheck;
 var registered;
+var lockedRetryMs = [100, 300, 600];
+var heldLock = "Lock file is already being held";
+var timers2 = globalThis;
+async function whenUnlocked(write) {
+  for (const waitMs of lockedRetryMs) {
+    try {
+      return await write();
+    } catch (error) {
+      if (!messageOf(error).includes(heldLock))
+        throw error;
+      await new Promise((resolve) => void timers2.setTimeout(resolve, waitMs));
+    }
+  }
+  return write();
+}
 async function startMod($, eventInput, passOn) {
   const claude = {
     plugin: { name: $.plugin.name, root: $.plugin.root },
     ui: {
       log: (text, options) => $.ui.log(text, options),
+      warn: (_id, text) => $.ui.log(text, { to: "debug" }),
       notice: (toolUseId, text) => $.ui.notice(toolUseId, text),
       toast: (text, options) => $.ui.toast(text, options),
       invalidate: (event) => $.ui.invalidate(event),
@@ -11324,8 +11413,8 @@ async function startMod($, eventInput, passOn) {
     config: { list: () => $.config.list() },
     store: {
       get: (key) => $.store.get(key),
-      set: (key, value) => $.store.set(key, value),
-      delete: (key) => $.store.delete(key),
+      set: (key, value) => whenUnlocked(() => $.store.set(key, value)),
+      delete: (key) => whenUnlocked(() => $.store.delete(key)),
       keys: () => $.store.keys()
     },
     clock: {
@@ -11340,6 +11429,7 @@ async function startMod($, eventInput, passOn) {
       model: () => $.session.model(),
       usage: () => $.session.usage(),
       surfaces: () => $.session.surfaces(),
+      version: async () => (await $.session.version()).version,
       messages: (args) => args === undefined ? $.session.messages() : $.session.messages(args),
       append: (args) => $.session.append(args),
       send: (args) => $.session.send(args)
@@ -11361,7 +11451,7 @@ async function startMod($, eventInput, passOn) {
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) }
   };
-  const [, answer] = await Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)]);
+  const [, answer] = await settledAfterAbort(Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)]), passOn.signal);
   return answer;
 }
 function routeToMod(_$, eventInput, passOn) {
@@ -11518,7 +11608,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11564,6 +11654,16 @@ async function readJson2(path) {
 var isText = (value) => typeof value === "string";
 var isLogEntry = (value) => isObject(value) && ["mod", "id", "message", "details", "at"].every((key) => isText(value[key]));
 var sameFailure = (left) => (right) => left.mod === right.mod && left.id === right.id;
+function versionsLine({ mod, core, cmod, program, claudeCode }) {
+  return [mod === undefined ? undefined : `mod ${mod}`, core === undefined ? undefined : `@cmodjs/core ${core}`, `cmod ${cmod}`, program === undefined ? undefined : `cmod program ${program}`, `Claude Code ${claudeCode}`].filter((part) => part !== undefined).join(" · ");
+}
+function reportedOf(entry) {
+  const seen = (entry.count ?? 1) > 1 ? `
+${entry.count} times in session ${entry.session ?? "unknown"}, first at ${entry.firstAt ?? entry.at}` : "";
+  return entry.versions === undefined ? entry.details : `${entry.details}
+
+${versionsLine(entry.versions)}${seen}`;
+}
 async function readEntries(path) {
   const value = await readJson2(path).catch((error) => {
     throw new Error(`${path} is not JSON (${messageOf(error)}). Delete it, and cmod starts it again.`);
@@ -11585,7 +11685,7 @@ async function readLog(mod) {
     if (oldestKept !== undefined && Date.parse(oldestKept.at) > file.modifiedAt)
       break;
     const entries = await readEntries(`${folder}/${file.name}`).catch((error) => {
-      mod.log(`the Log skips a file: ${messageOf(error)}`);
+      engineOf(mod).claude.ui.warn("log:read", `cmod: the Log skips a file: ${messageOf(error)}`);
       return [];
     });
     for (const entry of entries) {
@@ -11605,21 +11705,39 @@ async function refreshPreferences(mod) {
   mod.state.memory.preferences = await readPreferences(mod);
 }
 function failureLog(mod) {
+  const { claude } = engineOf(mod);
   let writing = Promise.resolve();
+  const cmodVersion = fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text) => String(JSON.parse(text).version)).catch((error) => `unknown (${messageOf(error)})`);
+  const versionsOf = async (failure) => {
+    const store = await storeOf(mod);
+    const program = await readCmodVersion({
+      list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
+      exists: async (path) => await claude.fs.stat(path).catch(ifMissing(undefined)) !== undefined
+    }, store).catch((error) => `unknown (${messageOf(error)})`);
+    const claudeCode = await claude.session.version().catch((error) => `unknown (${messageOf(error)})`);
+    return { ...failure.version === undefined ? {} : { mod: failure.version }, ...failure.core === undefined ? {} : { core: failure.core }, cmod: await cmodVersion, ...program === undefined ? {} : { program }, claudeCode };
+  };
   const add = async (entry) => {
-    const path = `${logFolder(mod)}/${await engineOf(mod).claude.session.id()}.json`;
-    const kept = [entry, ...(await readEntries(path)).filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures);
+    const path = `${logFolder(mod)}/${entry.session}.json`;
+    const earlier = await readEntries(path);
+    const same = earlier.find(sameFailure(entry));
+    const counted = { ...entry, count: (same?.count ?? 0) + 1, firstAt: same?.firstAt ?? same?.at ?? entry.at };
+    const kept = [counted, ...earlier.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures);
     await fs.write(path, `${JSON.stringify(kept, null, 2)}
 `);
-    mod.state.memory.log = [entry, ...mod.state.memory.log.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures);
+    mod.state.memory.log = [counted, ...mod.state.memory.log.filter((each) => !sameFailure(entry)(each))].slice(0, loggedFailures);
   };
   return async (failure) => {
     if (!isLogEntry(failure) || !isText(failure.root) || typeof failure.isCritical !== "boolean")
       throw new Error(`${failedMethod} takes the failure's mod, id, message, details, at, and root as text, and isCritical as true or false.`);
     const { mod: name, id, message, details, at, contact } = failure;
-    const added = writing.then(() => add({ mod: name, id, message, details, at, ...contact === undefined ? {} : { contact } }));
+    const level = failure.level === "warning" ? "warning" : "error";
+    const [session, versions] = await Promise.all([claude.session.id(), versionsOf(failure)]);
+    const added = writing.then(() => add({ mod: name, id, level, message, details, at, session, versions, ...contact === undefined ? {} : { contact } }));
     writing = Promise.allSettled([added]);
     await added;
+    if (level === "warning")
+      return { showsToast: false };
     return { showsToast: failure.isCritical || marketplaceOf(failure.root, failure.mod) === undefined || (await readPreferences(mod)).showsInstalledModErrors };
   };
 }
@@ -11682,7 +11800,7 @@ function settings2(mod) {
         if (name === mod.name)
           return [];
         const answer = await claude.cmod.call({ to: name, method, input: null }).catch((error) => {
-          mod.log(`${name} did not answer ${method}: ${messageOf(error)}`);
+          claude.ui.warn(`settings:${name}:${method}`, `cmod: ${name} did not answer ${method}: ${messageOf(error)}`);
           return;
         });
         return Array.isArray(answer) ? answer : [];
@@ -11760,12 +11878,12 @@ function settings2(mod) {
       if (log.length === 0)
         return Text({ dimColor: true, children: "No mod has failed." });
       const copy = (entry) => act(async () => {
-        await clipboard.write(entry.details);
+        await clipboard.write(reportedOf(entry));
         return "Copied the error.";
       });
       const askClaude = (entry) => act(async () => {
         mod.state.memory.reporting = null;
-        await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, entry.details), asUser: true });
+        await claude.prompt.submit({ text: reportPrompt(entry.mod, entry.contact, reportedOf(entry)), asUser: true });
         return;
       });
       return Box({
@@ -11775,7 +11893,7 @@ function settings2(mod) {
           const key = `${entry.mod}/${entry.id}`;
           const choices = reporting === key ? [
             Button({ plain: true, key: `ask-claude:${key}`, label: "Ask Claude to report it", onPress: () => askClaude(entry) }),
-            ...entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, entry.details)],
+            ...entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, reportedOf(entry))],
             Button({ plain: true, dimColor: true, key: `back:${key}`, label: "Back", onPress: () => void (mod.state.memory.reporting = null) })
           ] : [
             Button({ plain: true, key: `copy:${key}`, label: "Copy", onPress: () => copy(entry) }),
@@ -11785,8 +11903,16 @@ function settings2(mod) {
             key: `log:${key}`,
             flexDirection: "column",
             children: [
-              Text({ wrap: "truncate-end", children: [Text({ bold: true, children: entry.mod }), Text({ dimColor: true, children: ` · ${timeOf(entry.at)}` })] }),
+              Text({
+                wrap: "truncate-end",
+                children: [
+                  Text({ bold: true, children: entry.mod }),
+                  ...entry.level === "warning" ? [Text({ color: "warning", children: " warning" })] : [],
+                  Text({ dimColor: true, children: ` · ${timeOf(entry.at)}${(entry.count ?? 1) > 1 ? ` · ${entry.count} times since ${timeOf(entry.firstAt ?? entry.at)}` : ""}` })
+                ]
+              }),
               Text({ wrap: "wrap", children: entry.message }),
+              ...entry.versions === undefined ? [] : [Text({ dimColor: true, wrap: "truncate-end", children: versionsLine(entry.versions) })],
               Box({ gap: 2, flexWrap: "wrap", children: choices })
             ]
           });
@@ -11983,7 +12109,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12153,7 +12279,7 @@ function sidebar(mod, settings) {
         await pane.open({ focus: true });
         await view.show(name, request.tab);
       } else {
-        mod.log(`${name} sent a page request this cmod does not know, so it skips it: ${JSON.stringify(request)}`);
+        engineOf(mod).claude.ui.warn(`page-request:${name}`, `cmod: ${name} sent a page request this cmod does not know, so it skips it: ${JSON.stringify(request)}`);
       }
     }
     tell();
@@ -12238,7 +12364,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12292,7 +12418,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12308,6 +12434,7 @@ var watchStaleMs = 15000;
 var reloadEcho = "<command-name>/reload-plugins</command-name>";
 var reloadNote = "<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>";
 var reloadToast = "reload";
+var oldReloadKey = /^cmod:(hiding-reload|versions-before-reload):/;
 var shownUpdates = 3;
 async function tipOf(mod) {
   const messages = await engineOf(mod).claude.session.messages();
@@ -12366,7 +12493,13 @@ var cmodPlugin = defineMod({
       pluginsFile === undefined ? "" : await fs.read(pluginsFile).catch(ifMissing("")),
       (await settings.user.read())["enabledPlugins"] ?? null
     ]);
-    const sessionKey = async (name) => `cmod:${name}:${await claude.session.id()}`;
+    const sessionKey = async (name) => sessionKeyOf(mod.name, name, await claude.session.id());
+    const forgetOldReloadKeys = async () => {
+      for (const key of await claude.store.keys())
+        if (oldReloadKey.test(key))
+          await claude.store.delete(key);
+    };
+    forgetOldReloadKeys().catch((error) => claude.ui.warn("reload:old-keys", `cmod: kept the reload keys of ended sessions: ${messageOf(error)}`));
     const loadedVersions = async () => {
       if (pluginsFile === undefined)
         return {};
@@ -12383,7 +12516,7 @@ var cmodPlugin = defineMod({
       return Object.fromEntries(versions.flat());
     };
     const takeVersionsBeforeReload = async () => {
-      const key = await sessionKey("versions-before-reload");
+      const key = await sessionKey("versionsBeforeReload");
       const before = await claude.store.get(key);
       await claude.store.delete(key);
       return before;
@@ -12407,7 +12540,7 @@ var cmodPlugin = defineMod({
           claude.ui.toast(update);
     };
     const announceUpdates = (isAfterOwnReload) => void showUpdates(isAfterOwnReload).catch((error) => report({ id: "updates", message: "Could not show which plugins updated", error }));
-    announceUpdates(await claude.store.get(await sessionKey("hiding-reload")) === true);
+    announceUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
     let seenChange = await pluginsState();
     let isReloadDue = false;
     let quietWait;
@@ -12438,13 +12571,13 @@ var cmodPlugin = defineMod({
       mod.toast.dismiss(reloadToast);
       try {
         seenChange = await pluginsState();
-        await claude.store.set(await sessionKey("versions-before-reload"), loaded);
-        await claude.store.set(await sessionKey("hiding-reload"), true);
+        await claude.store.set(await sessionKey("versionsBeforeReload"), loaded);
+        await claude.store.set(await sessionKey("hidingReload"), true);
         await claude.command.run({ command: "reload-plugins" });
         await widgets.recheck();
         announceUpdates(true);
       } catch (error) {
-        await claude.store.delete(await sessionKey("hiding-reload"));
+        await claude.store.delete(await sessionKey("hidingReload"));
         await takeVersionsBeforeReload();
         report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true });
       }
@@ -12456,12 +12589,12 @@ var cmodPlugin = defineMod({
     router.add("session.append", async (e, next) => {
       if (e.door !== "command" || e.message.isMeta === true)
         return next(e);
-      const hidingReload = await sessionKey("hiding-reload");
+      const hidingReload = await sessionKey("hidingReload");
       if (await claude.store.get(hidingReload) !== true)
         return next(e);
       const isOwnReload = e.origin.kind === "plugin" && "name" in e.origin && e.origin.name === mod.name && JSON.stringify(e.message.content).includes(reloadEcho);
       if (!isOwnReload) {
-        await claude.store.delete(hidingReload);
+        await claude.store.delete(hidingReload).catch((error) => claude.ui.warn("reload:hide", `cmod: kept hiding /reload-plugins rows, because Claude Code's store refused the change: ${messageOf(error)}`));
         if (e.message.type !== "system")
           return next(e);
       }
@@ -12534,12 +12667,7 @@ var cmodPlugin = defineMod({
     const watchLock = `${store}/watch.lock`;
     let isWatchRunning = false;
     const keepWatching = async () => {
-      if (isWatchRunning)
-        return;
-      const now = await claude.clock.now();
-      const holders = await claude.fs.list(watchLock).catch(ifMissing([]));
-      const touched = await Promise.all(holders.map(async ({ name }) => (await claude.fs.stat(`${watchLock}/${name}`).catch(ifMissing(undefined)))?.mtimeMs ?? 0));
-      if (touched.some((at) => now - at < watchStaleMs))
+      if (isWatchRunning || await isHeld(claude, watchLock, watchStaleMs))
         return;
       isWatchRunning = true;
       runCmod(claude, ["watch"], await claude.session.id()).catch((error) => report({ id: "watch", message: "Stopped reloading the linked mods", error, isCritical: true })).finally(() => void (isWatchRunning = false));
@@ -12569,7 +12697,7 @@ var cmodPlugin = defineMod({
     });
     settings.beforeFileChange({ source: "user" }, () => void mod.after(reloadDelayMs, reloadIfChanged));
     sessions.current.onPrompt(() => reloadIfChanged());
-    setUpMods(mod).then(async (mods) => mods.length > 0 ? runCmod(claude, ["history", "index"], await claude.session.id()) : undefined).catch((error) => mod.log(messageOf(error)));
+    setUpMods(mod).then(async (mods) => mods.length > 0 ? runCmod(claude, ["history", "index"], await claude.session.id()) : undefined).catch((error) => claude.ui.warn("history:index", `cmod: the conversation index did not catch up: ${messageOf(error)}`));
     const tearDown = async (name) => {
       const { exitCode, stdout, stderr } = await process.run(["cmod", "teardown", name, "--events"], { timeoutMs: longestMs });
       const outcome = parseEvent(stdout.trim().split(`
@@ -12678,7 +12806,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-dAOwlA/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

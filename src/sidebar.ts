@@ -208,7 +208,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         await pane.open({ focus: true })
         await view.show(name, request.tab)
       } else {
-        mod.log(`${name} sent a page request this cmod does not know, so it skips it: ${JSON.stringify(request)}`)
+        engineOf(mod).claude.ui.warn(`page-request:${name}`, `cmod: ${name} sent a page request this cmod does not know, so it skips it: ${JSON.stringify(request)}`)
       }
     }
     tell()

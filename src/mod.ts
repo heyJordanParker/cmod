@@ -6,10 +6,10 @@ import type { Pages } from '../node_modules/@cmodjs/core/runtime/pages.js'
 import { MissingMachineId } from '../node_modules/@cmodjs/core/runtime/device.js'
 import { deviceNote } from '../node_modules/@cmodjs/core/session/context/turn/device.js'
 import { failedMethod } from '../node_modules/@cmodjs/core/runtime/toaster.js'
-import { cmodError, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
+import { cmodError, isHeld, runCmod } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
-import { sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
+import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
@@ -55,6 +55,8 @@ const reloadEcho = '<command-name>/reload-plugins</command-name>'
 const reloadNote = '<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>'
 
 const reloadToast = 'reload'
+
+const oldReloadKey = /^cmod:(hiding-reload|versions-before-reload):/
 
 const shownUpdates = 3
 
@@ -126,7 +128,11 @@ export const cmodPlugin = defineMod({
         pluginsFile === undefined ? '' : await fs.read(pluginsFile).catch(ifMissing('')),
         (await settings.user.read())['enabledPlugins'] ?? null,
       ])
-    const sessionKey = async (name: string) => `cmod:${name}:${await claude.session.id()}`
+    const sessionKey = async (name: 'hidingReload' | 'versionsBeforeReload') => sessionKeyOf(mod.name, name, await claude.session.id())
+    const forgetOldReloadKeys = async () => {
+      for (const key of await claude.store.keys()) if (oldReloadKey.test(key)) await claude.store.delete(key)
+    }
+    void forgetOldReloadKeys().catch((error: unknown) => claude.ui.warn('reload:old-keys', `cmod: kept the reload keys of ended sessions: ${messageOf(error)}`))
     const loadedVersions = async (): Promise<Versions> => {
       if (pluginsFile === undefined) return {}
       const installed = JSON.parse(await fs.read(pluginsFile).catch(ifMissing('{}'))) as { readonly plugins?: Readonly<Record<string, readonly InstalledCopy[]>> }
@@ -143,7 +149,7 @@ export const cmodPlugin = defineMod({
       return Object.fromEntries(versions.flat())
     }
     const takeVersionsBeforeReload = async () => {
-      const key = await sessionKey('versions-before-reload')
+      const key = await sessionKey('versionsBeforeReload')
       const before = (await claude.store.get(key)) as Versions | undefined
       await claude.store.delete(key)
       return before
@@ -162,7 +168,7 @@ export const cmodPlugin = defineMod({
       else for (const update of updates) claude.ui.toast(update)
     }
     const announceUpdates = (isAfterOwnReload: boolean) => void showUpdates(isAfterOwnReload).catch((error: unknown) => report({ id: 'updates', message: 'Could not show which plugins updated', error }))
-    announceUpdates((await claude.store.get(await sessionKey('hiding-reload'))) === true)
+    announceUpdates((await claude.store.get(await sessionKey('hidingReload'))) === true)
 
     let seenChange = await pluginsState()
     let isReloadDue = false
@@ -193,13 +199,13 @@ export const cmodPlugin = defineMod({
       mod.toast.dismiss(reloadToast)
       try {
         seenChange = await pluginsState()
-        await claude.store.set(await sessionKey('versions-before-reload'), loaded)
-        await claude.store.set(await sessionKey('hiding-reload'), true)
+        await claude.store.set(await sessionKey('versionsBeforeReload'), loaded)
+        await claude.store.set(await sessionKey('hidingReload'), true)
         await claude.command.run({ command: 'reload-plugins' })
         await widgets.recheck()
         announceUpdates(true)
       } catch (error) {
-        await claude.store.delete(await sessionKey('hiding-reload'))
+        await claude.store.delete(await sessionKey('hidingReload'))
         await takeVersionsBeforeReload()
         report({ id: reloadToast, message: 'Could not reload the plugins', error, retry: reload, isCritical: true })
       }
@@ -209,11 +215,11 @@ export const cmodPlugin = defineMod({
     })
     router.add('session.append', async (e, next) => {
       if (e.door !== 'command' || e.message.isMeta === true) return next(e)
-      const hidingReload = await sessionKey('hiding-reload')
+      const hidingReload = await sessionKey('hidingReload')
       if ((await claude.store.get(hidingReload)) !== true) return next(e)
       const isOwnReload = e.origin.kind === 'plugin' && 'name' in e.origin && e.origin.name === mod.name && JSON.stringify(e.message.content).includes(reloadEcho)
       if (!isOwnReload) {
-        await claude.store.delete(hidingReload)
+        await claude.store.delete(hidingReload).catch((error: unknown) => claude.ui.warn('reload:hide', `cmod: kept hiding /reload-plugins rows, because Claude Code's store refused the change: ${messageOf(error)}`))
         if (e.message.type !== 'system') return next(e)
       }
       return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reloadNote }] } })
@@ -276,11 +282,7 @@ export const cmodPlugin = defineMod({
     const watchLock = `${store}/watch.lock`
     let isWatchRunning = false
     const keepWatching = async () => {
-      if (isWatchRunning) return
-      const now = await claude.clock.now()
-      const holders = await claude.fs.list(watchLock).catch(ifMissing([]))
-      const touched = await Promise.all(holders.map(async ({ name }) => (await claude.fs.stat(`${watchLock}/${name}`).catch(ifMissing(undefined)))?.mtimeMs ?? 0))
-      if (touched.some((at) => now - at < watchStaleMs)) return
+      if (isWatchRunning || (await isHeld(claude, watchLock, watchStaleMs))) return
       isWatchRunning = true
       void runCmod(claude, ['watch'], await claude.session.id())
         .catch((error: unknown) => report({ id: 'watch', message: 'Stopped reloading the linked mods', error, isCritical: true }))
@@ -312,7 +314,7 @@ export const cmodPlugin = defineMod({
 
     void setUpMods(mod)
       .then(async (mods) => (mods.length > 0 ? runCmod(claude, ['history', 'index'], await claude.session.id()) : undefined))
-      .catch((error: unknown) => mod.log(messageOf(error)))
+      .catch((error: unknown) => claude.ui.warn('history:index', `cmod: the conversation index did not catch up: ${messageOf(error)}`))
 
     const tearDown = async (name: string) => {
       const { exitCode, stdout, stderr } = await process.run(['cmod', 'teardown', name, '--events'], { timeoutMs: longestMs })
