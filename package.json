@@ -9,9 +9,8 @@
       "settings": { "title": "Show or hide Settings", "default": "meta+m" }
     }
   },
-  "files": ["bun.lock", "hooks", "setup", "src", "types"],
+  "files": ["cli/bin/cmod", "cli/package.json", "hooks", "setup", "src", "types"],
   "dependencies": {
-    "@cmodjs/cli": "^5.4.0",
     "@cmodjs/core": "^5.4.0"
   }
 }

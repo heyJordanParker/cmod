@@ -1,0 +1,35 @@
+{
+  "name": "@cmodjs/cli",
+  "version": "5.4.1",
+  "description": "Claude Mod Manager: install, try, build, check, and publish Claude Code mods.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heyJordanParker/cmod.git",
+    "directory": "cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "cmod": "bin/cmod"
+  },
+  "files": [
+    "bin/"
+  ],
+  "scripts": {
+    "build": "trap 'rm -f .*.bun-build' EXIT; for machine in ${CMOD_MACHINES:-darwin-arm64 darwin-x64 linux-arm64 linux-x64}; do bun build --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-$machine src/main.ts --outfile dist/cmod-$machine || exit 1; done",
+    "check": "tsc --noEmit && OXLINT_TSGOLINT_PATH=../lint/node_modules/.bin/tsgolint ../lint/node_modules/.bin/oxlint --type-aware --deny-warnings",
+    "test": "ls tests/*.test.ts | xargs -P 0 -n 1 bun test --timeout 30000"
+  },
+  "cmod": {
+    "build": "bun run build",
+    "output": "dist"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "jsonc-parser": "^3.3.1",
+    "typescript": "^7.0.2"
+  }
+}

@@ -10,7 +10,7 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$root/.claude-plugin/plugin.json")
 [ -n "$version" ] || fail "$root/.claude-plugin/plugin.json names no version"
 
-launcher="$root/node_modules/@cmodjs/cli/bin/cmod"
+launcher="$root/cli/bin/cmod"
 store="${XDG_DATA_HOME:-$HOME/.local/share}/cmod/bin/cmod"
 programs="${XDG_DATA_HOME:-$HOME/.local/share}/cmod/programs"
 bin="$HOME/.local/bin"

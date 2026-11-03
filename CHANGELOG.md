@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.4.1] - 2026-11-03
+
+### Fixed
+- cmod sets itself up on a computer without Bun, such as a new Linux machine. The cmod plugin carries its own launcher now, where it needed Claude Code to install a package with Bun, and showed `.../@cmodjs/cli/bin/cmod is missing` on a computer without it.
+- `cmod update`, `cmod list`, and every command that asks Claude Code run on a Linux machine that refuses to show cmod's parent process, such as an OrbStack machine, where they failed with `EACCES: permission denied, readlink '/proc/<pid>/exe'`.
+- `cmod publish` releases a path in `cli/`, `.github/`, or `.claude/` that `package.json` `"files"` names. It left each one out without saying so.
+
 ## [5.4.0] - 2026-11-03
 
 ### Added
