@@ -43,58 +43,6 @@ function checkSteps(name, steps) {
   }
 }
 
-// node_modules/@cmodjs/core/options.js
-var optionKey = /^[A-Za-z_]\w*$/;
-function checkOptions(name, options) {
-  for (const [key, declared] of Object.entries(options)) {
-    const at = `${name}: options.${key}`;
-    if (!optionKey.test(key))
-      throw new Error(`${at} is not an option name. Use letters, digits, and _, starting with a letter, as Claude Code passes each option on as CLAUDE_PLUGIN_OPTION_${key.toUpperCase()}.`);
-    if (declared.title.trim() === "")
-      throw new Error(`${at} needs a title, the label /config shows.`);
-    if (declared.type === "choice" && (declared.choices ?? []).length === 0)
-      throw new Error(`${at} is a choice with no choices. Give option.choice(['a', 'b'], { ... }).`);
-    if (declared.type === "choice" && declared.default !== undefined && !(declared.choices ?? []).includes(declared.default))
-      throw new Error(`${at} defaults to ${String(declared.default)}, which is not one of its choices: ${(declared.choices ?? []).join(", ")}.`);
-  }
-  return options;
-}
-function isUnset(value) {
-  return value === undefined || value === "" || Array.isArray(value) && value.length === 0;
-}
-function fitsOption(declared, value) {
-  const type = declared.type;
-  if (type === "toggle")
-    return typeof value === "boolean" ? undefined : "takes true or false";
-  if (type === "number") {
-    if (typeof value !== "number" || !Number.isFinite(value))
-      return "takes a number";
-    if (declared.min !== undefined && value < declared.min)
-      return `takes ${declared.min} or more`;
-    if (declared.max !== undefined && value > declared.max)
-      return `takes ${declared.max} or less`;
-    return;
-  }
-  if (type === "list")
-    return Array.isArray(value) && value.every((item) => typeof item === "string") ? undefined : "takes a list of text";
-  if (typeof value !== "string")
-    return "takes text";
-  if (type === "choice" && !(declared.choices ?? []).includes(value))
-    return `takes one of: ${(declared.choices ?? []).join(", ")}`;
-  return;
-}
-
-// node_modules/@cmodjs/core/runtime/bound.js
-var current;
-function bind(imports) {
-  current = imports;
-}
-function bound() {
-  if (current === undefined)
-    throw new Error("A mod's imports work once its setup runs. Call them from setup or from a hook, never at the top of a module.");
-  return current;
-}
-
 // node_modules/@cmodjs/core/utils/text.js
 function listed(items) {
   if (items.length <= 1)
@@ -347,8 +295,8 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.3.0";
-var oldestCmodVersion = "5.3.0";
+var coreVersion = "5.4.0";
+var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -457,6 +405,85 @@ function isObject(value) {
 }
 function isTextList(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+// node_modules/@cmodjs/core/options.js
+var optionKey = /^[A-Za-z_]\w*$/;
+function checkOptions(name, options) {
+  for (const [key, declared] of Object.entries(options)) {
+    const at = `${name}: options.${key}`;
+    if (!optionKey.test(key))
+      throw new Error(`${at} is not an option name. Use letters, digits, and _, starting with a letter, as Claude Code passes each option on as CLAUDE_PLUGIN_OPTION_${key.toUpperCase()}.`);
+    if (declared.title.trim() === "")
+      throw new Error(`${at} needs a title, the label /config shows.`);
+    if (declared.type === "choice" && (declared.choices ?? []).length === 0)
+      throw new Error(`${at} is a choice with no choices. Give option.choice(['a', 'b'], { ... }).`);
+    if (declared.type === "choice" && declared.default !== undefined && !(declared.choices ?? []).includes(declared.default))
+      throw new Error(`${at} defaults to ${String(declared.default)}, which is not one of its choices: ${(declared.choices ?? []).join(", ")}.`);
+  }
+  return options;
+}
+function projectOptionsOf(name, declared, text) {
+  let file;
+  try {
+    file = JSON.parse(text);
+  } catch (error) {
+    return { values: {}, ignored: [`is not JSON (${messageOf(error)}). Fix the file; ${name} uses its other options until then.`] };
+  }
+  if (!isObject(file))
+    return { values: {}, ignored: ['is not a JSON object. Write one, such as { "branch": "main" }.'] };
+  const values = {};
+  const ignored = [];
+  for (const [key, value] of Object.entries(file)) {
+    const option = declared[key];
+    if (option === undefined)
+      ignored.push(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? "Remove it." : `Remove it, or use one of: ${Object.keys(declared).join(", ")}.`}`);
+    else if (option.type === "secret")
+      ignored.push(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it. ${secretFix}`);
+    else {
+      const misfit = fitsOption(option, value);
+      if (misfit === undefined)
+        values[key] = value;
+      else
+        ignored.push(`sets ${key} to ${JSON.stringify(value)}, and ${option.title} ${misfit}.`);
+    }
+  }
+  return { values, ignored };
+}
+function isUnset(value) {
+  return value === undefined || value === "" || Array.isArray(value) && value.length === 0;
+}
+function fitsOption(declared, value) {
+  const type = declared.type;
+  if (type === "toggle")
+    return typeof value === "boolean" ? undefined : "takes true or false";
+  if (type === "number") {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      return "takes a number";
+    if (declared.min !== undefined && value < declared.min)
+      return `takes ${declared.min} or more`;
+    if (declared.max !== undefined && value > declared.max)
+      return `takes ${declared.max} or less`;
+    return;
+  }
+  if (type === "list")
+    return Array.isArray(value) && value.every((item) => typeof item === "string") ? undefined : "takes a list of text";
+  if (typeof value !== "string")
+    return "takes text";
+  if (type === "choice" && !(declared.choices ?? []).includes(value))
+    return `takes one of: ${(declared.choices ?? []).join(", ")}`;
+  return;
+}
+
+// node_modules/@cmodjs/core/runtime/bound.js
+var current;
+function bind(imports) {
+  current = imports;
+}
+function bound() {
+  if (current === undefined)
+    throw new Error("A mod's imports work once its setup runs. Call them from setup or from a hook, never at the top of a module.");
+  return current;
 }
 
 // node_modules/@cmodjs/core/session/goal/task.js
@@ -700,6 +727,7 @@ function beforeDeadline(claude, { ms, job }, call, task) {
 }
 // node_modules/@cmodjs/core/runtime/dependencies.js
 var cmodPluginName = "cmod";
+var loadedMethod = "cmod:isLoaded";
 async function answerCall(name, api, e) {
   const method = Object.hasOwn(api, e.method) ? api[e.method] : undefined;
   if (method === undefined)
@@ -9116,33 +9144,9 @@ function createOptions({ name, declared, fromClaude, claude, report, changed }) 
     const path = `${project.folder}/options.json`;
     if (!await claude.fs.exists(path))
       return {};
-    const ignore = (reason) => report({ id: `options:${path} ${reason}`, message: `Ignores part of ${path}`, description: `${path} ${reason}` });
-    let file;
-    try {
-      file = JSON.parse(await claude.fs.read(path));
-    } catch (error) {
-      ignore(`is not JSON (${messageOf(error)}). Fix the file; ${name} uses its other options until then.`);
-      return {};
-    }
-    if (typeof file !== "object" || file === null || Array.isArray(file)) {
-      ignore('is not a JSON object. Write one, such as { "branch": "main" }.');
-      return {};
-    }
-    const kept = {};
-    for (const [key, value] of Object.entries(file)) {
-      const option = declared[key];
-      if (option === undefined)
-        ignore(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? "Remove it." : `Remove it, or use one of: ${Object.keys(declared).join(", ")}.`}`);
-      else if (option.type === "secret")
-        ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it. ${secretFix}`);
-      else {
-        const misfit = fitsOption(option, value);
-        if (misfit === undefined)
-          kept[key] = value;
-        else
-          ignore(`sets ${key} to ${JSON.stringify(value)}, and ${option.title} ${misfit}.`);
-      }
-    }
+    const { values: kept, ignored } = projectOptionsOf(name, declared, await claude.fs.read(path));
+    for (const reason of ignored)
+      report({ id: `options:${path} ${reason}`, message: `Ignores part of ${path}`, description: `${path} ${reason}` });
     return kept;
   };
   return {
@@ -11096,6 +11100,9 @@ async function createMod(definition, runtime) {
       async write(text) {
         await toaster.copy(text);
       }
+    },
+    mods: {
+      isLoaded: async (name) => await claude.cmod.call({ to: cmodPluginName, method: loadedMethod, input: { name } }) === true
     }
   };
   const timer = (ms, subject, repeats, listener) => {
@@ -11608,7 +11615,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/settings.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-O83aAy/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12109,7 +12116,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/sidebar.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-O83aAy/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12364,7 +12371,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/tools.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-O83aAy/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12418,7 +12425,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/src/mod.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-O83aAy/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12801,12 +12808,17 @@ var cmodPlugin = defineMod({
         await runCmod(claude, ["settings", input.mod, input.source, JSON.stringify(input.values), "--project", input.project], await claude.session.id());
         return null;
       },
-      [failedMethod]: failureLog(mod)
+      [failedMethod]: failureLog(mod),
+      async[loadedMethod](input) {
+        if (typeof input.name !== "string")
+          throw new Error(`${loadedMethod} takes the name of a mod, as { name: 'anyhost' }.`);
+        return isLoaded(input.name);
+      }
     };
   }
 });
 
-// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-NuhGXN/release/hooks/register.ts
+// ../../../../../private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/cmod-publish-cmod-O83aAy/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

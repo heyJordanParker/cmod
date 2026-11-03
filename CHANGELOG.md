@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-11-03
+
+### Added
+- `mods.isLoaded(name)` answers whether another mod runs in this Claude Code process, so a mod calls a mod it does not list, such as a sync mod the person may or may not have, only when it is there. Listing it would make Claude Code install it for everyone. A mod that calls it runs on cmod 5.4.0 or later, and `testMod` answers true for each mod its `dependencies` fakes.
+- `cmod options <mod> --json` prints a mod's option values at each level: the person's `/config` values, and each project's `options.json` values, keyed by the project's git root, for every project the computer has had sessions in or each `--project` given. A mod's program that runs outside any session, such as one copy per computer, reads both levels at once.
+- `cmod device --json` prints the computer as `device.read()` gives it, so a mod's program that runs over `ssh` with no Claude Code open names each computer by the same id.
+
 ## [5.3.0] - 2026-11-03
 
 ### Added

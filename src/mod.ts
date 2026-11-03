@@ -1,6 +1,7 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
 import { buildFailuresPath, hasLinkedMods, linksPath, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { loadedMethod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import type { Pages } from '../node_modules/@cmodjs/core/runtime/pages.js'
 import { MissingMachineId } from '../node_modules/@cmodjs/core/runtime/device.js'
@@ -409,6 +410,10 @@ export const cmodPlugin = defineMod({
         return null
       },
       [failedMethod]: failureLog(mod),
+      async [loadedMethod](input: { readonly name?: unknown }) {
+        if (typeof input.name !== 'string') throw new Error(`${loadedMethod} takes the name of a mod, as { name: 'anyhost' }.`)
+        return isLoaded(input.name)
+      },
     }
   },
 })
