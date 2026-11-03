@@ -15,7 +15,7 @@ afterAll(deleteTemporaryHomes)
 test("cmod new writes a CHANGELOG.md whose section for the first version cmod publish releases", async () => {
   const home = await temporaryHome()
 
-  expect((await cmod(home, 'new', 'my-mod')).exitCode).toBe(0)
+  expect(await cmod(home, 'new', 'my-mod')).toMatchObject({ exitCode: 0 })
 
   const sections = changelogSections(await readFile(join(home, 'my-mod/CHANGELOG.md'), 'utf8'))
   expect(sections.map(({ version }) => version)).toEqual(['Unreleased', '0.1.0'])
