@@ -25,8 +25,6 @@ jobs:
       release: ${{ steps.version.outputs.release }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Find what this version still needs
         id: version
@@ -39,7 +37,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if npm view "@cmodjs/core@$version" version > /dev/null 2>&1; then echo "core=done" >> "$GITHUB_OUTPUT"; fi
           if npm view "@cmodjs/cli@$version" version > /dev/null 2>&1; then echo "cli=done" >> "$GITHUB_OUTPUT"; fi
-          if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then echo "release=done" >> "$GITHUB_OUTPUT"; fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then echo "release=done" >> "$GITHUB_OUTPUT"; fi
 
       - uses: oven-sh/setup-bun@v2
         with:
