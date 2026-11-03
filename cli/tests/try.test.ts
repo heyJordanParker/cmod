@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readText } from '../src/files.js'
-import { claudeAnswering, cmod, cmodInTerminal, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodInTerminal, cmodOfStep, cmodPluginListed, cmodWith, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -383,7 +383,7 @@ test('a signal to cmod try during the install step skips the session and tears t
   const root = join(home, 'hello-mod')
   await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, 'echo "claude $*"') })
   await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello\n' })
-  await writeFiles(root, { ...helloMod, 'setup/install.sh': '#!/bin/sh\nkill -HUP $PPID\nsleep 1\necho ran >> "$CMOD_DATA/runs"\n' })
+  await writeFiles(root, { ...helloMod, 'setup/install.sh': `#!/bin/sh\n${cmodOfStep}\nkill -HUP $cmod\nsleep 1\necho ran >> "$CMOD_DATA/runs"\n` })
 
   const result = await cmod(home, 'try', '--home', '~', root)
 

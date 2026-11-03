@@ -13,7 +13,9 @@ export const cmodFromSource = `#!/bin/sh
 exec "${process.execPath}" "${main}" "$@"
 `
 
-export const cmodPluginListed = [{ id: 'cmod@cmod', version: '0.1.0', scope: 'user', enabled: true, installPath: '/cmod' }]
+export const cmodOfStep = 'cmod=$PPID; [ "$(ps -o comm= -p $cmod)" = sh ] && cmod=$(ps -o ppid= -p $cmod | tr -d " ")'
+
+export const cmodPluginListed =[{ id: 'cmod@cmod', version: '0.1.0', scope: 'user', enabled: true, installPath: '/cmod' }]
 
 const marketplaces = `const [action, value, flag, scope] = process.argv.slice(1)
 const fs = require("node:fs")
@@ -121,7 +123,9 @@ export async function cmodInTerminal(home: string, ...args: string[]): Promise<{
 }
 
 export function startCmodInTerminal(home: string, ...args: string[]) {
-  const child = Bun.spawn(['script', '-q', '/dev/null', 'sh', '-c', 'trap : INT; "$0" "$@"; exit $?', process.execPath, main, ...args], {
+  const command = ['sh', '-c', 'trap : INT; "$0" "$@"; exit $?', process.execPath, main, ...args]
+  const terminal = process.platform === 'darwin' ? ['script', '-q', '/dev/null', ...command] : ['script', '-q', '-e', '-c', command.map(shellWord).join(' '), '/dev/null']
+  const child = Bun.spawn(terminal, {
     cwd: home,
     env: environment(home),
     stdin: 'ignore',
@@ -130,6 +134,10 @@ export function startCmodInTerminal(home: string, ...args: string[]) {
   })
   writeFileSync(join(home, 'terminal-pid'), `${child.pid}\n`)
   return { child, ...watchOutput(child) }
+}
+
+function shellWord(word: string): string {
+  return `'${word.replaceAll("'", `'\\''`)}'`
 }
 
 function watchOutput(child: { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array>; exitCode: number | null; exited: Promise<number> }) {

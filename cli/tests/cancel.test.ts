@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { readdir, readFile, readlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { ifMissing, listFiles } from '../src/files.js'
-import { cmod, cmodInTerminal, createMod, createProgramMod, deleteTemporaryHomes, hashOf, helloBuild, isGone, serveRelease, sha256Sums, startCmod, temporaryHome, waitFor, writeFiles } from './cmod.js'
+import { cmod, cmodInTerminal, cmodOfStep, createMod, createProgramMod, deleteTemporaryHomes, hashOf, helloBuild, isGone, serveRelease, sha256Sums, startCmod, temporaryHome, waitFor, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -180,7 +180,7 @@ test("Ctrl+C during cmod remove's uninstall step still removes the mod", async (
   expect(JSON.parse(await readFile(join(store, 'consent.json'), 'utf8'))).toEqual({})
 })
 
-const blockRecordWrite = '#!/bin/sh\nmkdir "$HOME/.local/share/cmod/records/demo.json.$PPID.tmp"\n'
+const blockRecordWrite = `#!/bin/sh\n${cmodOfStep}\nmkdir "$HOME/.local/share/cmod/records/demo.json.$cmod.tmp"\n`
 
 test('a record write that fails after the uninstall step is saved deletes the saved step', async () => {
   const home = await temporaryHome()
