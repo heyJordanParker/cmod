@@ -440,7 +440,7 @@ type ToastOptions = {
 - `✕` closes the toast. The band shows the newest 3, and `+N more` shows every toast.
 - `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
-Every error cmod catches for a mod, such as a listener that throws, goes to the Log, in Settings on cmod's page, and so does every warning cmod has for a mod, such as a session that did not hear of its listener. A warning never shows a toast. The Log keeps the newest 100 failures of every session, each with the mod, the time, the message, the versions of the mod, its `@cmodjs/core`, cmod, and Claude Code, `Copy`, and `Report`, and the same failure again updates its entry and counts the repeat.
+Every error cmod catches for a mod, such as a listener that throws, goes to the Log, in Settings on cmod's page, and so does every warning cmod has for a mod, such as a session that did not hear of its listener. A warning never shows a toast. The Log keeps the newest 100 failures of every session, each with the mod, the time, the message, the versions of the mod, its `@cmodjs/core`, cmod, and Claude Code, `Copy`, and `Report`, and the same failure again updates its entry and counts the repeat. `cmod log <mod>` prints the same entries in a terminal ([commands.md](commands.md#cmod-log)).
 
 An error also shows as a toast when any of these holds:
 

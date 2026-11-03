@@ -1,7 +1,7 @@
 import type { ElementTable, RenderElement, RenderPropsOf, Timer } from 'claude-code'
 import type { Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
 import { Box, Button, drawWith, Link, Text } from '../ui/elements.js'
-import { coreVersion, installFix, isObject, secretFix } from '../records.js'
+import { coreVersion, installFix, isObject, secretFix, type Contact, type LogLevel } from '../records.js'
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
@@ -10,8 +10,6 @@ import { cmodPluginName } from './dependencies.js'
 export type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 
 export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown; readonly isCritical?: boolean }
-
-export type LogLevel = 'error' | 'warning'
 
 export type LoggedFailure = {
   readonly mod: string
@@ -39,8 +37,6 @@ export type Toaster = {
 }
 
 type Action = { readonly label: string; readonly onClick: () => unknown }
-
-export type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
 
 type Reporting = { readonly contact: Contact | undefined; readonly details: string; readonly status?: string }
 

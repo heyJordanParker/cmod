@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-11-03
+
+### Added
+- `cmod log [<mod>]` prints the Log in a terminal: each failure and warning a mod or cmod met in any session on this computer, newest first, with the versions it happened on and how often it repeated. An agent working on a mod reads what went wrong in every session without opening Settings, and `--json` gives it as data.
+
 ## [5.4.2] - 2026-11-03
 
 ### Fixed

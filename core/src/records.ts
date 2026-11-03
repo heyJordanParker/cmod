@@ -292,6 +292,60 @@ export function parsePreferences(value: unknown, path: string): Preferences {
   return { showsInstalledModErrors: value['showsInstalledModErrors'] === true }
 }
 
+export type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
+
+export type LogLevel = 'error' | 'warning'
+
+export type LogVersions = { readonly mod?: string; readonly core?: string; readonly cmod: string; readonly program?: string; readonly claudeCode: string }
+
+export type LogEntry = {
+  readonly mod: string
+  readonly id: string
+  readonly level?: LogLevel
+  readonly message: string
+  readonly details: string
+  readonly at: string
+  readonly firstAt?: string
+  readonly count?: number
+  readonly session?: string
+  readonly versions?: LogVersions
+  readonly contact?: Contact
+}
+
+export const loggedFailures = 100
+
+export function logFolder(store: string): string {
+  return `${dataFolder(store, 'cmod')}/log`
+}
+
+export function isLogEntry(value: unknown): value is LogEntry {
+  return isObject(value) && ['mod', 'id', 'message', 'details', 'at'].every((key) => typeof value[key] === 'string')
+}
+
+export function parseLog(value: unknown, path: string): LogEntry[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || !value.every(isLogEntry)) throw new Error(`${path} is not a list of mod failures. Delete it, and cmod starts it again.`)
+  return value
+}
+
+export function newestLog(entries: readonly LogEntry[]): LogEntry[] {
+  const newest = new Map<string, LogEntry>()
+  for (const entry of entries) {
+    const key = `${entry.mod}\n${entry.id}`
+    if ((newest.get(key)?.at ?? '') < entry.at) newest.set(key, entry)
+  }
+  return [...newest.values()].toSorted((left, right) => right.at.localeCompare(left.at)).slice(0, loggedFailures)
+}
+
+export function versionsLine({ mod, core, cmod, program, claudeCode }: LogVersions): string {
+  return [mod === undefined ? undefined : `mod ${mod}`, core === undefined ? undefined : `@cmodjs/core ${core}`, `cmod ${cmod}`, program === undefined ? undefined : `cmod program ${program}`, `Claude Code ${claudeCode}`].filter((part) => part !== undefined).join(' · ')
+}
+
+export function logReport(entry: LogEntry): string {
+  const seen = (entry.count ?? 1) > 1 ? `\n${entry.count} times in session ${entry.session ?? 'unknown'}, first at ${entry.firstAt ?? entry.at}` : ''
+  return entry.versions === undefined ? entry.details : `${entry.details}\n\n${versionsLine(entry.versions)}${seen}`
+}
+
 export function parseConsent(value: unknown, path: string): Record<string, string[]> {
   if (value === undefined) return Object.create(null)
   if (!isObject(value) || !Object.values(value).every(isTextList)) {
@@ -307,7 +361,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.4.2'
+export const coreVersion = '5.5.0'
 
 export const oldestCmodVersion = '5.4.0'
 

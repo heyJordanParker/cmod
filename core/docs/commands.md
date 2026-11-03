@@ -95,6 +95,14 @@ Starts one throwaway Claude Code session with mods set up, for trying a mod by h
 - A mod another folder has set up in that home is refused, so `cmod try` never replaces an installed copy.
 - Arguments after `--` go to `claude`, such as `-- -p "hello"`. An agent tests a mod with one `cmod try <path> -- -p "<prompt>"` run.
 
+### cmod log
+
+```text
+cmod log [<mod>] [--json]
+```
+
+Prints the Log that Settings shows on cmod's page, newest first: each failure and warning a mod or cmod met in any session on this computer, with the text `Copy` gives, the versions of the mod, its `@cmodjs/core`, cmod, and Claude Code it happened on, and how often it repeated in its session ([ui.md](ui.md#toasts)). `<mod>` keeps one mod's entries, so an agent working on a mod reads what went wrong in every session without opening Settings. `--json` prints the entries as a list of `{ mod, id, level, message, details, at, firstAt, count, session, versions }`.
+
 ### cmod publish
 
 ```text

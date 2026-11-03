@@ -10,6 +10,7 @@ import * as hotkey from './commands/hotkey.js'
 import * as install from './commands/install.js'
 import * as link from './commands/link.js'
 import * as list from './commands/list.js'
+import * as log from './commands/log.js'
 import * as newMod from './commands/new.js'
 import * as option from './commands/option.js'
 import * as options from './commands/options.js'
@@ -55,6 +56,7 @@ const commands: Record<string, Command> = {
   rules,
   device,
   history,
+  log,
   task,
   watch,
   program,
