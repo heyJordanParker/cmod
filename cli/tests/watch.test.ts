@@ -103,6 +103,9 @@ test.concurrent('a second cmod watch exits at once while the first one watches, 
   expect(await second.child.exited).toBe(0)
   expect(existsSync(lockFile(second.child.pid))).toBe(false)
   await until(() => statSync(lockFile(first.child.pid)).mtimeMs > touchedAt)
+  const firstTouch = statSync(lockFile(first.child.pid)).mtimeMs
+  await until(() => statSync(lockFile(first.child.pid)).mtimeMs > firstTouch)
+  expect(statSync(lockFile(first.child.pid)).mtimeMs - firstTouch).toBeGreaterThanOrEqual(4000)
   first.child.kill()
 }, 60000)
 

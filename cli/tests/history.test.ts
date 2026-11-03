@@ -2,8 +2,8 @@ import { Database } from 'bun:sqlite'
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { appendFile, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
-import { openHistory, searchQuery } from '../src/history.js'
+import { dirname, join } from 'node:path'
+import { openHistory, readSession, searchQuery } from '../src/history.js'
 import { cmod, cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
@@ -514,6 +514,29 @@ test('a search with many matches walks the time order of its scope and never sor
         .map((row) => row.detail)
     expect([planOf(false)[0], planOf(true)[0]]).toEqual([expect.stringContaining('messages_by_time'), expect.stringContaining('messages_by_folder')])
     expect([...planOf(false), ...planOf(true)].some((detail) => detail.includes('TEMP B-TREE'))).toBe(false)
+  } finally {
+    db.close()
+    process.env['XDG_DATA_HOME'] = before
+  }
+})
+
+test("a reader that finds another reader's offsets past its own after a write batch goes on from theirs, so it saves no row they saved", async () => {
+  const home = await temporaryHome()
+  const project = join(home, 'work/app')
+  const rows = Array.from({ length: 1100 }, (_, index) => ({ type: 'user', uuid: `u${index}`, timestamp: at(index % 60), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: `Prompt ${index} ${'x'.repeat(8_000)}` } }))
+  const path = join(home, `${projectFolder(project)}/s1.jsonl`)
+  await writeFiles(home, { [`${projectFolder(project)}/s1.jsonl`]: lines(rows) })
+  const end = Bun.file(path).size
+  const before = process.env['XDG_DATA_HOME']
+  process.env['XDG_DATA_HOME'] = join(home, 'data')
+  const db = openHistory()
+  try {
+    db.exec(`create trigger another_reader after update of offset on files when new.offset > 0 and new.offset < ${end} begin update files set offset = ${end} where id = new.id; end`)
+
+    readSession(db, [{ path, folder: dirname(path), session: 's1', task: undefined }])
+
+    const saved = db.query<{ id: string }, []>("select id from messages where session = 's1'").all().map(({ id }) => id)
+    expect([saved.length > 0, saved.includes('u0'), saved.includes('u1099')]).toEqual([true, true, false])
   } finally {
     db.close()
     process.env['XDG_DATA_HOME'] = before
