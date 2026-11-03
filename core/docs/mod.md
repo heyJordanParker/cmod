@@ -540,12 +540,21 @@ type Device = { id: string; name: string; os: 'darwin' | 'linux'; arch: 'arm64' 
 - `name` is the name the computer goes by on its network: its LocalHostName on macOS, such as `Jordans-Mac-mini`, and its hostname on Linux.
 - `os` and `arch` are the names cmod's builds use, such as `darwin` and `arm64`.
 - `read` reads the computer the first time the mod calls it, and answers the same device after that. It rejects on a computer other than macOS or Linux on arm64 or x64. It also rejects on a Linux computer where neither `/etc/machine-id` nor `/var/lib/dbus/machine-id` holds a machine id, as in many containers, with a sentence that names both files.
+- A mod's program that runs with no session, such as over `ssh`, reads the same device with `cmod device --json` ([commands.md](commands.md#cmod-device)).
 - Each turn names the device it ran on, as `turn.device` ([session.md](session.md#turn-context-goal-and-task)), so a mod tells which computer ran each turn of a session that moved between computers. A start on a computer without a machine id names no device, so the turns after it keep the device of the start before, or have none.
 
 ```ts
 const here = await device.read()
 const elsewhere = (await sessions.current.turns()).filter((turn) => turn.device !== undefined && turn.device.id !== here.id)
 ```
+
+## mods: the other mods that run
+
+```ts
+mods.isLoaded(name: string): Promise<boolean>
+```
+
+Answers whether a mod runs in this Claude Code process, so a mod calls another mod it does not list only when the person has it ([dependencies.md](dependencies.md#call-a-mod-only-when-it-runs-modsisloaded)).
 
 ## messageOf
 

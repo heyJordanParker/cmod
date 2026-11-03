@@ -45,7 +45,7 @@ type TestOptions<State, Options> = {
 | `scope` | `'project'` makes the mod a project plugin, in `<projectRoot>/.claude/skills/<name>` | `'user'` |
 | `projectRoot` | `sessions.current.project` | `/test/plugins/<name>`, or `/test/project` for a project plugin |
 | `cwd` | `sessions.current.cwd` | `projectRoot` |
-| `dependencies` | The methods other mods answer with | none: every call fails with `<name> is not installed. Install it in Plugins.` |
+| `dependencies` | The methods other mods answer with, and the mods `mods.isLoaded` answers true for | none: every call fails with `<name> is not installed. Install it in Plugins.`, and `mods.isLoaded` answers true only for the tested mod and cmod |
 | `files` | The fake file system, absolute path to text | no files |
 | `links` | Symbolic links in the fake file system, absolute link path to its target | no links |
 | `secrets` | The mod's secrets `mod.secrets` starts with, key to value. The fake keeps what the mod stores in memory, and `tested.calls` never holds a value | no secrets |

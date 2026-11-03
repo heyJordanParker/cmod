@@ -1,3 +1,6 @@
+import { isObject, secretFix } from './records.js'
+import { messageOf } from './utils/text.js'
+
 export type OptionType = 'text' | 'secret' | 'number' | 'toggle' | 'choice' | 'folder' | 'file' | 'list'
 
 export type OptionValue = string | number | boolean | readonly string[]
@@ -69,6 +72,54 @@ export function userConfigOf(options: Options): Record<string, UserConfigField> 
       } satisfies UserConfigField,
     ]),
   )
+}
+
+const optionTypes: Readonly<Record<UserConfigField['type'], OptionType>> = { string: 'text', number: 'number', boolean: 'toggle', directory: 'folder', file: 'file' }
+
+export function optionsOf(userConfig: Readonly<Record<string, unknown>>): Options {
+  return Object.fromEntries(
+    Object.entries(userConfig).flatMap(([key, field]): [string, Option][] => {
+      if (!isObject(field) || typeof field['type'] !== 'string' || !Object.hasOwn(optionTypes, field['type'])) return []
+      const choices = Array.isArray(field['options']) ? field['options'].filter((choice): choice is string => typeof choice === 'string') : undefined
+      const type: OptionType = field['sensitive'] === true ? 'secret' : field['multiple'] === true ? 'list' : choices !== undefined ? 'choice' : optionTypes[field['type'] as UserConfigField['type']]
+      return [
+        [
+          key,
+          {
+            type,
+            title: typeof field['title'] === 'string' ? field['title'] : key,
+            description: typeof field['description'] === 'string' ? field['description'] : '',
+            ...(typeof field['min'] === 'number' ? { min: field['min'] } : {}),
+            ...(typeof field['max'] === 'number' ? { max: field['max'] } : {}),
+            ...(choices === undefined ? {} : { choices }),
+          },
+        ],
+      ]
+    }),
+  )
+}
+
+export function projectOptionsOf(name: string, declared: Options, text: string): { readonly values: Record<string, unknown>; readonly ignored: readonly string[] } {
+  let file: unknown
+  try {
+    file = JSON.parse(text)
+  } catch (error) {
+    return { values: {}, ignored: [`is not JSON (${messageOf(error)}). Fix the file; ${name} uses its other options until then.`] }
+  }
+  if (!isObject(file)) return { values: {}, ignored: ['is not a JSON object. Write one, such as { "branch": "main" }.'] }
+  const values: Record<string, unknown> = {}
+  const ignored: string[] = []
+  for (const [key, value] of Object.entries(file)) {
+    const option = declared[key]
+    if (option === undefined) ignored.push(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? 'Remove it.' : `Remove it, or use one of: ${Object.keys(declared).join(', ')}.`}`)
+    else if (option.type === 'secret') ignored.push(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it. ${secretFix}`)
+    else {
+      const misfit = fitsOption(option, value)
+      if (misfit === undefined) values[key] = value
+      else ignored.push(`sets ${key} to ${JSON.stringify(value)}, and ${option.title} ${misfit}.`)
+    }
+  }
+  return { values, ignored }
 }
 
 export function isUnset(value: unknown): boolean {

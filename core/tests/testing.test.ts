@@ -4,7 +4,7 @@ import type { Fakes, TestCall } from '@cmodjs/core/testing.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { slashCommand } from '../src/jobs/slash-command.js'
 import { tool } from '../src/jobs/tool.js'
-import { BelowPrompt, Dashboard, defineMod, fs, Note, process, Prompt, Reply, sessions, TurnEnd, type Mod, type PaneInit } from '../src/mod.js'
+import { BelowPrompt, Dashboard, defineMod, fs, mods, Note, process, Prompt, Reply, sessions, TurnEnd, type Mod, type PaneInit } from '../src/mod.js'
 import type { Claude } from '../src/runtime/claude.js'
 import { engineOf } from '../src/runtime/engine.js'
 import { testMod, type TestOptions } from '../src/testing.js'
@@ -186,6 +186,21 @@ test("during a /resume's SessionStart, the session id the engine answers is the 
   await tested.startSession({ source: 'resume', id: 'resumed-session' })
 
   expect(answered).toEqual(['resumed-session'])
+})
+
+test("mods.isLoaded answers true for a mod the test fakes and false for any other, so a mod that calls tracer only when it runs tests both cases", async () => {
+  const outline = defineMod({
+    name: 'outline',
+    setup: (mod) => ({
+      outline: async () => ((await mods.isLoaded('tracer')) ? (await mod.dependencies.tracer.signatures({ path: '/work/a.ts' })).map(({ name }) => name) : 'tracer is not here'),
+    }),
+  })
+
+  const alone = testMod(outline)
+  const withTracer = testMod(outline, { dependencies: { tracer: { signatures: async () => [{ name: 'greet', line: 1 }] } } })
+
+  expect(await alone.api['outline']?.()).toBe('tracer is not here')
+  expect(await withTracer.api['outline']?.()).toEqual(['greet'])
 })
 
 test('type runs a slash command and returns its reply', async () => {

@@ -1,6 +1,6 @@
 import type { PluginOptions } from 'claude-code'
-import { fitsOption, isUnset, type Option, type Options } from '../options.js'
-import { configFolders, secretFix } from '../records.js'
+import { fitsOption, isUnset, projectOptionsOf, type Option, type Options } from '../options.js'
+import { configFolders } from '../records.js'
 import { listed, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import type { Failure } from './toaster.js'
@@ -56,29 +56,8 @@ export function createOptions({
     if (project === undefined) return {}
     const path = `${project.folder}/options.json`
     if (!(await claude.fs.exists(path))) return {}
-    const ignore = (reason: string) => report({ id: `options:${path} ${reason}`, message: `Ignores part of ${path}`, description: `${path} ${reason}` })
-    let file: unknown
-    try {
-      file = JSON.parse(await claude.fs.read(path))
-    } catch (error) {
-      ignore(`is not JSON (${messageOf(error)}). Fix the file; ${name} uses its other options until then.`)
-      return {}
-    }
-    if (typeof file !== 'object' || file === null || Array.isArray(file)) {
-      ignore('is not a JSON object. Write one, such as { "branch": "main" }.')
-      return {}
-    }
-    const kept: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(file)) {
-      const option = declared[key]
-      if (option === undefined) ignore(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? 'Remove it.' : `Remove it, or use one of: ${Object.keys(declared).join(', ')}.`}`)
-      else if (option.type === 'secret') ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it. ${secretFix}`)
-      else {
-        const misfit = fitsOption(option, value)
-        if (misfit === undefined) kept[key] = value
-        else ignore(`sets ${key} to ${JSON.stringify(value)}, and ${option.title} ${misfit}.`)
-      }
-    }
+    const { values: kept, ignored } = projectOptionsOf(name, declared, await claude.fs.read(path))
+    for (const reason of ignored) report({ id: `options:${path} ${reason}`, message: `Ignores part of ${path}`, description: `${path} ${reason}` })
     return kept
   }
 

@@ -55,6 +55,8 @@ An option with no default and no value is asked before `setup` runs, on the mod'
 
 `mod.options` follows the values while the session runs. Read an option where you use it, as in `mod.options.branch`, so a change applies at once. A change in `/config` reloads the mod, and a `/cd` reads the new project's `options.json`.
 
+A mod that needs both levels at once, such as one that syncs the person's folders and every project's, reads them with `cmod options <mod> --json`. It prints the person's values and each project's, for every project the computer has had sessions in ([commands.md](commands.md#cmod-options)).
+
 ## Set options for a team
 
 A project sets options for everyone who works in it with an `options.json` in its config folder, committed with the repository:

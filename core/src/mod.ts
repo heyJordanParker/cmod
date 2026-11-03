@@ -140,6 +140,7 @@ export type Imports = {
   readonly http: { fetch(url: string, init?: HttpInit): Promise<HttpResponse> }
   readonly device: { read(): Promise<Device> }
   readonly clipboard: { write(text: string): Promise<void> }
+  readonly mods: { isLoaded(name: string): Promise<boolean> }
 }
 
 export const sessions: Imports['sessions'] = {
@@ -203,6 +204,10 @@ export const device: Imports['device'] = {
 
 export const clipboard: Imports['clipboard'] = {
   write: (text) => bound().clipboard.write(text),
+}
+
+export const mods: Imports['mods'] = {
+  isLoaded: (name) => bound().mods.isLoaded(name),
 }
 
 export type Mod<State extends object = Record<never, never>, Declared extends Options = Options, Keys extends Hotkeys = Hotkeys> = {

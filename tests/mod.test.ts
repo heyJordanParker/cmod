@@ -129,7 +129,7 @@ test('a Linux computer with no machine id in /etc/machine-id or /var/lib/dbus/ma
     fs: { read: async (path: string) => (path === '/etc/machine-id' ? '' : Promise.reject(new Error(`ENOENT: no such file or directory, open '${path}'`))) },
   }
   await tested.start()
-  tested.fakes.device.read = () => readDevice(devcontainer as never)
+  tested.fakes.device.read = () => readDevice(devcontainer)
 
   const started = await tested.raise.beforeSessionStart({ source: 'startup' })
   await tested.settle()
@@ -1016,6 +1016,15 @@ test('cmod.call rejects a call to a mod run from its checkout with --plugin-dir,
   await expect(call({ to: 'linter', method: 'check', input: {} })).rejects.toThrow('linter is not installed. Install it in Plugins.')
 })
 
+test('cmod:isLoaded answers true for a mod this Claude Code loaded or that told cmod its parts, and false for any other', async () => {
+  const { tested } = await startedWith({ 'notes@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'tracer' } as never)
+  const isLoaded = (name: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:isLoaded', input: { name }, caller: 'inbox' } as never)
+
+  expect([await isLoaded('notes'), await isLoaded('tracer'), await isLoaded('anyhost')]).toEqual([{ value: true }, { value: true }, { value: false }])
+  expect(await isLoaded(3)).toEqual({ deny: "cmod: cmod:isLoaded takes the name of a mod, as { name: 'anyhost' }." })
+})
+
 test('cmod.call rejects a call to a mod removed after it told cmod its parts with the install command, once the reload took it out', async () => {
   const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.0.0' })
   await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
@@ -1182,7 +1191,7 @@ test('the cmod plugin keeps only the newest 200 messages of its session in memor
 test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 or later calls on it', async () => {
   const { tested } = cmodAnswering({})
   await tested.start()
-  const methods = ['cmod:sessions', 'cmod:search', 'cmod:messages', 'cmod:turns', 'cmod:contexts', 'cmod:tasks', 'cmod:goal', 'cmod:updateGoal', 'cmod:subscribe', 'cmod:watchBefore', 'cmod:act', 'cmod:partsChanged', 'forkParent', 'updateSettings', 'cmod:failed']
+  const methods = ['cmod:sessions', 'cmod:search', 'cmod:messages', 'cmod:turns', 'cmod:contexts', 'cmod:tasks', 'cmod:goal', 'cmod:updateGoal', 'cmod:subscribe', 'cmod:watchBefore', 'cmod:act', 'cmod:partsChanged', 'forkParent', 'updateSettings', 'cmod:failed', 'cmod:isLoaded']
   const refusal = async (method: string) => {
     const answer = await askCmod(tested, 'recall', method, {}).catch((error: unknown) => ({ deny: String(error) }))
     return (answer as { deny?: string }).deny ?? ''

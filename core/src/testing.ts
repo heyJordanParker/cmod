@@ -24,7 +24,7 @@ import type { ModDefinition } from './mod.js'
 import type { Options, OptionValues } from './options.js'
 import { hotkeyCommand, readSteps, storeFolder, type Steps } from './records.js'
 import type { Claude } from './runtime/claude.js'
-import { answerCall, cmodPluginName, notInstalled } from './runtime/dependencies.js'
+import { answerCall, cmodPluginName, loadedMethod, notInstalled } from './runtime/dependencies.js'
 import { closingContext, foldBefore, installBefore, withAnswer, type Answers, type Decide } from './runtime/before.js'
 import { permissionRoutes } from './runtime/permission-check.js'
 import type { RoutedEvent } from './runtime/hooks.js'
@@ -742,7 +742,7 @@ export function testMod<State extends object, Declared extends Options = Options
 }
 
 function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions): Claude['cmod']['call'] {
-  const cmod = { forkParent: () => null, updateSettings: () => null }
+  const cmod = { forkParent: () => null, updateSettings: () => null, [loadedMethod]: ({ name }: { readonly name: string }) => name === caller || name === cmodPluginName || Object.hasOwn(dependencies, name) }
   const apis = { [cmodPluginName]: cmod, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
   return async (call) => {
     const served = call.to === cmodPluginName ? conversations.answer(caller, call.method, call.input) : undefined

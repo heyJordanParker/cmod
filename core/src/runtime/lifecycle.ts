@@ -11,7 +11,7 @@ import { beforeDeadline, settledAfterAbort } from './deadline.js'
 import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import { serveConversations } from './conversations.js'
-import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, withBareRefusals } from './dependencies.js'
+import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, loadedMethod, withBareRefusals } from './dependencies.js'
 import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
@@ -856,6 +856,9 @@ async function createMod<State extends object, Declared extends Options>(definit
       async write(text) {
         await toaster.copy(text)
       },
+    },
+    mods: {
+      isLoaded: async (name) => (await claude.cmod.call({ to: cmodPluginName, method: loadedMethod, input: { name } })) === true,
     },
   }
   const timer = (ms: number, subject: string, repeats: boolean, listener: () => unknown): ModTimer => {

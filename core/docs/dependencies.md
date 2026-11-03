@@ -92,6 +92,33 @@ export const outline = defineMod({
 })
 ```
 
+## Call a mod only when it runs: mods.isLoaded
+
+A mod that works without another mod, and only uses it when the person has it, does not list it, because Claude Code installs every listed dependency for everyone who installs your mod. Ask whether it runs first, then call it through `mod.dependencies` as usual:
+
+```ts
+import { defineMod, mods } from '../node_modules/@cmodjs/core/mod.js'
+
+export const inbox = defineMod({
+  name: 'inbox',
+  setup(mod) {
+    return {
+      save: async () => {
+        if (await mods.isLoaded('anyhost')) await mod.dependencies.anyhost.sync({ folder: mod.dataFolder })
+      },
+    }
+  },
+})
+```
+
+```ts
+isLoaded(name: string): Promise<boolean>
+```
+
+- `isLoaded` answers true when the mod runs in this Claude Code process, as one Claude Code loaded or one run from its checkout with `--plugin-dir`. A mod the person installed but turned off answers false.
+- Claude Code lays a provider's types file beside your mod's only for a listed dependency, so type the methods you call in your own `types/index.d.ts`, with the shape the provider's types file exports, such as `interface CmodDependencies { anyhost: Anyhost }`.
+- A mod that calls `mods.isLoaded` runs on cmod 5.4.0 or later, which the `cmod` range `cmod check` writes says.
+
 ## When a call fails
 
 A call that cannot answer rejects with one of these reasons:

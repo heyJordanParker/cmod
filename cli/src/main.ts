@@ -1,6 +1,7 @@
 import { version } from '../package.json'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import * as check from './commands/check.js'
+import * as device from './commands/device.js'
 import * as disable from './commands/disable.js'
 import * as download from './commands/download.js'
 import * as enable from './commands/enable.js'
@@ -11,6 +12,7 @@ import * as link from './commands/link.js'
 import * as list from './commands/list.js'
 import * as newMod from './commands/new.js'
 import * as option from './commands/option.js'
+import * as options from './commands/options.js'
 import * as program from './commands/program.js'
 import * as publish from './commands/publish.js'
 import * as remove from './commands/remove.js'
@@ -46,10 +48,12 @@ const commands: Record<string, Command> = {
   setup,
   teardown,
   option,
+  options,
   hotkey,
   secret,
   settings,
   rules,
+  device,
   history,
   task,
   watch,

@@ -6,6 +6,8 @@ import type { Router } from './router.js'
 
 export const cmodPluginName = 'cmod'
 
+export const loadedMethod = 'cmod:isLoaded'
+
 export async function answerCall(name: string, api: { readonly [method: string]: (input: never) => unknown }, e: Frozen<Args<'cmod.call'>>): Promise<EventResult<'cmod.call'>> {
   const method = Object.hasOwn(api, e.method) ? api[e.method] : undefined
   if (method === undefined) return { deny: `${name} has no method ${e.method}.` }

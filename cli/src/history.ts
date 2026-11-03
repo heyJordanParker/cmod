@@ -513,6 +513,15 @@ function checkForks(db: Database, folders: readonly string[]): void {
   }
 }
 
+export function indexedProjects(db: Database): string[] {
+  const asked = db.query<{ project: string }, []>("select distinct project from sessions where project != '' order by project")
+  try {
+    return asked.all().map(({ project }) => project)
+  } finally {
+    asked.finalize()
+  }
+}
+
 export function listSessions(db: Database, scope: Scope): SessionData[] {
   const folders = foldersIn(scope)
   const running = runningSessions()

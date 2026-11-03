@@ -241,6 +241,30 @@ cmod download <program> <machine> <url> <sha256> [<machine> <url> <sha256> …]
 
 Downloads a program for an install script: fetches the download for this machine, checks its SHA-256, unpacks it, and moves `<program>` to `$CMOD_DATA/bin/<program>`. [install-steps.md](install-steps.md) explains it.
 
+## Run from a mod's program
+
+A mod's own program runs outside any session, as one copy per computer or over `ssh` on a computer with no Claude Code open. These give it what a mod reads in a session.
+
+### cmod options
+
+```text
+cmod options <mod> [--project <folder>]... [--json]
+```
+
+Prints a mod's option values in two levels. `person` holds the values the person set in `/config`. `projects` holds the values each project's committed `.claude/cmods/<mod>/options.json` sets, keyed by the project's git root as `git rev-parse --show-toplevel` prints it, or by the project's own folder outside git. With no `--project`, it reads every project cmod's conversation index holds a session of, and lists only those whose `options.json` exists. It leaves out secrets, and the entries a session would ignore, and names each of those on stderr. A session uses a project's value over the person's, and a value the person's organization locks over both, which this command cannot read outside Claude Code. `--json` prints `{ person, projects }`:
+
+```json
+{ "person": { "folders": ["~/notes"] }, "projects": { "/Users/ana/work/app": { "folders": ["plans"] } } }
+```
+
+### cmod device
+
+```text
+cmod device [--json]
+```
+
+Prints the computer as a mod's `device.read()` gives it: its id, name, operating system, and architecture ([mod.md](mod.md#device-the-computer-the-session-runs-on)). It runs the same reader, so a program names each computer by the id its mod sees. `--json` prints `{ id, name, os, arch }`. On a computer with no machine id, it exits 1 and says so.
+
 ## Run by cmod
 
 cmod runs these itself. A person runs them to see a step's whole log, or to finish a step.

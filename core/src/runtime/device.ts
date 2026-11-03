@@ -1,7 +1,6 @@
 import type { Device } from '../session/context/turn/device.js'
 import { ifMissing } from '../utils/paths.js'
 import { formatExit } from '../utils/text.js'
-import type { Claude } from './claude.js'
 
 const cmodAppId = '1fd8a8ee972047c4a89640fd51048522'
 
@@ -19,7 +18,12 @@ const machineIdFiles = ['/etc/machine-id', '/var/lib/dbus/machine-id'] as const
 
 export class MissingMachineId extends Error {}
 
-export async function readDevice(claude: Pick<Claude, 'process' | 'fs'>): Promise<Device> {
+export type DeviceSources = {
+  readonly process: { run(argv: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> }
+  readonly fs: { read(path: string): Promise<string> }
+}
+
+export async function readDevice(claude: DeviceSources): Promise<Device> {
   const output = async (argv: readonly string[]) => {
     const { exitCode, stdout, stderr } = await claude.process.run(argv)
     if (exitCode !== 0) throw new Error(`cmod could not read this computer: ${argv.join(' ')} ${formatExit(exitCode, stderr)}`)
@@ -37,7 +41,7 @@ export async function readDevice(claude: Pick<Claude, 'process' | 'fs'>): Promis
   return { id: await appSpecific(uuid.replaceAll('-', '').toLowerCase()), name, os, arch }
 }
 
-async function linuxMachineId(fs: Pick<Claude['fs'], 'read'>): Promise<string> {
+async function linuxMachineId(fs: DeviceSources['fs']): Promise<string> {
   for (const path of machineIdFiles) {
     const id = (await fs.read(path).catch(ifMissing(''))).trim()
     if (machineId.test(id)) return id
