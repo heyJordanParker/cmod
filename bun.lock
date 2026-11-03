@@ -1,18 +1,16 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "cmod",
       "dependencies": {
-        "@cmodjs/cli": "^5.4.0",
         "@cmodjs/core": "^5.4.0",
       },
     },
   },
   "packages": {
     "@babel/runtime": ["@babel/runtime@7.29.10", "", {}, "sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA=="],
-
-    "@cmodjs/cli": ["@cmodjs/cli@5.4.0", "", { "bin": { "cmod": "bin/cmod" } }, "sha512-jIcdGRff5a1LcxAON1VA2A3DFhIaHJPScCmkHWER7jgftZxfiMROMJRKCLUnz8WL+s/hP+vPhi09PbdFeS6hNg=="],
 
     "@cmodjs/core": ["@cmodjs/core@5.4.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-tAgPwNbHd7sr5f30uH3AtVkOLl0d7FPIllnSyFT3WV0/hJ0Y9Pzrn4bGNm6Isi6b2L+vLkzlXhN4shst8s40Vg=="],
 

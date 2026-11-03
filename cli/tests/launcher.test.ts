@@ -2,6 +2,8 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readlinkSync } from 'node:fs'
 import { chmod, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { buildRelease } from '../src/commands/publish.js'
+import { readPlugin } from '../src/plugin.js'
 import { deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
@@ -57,11 +59,15 @@ test('the cmod plugin, @cmodjs/cli, and @cmodjs/core share one version, which th
   expect({ cli: await versionOf('cli/package.json'), core: await versionOf('core/package.json') }).toEqual({ cli: plugin, core: plugin })
 })
 
-test("the cmod plugin's release carries bun.lock, the file that makes Claude Code install @cmodjs/cli and the launcher the bootstrap runs", async () => {
-  const manifest = JSON.parse(await Bun.file(join(checkout, 'package.json')).text())
+test("the cmod plugin's release carries the launcher the bootstrap runs and no bun.lock, so a computer without Bun sets cmod up", async () => {
+  const output = await temporaryHome()
 
-  expect(manifest.files).toContain('bun.lock')
-  expect(manifest.dependencies['@cmodjs/cli']).toBeString()
+  const { tree } = await buildRelease(await readPlugin(checkout), output)
+
+  expect(existsSync(join(tree, 'cli/bin/cmod'))).toBe(true)
+  expect(JSON.parse(await readFile(join(tree, 'cli/package.json'), 'utf8')).version).toBe(JSON.parse(await readFile(join(checkout, '.claude-plugin/plugin.json'), 'utf8')).version)
+  expect(existsSync(join(tree, 'bun.lock'))).toBe(false)
+  expect(existsSync(join(tree, 'cli/src'))).toBe(false)
 })
 
 test('the cmod launcher downloads its version, checks it against SHA256SUMS, and runs it', async () => {
@@ -185,7 +191,7 @@ test("the bootstrap keeps a ~/.local/bin/cmod it did not make, and still links c
   await writeFiles(home, { '.local/bin/cmod': '#!/bin/sh\necho "the person\'s own cmod"\n' })
   await mkdir(join(plugin, 'setup'), { recursive: true })
   await copyFile(join(checkout, 'setup', 'bootstrap.sh'), join(plugin, 'setup', 'bootstrap.sh'))
-  await installPackage(join(plugin, 'node_modules/@cmodjs/cli'), '0.1.1')
+  await installPackage(join(plugin, 'cli'), '0.1.1')
 
   const bootstrap = await run(['sh', join(plugin, 'setup/bootstrap.sh')], home, release.origin, '/usr/bin:/bin')
 
@@ -202,7 +208,7 @@ test("the cmod plugin's bootstrap installs the plugin's cmod and links ~/.local/
   await writeFiles(plugin, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.1.1' }) })
   await mkdir(join(plugin, 'setup'), { recursive: true })
   await copyFile(join(checkout, 'setup', 'bootstrap.sh'), join(plugin, 'setup', 'bootstrap.sh'))
-  await installPackage(join(plugin, 'node_modules/@cmodjs/cli'), '0.1.1')
+  await installPackage(join(plugin, 'cli'), '0.1.1')
   const npmLauncher = await installPackage(join(home, 'npm/lib/node_modules/@cmodjs/cli'), '0.1.1')
   await mkdir(join(home, 'npm/bin'), { recursive: true })
   await Bun.write(join(home, 'npm/bin/cmod'), `#!/bin/sh\nexec ${npmLauncher} "$@"\n`)

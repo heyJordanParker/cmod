@@ -23,7 +23,7 @@ ${summary}
 Releases the mod at path (default: the current folder) at the version in its
 plugin.json. Builds the release from the files git does not ignore, leaving
 out cli/, .github/, and .claude/. A "files" list in package.json limits the release to
-those paths, plus the folders of the install and uninstall steps,
+those paths, a path in those three folders included, plus the folders of the install and uninstall steps,
 .claude-plugin/, package.json, tsconfig.json, the README, and the license, the
 way npm does. Bundles the hooks module with its packages into one file, writing each
 control character as a \\u escape, so Anthropic's plugin directory can read
@@ -205,7 +205,7 @@ export async function buildRelease(plugin: Plugin, output: string): Promise<{ tr
     if (!files.some((file) => isUnder(file, [path]))) throw new Error(`package.json "files" lists ${path}, which matches no file in the mod. Add the file or remove it from "files", then run the command again.`)
   }
   const stepFolders = [plugin.steps.install, plugin.steps.uninstall].flatMap((command) => (command === undefined ? [] : scriptPaths(command))).map((path) => posix.dirname(posix.normalize(path)))
-  const released = files.filter((file) => (listed === undefined || isUnder(file, [...listed, ...alwaysReleased, ...stepFolders])) && !isUnder(file, leftOut))
+  const released = files.filter((file) => (listed === undefined ? !isUnder(file, leftOut) : isUnder(file, listed) || (isUnder(file, [...alwaysReleased, ...stepFolders]) && !isUnder(file, leftOut))))
   const tree = join(output, releaseBranch)
   await mkdir(tree)
   for (const file of released) await cp(join(plugin.root, file), join(tree, file), { verbatimSymlinks: true })

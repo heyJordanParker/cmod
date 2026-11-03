@@ -39,6 +39,7 @@ function readlinkOf(path: string): string | undefined {
   try {
     return readlinkSync(path)
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EACCES') return undefined
     return ifMissing(undefined)(error)
   }
 }

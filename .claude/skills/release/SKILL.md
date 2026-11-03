@@ -8,13 +8,12 @@ description: Release a new cmod version, so npm, the GitHub release, and the cmo
 A person reads the GitHub release to learn what a version lets them do, and what they must change in their mod before they update. `cmod publish` writes the release's notes from the version's section of the root `CHANGELOG.md`, and refuses a version with no section. So the changelog is written before the release, by hand, for the people who use cmod.
 
 - `.claude-plugin/plugin.json`, `core/package.json`, and `cli/package.json` share one version.
-- Pushing to `main` runs `.github/workflows/release.yml`, which publishes both npm packages, commits `bun.lock` and `marketplace.json`, tags `v<version>` and the release commit `cmod--v<version>`, and creates the GitHub release through `cmod publish`.
+- Pushing to `main` runs `.github/workflows/release.yml`, which publishes both npm packages, commits `marketplace.json`, tags `v<version>` and the release commit `cmod--v<version>`, and creates the GitHub release through `cmod publish`.
 - A mod's `"cmod"` dependency range installs only from a `cmod--v<version>` tag on the `release` branch commit, so a release without it breaks every fresh install of a mod that names a range.
-- npm can take minutes to serve a version it accepted. The workflow's last step loops on `bun install` until it does.
 
 ## 1. Raise the version
 
-Raise the version in all three files to the same new version, and the root `package.json`'s `@cmodjs/cli` and `@cmodjs/core` ranges to `^<version>`.
+Raise the version in all three files to the same new version.
 
 IF a commit since the last release changes or removes anything a mod author writes: an export, a `Mod` member, a `ModDefinition` key, a `package.json` `cmod` key, a `cmod` command or flag, or what a hook answer does:
 ### Raise the major version, and mark the commit breaking
@@ -37,7 +36,7 @@ Set `<date>` in `## [<version>] - <date>` to today's date just before the releas
 
 ## 4. Watch the release to its end
 
-Run `gh run watch <run id> --exit-status` on the run the push started. Then `git pull --ff-only`, which brings the release bot's commits.
+Run `gh run watch <run id> --exit-status` on the run the push started. Then `git pull --ff-only`, which brings the release bot's `marketplace.json` commit.
 
 ### Prove the release reached people
 `gh release view v<version> --repo heyJordanParker/cmod` shows the changelog section. `git ls-remote origin refs/tags/cmod--v<version>` prints the same commit as `git ls-remote origin refs/heads/release`. `npm view @cmodjs/core@<version> version` and `npm view @cmodjs/cli@<version> version` print the version. The release lists `cmod-<version>.zip`, `SHA256SUMS`, and a `cmod-<os>-<arch>` build for `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.

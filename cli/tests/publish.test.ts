@@ -334,6 +334,22 @@ test('a "files" list in package.json limits the release to its paths, .claude-pl
   expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'LICENSE', 'README.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts', 'tsconfig.json'])
 })
 
+test('a "files" list releases a path it names in cli/, and leaves out the rest of cli/', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, {
+    'package.json': JSON.stringify({ name: 'cmod', files: ['hooks', 'src', 'cli/bin/launch'] }),
+    'cli/bin/launch': '#!/bin/sh\necho launched\n',
+    'cli/src/main.ts': 'console.log("the program")\n',
+  })
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.exitCode).toBe(0)
+  const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry.startsWith('cli/') && !entry.endsWith('/'))
+  expect(entries).toEqual(['cli/bin/launch'])
+})
+
 test('a "files" list that leaves out the install step still releases its folder, so the mod installs', async () => {
   const home = await temporaryHome()
   const root = await committedHooksMod(home, {
