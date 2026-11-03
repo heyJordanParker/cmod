@@ -36,19 +36,16 @@ jobs:
           if npm view "@cmodjs/cli@$version" version > /dev/null 2>&1; then echo "cli=done" >> "$GITHUB_OUTPUT"; fi
           if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then echo "release=done" >> "$GITHUB_OUTPUT"; fi
 
-      - if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
 
-      - if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
-        uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Write Claude Code's types, which the build reads
-        if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
         run: |
           curl -fsSL https://claude.ai/install.sh | bash -s latest
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -56,7 +53,6 @@ jobs:
           test -d .claude-plugin/types
 
       - name: Test and build @cmodjs/core and @cmodjs/cli
-        if: steps.version.outputs.core != 'done' || steps.version.outputs.cli != 'done' || steps.version.outputs.release != 'done'
         run: |
           bun install --cwd lint --frozen-lockfile
           bun install --cwd core --frozen-lockfile
@@ -67,6 +63,14 @@ jobs:
           bun run --cwd core build
           bun run --cwd cli check
           bun run --cwd cli test
+
+      - name: Test the cmod plugin on the released @cmodjs/core
+        if: steps.version.outputs.release == 'done'
+        run: |
+          bun install --frozen-lockfile
+          bun test
+          bun x tsc --noEmit
+          OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
 
       - name: Publish @cmodjs/core to npm
         if: steps.version.outputs.core != 'done'
@@ -85,10 +89,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f bun.lock
-          until grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
+          until npx -y bun@1.2.21 install --no-cache && grep -q "\"@cmodjs/core@$version\"" bun.lock && grep -q "\"@cmodjs/cli@$version\"" bun.lock; do
             rm -f bun.lock
-            npx -y bun@1.2.21 install --no-cache || true
-            sleep 10
+            sleep 5
           done
           bun test
           bun x tsc --noEmit

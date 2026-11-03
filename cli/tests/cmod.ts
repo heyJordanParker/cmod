@@ -1,9 +1,9 @@
-import { writeFileSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { existsSync, writeFileSync } from 'node:fs'
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { readSteps, scriptsSha256 } from '@cmodjs/core/src/records.js'
-import { listFiles, readText } from '../src/files.js'
+import { ifMissing, listFiles, readText } from '../src/files.js'
 
 const main = join(import.meta.dir, '..', 'src', 'main.ts')
 const homes: string[] = []
@@ -181,4 +181,75 @@ export async function writeFiles(root: string, files: Record<string, string>): P
     await Bun.write(join(root, path), text)
     if (path.endsWith('.sh') || path.startsWith('bin/')) await chmod(join(root, path), 0o755)
   }
+}
+
+export const fourStepInstall = `#!/bin/sh
+echo "progress 1 4 Checking Homebrew"
+echo "progress 2 4 Installing trash"
+echo "progress 3 4 Adding the zsh alias"
+echo "progress 4 4 Finishing"
+echo "ran in $CMOD_PLUGIN_ROOT at $CMOD_VERSION" >> "$CMOD_DATA/runs"
+`
+
+export async function createMod(home: string, install = fourStepInstall): Promise<string> {
+  const root = join(home, 'demo')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+    'setup/install.sh': install,
+    'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled from $CMOD_PLUGIN_ROOT" >> "$HOME/uninstalls"\n',
+  })
+  return root
+}
+
+export const platform = `${process.platform}-${process.arch}`
+export const release = '/owner/hello-mod/releases/download/v0.2.0'
+export const helloBuild = { [`hello-${platform}`]: '#!/bin/sh\necho "hello 0.2.0"\n' }
+
+export function sha256Sums(files: Record<string, string>): string {
+  return Object.entries(files)
+    .map(([name, text]) => `${new Bun.CryptoHasher('sha256').update(text).digest('hex')}  ${name}\n`)
+    .join('')
+}
+
+export function serveRelease(files: Record<string, string>, delayMs = 0) {
+  return Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: async (request) => {
+      const { pathname } = new URL(request.url)
+      const file = pathname.startsWith(`${release}/`) ? files[pathname.slice(release.length + 1)] : undefined
+      await Bun.sleep(delayMs)
+      return file === undefined ? new Response('Not Found', { status: 404 }) : new Response(file)
+    },
+  })
+}
+
+export async function createProgramMod(home: string, repository: string): Promise<string> {
+  const root = join(home, 'hello-mod')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0', repository }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho "progress 1 2 Adding the alias"\necho "progress 2 2 Finishing"\necho ran >> "$CMOD_DATA/runs"\n',
+  })
+  return root
+}
+
+export async function waitFor(path: string): Promise<void> {
+  while (!existsSync(path)) await Bun.sleep(10)
+}
+
+export const lockNotice = 'Waiting for ~/.local/share/cmod/records/demo.json.lock'
+
+export const isGone = (path: string) => lstat(path).then(() => false, ifMissing(true))
+
+export async function goneProcessId(): Promise<number> {
+  const child = Bun.spawn(['true'])
+  await child.exited
+  return child.pid
+}
+
+export async function startOf(processId: number): Promise<string> {
+  const ps = Bun.spawn(['/bin/ps', '-o', 'lstart=', '-p', String(processId)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, stdout: 'pipe' })
+  return (await new Response(ps.stdout).text()).trim()
 }

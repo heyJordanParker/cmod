@@ -69,7 +69,7 @@ The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 3. It publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.
 4. It releases the cmod plugin on GitHub with `cmod publish`, which builds the cmod program for each machine, attaches the builds to the release, and pushes the `release` branch that Anthropic's plugin directory follows.
 
-Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway.
+Each step skips what is already done: a version npm already has, or a tag that already exists. So pushing again finishes a release that stopped halfway. A push that releases nothing still runs step 2, then tests the cmod plugin on the `@cmodjs/core` its `bun.lock` names, so every push to `main` runs every suite.
 
 The workflow's GitHub release holds a link to the commits, opened by a `## Breaking changes` list that `cmod publish` builds from each `BREAKING CHANGE:` footer and each `!` commit, such as `feat!:`, since the last tag. A commit that changes what a mod author writes carries both. Once the workflow finishes, write what the version lets people do from the commits since the last tag, with each breaking change's before and after, and set it with `gh release edit v<version> --notes-file <file>`. The `/release` Skill in `.claude/skills/` runs every step, the changelog included.
 
