@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.8.0] - 2026-11-04
+
+### Fixed
+- A Sidebar page whose `render` throws draws `The <title> page could not draw: <error>` in its place, and a widget that throws draws nothing. Before, the cmod plugin kept showing the page's or widget's last drawing, with buttons that looked pressable but no longer ran anything.
+- A press cmod cannot deliver now shows a toast. A button from an older drawing shows `The <mod> button was from an older drawing, so nothing ran` and the page draws again, and a press the mod refuses for another reason shows its error at once, even for an installed mod. Before, both went only to the debug log or the Log, so the press was lost with no message.
+- `@cmodjs/core` now takes under a fifth of Claude Code's 1 MB limit on a mod's hooks module, instead of two fifths. A mod that uses nothing went from 426,917 to 200,061 bytes, and the inbox mod from 968,696 to 529,044. Only the cmod plugin bundles the code that reads conversations and serves widgets and pages, and `cmod publish` minifies whitespace and identifiers, which `claude plugin validate --strict` accepts.
+- A linked mod's program no longer runs older code than the mod. `cmod watch` builds it again, at the same version too, after a change to a file its build reads: one in `cli/`, or one its JavaScript or TypeScript entry imports, such as the mod's own `src/`. So a program such as the inbox's browser view restarts on the new build and reads the data the mod now writes. A change no program build reads builds no program. A program build that fails shows as the mod's build failure, the last program that built keeps running, and a build that writes the same program leaves its running copy alone.
+
 ## [5.7.0] - 2026-11-04
 
 ### Changed
