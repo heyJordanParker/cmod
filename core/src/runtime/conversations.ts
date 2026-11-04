@@ -397,8 +397,8 @@ export function serveConversations({
     return false
   }
 
-  const refuses = (watcher: Watcher, event: BeforeEvent, change: SessionChange) =>
-    beforeAnswerKeys[event].includes('refuse') && (watcher.refusing ?? []).some(({ event: heard, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard, matcher === undefined ? undefined : receivedMatcher(matcher), change))
+  const refuses = (watcher: Watcher, event: BeforeEvent, change: SessionChange | undefined) =>
+    beforeAnswerKeys[event].includes('refuse') && (watcher.refusing ?? []).some(({ event: heard, matcher, scope }) => (change === undefined ? heard === event : isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard, matcher === undefined ? undefined : receivedMatcher(matcher), change)))
 
   const askAway = async (watcher: Watcher, event: BeforeEvent, change: SessionChange, endsAt: number) => {
     try {
@@ -426,9 +426,10 @@ export function serveConversations({
     return deciders(event).length > 0
   }
 
-  const failedBefore = (event: BeforeEvent, change: (where: Place) => SessionChange, error: Error) => {
+  const failedBefore = (event: BeforeEvent, change: (where: Place) => SessionChange | undefined, error: Error) => {
     if (!hasReadWatchers) return { refuse: `${cmodPluginName}: ${error.message}` }
-    const refusing = deciders(event).find((watcher) => refuses(watcher, event, change(place())))
+    const changed = change(place())
+    const refusing = deciders(event).find((watcher) => refuses(watcher, event, changed))
     return refusing === undefined ? undefined : { refuse: `${refusing.mod}: ${error.message}` }
   }
 

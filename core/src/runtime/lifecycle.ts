@@ -173,6 +173,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   asksPerson = true,
 ): Lifecycle<State> {
   let router: Router = createRouter()
+  let startingRouter: Router | undefined
   let phase: Phase = 'starting'
   let runtime: Pick<ModRuntime, 'claude' | 'toaster'> | undefined
   let programs: Programs | undefined
@@ -361,12 +362,17 @@ export function createLifecycle<State extends object, Declared extends Options =
   const activate = async (): Promise<void> => {
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw }).catch(async (error: unknown) => {
-      if (error instanceof MissingOptions && (await askOptions(error))) return undefined
-      await installer.close()
-      fail(messageOf(error), error instanceof MissingOptions ? `Retry asks for ${error.keys.length === 1 ? 'it' : 'them'}.` : undefined, begin, error)
-      throw error
-    })
+    startingRouter = activeRouter
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw })
+      .catch(async (error: unknown) => {
+        if (error instanceof MissingOptions && (await askOptions(error))) return undefined
+        await installer.close()
+        fail(messageOf(error), error instanceof MissingOptions ? `Retry asks for ${error.keys.length === 1 ? 'it' : 'them'}.` : undefined, begin, error)
+        throw error
+      })
+      .finally(() => {
+        startingRouter = undefined
+      })
     if (active === undefined) return activate()
     const { added } = active
     mod = active.mod
@@ -564,24 +570,24 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (activation !== undefined && phase !== 'active') await activation
   }
 
-  const held = (work: Promise<void>, signal: AbortSignal | undefined): Promise<void> =>
+  const held = (work: Promise<void>, signal: AbortSignal | undefined): Promise<boolean> =>
     runtime === undefined
-      ? work
-      : new Promise<void>((resolve) => {
-          const limit = claude().clock.after(startHoldMs, resolve)
-          if (signal?.aborted === true) resolve()
-          signal?.addEventListener('abort', () => resolve(), { once: true })
+      ? work.then(() => false)
+      : new Promise<boolean>((resolve) => {
+          const limit = claude().clock.after(startHoldMs, () => resolve(true))
+          if (signal?.aborted === true) resolve(false)
+          signal?.addEventListener('abort', () => resolve(false), { once: true })
           void work.then(() => {
             limit.cancel()
-            resolve()
+            resolve(false)
           })
         })
 
-  const holdUntilStarted = (signal?: AbortSignal): Promise<void> => held(startSettled.then(whenActive), signal)
+  const holdUntilStarted = (signal?: AbortSignal): Promise<boolean> => held(startSettled.then(whenActive), signal)
 
-  const holdUntilActive = (signal: AbortSignal | undefined): Promise<void> => {
+  const holdUntilActive = (signal: AbortSignal | undefined): Promise<boolean> => {
     const activating = whenActive()
-    return activation !== undefined && phase !== 'active' ? held(activating, signal) : activating
+    return activation !== undefined && phase !== 'active' ? held(activating, signal) : activating.then(() => false)
   }
 
   const routed = async <N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, signal?: AbortSignal): Promise<EventResult<N>> => {
@@ -606,7 +612,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     const tool = (e as { readonly tool?: unknown }).tool
     const isCallToThisMod = (event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) || (event === 'tool.call' && typeof tool === 'string' && tool.startsWith(`mcp__${definition.name}__`))
     if (event === 'cmod.call' && !isCallToThisMod) return next(e)
-    await (event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal))
+    const isLate = await (event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal))
     if (event === 'classic.SessionStart' && phase !== 'active') {
       missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
       return next(e)
@@ -618,6 +624,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       }
       return { deny: phase === 'failed' ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
     }
+    if (isLate && phase !== 'active') return (startingRouter ?? router).dispatchFailure(event, e, new Error(`it was still starting after ${startHoldMs / 1000} s`), next, false)
     const call = e as Frozen<Args<'cmod.call'>>
     if (event === 'cmod.call' && call.to === definition.name && mod !== undefined) {
       if (call.method === pendingStepsMethod) return { value: await pendingSteps(mod) } as EventResult<N>
@@ -701,7 +708,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       const error = new Error(reason)
       const failedBeneath = called && kind === 'throw' ? await next(e).then(() => undefined, messageOf) : undefined
       if (failedBeneath === undefined || failedBeneath !== message) toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, '')} hook`, error })
-      return router.dispatchFailure(event, e, error, next, called)
+      return (startingRouter ?? router).dispatchFailure(event, e, error, next, called)
     },
   }
 }

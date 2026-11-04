@@ -46,13 +46,15 @@ export function createRouter(): Router {
       }
       return call(0, e) as Promise<EventResult<N>>
     },
-    async dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>, called: boolean): Promise<EventResult<N>> {
-      const signalled = Object.assign((passed: unknown) => next(passed as Frozen<Args<N>>), { signal: unaborted, called })
-      for (const route of routes.get(event) ?? []) {
-        const answer = await route.failed?.(e, error, signalled)
-        if (answer !== undefined) return answer as EventResult<N>
+    dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>, called: boolean): Promise<EventResult<N>> {
+      const chain = routes.get(event)
+      const fail = async (index: number, current: unknown): Promise<unknown> => {
+        const route = chain?.[index]
+        if (route === undefined) return next(current as Frozen<Args<N>>)
+        const answer = await route.failed?.(current, error, Object.assign((passed: unknown) => fail(index + 1, passed), { signal: unaborted, called }))
+        return answer === undefined ? fail(index + 1, current) : answer
       }
-      return next(e)
+      return fail(0, e) as Promise<EventResult<N>>
     },
   }
 }

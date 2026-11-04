@@ -400,6 +400,95 @@ test("a prompt is dropped when Claude Code stops the cmod plugin's prompt hook b
   expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(false))).toEqual({ drop: 'cmod: it ran past the 10 s Claude Code gives a hook' })
 })
 
+const refusingOnFailure = (lifecycle: Awaited<ReturnType<typeof resumedOnLockedIndex>>, event: string) =>
+  lifecycle.route('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event, onFailure: 'refuse' }] }, caller: 'guard' } as never, async () => ({ deny: 'unanswered' }))
+
+const ranPast = 'it ran past the 10 s Claude Code gives a hook'
+const deletion = { tool: 'Bash', tool_use_id: 'toolu_1', command: 'rm -rf build' } as unknown as Frozen<Args<'tool.call'>>
+const ran = async () => ({ result: 'ran' })
+
+test("a refusing beforeToolCall listener denies the call when Claude Code stops the cmod plugin's tool hook before it answered", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+  await refusingOnFailure(lifecycle, 'toolCall')
+  void lifecycle.route('tool.call', deletion, ran)
+
+  expect(await lifecycle.caught('tool.call', deletion, ran, stopped(false))).toEqual({ deny: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('tool.call', deletion, ran, stopped(true))).toEqual({ result: 'ran' })
+})
+
+test("a tool call no mod gates passes when Claude Code stops the cmod plugin's tool hook", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+
+  expect(await lifecycle.caught('tool.call', deletion, ran, stopped(false))).toEqual({ result: 'ran' })
+})
+
+test("a refusing beforeTaskStart listener denies the spawn when Claude Code stops the cmod plugin's spawn hook before it answered", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+  await refusingOnFailure(lifecycle, 'taskStart')
+  const spawn = { tool_use_id: 'toolu_2', description: 'Audit the deploy', prompt: 'Audit it.', subagentType: 'general-purpose', parentModel: 'opus' } as unknown as Frozen<Args<'agent.spawn'>>
+  const started = async () => ({ model: 'opus', agentId: 'agent-1' })
+
+  expect(await lifecycle.caught('agent.spawn', spawn, started, stopped(false))).toEqual({ deny: `guard: ${ranPast}` })
+})
+
+test("a refusing beforeAttachedFile or beforeInstructionFile listener drops the attachment when Claude Code stops the cmod plugin's attachment hook before it answered", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+  await refusingOnFailure(lifecycle, 'attachedFile')
+  const file = { type: 'file', text: 'Called the Read tool with the following input: {"file_path":"/work/app/.env"}' } as unknown as Frozen<Args<'prompt.attachment'>>
+  const memory = { type: 'nested_memory', text: 'Contents of /work/app/src/CLAUDE.md:\n\nShip on Fridays.' } as unknown as Frozen<Args<'prompt.attachment'>>
+  const attached = async (e: Frozen<Args<'prompt.attachment'>>) => ({ text: e.text })
+
+  expect(await lifecycle.caught('prompt.attachment', file, attached, stopped(false))).toEqual({ text: null })
+  expect(await lifecycle.caught('prompt.attachment', memory, attached, stopped(false))).toEqual({ text: memory.text })
+
+  await refusingOnFailure(lifecycle, 'instructionFile')
+
+  expect(await lifecycle.caught('prompt.attachment', memory, attached, stopped(false))).toEqual({ text: null })
+})
+
+test("a refusing beforeContextEnd listener skips the compaction when Claude Code stops the cmod plugin's compaction hook before it answered", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+  await refusingOnFailure(lifecycle, 'contextEnd')
+  const compacted = async () => ({ messages: [] })
+
+  expect(await lifecycle.caught('session.compact', { trigger: 'manual', messages: [] } as never, compacted as never, stopped(false))).toEqual({ skip: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('session.compact', { trigger: 'auto', agentId: 'agent-1', messages: [] } as never, compacted as never, stopped(false))).toEqual({ skip: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('session.compact', { trigger: 'precompute', messages: [] } as never, compacted as never, stopped(false))).toEqual({ messages: [] })
+})
+
+test("a refusing beforeTurnEnd listener blocks the stop when Claude Code stops the cmod plugin's Stop hook before it answered", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+  await refusingOnFailure(lifecycle, 'turnEnd')
+  const stop = { session_id: 'test-session', stop_hook_active: false, last_assistant_message: 'Shipped.' } as unknown as Frozen<Args<'classic.Stop'>>
+  const subagentStop = { session_id: 'test-session', agent_id: 'agent-1', agent_type: 'general-purpose', stop_hook_active: false } as unknown as Frozen<Args<'classic.SubagentStop'>>
+
+  expect(await lifecycle.caught('classic.Stop', stop, async () => ({}), stopped(false))).toEqual({ block: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('classic.SubagentStop', subagentStop, async () => ({}), stopped(false))).toEqual({ block: `guard: ${ranPast}` })
+})
+
+test('a tool call that arrives while the cmod plugin still runs its setup is denied at the start limit, because the cmod plugin has not read which mods refuse it', async () => {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  const guarding = [{ mod: 'guard', target: 'test-session', project: '/work/app', events: ['toolCall'], refusing: [{ event: 'toolCall', onFailure: 'refuse' }] }]
+  Object.assign(fake.fakes.fs, fakeFiles({ '/test/home/.local/share/cmod/data/cmod/before/other.json': JSON.stringify(guarding) }))
+  fake.fakes.process.spawn = () => printed('')
+  const timers: { ms: number; fire: () => void }[] = []
+  fake.fakes.clock.after = (ms, fire) => {
+    if (ms === 0) void Promise.resolve().then(fire)
+    else timers.push({ ms, fire })
+    return { cancel: () => undefined }
+  }
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: () => new Promise<never>(() => undefined) }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'cmod', root: '/plugins/cmod', version: coreVersion, store: '/test/home/.local/share/cmod', isInstalled: false, shouldRecord: false, steps: {} }))
+  await fake.settle()
+
+  const answer = lifecycle.route('tool.call', deletion, ran)
+  await fake.settle()
+  timers.find((made) => made.ms === 9_000)?.fire()
+
+  expect(lifecycle.phase).toBe('ready')
+  expect(await answer).toEqual({ deny: 'cmod: it was still starting after 9 s' })
+})
+
 test('a mod listening on this session and on every session is asked once before a prompt', async () => {
   const asked: unknown[] = []
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
