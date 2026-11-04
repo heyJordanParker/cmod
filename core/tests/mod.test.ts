@@ -13,7 +13,7 @@ import { testMod, type FakeSession, type TestedMod } from '../src/testing.js'
 import { claudeCodeOf } from '../src/testing/claude-code.js'
 import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
 import { findElement, textOf } from '../src/testing/fake-elements.js'
-import { Box, Button, Text } from '../src/ui/elements.js'
+import { Box, Button, Input, Text } from '../src/ui/elements.js'
 import type { TracerSignature } from './tracer.js'
 
 const touchTracker = defineMod({
@@ -1310,6 +1310,90 @@ test('pane.scrollTo asks Claude Code to bring a row of the pane into view', asyn
   await tested.shown.pane.press('Latest')
 
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
+})
+
+const answerBox = (focus: (key: string) => Promise<void>) => Box({ flexDirection: 'column', children: [Text({ children: 'Ship it on Friday?' }), Button({ key: 'answer-button', label: 'Answer', onPress: () => focus('answer') }), Input({ key: 'answer', placeholder: 'Your answer', onSubmit: () => undefined })] })
+
+test("page.focus moves the keyboard to the page's field once, so the page shown again after the person hid it keeps its own keys", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'inbox',
+      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      setup(mod) {
+        const page: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => page.focus(key)) })
+        mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
+      },
+    }),
+  )
+  await tested.hotkey('toggle')
+  const before = await tested.shown.page.focusedKey()
+
+  await tested.shown.page.press('Answer')
+  const focused = await tested.shown.page.focusedKey()
+  await tested.hotkey('toggle')
+  await tested.hotkey('toggle')
+
+  expect([before, focused, await tested.shown.page.focusedKey()]).toEqual([undefined, 'answer', undefined])
+})
+
+test("pane.focus moves the keyboard to the pane's field once, so the pane opened again after the person closed it keeps its own keys", async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'ask',
+      hotkeys: { toggle: { title: 'Show or hide the question', default: 'ctrl+q' } },
+      setup(mod) {
+        const pane: Pane = mod.panes.add({ id: 'question', title: 'Question', render: () => answerBox((key) => pane.focus(key)) })
+        mod.hotkeys.toggle.onPress(() => pane.toggle({ focus: true }))
+      },
+    }),
+  )
+  await tested.hotkey('toggle')
+  const before = await tested.shown.pane.focusedKey()
+
+  await tested.shown.pane.press('Answer')
+  const focused = await tested.shown.pane.focusedKey()
+  await tested.hotkey('toggle')
+  await tested.hotkey('toggle')
+
+  expect([before, focused, await tested.shown.pane.focusedKey()]).toEqual([undefined, 'answer', undefined])
+  expect(tested.calls.filter((call) => call.call === 'ui.focus').map((call) => call.args)).toEqual([[{ requestId: 'question', key: 'answer' }]])
+})
+
+test('page.focus on a key the page does not draw rejects with the key, and sends the cmod plugin nothing', async () => {
+  let page: Page | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'inbox',
+      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      setup(mod) {
+        const added: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => added.focus(key)) })
+        page = added
+        mod.hotkeys.toggle.onPress(() => added.toggle({ focus: true }))
+      },
+    }),
+  )
+  await tested.hotkey('toggle')
+  await tested.shown.page.lines()
+  const sent = tested.calls.length
+
+  await expect(page?.focus('comment') ?? Promise.resolve()).rejects.toThrow('inbox: the Question page draws no Button, Input, or Select with the key "comment".')
+  expect(tested.calls.slice(sent).filter((call) => call.call === 'cmod.call')).toEqual([])
+})
+
+test("pane.focus rejects with the key and Claude Code's reason when the pane draws no such element", async () => {
+  let pane: Pane | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'ask',
+      async setup(mod) {
+        pane = mod.panes.add({ id: 'question', title: 'Question', render: () => answerBox(() => Promise.resolve()) })
+        await pane.open({ focus: true })
+      },
+    }),
+  )
+  await tested.start()
+
+  await expect(pane?.focus('comment') ?? Promise.resolve()).rejects.toThrow('ask: Claude Code did not focus "comment" in the Question pane: the pane "question" draws no Button, Input, or Select with the key "comment"')
 })
 
 test("a mod's call to its own name is answered by its own methods, since Claude Code shows a call only to the plugins above the caller", async () => {

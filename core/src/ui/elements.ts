@@ -93,6 +93,17 @@ export function elementOf(data: unknown, keyPrefix: string, press: (handler: num
   return constructors[name as keyof typeof constructors]((typeof props['key'] === 'string' ? { ...props, key: `${keyPrefix}${props['key']}` } : props) as never)
 }
 
+const focusable: ReadonlySet<unknown> = new Set(['Button', 'Input', 'Select'])
+
+export function drawsFocusable(data: unknown, key: string): boolean {
+  if (typeof data !== 'object' || data === null) return false
+  if (Array.isArray(data)) return data.some((each: unknown) => drawsFocusable(each, key))
+  const fields = data as Readonly<Record<string, unknown>>
+  const props = fields['props'] as Readonly<Record<string, unknown>> | undefined
+  if (focusable.has(fields[elementKey]) && props?.['key'] === key) return true
+  return Object.values(fields).some((each) => drawsFocusable(each, key))
+}
+
 export const Box = element('Box')
 export const Text = element('Text')
 export const Button = element('Button')

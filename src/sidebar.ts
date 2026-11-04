@@ -203,6 +203,8 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       } else if ('scroll' in request) {
         const to = typeof request.to === 'string' ? request.to : { key: `${name}/${request.scroll}:${request.to.key}` }
         await pane.scrollTo(to, request.block === undefined ? {} : { block: request.block })
+      } else if ('focus' in request) {
+        await pane.focus(`${name}/${request.focus}:${request.key}`)
       } else if ('settings' in request) {
         show(settingsTab)
         await pane.open({ focus: true })

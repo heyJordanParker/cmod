@@ -341,6 +341,48 @@ test("shown.pane draws with the scroll and view Claude Code passes, the main con
   expect(await tested.shown.pane.lines()).toEqual(['0 of 24 rows, main'])
 })
 
+const answerField = (autoFocus: boolean) => Box({ flexDirection: 'column', children: [Text({ children: 'Ship it on Friday?' }), Input({ key: 'answer', ...(autoFocus ? { autoFocus: true as const } : {}), onSubmit: () => undefined })] })
+
+test('shown.page.focusedKey() names the autoFocus element each time the page takes the keyboard, as Claude Code moves the ring there on each show', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'inbox',
+      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      setup(mod) {
+        const page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerField(true) })
+        mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
+      },
+    }),
+  )
+  await tested.hotkey('toggle')
+  const first = await tested.shown.page.focusedKey()
+  await tested.hotkey('toggle')
+  await tested.hotkey('toggle')
+
+  expect([first, await tested.shown.page.focusedKey()]).toEqual(['answer', 'answer'])
+})
+
+test('shown.pane.focusedKey() names no element while the pane does not hold the keyboard, and pane.focus there rejects', async () => {
+  let focused: unknown
+  const tested = testMod(
+    defineMod({
+      name: 'ask',
+      async setup(mod) {
+        const pane = mod.panes.add({ id: 'question', title: 'Question', render: () => answerField(true) })
+        await pane.open()
+        focused = await pane.focus('answer').then(
+          () => 'focused',
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        )
+      },
+    }),
+  )
+  await tested.start()
+
+  expect(await tested.shown.pane.focusedKey()).toBeUndefined()
+  expect(focused).toBe('ask: Claude Code did not focus "answer" in the Question pane: the pane "question" does not hold the keyboard')
+})
+
 type SearchState = { session: { query: string; draft: string; agent: string; opened: string[]; copiedFrom: string } }
 
 const searchPane: PaneInit<SearchState> = {

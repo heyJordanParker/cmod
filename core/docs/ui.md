@@ -127,6 +127,7 @@ type Page<Params = undefined> = {
   toggle(options?: { readonly focus?: true }): Promise<void>
   close(): Promise<void>
   scrollTo(target: 'start' | 'end' | { readonly key: string }, options?: { readonly block?: 'start' | 'center' | 'end' | 'nearest' }): Promise<void>
+  focus(key: string): Promise<void>
   remove(): void
 }
 ```
@@ -137,6 +138,7 @@ type Page<Params = undefined> = {
 - `toggle` closes an open page and opens a closed one. `close` takes its tab away, and the Sidebar hides once no page is left.
 - `isOpen` is true while the page has a tab, `isShown` while its tab is the one on screen, and `isFocused` while it has the keyboard.
 - `scrollTo` brings an element the page drew with that `key` into view, or the page's start or end.
+- `focus` moves the keyboard once to the `Button`, `Input`, or `Select` the page drew with that `key`, while the Sidebar holds the keyboard, such as from a `Button` the person pressed. Unlike `autoFocus`, which takes the keyboard each time the Sidebar shows, it moves it only when called. A key the page does not draw rejects with `<mod>: the <title> page draws no Button, Input, or Select with the key "<key>".` The cmod plugin moves the keyboard after the handler returns, so `focus` resolves once the cmod plugin has the request, and a move Claude Code refuses goes to the Log.
 - `props.columns` is the width the page draws in. The Sidebar draws the page in a panel titled with the mod's name, under its tab bar and above its key bar, so `columns` is the Sidebar's width less 6: its padding of one column on each side, and the panel's border and padding.
 - A page opened from what the person did, such as a slash command they typed, a hotkey, or a `Button` they pressed, shows at any terminal width. A page opened from anything else, such as `setup`, a timer, or a listener, shows only on a terminal 144 columns wide. Below that it waits until the person opens the Sidebar.
 - A page draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects, because the cmod plugin draws it. A `Button`'s `onPress` runs in the mod.
@@ -195,6 +197,7 @@ type PaneInit<State, Params = undefined> = {
 - `render` draws the pane's body. `props` holds `params`, `surface`, the app that draws it, `title`, `isFocused`, `bodyColumns`, `placement` (`'dock'` or `'inline'`), `scroll`, and `view`, which transcript is on screen beside the pane.
 - `onScroll` runs after this pane's window moved. `onClose` runs after the pane closed, by the person or by `close()`, and `e.origin.kind` is `'person'` or `'plugin'`. A handler that throws shows the error toast `The <title> pane's <handler> threw`.
 - `open` asks Claude Code to show the pane, and `isOpen` turns true once Claude Code places it. A pane opened from what the person did shows at any width, and one opened from anything else only at 144 columns, or 110 for a pane the person opened before.
+- `focus` moves the keyboard once to the `Button`, `Input`, or `Select` the pane drew with that `key`, while the pane holds the keyboard. It resolves once the keyboard moved, and rejects with `<mod>: Claude Code did not focus "<key>" in the <title> pane: <reason>` when it did not.
 - Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give each pane its own id.`
 - A `render` that throws draws `The <title> pane could not draw: <error>` in the pane.
 
@@ -496,4 +499,4 @@ sessions.current.caption(toolCall: ToolCall message, text: string | undefined): 
 
 ## Test the UI
 
-`tested.shown.page` and `tested.shown.pane` read the page or pane the mod shows now, with `lines()`, `press(key)`, `input(key, text)`, and `select(key, value)`. `tested.lines(area)` draws the mod's widgets in an area, and `tested.lines(kind, props)` draws a style. `tested.hotkey(name)` presses a hotkey. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.
+`tested.shown.page` and `tested.shown.pane` read the page or pane the mod shows now, with `lines()`, `press(key)`, `input(key, text)`, `select(key, value)`, and `focusedKey()`. `tested.lines(area)` draws the mod's widgets in an area, and `tested.lines(kind, props)` draws a style. `tested.hotkey(name)` presses a hotkey. `tested.shown.toasts` lists the toasts shown now, each as `{ type, message, description? }`. [testing.md](testing.md) covers each.

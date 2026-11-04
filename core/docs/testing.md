@@ -271,6 +271,13 @@ await tested.shown.page.select('agent', 'explorer')
 expect(await tested.shown.page.lines()).toContain('deploy by explorer')
 ```
 
+`shown.page.focusedKey()` and `shown.pane.focusedKey()` return the `key` of the `Button`, `Input`, or `Select` that holds the keyboard in what shows, or `undefined` while it does not hold the keyboard or no element does. The page or pane takes the keyboard when it opens with `{ focus: true }`, and its first `autoFocus` element takes it then. `focus(key)` moves it to another element until the page or pane closes or opens again.
+
+```ts
+await tested.shown.page.press('Answer')
+expect(await tested.shown.page.focusedKey()).toBe('answer')
+```
+
 ### moveTo
 
 `moveTo(projectRoot, cwd?)` moves the session. A new `projectRoot` runs a `/cd` there, so the mod loads that project's state. A `cwd` then runs a Bash `cd` there. The mod's `onCwdChange` listeners run for each move, and `sessions.current` follows it.

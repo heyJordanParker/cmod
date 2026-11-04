@@ -31,6 +31,7 @@ export type Pane<Params = undefined> = {
   toggle(options?: { readonly focus?: true }): Promise<void>
   close(): Promise<void>
   scrollTo(target: ScrollTarget, options?: ScrollOptions): Promise<void>
+  focus(key: string): Promise<void>
   remove(): void
 }
 
@@ -52,6 +53,7 @@ export type Page<Params = undefined> = {
   toggle(options?: { readonly focus?: true }): Promise<void>
   close(): Promise<void>
   scrollTo(target: ScrollTarget, options?: ScrollOptions): Promise<void>
+  focus(key: string): Promise<void>
   remove(): void
 }
 

@@ -2,7 +2,7 @@ import type { Args, ElementTable, Frozen, MarkdownProps, PaneOpenArgs, RenderEle
 import type { Mod, Turn } from '../mod.js'
 import { isObject } from '../records.js'
 import { TurnEnd, type Area, type Widget, type WidgetContext, type WidgetInit } from '../ui/areas.js'
-import { Box, drawKeyed, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
+import { Box, drawKeyed, drawsFocusable, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
 import type { Block, MarkdownPiece, MarkdownReader } from '../ui/markdown.js'
 import { checkPane, checkPart, sizeKeys, type OpenOptions, type Page, type PageInit, type Pane, type PaneInit, type ScrollOptions, type ScrollTarget } from '../ui/panes.js'
 import { componentOf, nameOf, type Kind, type Style, type StyledAt, type StyleInit } from '../ui/styles.js'
@@ -57,6 +57,7 @@ export type PageRequest =
   | { readonly open: string; readonly params?: unknown; readonly focus?: true }
   | { readonly close: string }
   | { readonly scroll: string; readonly to: ScrollTarget; readonly block?: ScrollOptions['block'] }
+  | { readonly focus: string; readonly key: string }
   | { readonly settings: true; readonly tab?: SettingsTab }
 
 export type SettingsTab = 'changelog' | 'permissions'
@@ -527,6 +528,10 @@ export function createUi<State extends object>({ name, claude, router, report, a
       },
       toggle: (options) => (openPanes.has(init.id) ? pane.close() : (pane.open as (options?: OpenOptions<Params>) => Promise<void>)(options as OpenOptions<Params>)),
       scrollTo: (target, options) => scrollIn(init.id, target, options),
+      async focus(key) {
+        const { deny } = await claude.ui.focus({ requestId: init.id, key })
+        if (deny !== undefined) throw new Error(`${name}: Claude Code did not focus "${key}" in the ${init.title} pane: ${deny}`)
+      },
       remove() {
         if (panes.get(init.id) !== added) return
         panes.delete(init.id)
@@ -572,6 +577,11 @@ export function createUi<State extends object>({ name, claude, router, report, a
       },
       scrollTo: async (target, options) => {
         await send({ requests: [{ scroll: init.id, to: target, ...(options?.block === undefined ? {} : { block: options.block }) }] })
+      },
+      focus: async (key) => {
+        const latest = [...(latestDraws.get(`page:${init.id}`)?.values() ?? [])].at(-1)
+        if (latest === undefined || !drawsFocusable(treeOf(latest.render, []), key)) throw new Error(`${name}: the ${init.title} page draws no Button, Input, or Select with the key "${key}".`)
+        await send({ requests: [{ focus: init.id, key }] })
       },
       remove() {
         if (pages.get(init.id) !== added) return

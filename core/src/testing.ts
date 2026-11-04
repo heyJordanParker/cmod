@@ -46,7 +46,7 @@ import { beforeEvents, processEvents, sessionEvents, type AnswerOf, type BeforeE
 import { ContextEnd } from './session/context/context.js'
 import { TaskStart } from './session/goal/task.js'
 import { calledAnswer, fakeClaude, type Fakes, type Shown as ShownByClaude, type TestCall } from './testing/fake-claude.js'
-import { checkKeys, elements, findElement, rowsOf } from './testing/fake-elements.js'
+import { checkKeys, elements, findElement, focusableKey, rowsOf } from './testing/fake-elements.js'
 import { fakeFiles } from './testing/fake-files.js'
 import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft, type StartedTask } from './testing/fake-sessions.js'
 import { listed, messageOf } from './utils/text.js'
@@ -71,6 +71,7 @@ export type ShownPart = {
   press(key: string, link?: string): Promise<void>
   input(key: string, text: string, type?: UiInputArgument['kind']): Promise<void>
   select(key: string, value: string): Promise<void>
+  focusedKey(): Promise<string | undefined>
 }
 
 export type Shown = ShownByClaude & { readonly toasts: readonly ShownToast[]; readonly sent: FakeSessions['sent']; readonly pane: ShownPart; readonly page: ShownPart }
@@ -198,18 +199,49 @@ export function testMod<State extends object, Declared extends Options = Options
   let openPages: { readonly id: string; readonly params: unknown }[] = []
   let shownPage: { readonly id: string; readonly params: unknown; readonly isFocused: boolean } | undefined
   const tellShown = () => callMod(partMethods.shown, { open: openPages, shown: shownPage?.id ?? null, isFocused: shownPage?.isFocused ?? false })
+  const modeled = new Set<Promise<unknown>>()
+  const modeling = <Value>(work: Promise<Value>): Promise<Value> => {
+    modeled.add(work)
+    void work.finally(() => modeled.delete(work)).catch(() => undefined)
+    return work
+  }
+  const settle = async () => {
+    do {
+      await fake.settle()
+      await Promise.allSettled(modeled)
+    } while (modeled.size > 0)
+  }
+  let focused: { readonly part: string; readonly key: string } | undefined
+  const forgetFocus = (part: string) => {
+    if (focused?.part === part) focused = undefined
+  }
+  const holdsKeyboard = async (isPane: boolean, id: string) => (isPane ? (await fake.claude.ui.panes()).some((open) => open.id === id && open.isFocused) : shownPage?.id === id && shownPage.isFocused)
+  const refusedFocus = async (isPane: boolean, id: string, key: string): Promise<string | undefined> => {
+    const pane = isPane ? id : 'sidebar'
+    if (!(await holdsKeyboard(isPane, id))) return `the pane "${pane}" does not hold the keyboard`
+    const drawn = lifecycle.phase === 'active' ? (isPane ? await drawPane(id) : await drawPage(id)).drawing : undefined
+    if (drawn === undefined || focusableKey(drawn, (props) => props['key'] === key) === undefined) return `the pane "${pane}" draws no Button, Input, or Select with the key "${key}"`
+    return undefined
+  }
   const applyRequests = async (requests: readonly PageRequest[]) => {
     for (const request of requests) {
       if ('open' in request) {
         const isSettings = declaredPages.some((page) => page.id === request.open && page.place === 'settings')
         if (!isSettings) openPages = [...openPages.filter((page) => page.id !== request.open), { id: request.open, params: request.params ?? null }]
         shownPage = { id: request.open, params: request.params ?? null, isFocused: request.focus === true }
+        if (request.focus === true) forgetFocus(`page:${request.open}`)
       } else if ('close' in request) {
         openPages = openPages.filter((page) => page.id !== request.close)
         if (shownPage?.id === request.close) shownPage = undefined
+      } else if ('focus' in request) {
+        const key = `${name}/${request.focus}:${request.key}`
+        const refused = await refusedFocus(false, request.focus, key)
+        if (refused === undefined) focused = { part: `page:${request.focus}`, key: request.key }
+        else reportPart(`pages:${name}`, `Could not show the page ${name} asked for`, new Error(`cmod: Claude Code did not focus "${key}" in the Sidebar pane: ${refused}`))
       } else if ('settings' in request) {
         const first = declaredPages.find((page) => page.place === 'settings')
         shownPage = first === undefined ? undefined : { id: first.id, params: null, isFocused: true }
+        if (first !== undefined) forgetFocus(`page:${first.id}`)
       }
     }
     await tellShown()
@@ -294,6 +326,23 @@ export function testMod<State extends object, Declared extends Options = Options
     conversations.add({ type: Prompt, text: args.text, from: { type: Mod, name, ...(args.asUser === true ? { as: Person } : {}) } })
     return submitted
   }
+  const openPane = fake.claude.ui.open
+  fake.claude.ui.open = async (pane) => {
+    if (pane.focus === true) forgetFocus(`pane:${pane.id}`)
+    return openPane(pane)
+  }
+  const focusOnce = fake.claude.ui.focus
+  fake.claude.ui.focus = (args) =>
+    modeling(
+      (async () => {
+        const answer = await focusOnce(args)
+        if (answer.deny !== undefined || !fake.shown.openPanes.has(args.requestId)) return answer
+        const refused = await refusedFocus(true, args.requestId, args.key)
+        if (refused !== undefined) return { deny: refused }
+        focused = { part: `pane:${args.requestId}`, key: args.key }
+        return answer
+      })(),
+    )
   const secrets = new Map(Object.entries(options.secrets ?? {}))
   const runProcess = fake.claude.process.run
   fake.claude.process.run = async (argv, init) => {
@@ -406,6 +455,7 @@ export function testMod<State extends object, Declared extends Options = Options
       const { id, origin } = e as Args<'ui.close'>
       if (origin.kind === 'person' && fake.shown.openPanes.has(id)) await drawPane(id)
       fake.shown.openPanes.delete(id)
+      forgetFocus(`pane:${id}`)
     }
     if (event === 'agent.spawn') {
       const started = await route('classic.SubagentStart', { hook_event_name: 'SubagentStart', agent_id: (answer as { agentId: string }).agentId, agent_type: (e as Args<'agent.spawn'>).subagentType }, undefined)
@@ -450,7 +500,7 @@ export function testMod<State extends object, Declared extends Options = Options
     const drawn = (await callMod(partMethods.draw, { page: pageId, params: page.params, columns, isFocused: page.isFocused })) as DrawnPart | null
     await fake.settle()
     const tree = drawn?.tree ?? null
-    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(elements, () => elementOf(tree, `${name}/${pageId}:`, (handler, args) => void pressPart({ draw: drawn.draw, handler, args })), markdownIn(elements, { surface: 'terminal', columns })) as RenderElement)
+    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(elements, () => elementOf(tree, `${name}/${pageId}:`, (handler, args) => void modeling(pressPart({ draw: drawn.draw, handler, args }))), markdownIn(elements, { surface: 'terminal', columns })) as RenderElement)
     checkKeys(drawing, cmodPluginName, 'Pane')
     return { drawing, columns }
   }
@@ -503,13 +553,13 @@ export function testMod<State extends object, Declared extends Options = Options
         }
         if (isPane) await lifecycle.route('ui.press', pressed, (e) => cmodBeneath.dispatch('ui.press', e, run))
         else await run(pressed)
-        await fake.settle()
+        await settle()
       },
       async input(key, text, type = 'submit') {
         const { id, props } = await drawnElement('Input', key)
         const typed: UiInputArgument = { ...eventIn(id, key), kind: type, value: text }
         await (props[type === 'submit' ? 'onSubmit' : 'onInput'] as ((value: string, e: UiInputArgument) => unknown) | undefined)?.(text, typed)
-        await fake.settle()
+        await settle()
       },
       async select(key, value) {
         const { id, props } = await drawnElement('Select', key)
@@ -517,7 +567,15 @@ export function testMod<State extends object, Declared extends Options = Options
         if (!choices.includes(value)) throw new Error(`The Select "${key}" in the ${kind} "${id}" of ${name} has no option "${value}". Its options are ${choices.map((option) => `"${option}"`).join(', ')}.`)
         const picked: UiSelectArgument = { ...eventIn(id, key), value }
         await (props['onSelect'] as (value: string, e: UiSelectArgument) => unknown)(value, picked)
-        await fake.settle()
+        await settle()
+      },
+      async focusedKey() {
+        await start()
+        const { id } = shownNow(isPane)
+        if (!(await holdsKeyboard(isPane, id))) return undefined
+        if (focused?.part === `${kind}:${id}`) return focused.key
+        const autoFocused = focusableKey((await draw()).drawing, (props) => props['autoFocus'] === true)
+        return isPane || autoFocused === undefined ? autoFocused : autoFocused.slice(`${name}/${id}:`.length)
       },
     }
   }
@@ -644,7 +702,7 @@ export function testMod<State extends object, Declared extends Options = Options
     start,
     raise,
     fire,
-    settle: fake.settle,
+    settle,
     add: async (message, added) => {
       await start()
       return settled(conversations.add(message, added?.task))
@@ -697,7 +755,7 @@ export function testMod<State extends object, Declared extends Options = Options
     async hotkey(hotkeyName) {
       if ((definition.hotkeys as Readonly<Record<string, unknown>> | undefined)?.[hotkeyName] === undefined) throw new Error(`${name} has no hotkey ${hotkeyName}. Declare it in defineMod: hotkeys: { ${hotkeyName}: { title: '…', default: 'ctrl+…' } }.`)
       await runCommand(hotkeyCommand(name, hotkeyName), '')
-      await fake.settle()
+      await settle()
     },
     async press(area: Area, key: string) {
       const { drawing } = await drawWidgets(area)
@@ -705,7 +763,7 @@ export function testMod<State extends object, Declared extends Options = Options
       const button = keys.map((each) => findElement(drawing, 'Button', each)).find((found) => found !== undefined) ?? findElement(drawing, 'Button', drawnByStyle(key))
       if (button === undefined) throw new Error(`The widgets of ${name} in ${area} draw no Button with the key or label "${key}".`)
       await (button['onPress'] as () => unknown)()
-      await fake.settle()
+      await settle()
     },
     api: new Proxy({}, {
       get: (_target, method) =>

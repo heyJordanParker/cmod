@@ -659,6 +659,24 @@ test('a page request of a kind this cmod does not know, from a mod on a newer @c
   expect(tested.state.session.shown).not.toBe('settings')
 })
 
+test("a mod's focus request moves the Sidebar's keyboard to the field its page drew, under the page's prefix", async () => {
+  const { tested, declare } = testSettings()
+  tested.fakes.cmod.call = async (input) => (input.method === 'cmod:draw' ? { draw: 1, tree: { $cmodElement: 'Input', props: { key: 'answer', onSubmit: { $cmodHandler: 0 } } } } : null)
+  await tested.start()
+  await declare([{ id: 'question', title: 'Question', place: 'sidebar' }])
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'ci-watch' } as never)
+  await changed({ requests: [{ open: 'question', focus: true }] })
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  await changed({ requests: [{ focus: 'question', key: 'answer' }] })
+  await tested.settle()
+
+  expect(tested.calls.filter((call) => call.call === 'ui.focus').map((call) => call.args[0])).toEqual([{ requestId: 'sidebar', key: 'ci-watch/question:answer' }])
+  expect(await tested.shown.pane.focusedKey()).toBe('ci-watch/question:answer')
+})
+
 test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the mod hears it shown", async () => {
   const { tested, declare, shown } = testSettings()
   const told: unknown[] = []

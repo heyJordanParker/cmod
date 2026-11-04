@@ -50,6 +50,13 @@ export function findElement(node: RenderNode, type: string, key: string | ((draw
   return undefined
 }
 
+const focusable: ReadonlySet<string> = new Set(['Button', 'Input', 'Select'])
+
+export function focusableKey(node: RenderNode, isTarget: (props: Drawn['props']) => boolean): string | undefined {
+  for (const { type, props } of drawnIn(node)) if (focusable.has(type) && typeof props['key'] === 'string' && isTarget(props)) return props['key']
+  return undefined
+}
+
 export function checkKeys(tree: RenderNode, plugin: string, component: string): void {
   const seen = new Set<string>()
   for (const { type, props } of drawnIn(tree)) {
