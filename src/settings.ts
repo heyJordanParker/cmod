@@ -1,10 +1,10 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readCmodVersion, readRecord, readSteps, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
-import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
+import { cmodError, newestCmodVersion } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
@@ -133,14 +133,7 @@ export function failureLog<State extends SettingsState>(mod: Mod<State>): (failu
     .then((text) => String((JSON.parse(text) as { readonly version?: unknown }).version))
     .catch((error: unknown) => `unknown (${messageOf(error)})`)
   const versionsOf = async (failure: LoggedFailure): Promise<LogVersions> => {
-    const store = await storeOf(mod)
-    const program = await readCmodVersion(
-      {
-        list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
-        exists: async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined))) !== undefined,
-      },
-      store,
-    ).catch((error: unknown) => `unknown (${messageOf(error)})`)
+    const program = await newestCmodVersion(claude).catch((error: unknown) => `unknown (${messageOf(error)})`)
     const claudeCode = await claude.session.version().catch((error: unknown) => `unknown (${messageOf(error)})`)
     return { ...(failure.version === undefined ? {} : { mod: failure.version }), ...(failure.core === undefined ? {} : { core: failure.core }), cmod: await cmodVersion, ...(program === undefined ? {} : { program }), claudeCode }
   }

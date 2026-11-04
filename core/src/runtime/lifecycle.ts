@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programPath, readCmodVersion, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programPath, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -16,7 +16,7 @@ import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
-import { cmodError, locatingPrograms, readLines, spawnCmod, type Programs } from './programs.js'
+import { cmodError, locatingPrograms, newestCmodVersion, readLines, spawnCmod, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
 import { fitsOption } from '../options.js'
 import { createInstaller } from './installer.js'
@@ -128,7 +128,7 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {}
   if (name === cmodPluginName) {
-    const installed = await cmodVersion(claude)
+    const installed = await newestCmodVersion(claude)
     return { name, root, version, store, steps, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false }
   }
   const plugin = { name, root, version, store, steps }
@@ -164,17 +164,6 @@ async function readJson(read: ReadFile, path: string): Promise<unknown> {
   } catch (error) {
     throw new Error(`${path} is not JSON (${messageOf(error)}). Fix it, then press Retry.`)
   }
-}
-
-async function cmodVersion(claude: Claude): Promise<string | undefined> {
-  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
-  return readCmodVersion(
-    {
-      list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
-      exists: async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined))) !== undefined,
-    },
-    store,
-  )
 }
 
 export function createLifecycle<State extends object, Declared extends Options = Options>(
@@ -286,7 +275,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   }
 
   const recordThroughCmod = async () => {
-    if (plugin === undefined || (await cmodVersion(claude())) === undefined) return
+    if (plugin === undefined || (await newestCmodVersion(claude())) === undefined) return
     let failed: string | undefined
     const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'] }), (text) => {
       const event = parseEvent(text)
@@ -429,7 +418,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (plugin === undefined) return
     if (plugin.name === cmodPluginName) return bootstrap(plugin.root)
     phase = 'installing'
-    const found = await cmodVersion(claude())
+    const found = await newestCmodVersion(claude())
     if (!fits(found)) return waitForcmod(found)
     if (!isQuiet) installing()
     let outcome: RunnerEvent | undefined
@@ -460,7 +449,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     }
     const poll = (ms: number) =>
       claude().clock.every(ms, () => {
-        check ??= cmodVersion(claude())
+        check ??= newestCmodVersion(claude())
           .then((version) => {
             check = undefined
             latest = version

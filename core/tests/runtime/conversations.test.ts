@@ -1093,3 +1093,30 @@ test('the cmod plugin restarts its follower quietly, and says so when a follower
 
   expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['Stopped hearing the other sessions'])
 })
+
+test('a follower that exits after a newer cmod is installed, which deleted the index it read, starts again on the newer cmod and shows nothing', async () => {
+  const store = storeFolder({ HOME: '/test/home' })
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }), { files: { [`${store}/programs/cmod`]: '', [`${store}/bin/cmod/5.6.0/cmod`]: '' } })
+  const children: ReturnType<typeof followerChild>[] = []
+  tested.fakes.process.spawn = () => {
+    const child = followerChild()
+    children.push(child)
+    return child.stream
+  }
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'other-1', subscriptions: [{ event: 'message' }] }, caller: 'watcher' } as never)
+  await tested.settle()
+
+  await tested.fakes.fs.write?.(`${store}/bin/cmod/5.7.0/cmod`, '')
+  children[0]?.exit(1)
+  await tested.settle()
+
+  expect(children).toHaveLength(2)
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
+
+  children[1]?.exit(1)
+  await tested.settle()
+
+  expect(children).toHaveLength(2)
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error').map(({ message }) => message)).toEqual(['Stopped hearing the other sessions'])
+})

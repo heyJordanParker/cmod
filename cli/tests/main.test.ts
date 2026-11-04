@@ -32,6 +32,36 @@ test('cmod with a name that is no command fails and lists the commands', async (
   expect(stderr).toContain(`\n  device      ${(await commands()).find(({ name }) => name === 'device')?.summary}\n`)
 })
 
+const runBySessions: Readonly<Record<string, readonly string[]>> = {
+  setup: [],
+  option: [],
+  options: [],
+  update: [],
+  list: [],
+  enable: [],
+  disable: [],
+  remove: [],
+  teardown: [],
+  hotkey: [],
+  settings: [],
+  rules: [],
+  watch: [],
+  device: [],
+  program: [],
+  secret: ['store', 'get', 'delete'],
+  task: ['start'],
+  history: ['sessions', 'follow', 'state', 'usage', 'search', 'messages', 'turns', 'contexts', 'tasks', 'goal', 'index'],
+}
+
+test('every command and subcommand a released session runs is still a command, because every session runs the newest cmod program', async () => {
+  const home = await temporaryHome()
+  for (const [name, subcommands] of Object.entries(runBySessions)) {
+    const { exitCode, stdout } = await cmod(home, name, '--help')
+    expect([name, exitCode]).toEqual([name, 0])
+    for (const subcommand of subcommands) expect(stdout).toContain(`cmod ${name} ${subcommand}`)
+  }
+})
+
 test("cmod <command> --help prints that command's help, and a failing command names itself", async () => {
   const home = await temporaryHome()
   const { help } = (await commands()).find(({ name }) => name === 'device') as { help: string }

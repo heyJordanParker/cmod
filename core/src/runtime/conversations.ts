@@ -15,7 +15,7 @@ import { formatExit, messageOf } from '../utils/text.js'
 import { beforeAnswerKeys, foldBefore, installBefore, relayOf, type Decide, type Place } from './before.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled } from './dependencies.js'
-import { readLines, runCmod, spawnCmod } from './programs.js'
+import { newestCmodVersion, readLines, runCmod, spawnCmod } from './programs.js'
 import type { RoutedHook, Router } from './router.js'
 import { PassedTimeout } from './deadline.js'
 import { conversationMethods, everySession, isAct, isHeardBy, isInScope, pickedColor, resultOf, spawnTask, usageOf, type Act, type Listened, type SessionColor } from './sessions.js'
@@ -191,22 +191,27 @@ export function serveConversations({
     follower?.stop()
     follower = undefined
     if (args.length === 0) return
+    const version = newestCmodVersion(claude)
     const stream = spawnCmod(claude, ['history', 'follow', ...args, '--json', '--project', project()], session)
     const started = { sessions: wanted, stop: () => void stream.return(undefined as never) }
     follower = started
-    void readLines(stream, (line) => {
+    const followed = readLines(stream, (line) => {
       if (line.trim() === '') return
       const parsed = JSON.parse(line) as { readonly session: string; readonly isInProject: boolean; readonly change: SessionChange }
       dispatch(parsed.session, [parsed.change], parsed.isInProject)
     })
-      .then(({ code, lastError }) => {
+    void Promise.all([version, followed])
+      .then(([, { code, lastError }]) => {
         if (follower === started) throw new Error(`cmod history follow ${formatExit(code, lastError)}`)
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
         if (follower !== started) return
         follower = undefined
-        report('follow', 'Stopped hearing the other sessions', error)
+        started.stop()
+        if ((await newestCmodVersion(claude)) === (await version)) throw error
+        follow()
       })
+      .catch((error: unknown) => report('follow', 'Stopped hearing the other sessions', error))
   }
 
   const follow = () => void restartFollower().catch((error: unknown) => report('follow', 'Stopped hearing the other sessions', error))

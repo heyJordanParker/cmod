@@ -1,5 +1,5 @@
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { storeFolder } from '../records.js'
+import { readCmodVersion, storeFolder } from '../records.js'
 import { ifMissing } from '../utils/paths.js'
 import { formatExit } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -44,6 +44,17 @@ export async function isHeld(claude: Claude, lock: string, staleMs: number): Pro
   const holders = await claude.fs.list(lock).catch(ifMissing([]))
   const touched = await Promise.all(holders.map(async ({ name }) => (await claude.fs.stat(`${lock}/${name}`).catch(ifMissing(undefined)))?.mtimeMs ?? 0))
   return touched.some((at) => now - at < staleMs)
+}
+
+export async function newestCmodVersion(claude: Claude): Promise<string | undefined> {
+  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+  return readCmodVersion(
+    {
+      list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
+      exists: async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined))) !== undefined,
+    },
+    store,
+  )
 }
 
 export async function runCmod(claude: Claude, args: readonly string[], session: string): Promise<string> {
