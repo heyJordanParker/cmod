@@ -589,6 +589,40 @@ test("a Sidebar page whose mod fails to draw it shows the mod's error in place o
   expect(lines).not.toContain('Drawing')
 })
 
+test('a press on a Sidebar button from an older drawing tells the person nothing ran, and the page draws again', async () => {
+  const tested = testMod(cmodPlugin, {
+    state: bound,
+    files: {
+      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+    },
+  })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  let draws = 0
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method === 'cmod:press') throw new Error('inbox: that button drew before the last redraw. Press the one it shows now.')
+    if (input.method !== 'cmod:draw') return null
+    draws += 1
+    return { draw: draws, tree: { $cmodElement: 'Button', props: { key: 'approve', label: 'Approve', onPress: { $cmodHandler: 0 } } } }
+  }
+  await tested.start()
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
+  await changed({ requests: [{ open: 'items' }] })
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+  const drawnBefore = draws
+
+  await tested.shown.pane.press('Approve')
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  expect(tested.shown.toasts).toContainEqual({ type: 'warning', message: 'The inbox button was from an older drawing, so nothing ran', description: 'Press the button it shows now.' })
+  expect(draws).toBe(drawnBefore + 1)
+})
+
 test('a Sidebar page opened with params draws, because the cmod plugin sends a plain copy of them across plugins', async () => {
   const tested = testMod(cmodPlugin, {
     state: bound,

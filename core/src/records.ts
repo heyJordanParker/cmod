@@ -401,8 +401,14 @@ function readCommand(steps: Record<string, unknown>, key: 'install' | 'uninstall
   return { [key]: command }
 }
 
-export function bundleDefines(steps: Steps): Record<string, string> {
-  return steps.approve === true ? {} : { 'globalThis.cmodWithoutApprove': 'true' }
+export function bundleOptions(steps: Steps) {
+  return {
+    format: 'esm' as const,
+    target: 'browser' as const,
+    external: ['claude-code'],
+    define: steps.approve === true ? {} : { 'globalThis.cmodWithoutApprove': 'true' },
+    minify: { whitespace: true, identifiers: true },
+  }
 }
 
 export function scriptPaths(command: string): string[] {

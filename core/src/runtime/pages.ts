@@ -6,7 +6,7 @@ import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
-import { partMethods, stalePress, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
+import { partMethods, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
 import type { Widgets } from './widgets.js'
 
 const askedWaitMs = 1000
@@ -34,6 +34,7 @@ export function servePages({
   claude,
   router,
   report,
+  tellRefusedPress,
   widgets,
   parts,
   tellStylers,
@@ -41,6 +42,7 @@ export function servePages({
   readonly claude: Claude
   readonly router: Router
   readonly report: (id: string, message: string, error: unknown) => void
+  readonly tellRefusedPress: (mod: string, error: unknown) => void
   readonly widgets: Pick<Widgets, 'update'>
   readonly parts: DrawnParts
   readonly tellStylers: (stylers: readonly string[]) => void
@@ -131,8 +133,7 @@ export function servePages({
         (error: unknown) => {
           parts.forget(mod)
           claude.ui.invalidate('ui.render')
-          if (messageOf(error).includes(stalePress)) claude.ui.log(`cmod: ${mod} draws its page again, because the button pressed was from an older drawing:${messageOf(error)}`, { to: 'debug' })
-          else report(`press:${mod}`, `${mod} did not take the press`, error)
+          tellRefusedPress(mod, error)
         },
       )
       .finally(() => pressing.delete(pending))

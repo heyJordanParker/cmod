@@ -3,11 +3,13 @@ import type { ModDefinition } from './mod.js'
 import type { Options } from './options.js'
 import type { Claude } from './runtime/claude.js'
 import type { RoutedEvent } from './runtime/hooks.js'
+import { serveConversations } from './runtime/conversations.js'
 import { settledAfterAbort } from './runtime/deadline.js'
-import { cmodPluginName } from './runtime/dependencies.js'
 import { readDevice } from './runtime/device.js'
-import { createLifecycle, readPlugin, type Lifecycle } from './runtime/lifecycle.js'
+import { createLifecycle, readPlugin, type Lifecycle, type ServeCmodPlugin } from './runtime/lifecycle.js'
+import { servePages } from './runtime/pages.js'
 import { permissionRoutes, type PermissionRoutes } from './runtime/permission-check.js'
+import { serveWidgets } from './runtime/widgets.js'
 import { messageOf } from './utils/text.js'
 
 let lifecycle: Lifecycle<object>
@@ -136,10 +138,34 @@ function routeCallFailure(_$: EngineInterface, eventInput: Frozen<Args<'cmod.cal
   return lifecycle.caught('cmod.call', withCaller(eventInput, passOn), withoutCaller(passOn), passOn)
 }
 
+export const serveCmodPlugin: ServeCmodPlugin = ({ claude, router, store, project, report, clear, tellRefusedPress, parts, markdownIn, tellStylers }) => {
+  const conversations = serveConversations({ claude, router, store, project, report, clear })
+  const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn })
+  const pages = servePages({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers })
+  return { conversations, widgets, pages }
+}
+
 export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
+  registerHooks(addHook, definition, options)
+  addHook('ui.render', routeToMod).catch(routeFailure)
+}
+
+export function registerCmodPlugin<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
+  registerHooks(addHook, definition, options, serveCmodPlugin)
+  addHook('ui.render', { component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] }, routeToMod).catch(routeFailure)
+  addHook('command.describe', { command: /--/ }, routeToMod).catch(routeFailure)
+  addHook('session.append', routeToMod).catch(routeFailure)
+  addHook('session.receive', routeToMod).catch(routeFailure)
+  addHook('agent.spawn', routeToMod).catch(routeFailure)
+  addHook('prompt.attachment', routeToMod).catch(routeFailure)
+  addHook('turn.start', routeToMod).catch(routeFailure)
+  addHook('turn.complete', routeToMod).catch(routeFailure)
+}
+
+function registerHooks<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions, serve?: ServeCmodPlugin): void {
   permissionCheck = undefined
   registered = definition
-  lifecycle = createLifecycle(definition, () => permissionCheck, options)
+  lifecycle = createLifecycle(definition, () => permissionCheck, options, true, serve)
   addHook('session.start', startMod)
   addHook('classic.Setup', routeToMod).catch(routeFailure)
   addHook('classic.SessionStart', routeToMod).catch(routeFailure)
@@ -176,21 +202,11 @@ export function registerMod<State extends object, Declared extends Options>(addH
   addHook('command.run', routeToMod).catch(routeFailure)
   addHook('session.measure', routeToMod).catch(routeFailure)
   addHook('skill.prompt', routeToMod).catch(routeFailure)
-  if (definition.name === cmodPluginName) addHook('ui.render', { component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] }, routeToMod).catch(routeFailure)
-  else addHook('ui.render', routeToMod).catch(routeFailure)
   addHook('ui.press', routeToMod).catch(routeFailure)
   addHook('ui.scroll', routeToMod).catch(routeFailure)
   addHook('ui.close', routeToMod).catch(routeFailure)
   addHook('cmod.call', { to: definition.name }, routeCallToMod).catch(routeCallFailure)
   addHook('session.compact', routeToMod).catch(routeFailure)
-  if (definition.name !== cmodPluginName) return
-  addHook('command.describe', { command: /--/ }, routeToMod).catch(routeFailure)
-  addHook('session.append', routeToMod).catch(routeFailure)
-  addHook('session.receive', routeToMod).catch(routeFailure)
-  addHook('agent.spawn', routeToMod).catch(routeFailure)
-  addHook('prompt.attachment', routeToMod).catch(routeFailure)
-  addHook('turn.start', routeToMod).catch(routeFailure)
-  addHook('turn.complete', routeToMod).catch(routeFailure)
 }
 
 export function registerPermissionCheck(addHook: On): void {

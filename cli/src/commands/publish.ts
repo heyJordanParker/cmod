@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, posix } from 'node:path'
 import { parseArgs } from 'node:util'
 import { version as coreVersion } from '@cmodjs/core/package.json'
-import { bundleDefines, isObject, scriptPaths } from '@cmodjs/core/src/records.js'
+import { bundleOptions, isObject, scriptPaths } from '@cmodjs/core/src/records.js'
 import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { cmodPluginEntry, listPlugins, validatePlugin } from '../claude.js'
@@ -263,7 +263,7 @@ export async function bundledHooks(root: string, tree = root): Promise<{ hooks: 
     return new Error(`Bundling hooks/${module} failed: ${reason}${install}`)
   }
   const { steps } = await readPlugin(root)
-  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], format: 'esm', target: 'browser', external: ['claude-code'], define: bundleDefines(steps) }).catch((error: unknown) => {
+  const built = await Bun.build({ entrypoints: [join(tree, 'hooks', module)], ...bundleOptions(steps) }).catch((error: unknown) => {
     throw failed(error instanceof AggregateError ? error.errors.map(String).join('\n') : messageOf(error))
   })
   const [bundled] = built.outputs

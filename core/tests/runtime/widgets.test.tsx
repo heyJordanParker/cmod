@@ -153,7 +153,7 @@ test('a widget that throws is reported and draws nothing, and the widgets beside
 
   expect(await tested.lines(BelowPrompt)).toEqual(['main'])
   expect(tested.shown.toasts.map((toast) => toast.message)).toContain('The Broken widget could not draw')
-  expect(await tested.fire('cmod.call', { to: 'git', method: partMethods.draw, input: { widget: 'broken', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)).toEqual({ deny: 'git: no repository' } as never)
+  expect(await tested.fire('cmod.call', { to: 'git', method: partMethods.draw, input: { widget: 'broken', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)).toEqual({ value: { draw: expect.any(Number), tree: null } } as never)
 })
 
 test('a widget that draws a Client is reported and draws nothing, and a Raster draws as data the cmod plugin draws', async () => {

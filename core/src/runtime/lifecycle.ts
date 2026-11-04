@@ -10,7 +10,7 @@ import type { Claude } from './claude.js'
 import { beforeDeadline, settledAfterAbort } from './deadline.js'
 import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
-import { serveConversations } from './conversations.js'
+import type { Conversations } from './conversations.js'
 import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, loadedMethod, withBareRefusals } from './dependencies.js'
 import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
@@ -30,11 +30,11 @@ import { createState } from './state.js'
 import { createToaster, type Failure, type ShownToast, type Toaster } from './toaster.js'
 import { toolCalls } from './tool-calls.js'
 import { createHotkeys } from './hotkeys.js'
-import { servePages, type Pages } from './pages.js'
+import type { Pages } from './pages.js'
 import { drawnParts, type DrawnParts } from './parts.js'
 import { createWatches } from './watches.js'
-import { createUi, partMethods, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownPages, type UiArea } from './ui.js'
-import { serveWidgets } from './widgets.js'
+import { createUi, partMethods, stalePress, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownPages, type UiArea } from './ui.js'
+import type { Widgets } from './widgets.js'
 import { Progress } from '../ui/components.js'
 import { Box, Text } from '../ui/elements.js'
 
@@ -63,6 +63,21 @@ export type Lifecycle<State extends object> = {
   raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
 }
 
+export type CmodPlugin = { readonly conversations: Conversations; readonly widgets: Widgets; readonly pages: Pages }
+
+export type ServeCmodPlugin = (served: {
+  readonly claude: Claude
+  readonly router: Router
+  readonly store: string
+  readonly project: () => string
+  readonly report: (id: string, message: string, error: unknown) => void
+  readonly clear: (id: string) => void
+  readonly tellRefusedPress: (mod: string, error: unknown) => void
+  readonly parts: DrawnParts
+  readonly markdownIn: UiArea<object>['markdownIn']
+  readonly tellStylers: UiArea<object>['restyled']
+}) => CmodPlugin
+
 type ModRuntime = {
   readonly claude: Claude
   readonly router: Router
@@ -72,6 +87,7 @@ type ModRuntime = {
   readonly permissionRoutes: () => PermissionRoutes | undefined
   readonly options: PluginOptions
   readonly nextDraw: () => number
+  readonly serveCmodPlugin: ServeCmodPlugin | undefined
 }
 
 type ActiveMod<State extends object, Declared extends Options> = {
@@ -171,6 +187,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   permissionRoutes: () => PermissionRoutes | undefined = () => undefined,
   options: PluginOptions = {},
   asksPerson = true,
+  serveCmodPlugin?: ServeCmodPlugin,
 ): Lifecycle<State> {
   let router: Router = createRouter()
   let startingRouter: Router | undefined
@@ -363,7 +380,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
     startingRouter = activeRouter
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw })
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw, serveCmodPlugin })
       .catch(async (error: unknown) => {
         if (error instanceof MissingOptions && (await askOptions(error))) return undefined
         await installer.close()
@@ -1007,18 +1024,23 @@ async function createMod<State extends object, Declared extends Options>(definit
   router.add('skill.prompt', userSkillHook(claude))
   router.add('ui.press', (e, next) => area.asked(() => next(e)))
   let api: Readonly<Record<string, (input: never) => unknown>> = {}
-  const conversations = definition.name === cmodPluginName ? serveConversations({ claude, router, store: runtime.store, project: () => modState.root, report: (id, message, error) => report({ id, message, error }), clear: (id) => toaster.toast.dismiss(id) }) : undefined
   let pages: Pages | undefined
   const reportPart = (id: string, message: string, error: unknown) => report({ id, message, error })
+  const tellRefusedPress = (to: string, error: unknown) => {
+    if (messageOf(error).includes(stalePress)) toaster.toast.warning(`The ${to} button was from an older drawing, so nothing ran`, { id: `press:${to}`, description: 'Press the button it shows now.' })
+    else report({ id: `press:${to}`, message: `${to} did not take the press`, error, isCritical: true })
+  }
   const pressElsewhere = (to: string, input: PartPress) =>
     void claude.cmod.call({ to, method: partMethods.press, input }).catch((error: unknown) => {
       parts?.forget(to)
       claude.ui.invalidate('ui.render')
-      reportPart(`press:${to}`, `${to} did not take the press`, error)
+      tellRefusedPress(to, error)
     })
   parts = drawnParts({ claude, report: reportPart, press: (to, input) => (pages === undefined ? pressElsewhere(to, input) : pages.press(to, input)) })
-  const widgets = conversations === undefined ? undefined : serveWidgets({ claude, router, store: runtime.store, report: reportPart, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn: area.markdownIn })
-  pages = widgets === undefined ? undefined : servePages({ claude, router, report: reportPart, widgets, parts, tellStylers: area.restyled })
+  const served = runtime.serveCmodPlugin?.({ claude, router, store: runtime.store, project: () => modState.root, report: reportPart, clear: (id) => toaster.toast.dismiss(id), tellRefusedPress, parts, markdownIn: area.markdownIn, tellStylers: area.restyled })
+  const conversations = served?.conversations
+  const widgets = served?.widgets
+  pages = served?.pages
   const tellColor = (to: string, told: SessionColor) => {
     if (told.session === '' || to === cmodPluginName) return
     claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error: unknown) => claude.ui.warn('color:tell', `cmod: ${to} did not hear the session's color: ${messageOf(error)}`)))

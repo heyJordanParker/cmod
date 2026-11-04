@@ -32,6 +32,7 @@ import { keepClaudeCode, type ClaudeCode } from './testing/claude-code.js'
 import { createRouter } from './runtime/router.js'
 import { toolInputOf } from './runtime/tool-calls.js'
 import { createLifecycle } from './runtime/lifecycle.js'
+import { serveCmodPlugin } from './register.js'
 import { MissingOptions } from './runtime/options.js'
 import { conversationMethods, pickedColor, type SessionColor } from './runtime/sessions.js'
 import type { ShownToast } from './runtime/toaster.js'
@@ -282,7 +283,8 @@ export function testMod<State extends object, Declared extends Options = Options
   }
   const cmodClaude: Claude = { ...fake.claude, cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) } }
   const reportPart = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
-  const parts = drawnParts({ claude: cmodClaude, report: reportPart, press: (_mod: string, input: PartPress) => void pressPart(input).catch((error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' })) })
+  const tellRefusedPress = (_mod: string, error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' })
+  const parts = drawnParts({ claude: cmodClaude, report: reportPart, press: (mod: string, input: PartPress) => void pressPart(input).catch((error: unknown) => tellRefusedPress(mod, error)) })
   const servedWidgets = async (): Promise<Widgets> => {
     const own = name === cmodPluginName && lifecycle.mod !== undefined ? engineOf(lifecycle.mod).widgets : undefined
     if (own !== undefined) return own
@@ -298,7 +300,7 @@ export function testMod<State extends object, Declared extends Options = Options
   }
   const widgetsOf = () => (widgets ??= servedWidgets())
   const cmodBeneath = createRouter()
-  const pages = servePages({ claude: cmodClaude, router: cmodBeneath, report: reportPart, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined })
+  const pages = servePages({ claude: cmodClaude, router: cmodBeneath, report: reportPart, tellRefusedPress, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined })
   pages.apply((_mod, requests) => applyRequests(requests))
   const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations)
   fake.fakes.cmod.call = async (call) => {
@@ -366,7 +368,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const starting = options.state as Record<string, object> | undefined
   const declared = Object.entries(definition.state ?? {}) as [string, object][]
   const state = Object.fromEntries(declared.map(([lifetime, values]) => [lifetime, { ...values, ...starting?.[lifetime] }])) as State
-  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => permissionRoutes,(options.options ?? {}) as PluginOptions, false)
+  const lifecycle = createLifecycle<State, Declared>({ ...definition, state }, () => permissionRoutes, (options.options ?? {}) as PluginOptions, false, definition.name === cmodPluginName ? serveCmodPlugin : undefined)
   let started: Promise<void> | undefined
   let isColorTold = false
   let deviceNoted: Promise<void> | undefined

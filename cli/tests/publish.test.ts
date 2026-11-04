@@ -305,10 +305,14 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
   expect(JSON.parse(await zipText(archive, 'hooks/hooks.json'))).toEqual({ description: 'greeter hooks module', modules: ['./register.js'] })
   const bundle = await zipText(archive, 'hooks/register.js')
-  expect(bundle).toContain('function greet($, e, next)')
-  expect(bundle).toContain('function register(on)')
   expect(bundle).not.toContain('import ')
   const tree = join(dirname(archive), 'release')
+  const { register } = (await import(join(tree, 'hooks', 'register.js'))) as { register: (on: (event: string, hook: (...args: unknown[]) => Promise<unknown>) => void) => void }
+  const hooks: Record<string, (...args: unknown[]) => Promise<unknown>> = {}
+  register((event, hook) => void (hooks[event] = hook))
+  const toasts: string[] = []
+  expect(await hooks['session.start']?.({ ui: { toast: async (text: string) => void toasts.push(text) } }, 'started', async (e: unknown) => `passed ${String(e)}`)).toBe('passed started')
+  expect(toasts).toEqual(['hello'])
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(`plugin validate ${tree}/.claude-plugin/plugin.json --strict\n`)
   expect(result.stdout).toContain(`and ${tree} to its release branch. Nothing was pushed:`)
 })

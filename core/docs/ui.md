@@ -142,7 +142,8 @@ type Page<Params = undefined> = {
 - `props.columns` is the width the page draws in. The Sidebar draws the page in a panel titled with the mod's name, under its tab bar and above its key bar, so `columns` is the Sidebar's width less 6: its padding of one column on each side, and the panel's border and padding.
 - A page opened from what the person did, such as a slash command they typed, a hotkey, or a `Button` they pressed, shows at any terminal width. A page opened from anything else, such as `setup`, a timer, or a listener, shows only on a terminal 144 columns wide. Below that it waits until the person opens the Sidebar.
 - A page draws only the elements of `ui/elements.js` and `ui/components.js`, text, numbers, and plain objects, because the cmod plugin draws it. A `Button`'s `onPress` runs in the mod.
-- A `render` that throws draws nothing, and cmod shows the error toast `The <title> page could not draw` once, until the page draws again.
+- A `render` that throws draws `The <title> page could not draw: <error>` in the page, and cmod shows the error toast `The <title> page could not draw` once, until the page draws again.
+- A press on a `Button` from an older drawing, such as one drawn before the mod reloaded, runs nothing. cmod shows the toast `The <mod> button was from an older drawing, so nothing ran` and draws the page again.
 
 A hotkey is the usual way in:
 

@@ -3,6 +3,7 @@ import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream,
 import { installPage } from '../../src/runtime/installer.js'
 import { permissions } from '../../src/jobs/permissions.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
+import { serveCmodPlugin } from '../../src/register.js'
 import { servePages } from '../../src/runtime/pages.js'
 import { drawnParts } from '../../src/runtime/parts.js'
 import { createRouter } from '../../src/runtime/router.js'
@@ -189,7 +190,7 @@ function cmodSidebar(name: string) {
     return askedByCmod(loaded, name, call.method, call.input)
   }
   const parts = drawnParts({ claude: cmod.claude, report: () => undefined, press: (mod, input) => pages.press(mod, input) })
-  const pages = servePages({ claude: cmod.claude, router: createRouter(), report: (_id, message, error) => void refusals.push(`${message}: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined })
+  const pages = servePages({ claude: cmod.claude, router: createRouter(), report: (_id, message, error) => void refusals.push(`${message}: ${messageOf(error)}`), tellRefusedPress: (mod, error) => void refusals.push(`${mod} did not take the press: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined })
   const shown = async (page: string) => {
     pages.element(name, page, null, 60, true)
     await cmod.settle()
@@ -632,7 +633,7 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   const fake = fakeClaude({ name: 'cmod', root })
   const router = createRouter()
   const opened: unknown[] = []
-  const pages = servePages({ claude: fake.claude, router, report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const pages = servePages({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   pages.apply(async (mod, requests) => void opened.push({ mod, requests }))
 
   const isHeld = pages.update('ci-watch', { requests: [{ open: 'runs' }], isAsked: true })
@@ -650,7 +651,7 @@ test("a press waits for the mod it pressed, never for a slower mod an earlier pr
   let answerInbox: (value: unknown) => void = () => undefined
   fake.fakes.cmod.call = async (call) => (call.to === 'inbox' ? new Promise((resolve) => (answerInbox = resolve)) : null)
   const router = createRouter()
-  const pages = servePages({ claude: fake.claude, router, report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const pages = servePages({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   const pressIn = (mod: string) => router.dispatch('ui.press', { requestId: 'sidebar', key: 'k' } as never, async () => (pages.press(mod, { handler: 1 } as never), { element: null } as never))
   const first = pressIn('inbox')
   let isSecondDone = false
@@ -667,7 +668,7 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
   const told: unknown[] = []
   fake.fakes.cmod.call = async (call) => (told.push({ to: call.to, method: call.method, input: call.input }), null)
   const ownStylers: unknown[] = []
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: (stylers) => void ownStylers.push(stylers) })
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: (stylers) => void ownStylers.push(stylers) })
   pages.update('notes', { parts: { widgets: [], pages: [] } })
   pages.update('cmod', { parts: { widgets: [], pages: [] } })
 
@@ -686,7 +687,7 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
   expect(told.filter((call) => (call as { to: string }).to === 'cmod')).toEqual([])
 })
 
-test('a press the mod refuses makes the page draw again, so its next buttons work', async () => {
+test('a press the mod refuses makes the page draw again, so its next buttons work, and the person hears of it', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const asked: string[] = []
   fake.fakes.cmod.call = async (call) => {
@@ -694,8 +695,9 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
     if (call.method === partMethods.press) throw new Error('ci-watch: that button drew before the last redraw. Press the one it shows now.')
     return call.method === partMethods.draw ? { draw: asked.length, tree: { $cmodElement: 'Button', props: { key: 'go', label: 'Go', onPress: { $cmodHandler: 0 } } } } : null
   }
+  const told: string[] = []
   const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts, tellStylers: () => undefined })
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: (mod, error) => void told.push(`${mod}: ${messageOf(error)}`), widgets: { update: () => undefined }, parts, tellStylers: () => undefined })
   const draw = async () => {
     pages.element('ci-watch', 'runs', { run: 7 }, 80, false)
     await fake.settle()
@@ -708,6 +710,7 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
   await draw()
 
   expect(asked.filter((method) => method === partMethods.draw || method === partMethods.press)).toEqual([partMethods.draw, partMethods.press, partMethods.draw])
+  expect(told).toEqual(['ci-watch: ci-watch: that button drew before the last redraw. Press the one it shows now.'])
 })
 
 test('a page keeps its drawing while its mod draws it for a focused pane or a new width, so Claude Code never clamps the scrolled window to a one-line placeholder', async () => {
@@ -717,7 +720,7 @@ test('a page keeps its drawing while its mod draws it for a focused pane or a ne
     const { columns, isFocused } = call.input as { readonly columns: number; readonly isFocused: boolean }
     return { draw: 1, tree: { $cmodElement: 'Text', props: { children: `runs at ${columns}${isFocused ? ', focused' : ''}` } } }
   }
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   const shown = async (columns: number, isFocused: boolean, params: unknown = { run: 7 }) => {
     const drawn = drawWith(elements, () => pages.element('ci-watch', 'runs', params, columns, isFocused))
     await fake.settle()
@@ -736,22 +739,48 @@ test('a page keeps its drawing while its mod draws it for a focused pane or a ne
   ])
 })
 
-test('a press on a page drawn before its mod restarted only draws the page again, and a press the mod refuses for another reason shows its failure', async () => {
+test('a press on a button from an older drawing tells the person nothing ran, a press the mod refuses for another reason shows its failure at once, and either draws the page again', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const refusals: Readonly<Record<string, string>> = { 'ci-watch': 'ci-watch: that button drew before the last redraw. Press the one it shows now.', deploys: 'deploys: the deploy key is missing' }
-  fake.fakes.cmod.call = async (call) => calledAnswer('cmod', call.method === partMethods.press ? { deny: refusals[call.to] ?? 'unknown mod' } : { value: null })
-  const reported: string[] = []
-  const redraws = () => fake.calls.filter((call) => call.call === 'ui.invalidate').length
-  const pages = servePages({ claude: fake.claude, router: createRouter(), report: (_id, message, error) => void reported.push(`${message}: ${messageOf(error)}`), widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
-
-  pages.press('ci-watch', { draw: 3, handler: 0, args: [] })
+  const drawn: string[] = []
+  fake.fakes.cmod.call = async (call) => {
+    if (call.method === partMethods.draw) drawn.push(call.to)
+    return calledAnswer('cmod', call.method === partMethods.press ? { deny: refusals[call.to] ?? 'unknown mod' } : { value: call.method === partMethods.draw ? { draw: 1, tree: null } : null })
+  }
+  let cmod: Mod | undefined
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'cmod',
+      setup(mod) {
+        cmod = mod
+        return { 'cmod:failed': () => ({ showsToast: false }) }
+      },
+    }),
+    undefined,
+    {},
+    true,
+    serveCmodPlugin,
+  )
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
   await fake.settle()
-  const redrawnForStale = redraws()
-  pages.press('deploys', { draw: 3, handler: 0, args: [] })
-  await fake.settle()
+  const pages = engineOf(cmod as Mod).pages
+  const pressAndDraw = async (mod: string) => {
+    pages?.element(mod, 'runs', null, 60, true)
+    await fake.settle()
+    pages?.press(mod, { draw: 1, handler: 0, args: [] })
+    await fake.settle()
+    pages?.element(mod, 'runs', null, 60, true)
+    await fake.settle()
+  }
 
-  expect([redrawnForStale, reported]).toEqual([1, ['deploys did not take the press: cmod: $.cmod.call: deploys: the deploy key is missing']])
-  expect(fake.shown.debug).toContain('cmod: ci-watch draws its page again, because the button pressed was from an older drawing:cmod: $.cmod.call: ci-watch: that button drew before the last redraw. Press the one it shows now.')
+  await pressAndDraw('ci-watch')
+  await pressAndDraw('deploys')
+
+  expect(drawn).toEqual(['ci-watch', 'ci-watch', 'deploys', 'deploys'])
+  expect(lifecycle.toasts.filter((toast) => toast.type !== 'success')).toEqual([
+    { type: 'warning', message: 'The ci-watch button was from an older drawing, so nothing ran', description: 'Press the button it shows now.' },
+    { type: 'error', message: 'deploys did not take the press', description: 'deploys: the deploy key is missing' },
+  ])
 })
 
 test('after a mod restarts with its install question open, Not now on the shown install tab answers on the first press', async () => {
@@ -785,6 +814,37 @@ test("after a mod restarts, a press on its Sidebar page runs the restarted modul
 
   expect(cmod.refusals).toEqual([])
   expect(ranIn).toEqual(['restarted'])
+})
+
+test("a Sidebar page whose render throws after a state change shows its error, never the last drawing's buttons", async () => {
+  const cmod = cmodSidebar('safe-delete')
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      state: { session: { item: 'deploy.log' } },
+      setup: (mod) =>
+        void mod.sidebar.add({
+          id: 'trash',
+          title: 'Trash',
+          render: (drawn) => {
+            const { item } = drawn.state.session
+            if (item === '') throw new Error('the trash lost its item')
+            return Button({ key: 'restore', label: `Restore ${item}`, onPress: () => undefined })
+          },
+        }),
+    }),
+  )
+  await cmod.load(lifecycle, fake, { ...pending, isInstalled: true })
+  const before = textOf(await cmod.shown('trash'))
+
+  ;(lifecycle.mod as Mod<{ session: { item: string } }>).state.session.item = ''
+  await fake.settle()
+  await cmod.shown('trash')
+  const after = await cmod.shown('trash')
+
+  expect(before).toBe('[ Restore deploy.log ]')
+  expect([textOf(after), findElement(after, 'Button', 'Restore deploy.log')]).toEqual(['The Trash page could not draw: the trash lost its item', undefined])
 })
 
 test("a restarted module refuses a press on a draw number an earlier module of the mod drew, instead of running another drawing's button", async () => {
@@ -933,6 +993,10 @@ test("a failure the cmod plugin reports while its own setup still runs waits for
         return { 'cmod:failed': (input: unknown) => (logged.push(input), { showsToast: false }) }
       },
     }),
+    undefined,
+    {},
+    true,
+    serveCmodPlugin,
   )
   const started = lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
   await fake.settle()
@@ -1650,7 +1714,7 @@ test('the cmod plugin takes what a mod listens to while it installs, and serves 
   Object.assign(fake.fakes.fs, disk)
   const bootstrap = controlledStream()
   fake.fakes.process.spawn = (request) => (request.argv.includes('./setup/bootstrap.sh') ? bootstrap.stream : finished(['[]'], 0))
-  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }), undefined, {}, true, serveCmodPlugin)
   const listens = [{ event: 'Prompt' }]
   const watches = [{ event: 'ContextEnd' }]
 

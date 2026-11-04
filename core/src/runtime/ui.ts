@@ -659,32 +659,34 @@ export function createUi<State extends object>({ name, claude, router, report, a
     latestDraws.delete(key)
   }
 
-  const drawPart = (key: string, title: string, input: PartDraw, render: () => RenderElement | undefined): DrawnPart | null => {
+  const drawPart = (key: string, title: string, input: PartDraw, render: () => RenderElement | undefined, drawFailure: (error: unknown) => RenderElement | undefined = () => undefined): DrawnPart => {
+    let handlers: Handler[] = []
+    let tree: unknown
     try {
-      const pressed: Handler[] = []
-      const tree = treeOf(render, pressed)
+      tree = treeOf(render, handlers)
       failedDraws.delete(key)
-      const number = nextDraw()
-      const inputs = latestDraws.get(key) ?? new Map<string, SentDrawing>()
-      latestDraws.set(key, inputs)
-      const drawnFor = JSON.stringify('turn' in input ? { ...input, turn: input.turn.prompt.id } : input)
-      const earlier = inputs.get(drawnFor)?.draws ?? []
-      const kept = [...earlier, number].slice(-2)
-      for (const draw of earlier) if (!kept.includes(draw)) draws.delete(draw)
-      inputs.delete(drawnFor)
-      inputs.set(drawnFor, { draws: kept, tree: JSON.stringify(tree), render })
-      const [oldest] = inputs
-      if (inputs.size > keptDrawInputs && oldest !== undefined) {
-        for (const draw of oldest[1].draws) draws.delete(draw)
-        inputs.delete(oldest[0])
-      }
-      draws.set(number, { id: key, handlers: pressed })
-      return { draw: number, tree }
     } catch (error) {
       if (!failedDraws.has(key)) report({ id: key, message: `The ${title} could not draw`, error })
       failedDraws.add(key)
-      throw error
+      handlers = []
+      tree = treeOf(() => drawFailure(error), handlers)
     }
+    const number = nextDraw()
+    const inputs = latestDraws.get(key) ?? new Map<string, SentDrawing>()
+    latestDraws.set(key, inputs)
+    const drawnFor = JSON.stringify('turn' in input ? { ...input, turn: input.turn.prompt.id } : input)
+    const earlier = inputs.get(drawnFor)?.draws ?? []
+    const kept = [...earlier, number].slice(-2)
+    for (const draw of earlier) if (!kept.includes(draw)) draws.delete(draw)
+    inputs.delete(drawnFor)
+    inputs.set(drawnFor, { draws: kept, tree: JSON.stringify(tree), render })
+    const [oldest] = inputs
+    if (inputs.size > keptDrawInputs && oldest !== undefined) {
+      for (const draw of oldest[1].draws) draws.delete(draw)
+      inputs.delete(oldest[0])
+    }
+    draws.set(number, { id: key, handlers })
+    return { draw: number, tree }
   }
 
   const draw = (input: PartDraw): DrawnPart | null => {
@@ -692,7 +694,8 @@ export function createUi<State extends object>({ name, claude, router, report, a
     if ('page' in input) {
       const added = pages.get(input.page)
       if (added === undefined) throw new Error(`${name} has no ${input.page} page.`)
-      return drawPart(`page:${input.page}`, `${added.init.title} page`, input, () => added.init.render(mod(), { params: input.params, isFocused: input.isFocused, columns: input.columns }))
+      const title = `${added.init.title} page`
+      return drawPart(`page:${input.page}`, title, input, () => added.init.render(mod(), { params: input.params, isFocused: input.isFocused, columns: input.columns }), (error) => Text({ color: 'error', children: `The ${title} could not draw: ${messageOf(error)}` }))
     }
     const widget = widgets.get(input.widget)
     if (widget === undefined || !widget.areas.includes(input.area)) return null

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Args, Caught, Frozen, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { defineMod, notInstalled, sessions } from '../../src/mod.js'
 import { coreVersion, storeFolder } from '../../src/records.js'
+import { serveCmodPlugin } from '../../src/register.js'
 import type { Claude } from '../../src/runtime/claude.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
@@ -365,7 +366,7 @@ async function resumedOnLockedIndex(files: { readonly list?: Claude['fs']['list'
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   Object.assign(fake.fakes.fs, fakeFiles({}), files)
   fake.fakes.process.spawn = (request) => (request.argv.includes('state') ? unending() : printed('[]'))
-  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }), undefined, {}, true, serveCmodPlugin)
   await lifecycle.start(fake.claude, async () => ({ name: 'cmod', root: '/plugins/cmod', version: coreVersion, store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }))
   await lifecycle.route('classic.SessionStart', { session_id: 'test-session', source: 'resume' } as never, async () => ({}))
   await fake.settle()
@@ -477,7 +478,7 @@ test('a tool call that arrives while the cmod plugin still runs its setup is den
     else timers.push({ ms, fire })
     return { cancel: () => undefined }
   }
-  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: () => new Promise<never>(() => undefined) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: () => new Promise<never>(() => undefined) }), undefined, {}, true, serveCmodPlugin)
   await lifecycle.start(fake.claude, async () => ({ name: 'cmod', root: '/plugins/cmod', version: coreVersion, store: '/test/home/.local/share/cmod', isInstalled: false, shouldRecord: false, steps: {} }))
   await fake.settle()
 

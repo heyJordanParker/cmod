@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
 import type { EngineInterface, HookFailure, On, RenderElement } from 'claude-code'
-import { registerMod, registerPermissionCheck } from '../src/register.js'
+import { registerCmodPlugin, registerMod, registerPermissionCheck } from '../src/register.js'
 import { commands, defineMod, device, sessions, type Device } from '../src/mod.js'
 import { permissions } from '../src/jobs/permissions.js'
 import { processEvents } from '../src/session/session.js'
 import { Message } from '../src/session/context/turn/message/message.js'
 import { ToolCall } from '../src/session/context/turn/message/tool-call.js'
 import { conversationMethods } from '../src/runtime/sessions.js'
-import { bundleDefines, hotkeyCommand, readSteps } from '../src/records.js'
+import { bundleOptions, hotkeyCommand, readSteps } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
 import { messageOf } from '../src/utils/text.js'
@@ -125,7 +125,7 @@ test("only the cmod plugin registers command.describe, so Claude Code never send
   const cmod = fakeOn()
 
   registerMod(withHotkeys.on, defineMod({ name: 'modes', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
-  registerMod(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
+  registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
   expect(withHotkeys.registrations.map((registration) => registration.pattern)).not.toContain('command.describe')
   expect(cmod.registrations.map((registration) => registration.pattern)).toContain('command.describe')
@@ -136,7 +136,7 @@ test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code
   const cmod = fakeOn()
 
   registerMod(bare.on, defineMod({ name: 'bare', setup: () => undefined }), {})
-  registerMod(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
+  registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
   const everyMod = [
     'session.start',
@@ -175,12 +175,12 @@ test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code
     'command.run',
     'session.measure',
     'skill.prompt',
-    'ui.render',
     'ui.press',
     'ui.scroll',
     'ui.close',
     'cmod.call',
     'session.compact',
+    'ui.render',
   ]
   expect(bare.registrations.map((registration) => registration.pattern)).toEqual(everyMod)
   expect(cmod.registrations.map((registration) => registration.pattern)).toEqual([...everyMod, 'command.describe', 'session.append', 'session.receive', 'agent.spawn', 'prompt.attachment', 'turn.start', 'turn.complete'])
@@ -192,7 +192,7 @@ test("the cmod plugin's ui.render matches only the components it draws, so its r
   const cmod = fakeOn()
 
   registerMod(notes.on, defineMod({ name: 'notes', setup: () => undefined }), {})
-  registerMod(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
+  registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
   const drawing = (registrations: readonly Registration[]) => registrations.find((registration) => registration.pattern === 'ui.render')
   expect(drawing(notes.registrations)?.hasMatcher).toBe(false)
@@ -213,7 +213,8 @@ const registeredChain = (names: readonly string[]) =>
   Object.fromEntries(
     names.map((name) => {
       const plugin = fakeOn()
-      registerMod(plugin.on, defineMod({ name, setup: () => undefined }), {})
+      const register = name === 'cmod' ? registerCmodPlugin : registerMod
+      register(plugin.on, defineMod({ name, setup: () => undefined }), {})
       return [name, plugin]
     }),
   )
@@ -577,25 +578,29 @@ declare const Bun: {
     target: 'browser'
     external: string[]
     define?: Record<string, string>
+    minify?: { whitespace: boolean; identifiers: boolean }
     plugins?: { name: string; setup(build: { onResolve(options: { filter: RegExp }, resolve: () => { path: string }): void }): void }[]
   }): Promise<{ outputs: { text(): Promise<string> }[] }>
   spawnSync(argv: string[], options?: { cwd: string }): { exitCode: number; stdout: { toString(): string }; stderr: { toString(): string } }
 }
 
-let builtReader: Promise<string> | undefined
+const builtVendors = new Map<string, Promise<string>>()
 
-function readerTheBuildShips(): Promise<string> {
-  builtReader ??= (async () => {
-    const core = import.meta.dir.replace(/\/tests$/, '')
-    const { scripts } = JSON.parse(await Bun.file(`${core}/package.json`).text()) as { readonly scripts: { readonly build: string } }
-    const step = scripts.build.split(' && ').find((command) => command.includes('src/vendor-markdown.ts')) ?? ''
-    if (!step.includes('--outfile vendor-markdown.js')) throw new Error(`the build script has no step that writes vendor-markdown.js: ${scripts.build}`)
-    const reader = `${core}/node_modules/.bundle-vendor-markdown.js`
-    const built = Bun.spawnSync(['sh', '-c', step.replace('--outfile vendor-markdown.js', `--outfile ${reader}`)], { cwd: core })
-    if (built.exitCode !== 0) throw new Error(`${step} failed: ${built.stderr.toString()}`)
-    return reader
-  })()
-  return builtReader
+function vendorTheBuildShips(name: 'vendor' | 'vendor-markdown'): Promise<string> {
+  const building =
+    builtVendors.get(name) ??
+    (async () => {
+      const core = import.meta.dir.replace(/\/tests$/, '')
+      const { scripts } = JSON.parse(await Bun.file(`${core}/package.json`).text()) as { readonly scripts: { readonly build: string } }
+      const step = scripts.build.split(' && ').find((command) => command.includes(`src/${name}.ts `)) ?? ''
+      if (!step.includes(`--outfile ${name}.js`)) throw new Error(`the build script has no step that writes ${name}.js: ${scripts.build}`)
+      const built = `${core}/node_modules/.bundle-${name}.js`
+      const ran = Bun.spawnSync(['sh', '-c', step.replace(`--outfile ${name}.js`, `--outfile ${built}`)], { cwd: core })
+      if (ran.exitCode !== 0) throw new Error(`${step} failed: ${ran.stderr.toString()}`)
+      return built
+    })()
+  builtVendors.set(name, building)
+  return building
 }
 
 test('no module a hook loads holds import(), which makes Claude Code refuse the whole hooks module', async () => {
@@ -613,13 +618,13 @@ test('only registerPermissionCheck with "approve": true, or a 4.x "approve" perm
   const bundled = async (name: string, body: string, steps: Record<string, unknown>) => {
     const entry = `${import.meta.dir}/../node_modules/.bundle-${name}.ts`
     await Bun.write(entry, `import { registerMod, registerPermissionCheck } from '${import.meta.dir}/../src/register.ts'\nexport function register(on) {\n  registerMod(on, { name: 'demo', setup() {} }, {})\n  ${body}\n}\n`)
-    const built = await Bun.build({ entrypoints: [entry], format: 'esm', target: 'browser', external: ['claude-code'], define: bundleDefines(readSteps({ cmod: steps }) ?? {}) })
+    const built = await Bun.build({ entrypoints: [entry], ...bundleOptions(readSteps({ cmod: steps }) ?? {}) })
     return (await built.outputs[0]?.text()) ?? ''
   }
   const shape = (code: string) => ({
     hearsPermissions: /\(\s*"(tool\.check|PermissionRequest|classic\.PermissionRequest)",/.test(code),
-    refuses: code.includes('decision: "deny"') && code.includes('behavior: "deny"'),
-    allows: code.includes('decision: "allow"') || code.includes('behavior: "allow"') || code.includes('decision: "ask"') || code.includes('updatedPermissions'),
+    refuses: /decision:\s*"deny"/.test(code) && /behavior:\s*"deny"/.test(code),
+    allows: /(decision|behavior):\s*"allow"|decision:\s*"ask"|updatedPermissions/.test(code),
   })
 
   expect(shape(await bundled('plain', '', { approve: true }))).toEqual({ hearsPermissions: false, refuses: false, allows: false })
@@ -628,8 +633,25 @@ test('only registerPermissionCheck with "approve": true, or a 4.x "approve" perm
   expect(shape(await bundled('approving-4x', 'registerPermissionCheck(on)', { permissions: { approve: true } }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
 })
 
+test("a mod that uses nothing bundles under a fifth of Claude Code's 1 MB hooks module limit, so the rest of the limit stays the mod's own", async () => {
+  const vendor = await vendorTheBuildShips('vendor')
+  const src = `${import.meta.dir}/../src`
+  const entry = `${import.meta.dir}/../node_modules/.bundle-minimal.ts`
+  await Bun.write(entry, `import { defineMod } from '${src}/mod.ts'\nimport { registerMod } from '${src}/register.ts'\nexport function register(on, options) {\n  registerMod(on, defineMod({ name: 'minimal', setup: () => undefined }), options)\n}\n`)
+  const built = await Bun.build({
+    entrypoints: [entry],
+    ...bundleOptions({}),
+    plugins: [{ name: 'the built vendor', setup: (build) => build.onResolve({ filter: /\/vendor\.js$/ }, () => ({ path: vendor })) }],
+  })
+  const code = (await built.outputs[0]?.text()) ?? ''
+  const hooksModuleLimit = 1_048_576
+
+  expect(code).toContain('"session.start"')
+  expect(code.length).toBeLessThan(hooksModuleLimit / 5)
+})
+
 test("a mod that styles reply blocks bundles the markdown reader the build ships minified, so a mod near Claude Code's 1 MB hooks module limit still fits", async () => {
-  const reader = await readerTheBuildShips()
+  const reader = await vendorTheBuildShips('vendor-markdown')
   const entry = `${import.meta.dir}/../node_modules/.bundle-styles.ts`
   await Bun.write(
     entry,
@@ -650,7 +672,7 @@ test("a mod that styles reply blocks bundles the markdown reader the build ships
 })
 
 test('the markdown reader the build ships minified parses a GFM reply to the same tree as its source', async () => {
-  const built = (await import(await readerTheBuildShips())) as typeof markdownSource
+  const built = (await import(await vendorTheBuildShips('vendor-markdown'))) as typeof markdownSource
   const text = '# Title &amp; more\n\nA [link](file:///x.md) and ~~gone~~ www.example.com.[^1]\n\n| a | b |\n|:-|-:|\n| 1 | 2 |\n\n- [x] done\n- open &nbsp;\n\n```ts\nconst a = 1\n```\n\n[^1]: A note.\n'
   const tree = (vendor: typeof markdownSource) => vendor.fromMarkdown(text, { extensions: [vendor.gfm()], mdastExtensions: [vendor.gfmFromMarkdown()] })
 

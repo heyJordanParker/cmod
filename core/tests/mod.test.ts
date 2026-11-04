@@ -2054,6 +2054,35 @@ test('a slash command opens a Sidebar page with its params, and the page knows i
   expect([page?.isOpen, page?.isShown]).toEqual([false, false])
 })
 
+test("a page whose render throws draws its error in place, so no button of its last drawing stays pressable, and the error goes to the Log once", async () => {
+  let isBroken = false
+  const tested = testMod(
+    defineMod({
+      name: 'inbox',
+      setup(mod) {
+        void mod.sidebar
+          .add({
+            id: 'items',
+            title: 'Inbox',
+            render: () => {
+              if (isBroken) throw new Error('item 3 has no title')
+              return Button({ key: 'approve', label: 'Approve', onPress: () => undefined })
+            },
+          })
+          .open()
+      },
+    }),
+  )
+  const drawn = await tested.shown.page.lines()
+
+  isBroken = true
+
+  expect(drawn).toEqual(['[ Approve ]'])
+  expect([await tested.shown.page.lines(), await tested.shown.page.lines()]).toEqual([['The Inbox page could not draw: item 3 has no title'], ['The Inbox page could not draw: item 3 has no title']])
+  await expect(tested.shown.page.press('Approve')).rejects.toThrow('The page "items" of inbox draws no Button with the key or label "Approve".')
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'The Inbox page could not draw')).toEqual([{ type: 'error', message: 'The Inbox page could not draw', description: 'item 3 has no title' }])
+})
+
 test('a page a slash command opens reaches the cmod plugin as the person asking, so the Sidebar opens at any width', async () => {
   const sent: unknown[] = []
   const tested = testMod(
