@@ -264,6 +264,14 @@ export function instancePath(store: string, mod: string, executable: string): st
   return `${instanceFolder(store, mod)}/${executable}.json`
 }
 
+export function serviceFolder(store: string, mod: string): string {
+  return `${store}/services/${checkedName(mod)}`
+}
+
+export function servicePath(store: string, mod: string, executable: string): string {
+  return `${serviceFolder(store, mod)}/${checkedName(executable)}.json`
+}
+
 export type Links = { readonly marketplaces: Readonly<Record<string, string>>; readonly turnedOff: Readonly<Record<string, readonly string[]>> }
 
 export function parseLinks(value: unknown, path: string): Links {
@@ -369,9 +377,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.8.0'
+export const coreVersion = '5.9.0'
 
-export const oldestCmodVersion = '5.4.0'
+export const oldestCmodVersion = '5.9.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`

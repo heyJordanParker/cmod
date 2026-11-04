@@ -236,6 +236,46 @@ test("a following session starts cmod program once the holder's instance file is
   expect(await started.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/next.sock' })
 })
 
+test('an isService program asks cmod program --service for the computer-wide copy, and ready() resolves the address the service wrote to the instance file', async () => {
+  const spawned: ProcessSpawnRequest[] = []
+  let handle: Program | undefined
+  const tested = testMod(
+    defineMod({
+      name: 'preview',
+      setup(mod) {
+        handle = mod.use(program({ command: ['preview-server', '--port', '0'], environment: { PREVIEW_ROOT: '/srv/site' }, isService: true }))
+      },
+    }),
+    { files: heldCopy },
+  )
+  tested.fakes.clock.now = async () => 14_999
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request)
+    return written([{ stream: 'stdout', text: 'held\n' }], true)
+  }
+  await tested.start()
+
+  expect(await handle?.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
+  expect(handle?.state).toBe('running')
+  expect(spawned.map(({ argv }) => argv)).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'preview', '--service', '--env', 'PREVIEW_ROOT', '--', 'preview-server', '--port', '0']])
+  expect(spawned[0]?.env).toMatchObject({ PREVIEW_ROOT: '/srv/site' })
+})
+
+test('two isService programs with one executable in a mod throw at mod.use, so the computer runs one copy', async () => {
+  const tested = testMod(
+    defineMod({
+      name: 'preview',
+      setup(mod) {
+        mod.use(program({ command: ['preview-server', '--port', '0'], isService: true }))
+        mod.use(program({ command: ['preview-server', '--port', '1'], isService: true }))
+      },
+    }),
+  )
+  tested.fakes.process.spawn = () => written([{ stream: 'stdout', text: 'held\n' }], true)
+
+  await expect(tested.start()).rejects.toThrow('preview: the service preview-server is already added. Give each isService program its own executable.')
+})
+
 test('two singleInstance programs with one executable in a mod throw at mod.use', async () => {
   const tested = testMod(
     defineMod({

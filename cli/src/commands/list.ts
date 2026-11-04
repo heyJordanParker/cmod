@@ -5,6 +5,7 @@ import { dataFolder, isAtLeast, readRecord, storeFolder } from '@cmodjs/core/src
 import { listPlugins } from '../claude.js'
 import { readText } from '../files.js'
 import { readPlugin, usesCmod, type Plugin } from '../plugin.js'
+import { serviceNames } from '../service.js'
 import { linkedFolders } from '../settings.js'
 import { recordNames } from '../store.js'
 
@@ -19,13 +20,17 @@ mod shows whether cmod set it up, and any other plugin shows whether Claude
 Code enabled it. A plugin Claude Code turned off shows why. Also lists every
 mod Claude Code removed whose uninstall step has not run yet.
 
+A mod that runs a program as a service of this computer, for a program job with
+isService, names it.
+
 Options:
   --json  Print the list as JSON, with each plugin's folder, the one it runs
-          from, each mod's dataFolder, the one mod.dataFolder names, and the
-          dependencies Claude Code turned each plugin off for, because they are
+          from, each mod's dataFolder, the one mod.dataFolder names, the
+          services of a mod that runs programs as services of this computer, and
+          the dependencies Claude Code turned each plugin off for, because they are
           older than the plugin needs`
 
-type Row = { name: string; version: string; state: string; unsatisfied: readonly string[]; folder?: string; dataFolder?: string }
+type Row = { name: string; version: string; state: string; unsatisfied: readonly string[]; folder?: string; dataFolder?: string; services?: readonly string[] }
 
 export async function run(argv: string[]): Promise<number> {
   const { values } = parseArgs({ args: argv, allowPositionals: false, options: { json: { type: 'boolean', default: false } } })
@@ -48,7 +53,9 @@ export async function run(argv: string[]): Promise<number> {
     const origin = installed.isLinked ? `linked from ${root}, ` : ''
     const errors = installed.errors.join('; ')
     const state = !installed.enabled ? `disabled${errors === '' ? '' : `: ${errors}`}` : errors !== '' ? `Claude Code turned it off: ${errors}` : mod === undefined ? 'enabled' : await setupState(mod)
-    rows.push({ name: installed.id, version: mod?.version ?? installed.version, state: `${origin}${state}`, unsatisfied: installed.unsatisfied, ...foldersOf(root, mod) })
+    const services = mod === undefined ? [] : await serviceNames(mod.name)
+    const serving = services.length === 0 ? '' : `, runs ${services.join(' and ')} as a service of this computer`
+    rows.push({ name: installed.id, version: mod?.version ?? installed.version, state: `${origin}${state}${serving}`, unsatisfied: installed.unsatisfied, ...foldersOf(root, mod), ...(services.length === 0 ? {} : { services }) })
   }
   for (const folder of await linkedFolders()) {
     if (!existsSync(`${folder}/.claude-plugin/plugin.json`)) {

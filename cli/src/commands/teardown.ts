@@ -8,6 +8,7 @@ import { runStep } from '../process.js'
 import { removeData, removeProgram } from '../program.js'
 import { startProgress, type Progress } from '../progress.js'
 import { unlinkRules } from '../rules.js'
+import { removeServices } from '../service.js'
 import { modBindings, restoreSettings, unbindKeys } from '../settings.js'
 import { modLock, revokeApprovals, storePath, takeLock } from '../store.js'
 import { holdSignals, printEvent, printFailure, stepEnvironment, uninterruptible } from './setup.js'
@@ -23,7 +24,8 @@ that still run its commands and the Claude Code settings it set that still
 hold its values, and deletes its install record, the saved step,
 every version of its program with its links, its data
 folder, its secrets, the addresses of its single-instance programs, and its approvals in
-consent.json. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
+consent.json. It first stops and deletes each service of the computer that cmod
+program --service made for the mod. It keeps the mod's config folder, ~/.claude/cmods/<plugin-name>, because
 the files there are yours. Claude Code has already deleted the plugin's folder by then. A mod with
 no install record has only its data folder, secrets, and approvals deleted. While a setup
 or another teardown of the mod runs, a teardown waits for it. A teardown whose
@@ -70,6 +72,7 @@ async function tearDown(name: string, emit: (event: RunnerEvent) => void): Promi
   await using lock = await takeLock(modLock(name), hold.abortSignal)
   if (lock === undefined) return 1
   const store = storeFolder(process.env)
+  await removeServices(name)
   await rm(instanceFolder(store, name), { recursive: true, force: true })
   const record = await readRecord(readText, store, name)
   if (record === undefined) {

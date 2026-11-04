@@ -92,10 +92,32 @@ async function removeTemporary(folder: string): Promise<void> {
   await rm(folder, { recursive: true, force: true })
 }
 
+const serviceManager = `#!/bin/sh
+echo "$(basename "$0") $*" >> "$HOME/service-calls"
+if [ -e "$HOME/service-refuses" ]; then echo "$(basename "$0"): Domain does not support specified action" >&2; exit 125; fi
+running() { [ -e "$HOME/service-pid" ] && kill -0 "$(cat "$HOME/service-pid")" 2>/dev/null; }
+start() {
+  touch "$HOME/service-loaded"
+  if [ -x "$HOME/start-service.sh" ] && ! running; then "$HOME/start-service.sh" > /dev/null 2>&1 & echo $! > "$HOME/service-pid"; fi
+}
+stop() {
+  if running; then pkill -TERM -P "$(cat "$HOME/service-pid")"; fi
+}
+case "$(basename "$0") $*" in
+  "launchctl print "*) [ -e "$HOME/service-loaded" ] ;;
+  "launchctl bootstrap "*)
+    if [ -e "$HOME/service-loaded" ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
+    start ;;
+  "launchctl kickstart "*|"systemctl --user start "*|"systemctl --user restart "*) start ;;
+  "launchctl bootout "*) stop; (sleep 1; rm -f "$HOME/service-loaded") > /dev/null 2>&1 & ;;
+  "systemctl --user disable "*) stop; rm -f "$HOME/service-loaded" ;;
+esac
+`
+
 export async function temporaryHome(): Promise<string> {
   const home = await mkdtemp(join(temporaryRoot, 'cmod-test-'))
   homes.push(home)
-  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed) })
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed), 'bin/launchctl': serviceManager, 'bin/systemctl': serviceManager })
   return home
 }
 

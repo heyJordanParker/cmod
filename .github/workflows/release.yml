@@ -58,7 +58,7 @@ jobs:
           bun install --cwd cli --frozen-lockfile
           (cd core && bun test tests/register.test.ts)
           cd cli
-          printf '%s\n' tests/install.test.ts tests/launcher.test.ts tests/secret.test.ts tests/try.test.ts | xargs -P 0 -n 1 bun test --timeout 30000
+          printf '%s\n' tests/install.test.ts tests/launcher.test.ts tests/program.test.ts tests/secret.test.ts tests/try.test.ts | xargs -P 0 -n 1 bun test --timeout 30000
 
   release:
     needs: [version, test, macos]

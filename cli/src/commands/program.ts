@@ -1,15 +1,17 @@
 import { existsSync, watch } from 'node:fs'
 import { mkdir, readdir, rm, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { parseArgs } from 'node:util'
 import { instancePath, storeFolder } from '@cmodjs/core/src/records.js'
-import { ifMissing, readJson, writeAtomically } from '../files.js'
+import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
 import { programsFolder } from '../program.js'
+import { startService } from '../service.js'
 import { isHolding, startTime, takeLock } from '../store.js'
 
 export const summary = "Run one copy of a mod's program for every session."
 
-export const help = `Usage: cmod program <mod> [--no-wait] -- <command…>
+export const help = `Usage: cmod program <mod> [--no-wait | --service [--env <name>]...] -- <command…>
 
 ${summary}
 
@@ -24,11 +26,25 @@ prints held, and exits 0, and the session follows the instance file itself.
 The holder stops the command on SIGTERM, SIGINT, or SIGHUP, and when its parent
 process exits, and exits with the command's exit code when the command exits on
 its own. A copy an earlier holder left running gets SIGTERM, then SIGKILL after
-5 seconds, before the new holder starts its own.`
+5 seconds, before the new holder starts its own.
+
+With --service, which a session passes for a program job with isService, it
+makes the holder a service of the computer, com.claudemodmanager.<mod>.<program>:
+a launchd agent in ~/Library/LaunchAgents on macOS, and a systemd user service
+in ~/.config/systemd/user on Linux. The service runs cmod program <mod> --
+<command…> at login and again whenever it exits, with HOME, XDG_DATA_HOME,
+CLAUDE_CONFIG_DIR, a PATH of the store's programs folder and the system
+folders, and each --env variable, and cmod records it in
+services/<mod>/<program>.json. It loads the service when it is new,
+changed, or not loaded, waits up to 15 seconds for a holder, prints held, and
+exits 0. When the computer does not take the service, it runs as --no-wait
+does.`
 
 const checkMs = 5000
 
 const killMs = 5000
+
+const serviceStartMs = 15_000
 
 const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
 
@@ -36,12 +52,20 @@ type Instance = { readonly address: string; readonly pid: number; readonly start
 
 export async function run(argv: string[]): Promise<number> {
   const [mod, ...rest] = argv
-  const isNoWait = rest[0] === '--no-wait'
-  const [separator, executable, ...args] = isNoWait ? rest.slice(1) : rest
-  if (mod === undefined || separator !== '--' || executable === undefined) throw new Error(`cmod program takes a mod's name, --, and the program's command.\n\n${help}`)
+  const separator = rest.indexOf('--')
+  const [executable, ...args] = separator === -1 ? [] : rest.slice(separator + 1)
+  if (mod === undefined || executable === undefined) throw new Error(`cmod program takes a mod's name, --, and the program's command.\n\n${help}`)
+  const { values } = parseArgs({ args: rest.slice(0, separator), options: { 'no-wait': { type: 'boolean', default: false }, service: { type: 'boolean', default: false }, env: { type: 'string', multiple: true, default: [] } } })
   const file = instancePath(storeFolder(process.env), mod, basename(executable))
   const lockPath = `${file}.lock`
   await mkdir(dirname(file), { recursive: true })
+  const service = values.service ? await startService(mod, [executable, ...args], values.env) : undefined
+  if (service !== undefined) {
+    if (!(await isHeldWithin(lockPath, serviceStartMs))) throw new Error(`the ${service.label} service did not start ${executable} within ${serviceStartMs / 1000} seconds. ${service.status} shows why.`)
+    process.stdout.write('held\n')
+    return 0
+  }
+  const isNoWait = values['no-wait'] || values.service
   const ending = new AbortController()
   let wake = () => undefined as void
   const end = () => {
@@ -129,6 +153,15 @@ async function hold(file: string, executable: string, args: readonly string[], e
     ending.removeEventListener('abort', stopping)
     await rm(file, { force: true })
   }
+}
+
+async function isHeldWithin(lock: string, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
+  do {
+    for (const holder of await readdir(lock).catch(ifMissing([]))) if (await isHolding(Number(holder), await readText(join(lock, holder)))) return true
+    await Bun.sleep(100)
+  } while (Date.now() < deadline)
+  return false
 }
 
 async function touchHolders(lock: string): Promise<void> {

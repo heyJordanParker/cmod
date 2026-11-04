@@ -21,13 +21,15 @@ const staleMs = 15_000
 
 const retryWithinMs = 1000
 
-export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean }): Job<Program> {
-  const { command, environment, singleInstance = false } = options
+export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean }): Job<Program> {
+  const { command, environment, singleInstance = false, isService = false } = options
   return ({ mod, announce, reserveName }) => {
     const { claude, report, spawnCmod, watches } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
-    if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
+    if (isService) reserveName('program', basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
+    else if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
+    const isElected = singleInstance || isService
     const request = { argv: command, ...(environment === undefined ? {} : { env: environment }) }
     let state: Program['state'] = 'stopped'
     let address: Address | undefined
@@ -39,7 +41,10 @@ export function program(options: { readonly command: readonly string[]; readonly
     let instance: Promise<string> | undefined
     let leaseCheck: Promise<void> | undefined
 
-    const spawn = () => (singleInstance ? spawnCmod(['program', mod.name, '--no-wait', '--', ...command], environment) : claude.process.spawn(request))
+    const spawn = () => {
+      if (isService) return spawnCmod(['program', mod.name, '--service', ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
+      return singleInstance ? spawnCmod(['program', mod.name, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
+    }
 
     const instanceFile = () =>
       (instance ??= Promise.all([claude.env.home(), claude.env.dataHome()]).then(([home, dataHome]) => instancePath(storeFolder({ HOME: home, XDG_DATA_HOME: dataHome }), mod.name, basename(executable))))
@@ -116,7 +121,7 @@ export function program(options: { readonly command: readonly string[]; readonly
           const lines = `${pending}${piece.text}`.split('\n')
           pending = lines.pop() ?? ''
           for (const line of lines.slice(0, 1)) {
-            if (singleInstance && line.trim() === 'held') return await follow(await instanceFile())
+            if (isElected && line.trim() === 'held') return await follow(await instanceFile())
             const next = addressOf(line.trim())
             if (next === undefined) {
               stop(`its first line is "${line.trim()}". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.`)

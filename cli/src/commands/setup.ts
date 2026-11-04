@@ -9,6 +9,7 @@ import { relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
+import { restartServices } from '../service.js'
 import { ifMissing, listFiles, readText, writeAtomically } from '../files.js'
 import { startProgress, type Progress } from '../progress.js'
 import { bindKeys, isLinked, modBindings, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
@@ -26,7 +27,9 @@ then runs by its name, or builds it from the checkout's cli/ when cmod link
 loaded the mod, and links it into ~/.local/bin for a terminal,
 runs the mod's install step from its package.json "cmod" key,
 saves its uninstall step, binds the default combos its "cmod.hotkeys" declares in
-Claude Code's keybindings.json, and records the mod as set up. A hotkey you
+Claude Code's keybindings.json, records the mod as set up, and restarts each
+service of the computer that cmod program --service made for it, so the service
+runs the new program. A hotkey you
 rebound keeps your combo, and a combo you already bound to something else
 stays yours, and the setup prints the line to add. An unchanged mod runs
 nothing. While a setup or teardown of the mod runs, another setup waits for it,
@@ -246,6 +249,10 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       grantedOnUpdate: [],
     })
     isRecorded = true
+    await restartServices(plugin.name).then(
+      (names) => names.forEach((name) => emit({ type: 'log', text: `Restarted the ${name} service of ${plugin.name} on ${plugin.version}` })),
+      (error: unknown) => emit({ type: 'log', text: `The services of ${plugin.name} keep running the earlier program, because restarting them failed: ${messageOf(error)}` }),
+    )
     if (state.updates !== undefined) {
       await turnOnUpdates(state.updates)
       emit({ type: 'log', text: `${plugin.name} now updates automatically from the ${state.updates} marketplace. Turn it off in /plugin, Marketplaces.` })

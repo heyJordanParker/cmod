@@ -451,6 +451,19 @@ test('Settings marks a mod turned off in Claude Code, and Turn on runs cmod enab
   expect((await shown()).replace(/\s+/g, ' ')).toContain('Turned ci-watch on.')
 })
 
+test('Settings says a mod runs as a service of this computer only when cmod made one of its programs a service', async () => {
+  const service = testSettings({ [`${store}/services/ci-watch/ci-runner.json`]: JSON.stringify({ label: 'com.claudemodmanager.ci-watch.ci-runner', unit: '/test/home/Library/LaunchAgents/com.claudemodmanager.ci-watch.ci-runner.plist' }) })
+  const plain = testSettings()
+
+  await service.tested.type('/mods ci-watch')
+  await service.tested.settle()
+  await plain.tested.type('/mods ci-watch')
+  await plain.tested.settle()
+
+  expect((await service.shown()).replace(/\s+/g, ' ')).toContain('Runs as a service of this computer')
+  expect(await plain.shown()).not.toContain('Runs as a service of this computer')
+})
+
 test('Settings shows a linked mod on while the copy cmod link turned off stays off', async () => {
   const { tested, shown } = testSettings()
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@inline': false, 'ci-watch@Developer-linked': true } })
