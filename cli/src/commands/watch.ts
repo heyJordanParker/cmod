@@ -11,14 +11,15 @@ import { linkedFolders } from '../settings.js'
 import { markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
 import { bundledHooks } from './publish.js'
 
-export const summary = 'Reload every session once a linked mod builds after a change.'
+export const summary = 'Reload the sessions inside a linked mod once it builds after a change.'
 
 export const help = `Usage: cmod watch
 
 ${summary}
 
 Watches each folder cmod link linked. Once a folder has had no change for 2
-seconds and its hooks module builds, every session reloads its mods once. A
+seconds and its hooks module builds, each session whose project is that folder
+or inside it reloads its mods once, and every other session offers Reload. A
 change only to files git ignores, such as the .claude-plugin/types/ Claude Code
 writes each time it loads the mod, reloads nothing. A build that still fails after 10 seconds without a change shows its error in
 every session. At its start it builds again each mod an earlier cmod watch
@@ -101,7 +102,7 @@ export async function run(argv: string[]): Promise<number> {
       return
     }
     if (failures.delete(name)) await writeFailures()
-    await markPluginsChanged()
+    await markPluginsChanged(folder)
   }
 
   const changed = (folder: string, file: string | null) => {

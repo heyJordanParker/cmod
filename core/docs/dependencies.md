@@ -67,7 +67,7 @@ Claude Code checks the range against the provider's `version` when it loads your
 
 cmod is a provider too, with one difference: every newer cmod runs every mod built on an older `@cmodjs/core`. So a mod names only the oldest cmod it runs on, which the `@cmodjs/core` it bundles names as `oldestCmodVersion` in its `records.js`, as `>=5.2.0`. `cmod check` writes that range whenever the mod's `@cmodjs/core` changes, and `cmod publish` refuses a release whose range differs. A caret range such as `^5.0.0` stops Claude Code from updating cmod past 5.x for every mod on the computer, so leave it to `cmod check`.
 
-Each mod's marketplace lists its own copy of cmod and of each provider, and Claude Code loads only one copy of each. When a mod needs a newer cmod than a copy Claude Code installed, the cmod plugin updates every copy of cmod, and when two copies of any plugin differ, it updates every copy of that plugin. Then it reloads the mods, so a mod never waits for the person to update its providers.
+Each mod's marketplace lists its own copy of cmod and of each provider, and Claude Code loads only one copy of each. When a mod needs a newer cmod than a copy Claude Code installed, the cmod plugin updates every copy of cmod, and when two copies of any plugin differ, it updates every copy of that plugin. Then each session offers Reload, so a mod never waits for the person to update its providers, only to press Reload.
 
 Claude Code then lays tracer's types file beside the mod's own types, so the call is typed:
 

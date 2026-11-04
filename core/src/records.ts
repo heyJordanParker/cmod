@@ -236,6 +236,14 @@ export function pluginsChangedPath(store: string): string {
   return `${store}/plugins-changed`
 }
 
+export function pluginsChangedMark(at: number, pid: number, checkout?: string): string {
+  return `${at} ${pid}\n${checkout === undefined ? '' : `${checkout}\n`}`
+}
+
+export function markedCheckout(mark: string): string | undefined {
+  return mark.split('\n')[1] || undefined
+}
+
 export function storeChangedPath(store: string): string {
   return `${store}/store-changed`
 }

@@ -1071,6 +1071,7 @@ test('a reload that takes out a mod with widgets asks it for no widgets, so noth
 
   await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
   await tick()
+  await pressInBand(tested, 'Reload')
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
@@ -1083,8 +1084,11 @@ test('cmod.call rejects a call to a mod removed after it told cmod its parts wit
 
   await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
   await tick()
-  await tick()
   const call = await unansweredCall()
+  await expect(call({ to: 'notes', method: 'search', input: {} })).rejects.toThrow(/^notes did not answer in time/)
+
+  await pressInBand(tested, 'Reload')
+  await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
   await expect(call({ to: 'notes', method: 'search', input: {} })).rejects.toThrow('notes is not installed. Install it in Plugins.')
@@ -1744,34 +1748,53 @@ test('a store file cmod changes without the store-changed stamp is not read', as
 
 const shownToasts = (tested: ReturnType<typeof testMod>) => tested.calls.filter(({ call }) => call === 'ui.toast').map(({ args }) => args[0])
 
-test("a plugin turned on in this session's own /plugin, which raises no ConfigChange here, reloads the session once that prompt's turn ends", async () => {
+const offerOf = (tested: ReturnType<typeof testMod>) => tested.shown.toasts.find((toast) => toast.message === 'Plugins changed')
+
+const offering = (description: string) => ({ type: 'info' as const, message: 'Plugins changed', description })
+
+const changedOffer = offering('Reload to use the changes in this session.')
+
+async function pressInBand(tested: ReturnType<typeof testMod>, label: string) {
+  const band = await tested.fire('ui.render', { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } } as never, { type: 'Text', children: ['>'] } as never)
+  const button = findElement(band, 'Button', label)
+  if (button === undefined) throw new Error(`The band draws no ${label} button.`)
+  await (button['onPress'] as () => Promise<void>)()
+}
+
+async function idleSession() {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
+  tested.fakes.session.messages = async () => []
+  const { tick, advance } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
+  return { tested, reloads, tick, advance }
+}
+
+test("a plugin turned on in this session's own /plugin, which raises no ConfigChange here, shows the Reload offer at the next prompt and reloads nothing", async () => {
+  const { tested, reloads, tick } = await idleSession()
 
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
   await prompt(tested, 'hello')
-  await tick()
-  expect(reloads).toEqual([])
-
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
   await tick()
-  expect(reloads).toEqual(['reload-plugins'])
+
+  expect(offerOf(tested)).toEqual(changedOffer)
+  expect(reloads).toEqual([])
 })
 
-test('a plugins-changed mark in an idle session runs /reload-plugins, and the band shows no toast for it', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
+test('a plugin change in an idle session shows the Reload offer and sends no /reload-plugins, and Reload reloads the session and takes the offer away', async () => {
+  const { tested, reloads, tick } = await idleSession()
 
   await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
+  await tick()
+
+  expect(reloads).toEqual([])
+  expect(tested.shown.toasts).toEqual([ready, changedOffer])
+
+  await pressInBand(tested, 'Reload')
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
@@ -1779,26 +1802,67 @@ test('a plugins-changed mark in an idle session runs /reload-plugins, and the ba
   expect(shownToasts(tested)).toEqual([])
 })
 
-test('a plugins-changed mark during a running turn runs /reload-plugins only after the turn ends', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+test('Reload pressed while Claude works says the session reloads when the turn ends, and runs /reload-plugins only then', async () => {
+  const { tested, reloads, tick } = await idleSession()
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
   await prompt(tested, 'Rename the parser')
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
-  await tick()
+  await pressInBand(tested, 'Reload')
   await tick()
   expect(reloads).toEqual([])
+  expect(offerOf(tested)).toEqual(offering('Reloads when this turn ends.'))
 
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
+  expect(offerOf(tested)).toBeUndefined()
 })
 
-test('a plugins-changed mark during a turn the person stops with Esc reloads after the next turn, because Claude Code holds plugin input until the person sends some', async () => {
+test('a linked checkout that builds reloads by itself only the session whose project is inside it, and offers Reload in every other session', async () => {
+  const { tested, reloads, tick } = await idleSession()
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n/work/notes\n')
+  await tick()
+  await tick()
+  expect(reloads).toEqual([])
+  expect(offerOf(tested)).toEqual(changedOffer)
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '2 100\n/test/plugins\n')
+  await tick()
+  await tick()
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(offerOf(tested)).toBeUndefined()
+})
+
+test("a person's own /reload-plugins takes the offer away, because the session then runs what is installed", async () => {
+  const { tested, reloads, tick } = await idleSession()
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  expect(offerOf(tested)).toEqual(changedOffer)
+
+  await appendedRow(tested, 'echo-1', { kind: 'composer' }, 'user', reloadEcho)
+  await tick()
+
+  expect(offerOf(tested)).toBeUndefined()
+  expect(reloads).toEqual([])
+})
+
+test('a plugin turned off and on again takes the offer away, because the session runs what is installed again', async () => {
+  const { tested, tick } = await idleSession()
+
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  await tick()
+  expect(offerOf(tested)).toEqual(changedOffer)
+
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true } })
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  await tick()
+  expect(offerOf(tested)).toBeUndefined()
+})
+
+test('a linked checkout change during a turn the person stops with Esc reloads the session inside it after the next turn, because Claude Code holds plugin input until the person sends some', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1808,7 +1872,7 @@ test('a plugins-changed mark during a turn the person stops with Esc reloads aft
   await tick()
   await prompt(tested, 'Rename the parser')
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n/test/plugins/cmod\n')
   await tick()
   await tick()
   await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
@@ -1823,7 +1887,7 @@ test('a plugins-changed mark during a turn the person stops with Esc reloads aft
   expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
 })
 
-test('a reload refused because the person pressed Esc while it waited to run shows no toast, logs nothing, and reloads at the next idle point', async () => {
+test('a linked reload refused because the person pressed Esc while it waited to run shows no toast, logs nothing, and reloads at the next idle point', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -1834,7 +1898,7 @@ test('a reload refused because the person pressed Esc while it waited to run sho
   await prompt(tested, 'Rename the parser')
   await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n/test/plugins/cmod\n')
   await tick()
   await tick()
   expect(reloads).toEqual([])
@@ -1871,11 +1935,11 @@ async function updated(from: Readonly<Record<string, string>>, to: Readonly<Reco
   await tested.fakes.fs.write?.(installedPlugins, installedJson(to))
   await tick()
   await tick()
-  expect(reloads).toEqual(['reload-plugins'])
-  return { tested, tick }
+  expect(reloads).toEqual([])
+  return { tested, reloads, tick }
 }
 
-test('an update of five plugins, which rewrites installed_plugins.json once per plugin, reloads once and shows one 5 plugins updated toast', async () => {
+test('an update of five plugins, which rewrites installed_plugins.json once per plugin, keeps one offer that counts them, and Reload reloads once with no corner toast', async () => {
   const ids = ['notes@market', 'inbox@market', 'tasks@market', 'deploys@market', 'recall@market']
   const { tested, reloads, tick, advance } = await startedWith(Object.fromEntries(ids.map((id) => [id, '1.0.0'])))
 
@@ -1884,39 +1948,46 @@ test('an update of five plugins, which rewrites installed_plugins.json once per 
     await advance(1000)
   }
   await tick()
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'Plugins changed')).toEqual([offering('5 plugins changed. Reload to use them in this session.')])
+
+  await pressInBand(tested, 'Reload')
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
-  expect(shownToasts(tested)).toEqual(['5 plugins updated'])
+  expect(offerOf(tested)).toBeUndefined()
+  expect(shownToasts(tested)).toEqual([])
 })
 
-test('an update after /clear still shows its toast, because the versions belong to the running Claude Code, not the conversation', async () => {
-  const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.2.0' })
+test('an update after /clear is still offered, because the versions belong to the running Claude Code, not the conversation', async () => {
+  const { tested, tick } = await startedWith({ 'notes@market': '1.2.0' })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'clear', session_id: 'after-clear' })
   await tick()
 
   await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'notes@market': '1.3.0' }))
   await tick()
-  await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
+  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
 })
 
-test('a reload that changed three versions shows one toast for each', async () => {
+test('the offer names each of three updates', async () => {
   const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version })
   const { tested } = await updated(versions('1.0.0'), versions('1.1.0'))
 
-  expect(shownToasts(tested).toSorted()).toEqual(['inbox updated to 1.1.0', 'notes updated to 1.1.0', 'tasks updated to 1.1.0'])
+  expect(offerOf(tested)).toEqual(offering('notes updated to 1.1.0, inbox updated to 1.1.0, tasks updated to 1.1.0. Reload to use them in this session.'))
 })
 
-test('a reload that changed notes from 1.2.0 to 1.3.0 shows notes updated to 1.3.0 in the corner', async () => {
+test('the offer names the one plugin an update changed, and the ones turned on and off', async () => {
   const { tested } = await updated({ 'notes@market': '1.2.0', 'inbox@market': '2.0.0' }, { 'notes@market': '1.3.0', 'inbox@market': '2.0.0' })
+  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
 
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
+  const turned = await updated({ 'notes@market': '1.2.0' }, { 'inbox@market': '2.0.0' })
+  turned.tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'inbox@market': true } })
+  await turned.tested.fakes.fs.write?.(installedPlugins, installedJson({ 'inbox@market': '2.0.1' }))
+  await turned.tick()
+  expect(offerOf(turned.tested)).toEqual(offering('inbox turned on, notes turned off. Reload to use them in this session.'))
 })
 
-test('a reload that updated a plugin installed from git names the version its plugin.json holds, without the commit Claude Code adds', async () => {
+test('the offer names an update of a plugin installed from git by the version its plugin.json holds, without the commit Claude Code adds', async () => {
   const copy = (version: string) => `/test/home/.claude/plugins/cache/market/notes/${version}`
   const installed = (version: string) => JSON.stringify({ version: 2, plugins: { 'notes@market': [{ scope: 'user', installPath: copy(version), version }] } })
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'notes@market': true })
@@ -1931,80 +2002,55 @@ test('a reload that updated a plugin installed from git names the version its pl
 
   await tested.fakes.fs.write?.(installedPlugins, installed('1.3.0-bbbbbbbbbbbb'))
   await tick()
-  await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
+  expect(reloads).toEqual([])
+  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
 })
 
-test('a reload that changed four versions shows one 4 plugins updated toast', async () => {
+test('the offer counts four updates instead of naming them', async () => {
   const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version, 'deploys@market': version })
   const { tested } = await updated(versions('1.0.0'), versions('1.1.0'))
 
-  expect(shownToasts(tested)).toEqual(['4 plugins updated'])
+  expect(offerOf(tested)).toEqual(offering('4 plugins changed. Reload to use them in this session.'))
 })
 
-test('a reload with no version change, such as an edit to a linked mod, shows no corner toast', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'notes@market': true })
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'notes@market': '1.2.0' }))
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
-
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
-  await tick()
-  await tick()
-
-  expect(reloads).toEqual(['reload-plugins'])
-  expect(shownToasts(tested)).toEqual([])
-})
-
-test('an update whose install record lists what the update granted shows only its name and version, at once, without reading the record', async () => {
+test('an update whose install record lists what the update granted is offered by name and version, without reading the record', async () => {
   const record = `${store}/records/notes.json`
   const granted = JSON.stringify({ name: 'notes', version: '1.3.0', root: '/plugins/notes', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {}, permissions: ['conversation'], grantedOnUpdate: ['conversation'] })
   const { tested } = await updated({ 'notes@market': '1.2.0' }, { 'notes@market': '1.3.0' }, { [record]: granted })
 
-  expect(shownToasts(tested)).toEqual(['notes updated to 1.3.0'])
+  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
   expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toEqual([])
 })
 
-test('a user settings change Claude Code reports turns a plugin on, and reloads the session once Claude Code has loaded it', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
+test('a user settings change Claude Code reports turns a plugin on, and the offer shows once Claude Code has written it', async () => {
+  const { tested, reloads, tick } = await idleSession()
 
   await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
   tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
   await tick()
-  await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(offerOf(tested)).toEqual(changedOffer)
+  expect(reloads).toEqual([])
 })
 
-test('two changes cmod marks in its store reload the session once, and the mark the session started with reloads nothing', async () => {
+test('two changes cmod marks in its store update one offer in place, and the mark the session started with offers nothing', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const changed = `${store}/plugins-changed`
   await tested.fakes.fs.write?.(changed, '1 100\n')
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
   const { tick } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
 
   await tick()
   await tick()
-  expect(reloads).toEqual([])
+  expect(offerOf(tested)).toBeUndefined()
 
   await writeStoreFile(tested, changed, '2 200\n')
+  await tick()
   await writeStoreFile(tested, changed, '3 300\n')
   await tick()
-  await tick()
 
-  expect(reloads).toEqual(['reload-plugins'])
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'Plugins changed')).toEqual([changedOffer])
 })
 
 const reloadEcho = '<command-name>/reload-plugins</command-name>\n<command-message>reload-plugins</command-message>\n<command-args></command-args>'
@@ -2017,17 +2063,17 @@ const appendedRow = async (tested: ReturnType<typeof testMod>, uuid: string, ori
   return kept.message?.content
 }
 
-test("the reload cmod runs leaves no row in the conversation, and a person's own /reload-plugins still shows", async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
+async function reloadedByPress() {
+  const session = await idleSession()
+  await writeStoreFile(session.tested, `${store}/plugins-changed`, '1 100\n')
+  await session.tick()
+  await pressInBand(session.tested, 'Reload')
+  await session.tick()
+  return session
+}
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
-  await tick()
-  await tick()
+test("the reload cmod runs leaves no row in the conversation, and a person's own /reload-plugins still shows", async () => {
+  const { tested, reloads } = await reloadedByPress()
 
   expect(reloads).toEqual(['reload-plugins'])
   expect(await appendedRow(tested, 'echo-1', { kind: 'plugin', name: 'cmod' }, 'user', reloadEcho)).toEqual(hiddenReload)
@@ -2037,23 +2083,14 @@ test("the reload cmod runs leaves no row in the conversation, and a person's own
 })
 
 test("cmod's reload hides its output row even when Claude Code restarted the cmod plugin before the echo row reached it", async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
-
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
-  await tick()
-  await tick()
+  const { tested, reloads } = await reloadedByPress()
 
   expect(reloads).toEqual(['reload-plugins'])
   expect(await appendedRow(tested, 'output-1', { kind: 'engine' }, 'system', reloadOutput)).toEqual(hiddenReload)
   expect(await appendedRow(tested, 'echo-4', { kind: 'composer' }, 'user', '<command-name>/model</command-name>')).toEqual([{ type: 'text', text: '<command-name>/model</command-name>' }])
 })
 
-test('a plugin Claude Code installs, updates, or turns on without cmod reloads the session, and other settings reload nothing', async () => {
+test('a plugin Claude Code installs, updates, or turns on without cmod is offered, other settings offer nothing, and nothing reloads by itself', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.1.0' }] } }))
   const reloads: string[] = []
@@ -2062,24 +2099,17 @@ test('a plugin Claude Code installs, updates, or turns on without cmod reloads t
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
 
+  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
+  await tick()
+  expect(offerOf(tested)).toBeUndefined()
+
   await tested.fakes.fs.write?.(installedPlugins, JSON.stringify({ plugins: { 'hello@market': [{ version: '0.2.0' }] } }))
   await tick()
-  await tick()
-  expect(reloads).toEqual(['reload-plugins'])
-
-  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
-  await tick()
-  await tick()
-  expect(reloads).toEqual(['reload-plugins'])
-
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
-  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
-  await tick()
-  await tick()
-  expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
+  expect(offerOf(tested)).toEqual(changedOffer)
+  expect(reloads).toEqual([])
 })
 
-test('a session no app shows, such as claude -p, never reloads, so its answer stays the run\'s result', async () => {
+test('a session no app shows, such as claude -p, neither offers nor runs a reload, so its answer stays the run\'s result', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   tested.fakes.session.surfaces = async () => []
   const reloads: string[] = []
@@ -2088,32 +2118,15 @@ test('a session no app shows, such as claude -p, never reloads, so its answer st
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '2 200\n')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '2 200\n/test/plugins/cmod\n')
   await tick()
   await tick()
 
   expect(reloads).toEqual([])
+  expect(offerOf(tested)).toBeUndefined()
 })
 
-test('a plugin install that writes the user settings, then installed_plugins.json, reloads the session once', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  const { tick, advance } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
-
-  await claudeCodeOf(tested).fire('ConfigChange', { source: 'user_settings', file_path: '/test/home/.claude/settings.json' })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'hello@market': true } })
-  await advance(1500)
-  await tested.fakes.fs.write?.(installedPlugins, '{"version":2,"plugins":{"hello@market":[]}}')
-  await tick()
-  await tick()
-
-  expect(reloads).toEqual(['reload-plugins'])
-})
-
-test("a change cmod marks while cmod's reload runs reloads the session again after it", async () => {
+test("a change cmod marks while cmod's reload runs is offered again after it", async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
   const changed = `${store}/plugins-changed`
   const reloads: string[] = []
@@ -2129,23 +2142,22 @@ test("a change cmod marks while cmod's reload runs reloads the session again aft
   const { tick } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
-
   await writeStoreFile(tested, changed, '1 100\n')
   await tick()
-  await tick()
+
+  await pressInBand(tested, 'Reload')
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
 
   finish()
   await tick()
-  await tick()
 
-  expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(offerOf(tested)).toEqual(changedOffer)
 })
 
-test('a reload the session refuses for a reason the person did not cause shows why, and Retry reloads', async () => {
+test('a reload the session refuses for a reason the person did not cause shows why in place of the offer, and Retry reloads', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const changed = `${store}/plugins-changed`
   const reloads: string[] = []
   let refusals = 1
   tested.fakes.command.run = async ({ command }) => {
@@ -2159,20 +2171,18 @@ test('a reload the session refuses for a reason the person did not cause shows w
   const { tick } = watchedStore(tested)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tick()
-
-  await writeStoreFile(tested, changed, '1 100\n')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
+
+  await pressInBand(tested, 'Reload')
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'Could not reload the plugins', description: 'no command /reload-plugins' }])
+  expect(tested.shown.toasts.slice(1)).toEqual([{ type: 'error', message: 'Could not reload the plugins', description: 'no command /reload-plugins' }])
 
-  const band = await tested.fire('ui.render', { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } } as never, { type: 'Text', children: ['>'] } as never)
-  const retry = findElement(band, 'Button', 'Retry')
-  if (retry === undefined) throw new Error('The reload failure draws no Retry button.')
-  await (retry['onPress'] as () => Promise<void>)()
+  await pressInBand(tested, 'Retry')
   await tick()
   expect(reloads).toEqual(['reload-plugins', 'reload-plugins'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(tested.shown.toasts.slice(1)).toEqual([])
 })
 const gitWidgets = {
   'cmod:parts': () => ({ widgets: [{ id: 'branch', title: 'Branch', areas: ['belowPrompt', 'dashboard'] }], pages: [] }),

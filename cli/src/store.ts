@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { consentPath, isObject, linksPath, parseConsent, parseLinks, pluginsChangedPath, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
+import { consentPath, isObject, linksPath, parseConsent, parseLinks, pluginsChangedMark, pluginsChangedPath, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
 import { interruptProgress } from './progress.js'
@@ -15,10 +15,10 @@ export function storePath(...parts: string[]): string {
   return join(storeFolder(process.env), ...parts)
 }
 
-export async function markPluginsChanged(): Promise<void> {
+export async function markPluginsChanged(checkout?: string): Promise<void> {
   const store = storeFolder(process.env)
   if (!existsSync(store)) return
-  await writeAtomically(pluginsChangedPath(store), `${Date.now()} ${process.pid}\n`)
+  await writeAtomically(pluginsChangedPath(store), pluginsChangedMark(Date.now(), process.pid, checkout))
   await markStoreChanged()
 }
 
