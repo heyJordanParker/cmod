@@ -1,12 +1,16 @@
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { readdir, rm, utimes } from 'node:fs/promises'
-import { join, sep } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { buildFailuresPath, isAtLeast, readCmodVersion, storeFolder } from '@cmodjs/core/src/records.js'
+import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version } from '../../package.json'
 import { relinkPluginFolders } from '../claude.js'
 import { ifMissing, readJson, writeAtomically } from '../files.js'
+import { readPlugin } from '../plugin.js'
 import { capture } from '../process.js'
+import { buildReadsAny, installProgram, readProgram } from '../program.js'
+import { startProgress } from '../progress.js'
 import { linkedFolders } from '../settings.js'
 import { markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
 import { bundledHooks } from './publish.js'
@@ -18,11 +22,19 @@ export const help = `Usage: cmod watch
 ${summary}
 
 Watches each folder cmod link linked. Once a folder has had no change for 2
-seconds and its hooks module builds, each session whose project is that folder
-or inside it reloads its mods once, and every other session offers Reload. A
-change only to files git ignores, such as the .claude-plugin/types/ Claude Code
-writes each time it loads the mod, reloads nothing. A build that still fails after 10 seconds without a change shows its error in
-every session. At its start it builds again each mod an earlier cmod watch
+seconds, it bundles its hooks module. When a changed file is one the program's
+build reads, a file in cli/ or one its JavaScript or TypeScript entry imports,
+it also builds the program cli/ declares, as cmod link does, into cmod's
+programs folder, where the running copy stops and the next one starts on the
+new build. A build that writes the same program leaves the file and its running
+copy as they are. Once both build, each session
+whose project is that folder or inside it reloads its mods once, and every
+other session offers Reload. A change only to files git ignores, such as the
+.claude-plugin/types/ Claude Code writes each time it loads the mod, to the
+program's output folder, or to a file gone by then that git does not track,
+such as a build's temporary file, reloads nothing. A build that still fails
+after 10 seconds without a change shows its error in every session, and the
+last program that built keeps running. At its start it builds again each mod an earlier cmod watch
 left failing, so a failure an older cmod wrote goes once the mod builds. One cmod
 watch watches per machine: another one exits at once while it runs. It touches
 its file in watch.lock every 5 seconds, and the cmod plugin of each session
@@ -49,13 +61,20 @@ export async function withoutIgnored(folder: string, files: readonly string[]): 
   return files.filter((file) => !ignored.has(file))
 }
 
-async function isAnySource(folder: string, files: readonly string[]): Promise<boolean> {
-  if (files.length === 0 || files.includes('')) return true
-  const sources = await withoutIgnored(folder, files).catch((error: unknown) => {
-    process.stderr.write(`cmod watch: reloads for every change in ${folder}, because git could not say which files it ignores: ${messageOf(error)}\n`)
-    return files
+async function sourcesAmong(folder: string, files: readonly string[]): Promise<string[]> {
+  const listed = await capture(['git', '--literal-pathspecs', '-C', folder, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...files])
+  if (listed.exitCode !== 0) return files.filter((file) => existsSync(join(folder, file)))
+  return listed.stdout.split('\0').filter((file) => file !== '')
+}
+
+async function changedSources(folder: string, files: readonly string[], output: string | undefined): Promise<readonly string[] | undefined> {
+  if (files.length === 0 || files.includes('')) return undefined
+  const outside = files.filter((file) => output === undefined || relativePath(output, file) === undefined)
+  if (outside.length === 0) return []
+  return sourcesAmong(folder, outside).catch((error: unknown) => {
+    process.stderr.write(`cmod watch: reloads for every change in ${folder}, because git could not say which files it tracks: ${messageOf(error)}\n`)
+    return outside
   })
-  return sources.length > 0
 }
 
 export async function run(argv: string[]): Promise<number> {
@@ -67,8 +86,12 @@ export async function run(argv: string[]): Promise<number> {
   await relinkPluginFolders()
   const watchers = new Map<string, FSWatcher>()
   const timers = new Map<string, Timer>()
+  const failing = new Set<Timer>()
+  const attempts = new Map<string, number>()
+  const programsDue = new Set<string>()
   const changedFiles = new Map<string, Set<string>>()
   const failures = new Map(Object.entries(((await readJson(buildFailuresPath(storeFolder(process.env)))) ?? {}) as Record<string, string>))
+  const progress = { ...startProgress(process.stderr), note: () => {} }
 
   const writeFailures = async () => {
     const path = buildFailuresPath(storeFolder(process.env))
@@ -87,18 +110,29 @@ export async function run(argv: string[]): Promise<number> {
   const settle = async (folder: string) => {
     const files = [...(changedFiles.get(folder) ?? [])]
     changedFiles.delete(folder)
-    if (!(await isAnySource(folder, files))) return
     const name = await nameOf(folder)
+    let attempt = attempts.get(folder) ?? 0
     try {
+      const plugin = await readPlugin(folder)
+      const program = await readProgram(plugin)
+      const sources = await changedSources(folder, files, program === undefined ? undefined : relative(plugin.root, resolve(program.folder, program.output)))
+      if (sources?.length === 0) return
+      attempt += 1
+      attempts.set(folder, attempt)
+      if (program !== undefined && (sources === undefined || (await buildReadsAny(program, sources.map((file) => join(plugin.root, file)))))) programsDue.add(folder)
       await bundledHooks(folder)
+      if (program !== undefined && programsDue.has(folder)) {
+        await installProgram(program, plugin.version, progress)
+        programsDue.delete(folder)
+      }
     } catch (error) {
-      timers.set(
-        folder,
-        setTimeout(() => {
-          failures.set(name, messageOf(error))
-          void writeFailures()
-        }, failMs - settleMs),
-      )
+      const timer = setTimeout(() => {
+        failing.delete(timer)
+        if (attempts.get(folder) !== attempt) return
+        failures.set(name, messageOf(error))
+        void writeFailures()
+      }, failMs - settleMs)
+      failing.add(timer)
       return
     }
     if (failures.delete(name)) await writeFailures()
@@ -138,6 +172,6 @@ export async function run(argv: string[]): Promise<number> {
     await Bun.sleep(pollMs)
   }
   for (const watcher of watchers.values()) watcher.close()
-  for (const timer of timers.values()) clearTimeout(timer)
+  for (const timer of [...timers.values(), ...failing]) clearTimeout(timer)
   return 0
 }

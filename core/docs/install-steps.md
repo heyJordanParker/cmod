@@ -203,7 +203,7 @@ A mod that builds its own command-line program keeps its source in `cli/`, and c
 
 Then:
 
-- `cmod link` builds the program and links this machine's build into cmod's programs folder and `~/.local/bin`. When the linked checkout's version changes, the next session's setup builds it again from the checkout, so a version with no release yet still sets up.
+- `cmod link` builds the program and links this machine's build into cmod's programs folder and `~/.local/bin`. `cmod watch` builds it again, at the same version too, after each change to a file in `cli/` or a file the `bin` entry imports, so the program never runs older code than the mod. When the linked checkout's version changes, the next session's setup builds it again from the checkout, so a version with no release yet still sets up.
 - `cmod publish` builds every machine's file and attaches each to the GitHub release `v<version>`, with a `SHA256SUMS` file. It refuses a `cli/` program that the `package.json` `program` key does not name.
 - On install, cmod downloads `<repository>/releases/download/v<version>/<program>-<machine>`, checks it against `SHA256SUMS`, runs `<program> --version`, and links it into cmod's programs folder and `~/.local/bin`.
 - `cmod unlink` and the uninstall remove the program and both links.

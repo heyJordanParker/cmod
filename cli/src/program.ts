@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { dataFolder, isObject, pluginName, programPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
 import type { Plugin } from './plugin.js'
@@ -155,22 +156,45 @@ async function runBuild(program: Program, wanted: readonly string[], progress: P
 }
 
 export async function installProgram(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
-  const target = await storeBuild(program, version, progress, environment)
+  const { target, isChanged } = await storeBuild(program, version, progress, environment)
   const entry = await linkProgram(program.name, target)
-  progress.succeed(`Installed ${program.name} ${version}: Claude Code runs ${tilde(join(programsFolder(), program.name))}, which runs ${tilde(target)}`)
+  if (isChanged) progress.succeed(`Installed ${program.name} ${version}: Claude Code runs ${tilde(join(programsFolder(), program.name))}, which runs ${tilde(target)}`)
   const note = terminalNote(program.name, entry)
   if (note !== undefined) progress.note(note)
   else if (entry !== undefined && !(process.env['PATH'] ?? '').split(':').includes(dirname(entry))) progress.note(`Add ~/.local/bin to PATH to run ${program.name} in a terminal.`)
 }
 
-async function storeBuild(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<string> {
+async function storeBuild(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<{ target: string; isChanged: boolean }> {
   const built = (await buildProgram(program, [machine], progress, environment))[0] as string
   const target = programPath(storeFolder(process.env), program.name, version)
+  if (await hasSameBytes(built, target)) return { target, isChanged: false }
   await mkdir(dirname(target), { recursive: true })
   await copyFile(built, `${target}.${process.pid}.tmp`)
   await chmod(`${target}.${process.pid}.tmp`, 0o755)
   await rename(`${target}.${process.pid}.tmp`, target)
-  return target
+  return { target, isChanged: true }
+}
+
+async function hasSameBytes(path: string, other: string): Promise<boolean> {
+  const [file, copy] = [Bun.file(path), Bun.file(other)]
+  return (await copy.exists()) && file.size === copy.size && Buffer.from(await file.bytes()).equals(await copy.bytes())
+}
+
+export async function buildReadsAny(program: Program, paths: readonly string[]): Promise<boolean> {
+  if (paths.some((path) => relativePath(program.folder, path) !== undefined)) return true
+  const entry = await scriptEntry(program)
+  if (entry === undefined) return false
+  const bundled = await Bun.build({ entrypoints: [entry], target: 'bun', metafile: true, throw: false })
+  if (!bundled.success || bundled.metafile === undefined) return true
+  const inputs = new Set(Object.keys(bundled.metafile.inputs).map((input) => resolve(input)))
+  return paths.some((path) => inputs.has(path))
+}
+
+async function scriptEntry(program: Program): Promise<string | undefined> {
+  const packageJson = await readJson(join(program.folder, 'package.json'))
+  const bin = isObject(packageJson) ? packageJson['bin'] : undefined
+  const path = typeof bin === 'string' ? bin : isObject(bin) ? bin[program.name] : undefined
+  return typeof path === 'string' && /\.[cm]?[jt]sx?$/.test(path) ? join(program.folder, path) : undefined
 }
 
 export async function fetchProgram(plugin: Plugin, name: string, emit: (event: RunnerEvent) => void): Promise<void> {
