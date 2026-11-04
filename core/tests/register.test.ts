@@ -11,6 +11,7 @@ import { bundleDefines, hotkeyCommand, readSteps } from '../src/records.js'
 import { elements, textOf } from '../src/testing/fake-elements.js'
 import { Text } from '../src/ui/elements.js'
 import { messageOf } from '../src/utils/text.js'
+import * as markdownSource from '../src/vendor-markdown.js'
 
 type Registration = {
   readonly pattern: string
@@ -570,8 +571,31 @@ declare const Bun: {
   Glob: new (pattern: string) => { scan(options: { cwd: string }): AsyncIterable<string> }
   file(path: string): { text(): Promise<string> }
   write(path: string, text: string): Promise<number>
-  build(options: { entrypoints: string[]; format: 'esm'; target: 'browser'; external: string[]; define: Record<string, string> }): Promise<{ outputs: { text(): Promise<string> }[] }>
-  spawnSync(argv: string[]): { exitCode: number; stdout: { toString(): string } }
+  build(options: {
+    entrypoints: string[]
+    format: 'esm'
+    target: 'browser'
+    external: string[]
+    define?: Record<string, string>
+    plugins?: { name: string; setup(build: { onResolve(options: { filter: RegExp }, resolve: () => { path: string }): void }): void }[]
+  }): Promise<{ outputs: { text(): Promise<string> }[] }>
+  spawnSync(argv: string[], options?: { cwd: string }): { exitCode: number; stdout: { toString(): string }; stderr: { toString(): string } }
+}
+
+let builtReader: Promise<string> | undefined
+
+function readerTheBuildShips(): Promise<string> {
+  builtReader ??= (async () => {
+    const core = import.meta.dir.replace(/\/tests$/, '')
+    const { scripts } = JSON.parse(await Bun.file(`${core}/package.json`).text()) as { readonly scripts: { readonly build: string } }
+    const step = scripts.build.split(' && ').find((command) => command.includes('src/vendor-markdown.ts')) ?? ''
+    if (!step.includes('--outfile vendor-markdown.js')) throw new Error(`the build script has no step that writes vendor-markdown.js: ${scripts.build}`)
+    const reader = `${core}/node_modules/.bundle-vendor-markdown.js`
+    const built = Bun.spawnSync(['sh', '-c', step.replace('--outfile vendor-markdown.js', `--outfile ${reader}`)], { cwd: core })
+    if (built.exitCode !== 0) throw new Error(`${step} failed: ${built.stderr.toString()}`)
+    return reader
+  })()
+  return builtReader
 }
 
 test('no module a hook loads holds import(), which makes Claude Code refuse the whole hooks module', async () => {
@@ -602,6 +626,37 @@ test('only registerPermissionCheck with "approve": true, or a 4.x "approve" perm
   expect(shape(await bundled('refusing', 'registerPermissionCheck(on)', {}))).toEqual({ hearsPermissions: true, refuses: true, allows: false })
   expect(shape(await bundled('approving', 'registerPermissionCheck(on)', { approve: true }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
   expect(shape(await bundled('approving-4x', 'registerPermissionCheck(on)', { permissions: { approve: true } }))).toEqual({ hearsPermissions: true, refuses: true, allows: true })
+})
+
+test("a mod that styles reply blocks bundles the markdown reader the build ships minified, so a mod near Claude Code's 1 MB hooks module limit still fits", async () => {
+  const reader = await readerTheBuildShips()
+  const entry = `${import.meta.dir}/../node_modules/.bundle-styles.ts`
+  await Bun.write(
+    entry,
+    `import { defineMod } from '${import.meta.dir}/../src/mod.ts'\nimport { List, Paragraph } from '${import.meta.dir}/../src/ui/markdown.ts'\nexport const styles = defineMod({ name: 'demo', setup(mod) {\n  mod.styles.add({ kind: Paragraph, render: () => undefined })\n  mod.styles.add({ kind: List, render: () => undefined })\n} })\n`,
+  )
+  const built = await Bun.build({
+    entrypoints: [entry],
+    format: 'esm',
+    target: 'browser',
+    external: ['claude-code'],
+    plugins: [{ name: 'the built reader', setup: (build) => build.onResolve({ filter: /\/vendor-markdown\.js$/ }, () => ({ path: reader })) }],
+  })
+  const code = (await built.outputs[0]?.text()) ?? ''
+  const minifiedBytes = 156_853
+
+  expect(code).toContain('.bundle-vendor-markdown.js')
+  expect(code.length).toBeLessThan(minifiedBytes + 3_000)
+})
+
+test('the markdown reader the build ships minified parses a GFM reply to the same tree as its source', async () => {
+  const built = (await import(await readerTheBuildShips())) as typeof markdownSource
+  const text = '# Title &amp; more\n\nA [link](file:///x.md) and ~~gone~~ www.example.com.[^1]\n\n| a | b |\n|:-|-:|\n| 1 | 2 |\n\n- [x] done\n- open &nbsp;\n\n```ts\nconst a = 1\n```\n\n[^1]: A note.\n'
+  const tree = (vendor: typeof markdownSource) => vendor.fromMarkdown(text, { extensions: [vendor.gfm()], mdastExtensions: [vendor.gfmFromMarkdown()] })
+
+  expect(tree(markdownSource).children.map((node) => node.type)).toEqual(['heading', 'paragraph', 'table', 'list', 'code', 'footnoteDefinition'])
+  expect(tree(built)).toEqual(tree(markdownSource))
+  expect(built.toString(tree(built))).toBe(markdownSource.toString(tree(markdownSource)))
 })
 
 test("registerMod names each event as a string literal, which Claude Code's hooks loader requires, and registers every hook a mod hears", async () => {

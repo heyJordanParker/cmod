@@ -26,7 +26,7 @@
     "docs/"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser --define process=undefined && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker",
+    "build": "tsc -p tsconfig.build.json && bun build src/vendor.ts --outfile vendor.js --format esm --target browser --define process=undefined --minify && NODE_ENV=production bun build src/vendor-markdown.ts --outfile vendor-markdown.js --format esm --target browser --conditions worker --minify",
     "check": "tsc -p tsconfig.json --noEmit && OXLINT_TSGOLINT_PATH=../lint/node_modules/.bin/tsgolint ../lint/node_modules/.bin/oxlint --type-aware --deny-warnings",
     "test": "bun test"
   },
