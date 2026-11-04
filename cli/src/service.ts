@@ -37,10 +37,7 @@ export async function startService(mod: string, command: readonly string[], vari
     return { label, status: manager.status(label) }
   } catch (error) {
     await rm(unit, { force: true })
-    await rm(record, { force: true })
-    await rmdir(dirname(record)).catch((rmdirError: NodeJS.ErrnoException) => {
-      if (rmdirError.code !== 'ENOTEMPTY' && rmdirError.code !== 'ENOENT') throw rmdirError
-    })
+    await removeRecord(record)
     process.stderr.write(`cmod program: ${executable} of ${mod} runs only while a session is open, because this computer did not take it as a service: ${messageOf(error)}\n`)
     return undefined
   }
@@ -50,6 +47,14 @@ export async function restartServices(mod: string): Promise<string[]> {
   const services = await recordedServices(mod)
   for (const { label } of services) await manager.restart(label)
   return services.map(({ name }) => name)
+}
+
+export async function removeService(mod: string, program: string): Promise<void> {
+  const record = servicePath(storeFolder(process.env), mod, program)
+  const service = await readService(record)
+  if (service === undefined) return
+  await manager.remove(service.label, service.unit)
+  await removeRecord(record)
 }
 
 export async function removeServices(mod: string): Promise<void> {
@@ -64,14 +69,22 @@ export async function serviceNames(mod: string): Promise<string[]> {
 async function recordedServices(mod: string): Promise<(Service & { readonly name: string })[]> {
   const folder = serviceFolder(storeFolder(process.env), mod)
   const entries = (await readdir(folder).catch(ifMissing([]))).filter((entry) => entry.endsWith('.json')).sort()
-  return Promise.all(
-    entries.map(async (entry) => {
-      const path = join(folder, entry)
-      const service = await readJson(path)
-      if (!isObject(service) || typeof service['label'] !== 'string' || typeof service['unit'] !== 'string') throw new Error(`${path} is not a cmod service record. Delete it, and the mod's next session writes it again.`)
-      return { name: entry.slice(0, -'.json'.length), label: service['label'], unit: service['unit'] }
-    }),
-  )
+  const services = await Promise.all(entries.map(async (entry) => ({ name: entry.slice(0, -'.json'.length), service: await readService(join(folder, entry)) })))
+  return services.flatMap(({ name, service }) => (service === undefined ? [] : [{ name, ...service }]))
+}
+
+async function readService(path: string): Promise<Service | undefined> {
+  const service = await readJson(path)
+  if (service === undefined) return undefined
+  if (!isObject(service) || typeof service['label'] !== 'string' || typeof service['unit'] !== 'string') throw new Error(`${path} is not a cmod service record. Delete it, and the mod's next session writes it again.`)
+  return { label: service['label'], unit: service['unit'] }
+}
+
+async function removeRecord(record: string): Promise<void> {
+  await rm(record, { force: true })
+  await rmdir(dirname(record)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error
+  })
 }
 
 const domain = () => `gui/${process.getuid?.() ?? 0}`

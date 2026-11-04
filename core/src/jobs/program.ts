@@ -27,7 +27,7 @@ export function program(options: { readonly command: readonly string[]; readonly
     const { claude, report, spawnCmod, watches } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
-    if (isService) reserveName('program', basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
+    if (isService) for (const type of ['program', 'service']) reserveName(type, basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
     else if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
     const isElected = singleInstance || isService
     const request = { argv: command, ...(environment === undefined ? {} : { env: environment }) }

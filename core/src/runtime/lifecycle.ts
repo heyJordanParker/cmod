@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programPath, readRecord, readSteps, recordPath, scriptsSha256, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programPath, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -16,7 +16,7 @@ import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
-import { cmodError, locatingPrograms, newestCmodVersion, readLines, spawnCmod, type Programs } from './programs.js'
+import { cmodError, locatingPrograms, newestCmodVersion, readLines, runCmod, spawnCmod, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
 import { fitsOption } from '../options.js'
 import { createInstaller } from './installer.js'
@@ -1100,6 +1100,12 @@ async function createMod<State extends object, Declared extends Options>(definit
     names.add(key)
     return { remove: () => void names.delete(key) }
   }
+  const removeUndeclaredServices = async () => {
+    for (const { name } of await claude.fs.list(serviceFolder(runtime.store, definition.name)).catch(ifMissing([]))) {
+      const program = name.endsWith('.json') ? name.slice(0, -'.json'.length) : undefined
+      if (program !== undefined && !names.has(`service:${program}`)) await runCmod(claude, ['program', definition.name, '--remove-service', '--', program], session)
+    }
+  }
   await failsAs('its state did not load', () => modState.load())
   await failsAs('its options did not load', () => modOptions.load(root))
   const missing = modOptions.missing
@@ -1109,6 +1115,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   api = apiOf(definition.name, returned)
   await failsAs('its open panes did not load', () => area.restorePanes())
   area.started()
+  void removeUndeclaredServices().catch((error: unknown) => report({ id: 'program:services', message: 'Could not stop a service it no longer runs', error }))
   return { mod, added, imports, raise: client.raise, area }
 }
 

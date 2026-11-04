@@ -6,12 +6,12 @@ import { instancePath, storeFolder } from '@cmodjs/core/src/records.js'
 import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
 import { programsFolder } from '../program.js'
-import { startService } from '../service.js'
-import { isHolding, startTime, takeLock } from '../store.js'
+import { removeService, startService } from '../service.js'
+import { isHolding, modLock, startTime, takeLock } from '../store.js'
 
 export const summary = "Run one copy of a mod's program for every session."
 
-export const help = `Usage: cmod program <mod> [--no-wait | --service [--env <name>]...] -- <command…>
+export const help = `Usage: cmod program <mod> [--no-wait | --service [--env <name>]... | --remove-service] -- <command…>
 
 ${summary}
 
@@ -38,7 +38,12 @@ folders, and each --env variable, and cmod records it in
 services/<mod>/<program>.json. It loads the service when it is new,
 changed, or not loaded, waits up to 15 seconds for a holder, prints held, and
 exits 0. When the computer does not take the service, it runs as --no-wait
-does.`
+does.
+
+With --remove-service, which a session passes for each service in
+services/<mod>/ that the mod's setup no longer adds, it stops the program's
+service, deletes its unit and its record, and exits 0. A program with no
+service changes nothing.`
 
 const checkMs = 5000
 
@@ -55,7 +60,16 @@ export async function run(argv: string[]): Promise<number> {
   const separator = rest.indexOf('--')
   const [executable, ...args] = separator === -1 ? [] : rest.slice(separator + 1)
   if (mod === undefined || executable === undefined) throw new Error(`cmod program takes a mod's name, --, and the program's command.\n\n${help}`)
-  const { values } = parseArgs({ args: rest.slice(0, separator), options: { 'no-wait': { type: 'boolean', default: false }, service: { type: 'boolean', default: false }, env: { type: 'string', multiple: true, default: [] } } })
+  const { values } = parseArgs({ args: rest.slice(0, separator), options: { 'no-wait': { type: 'boolean', default: false }, service: { type: 'boolean', default: false }, env: { type: 'string', multiple: true, default: [] }, 'remove-service': { type: 'boolean', default: false } } })
+  if (values['remove-service']) {
+    const lock = await takeLock(modLock(mod))
+    try {
+      await removeService(mod, basename(executable))
+    } finally {
+      await lock[Symbol.asyncDispose]()
+    }
+    return 0
+  }
   const file = instancePath(storeFolder(process.env), mod, basename(executable))
   const lockPath = `${file}.lock`
   await mkdir(dirname(file), { recursive: true })

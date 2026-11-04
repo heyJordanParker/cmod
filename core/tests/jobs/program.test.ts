@@ -276,6 +276,75 @@ test('two isService programs with one executable in a mod throw at mod.use, so t
   await expect(tested.start()).rejects.toThrow('preview: the service preview-server is already added. Give each isService program its own executable.')
 })
 
+function exitedCleanly(): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
+  async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+    yield* []
+    return { code: 0, signal: null }
+  }
+  return Object.assign(read(), { result: Promise.resolve<ProcessSpawnResult>({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+}
+
+const recordedService = (program: string) => ({
+  [`/test/home/.local/share/cmod/services/preview/${program}.json`]: `${JSON.stringify({ label: `com.claudemodmanager.preview.${program}`, unit: `/test/home/Library/LaunchAgents/com.claudemodmanager.preview.${program}.plist` })}\n`,
+})
+
+const cmodProgram = '/test/home/.local/share/cmod/programs/cmod'
+
+test("a mod whose new version adds no isService program runs cmod program --remove-service at its start for the service the cmod store records, so the old program stops", async () => {
+  const spawned: (readonly string[])[] = []
+  const tested = testMod(defineMod({ name: 'preview', setup() {} }), { files: recordedService('preview-server') })
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request.argv)
+    return exitedCleanly()
+  }
+
+  await tested.start()
+  await tested.settle()
+
+  expect(spawned).toEqual([[cmodProgram, 'program', 'preview', '--remove-service', '--', 'preview-server']])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
+})
+
+test('a mod whose new version still adds its isService program keeps that service at its start, and removes only the service of the program it renamed', async () => {
+  const spawned: (readonly string[])[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'preview',
+      setup(mod) {
+        mod.use(program({ command: ['preview-server', '--port', '0'], isService: true }))
+      },
+    }),
+    { files: { ...heldCopy, ...recordedService('preview-server'), ...recordedService('old-server') } },
+  )
+  tested.fakes.clock.now = async () => 14_999
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request.argv)
+    return request.argv.includes('--service') ? written([{ stream: 'stdout', text: 'held\n' }], true) : exitedCleanly()
+  }
+
+  await tested.start()
+  await tested.settle()
+
+  expect(spawned.toSorted()).toEqual([
+    [cmodProgram, 'program', 'preview', '--remove-service', '--', 'old-server'],
+    [cmodProgram, 'program', 'preview', '--service', '--', 'preview-server', '--port', '0'],
+  ])
+})
+
+test('a mod with no services folder in the cmod store spawns no cmod process at its start', async () => {
+  const spawned: (readonly string[])[] = []
+  const tested = testMod(defineMod({ name: 'preview', setup() {} }))
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request.argv)
+    return exitedCleanly()
+  }
+
+  await tested.start()
+  await tested.settle()
+
+  expect(spawned).toEqual([])
+})
+
 test('two singleInstance programs with one executable in a mod throw at mod.use', async () => {
   const tested = testMod(
     defineMod({

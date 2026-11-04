@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.10.0] - 2026-11-05
+
+### Changed
+- A mod built on `@cmodjs/core` 5.10.0 runs on cmod 5.10.0 or later, which can stop a service the mod dropped. `cmod check` writes the new minimum, and a session on an older cmod updates it by itself.
+
+### Fixed
+- A service a mod no longer runs stops. When a mod's new version drops `isService` from a `program`, or renames the program, the first session that starts that version stops and deletes the old launchd agent or systemd user service, so the computer stops running a program the mod no longer ships at every login. A service the new version still runs keeps running, and a mod with no service starts as before.
+
 ## [5.9.0] - 2026-11-04
 
 ### Added

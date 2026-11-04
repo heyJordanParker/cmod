@@ -367,6 +367,60 @@ test.concurrent('cmod remove stops the service of the mod and deletes its unit a
   await until(() => serverIds(home, 'stop').length === 1)
 }, 60000)
 
+test.concurrent("cmod program --remove-service, which the first session of a mod's version without the program runs after cmod setup, stops the service and deletes its unit and its record", async () => {
+  const home = await serviceHome('demo')
+  const root = await createMod(home)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
+  await until(() => serverIds(home, 'start').length === 1)
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  const loaded = serviceCalls(home).length
+
+  expect(await cmod(home, 'program', 'demo', '--remove-service', '--', 'fake-server')).toEqual({ exitCode: 0, stdout: '', stderr: '' })
+
+  const calls = serviceCalls(home).slice(loaded)
+  if (isMac) {
+    expect(calls[0]).toBe(`launchctl bootout gui/${uid}/${label('demo')}`)
+    expect([...new Set(calls.slice(1))]).toEqual([`launchctl print gui/${uid}/${label('demo')}`])
+  } else {
+    expect(calls).toEqual([`systemctl --user disable --now ${label('demo')}.service`, 'systemctl --user daemon-reload'])
+  }
+  expect(existsSync(unitOf(home, 'demo'))).toBe(false)
+  expect(existsSync(servicesOf(home, 'demo'))).toBe(false)
+  await until(() => serverIds(home, 'stop').length === 1)
+}, 60000)
+
+test.concurrent('cmod program --remove-service of a program with no service changes nothing and exits 0, so a second session that removes it too fails nothing, and the other services of the mod stay', async () => {
+  const home = await serviceHome('demo')
+  const other = { label: 'com.claudemodmanager.demo.other-server', unit: join(home, 'Library/LaunchAgents/com.claudemodmanager.demo.other-server.plist') }
+  await writeFiles(home, { '.local/share/cmod/services/demo/other-server.json': `${JSON.stringify(other)}\n` })
+
+  expect(await cmod(home, 'program', 'demo', '--remove-service', '--', 'fake-server')).toEqual({ exitCode: 0, stdout: '', stderr: '' })
+
+  expect(serviceCalls(home)).toEqual([])
+  expect(readdirSync(servicesOf(home, 'demo'))).toEqual(['other-server.json'])
+}, 60000)
+
+test.concurrent('a mod whose new version still declares the program keeps its service loaded across cmod setup and the next session start', async () => {
+  const home = await serviceHome('demo')
+  const root = await createMod(home)
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
+  await until(() => serverIds(home, 'start').length === 1)
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  const loaded = serviceCalls(home).length
+
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  expect(await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+
+  expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl kickstart -k gui/${uid}/${label('demo')}`, `launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user restart ${label('demo')}.service`, `systemctl --user start ${label('demo')}.service`])
+  expect(existsSync(unitOf(home, 'demo'))).toBe(true)
+  expect(readdirSync(servicesOf(home, 'demo'))).toEqual(['fake-server.json'])
+  expect(serverIds(home, 'stop')).toEqual([])
+  await stopService(home, 'demo')
+}, 60000)
+
 test.concurrent('cmod list shows the programs a mod runs as a service of this computer', async () => {
   const home = await serviceHome('demo')
   const root = await createMod(home)
