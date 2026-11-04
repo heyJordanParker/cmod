@@ -4,7 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.7.0] - 2026-11-04
+
+### Changed
+- A session whose plugins changed no longer reloads by itself. It keeps running what it loaded and shows one `Plugins changed` toast with a Reload button, which names each plugin updated, turned on, or turned off, and updates in place as more change. Reload pressed while Claude works reloads when the turn ends. Only a session working inside a linked checkout reloads by itself after that checkout builds, so an edit to a linked mod no longer reloads every open session. The corner toasts after a reload are gone, because the offer named each change.
+- Every toast takes the band's whole width, with its close button at the right end of its last line, so pressing one spot again and again closes a stack of toasts.
+
 ### Fixed
+- An older session keeps hearing the other sessions after a newer cmod replaces the conversation index. Before, it showed `Stopped hearing the other sessions` for good.
 - `cmod check` skips every file git ignores, such as scratch work in an ignored `docs/agents/` folder, so a file no release holds no longer fails the imports, metadata, or binaries check.
 - `cmod check` keeps a minimum cmod you write in `.claude-plugin/plugin.json` above the oldest cmod your `@cmodjs/core` runs on, such as `>=5.6.0` for a mod that calls `page.focus`, and `cmod publish` releases it. Before, `cmod check` lowered it to that oldest cmod, `>=5.4.0`, and `cmod publish` refused any other range, so a mod could not require the cmod it needs. A minimum below that oldest cmod is still raised to it.
 - A `beforePrompt` listener with `onFailure: 'refuse'` drops the prompt when Claude Code stops cmod's own prompt hook before the listener answered, with the mod and the stop as the reason. Before, the prompt reached Claude. A session no mod gates still lets its prompts in.

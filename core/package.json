@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/core",
-  "version": "5.6.0",
+  "version": "5.7.0",
   "description": "Build Claude Code mods: hooks, panes, checks, and an install that just works.",
   "license": "MIT",
   "type": "module",
