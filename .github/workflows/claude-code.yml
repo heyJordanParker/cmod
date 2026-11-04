@@ -1,0 +1,19 @@
+name: Latest Claude Code
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The Claude Code version to write types/ from
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    with:
+      claude-code: ${{ inputs.version || 'latest' }}

@@ -1,0 +1,61 @@
+name: Test
+
+on:
+  workflow_call:
+    inputs:
+      claude-code:
+        description: The Claude Code version to write types/ from before the suites run, or none to test the committed types
+        type: string
+        default: ''
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Write the types of Claude Code ${{ inputs.claude-code }}
+        if: inputs.claude-code != ''
+        run: |
+          types/write-claude-code.sh "${{ inputs.claude-code }}"
+          git diff --stat -- types
+
+      - uses: actions/upload-artifact@v7
+        if: inputs.claude-code != ''
+        with:
+          name: claude-code-types
+          path: |
+            types/claude-code/
+            types/claude-code-tools/
+
+      - name: Test the lint rules, @cmodjs/core, and @cmodjs/cli
+        run: |
+          bun install --cwd lint --frozen-lockfile
+          bun install --cwd core --frozen-lockfile
+          bun install --cwd cli --frozen-lockfile
+          bun run --cwd lint test
+          (cd core && bun test)
+          bun run --cwd cli check
+          bun run --cwd core check
+          bun run --cwd core build
+          bun run --cwd cli test
+
+      - name: Test the cmod plugin on this @cmodjs/core
+        run: |
+          bun install --frozen-lockfile
+          (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")
+          rm -rf node_modules/@cmodjs/core
+          mkdir node_modules/@cmodjs/core
+          tar -xzf "$RUNNER_TEMP"/cmodjs-core-*.tgz -C node_modules/@cmodjs/core --strip-components=1
+          bun test
+          bun x tsc --noEmit
+          OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
