@@ -248,6 +248,10 @@ function marketplaceOf(root, name) {
 function pluginsChangedPath(store) {
   return `${store}/plugins-changed`;
 }
+function markedCheckout(mark) {
+  return mark.split(`
+`)[1] || undefined;
+}
 function storeChangedPath(store) {
   return `${store}/store-changed`;
 }
@@ -329,7 +333,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.6.0";
+var coreVersion = "5.7.0";
 var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -856,391 +860,156 @@ function defineMod(definition) {
 }
 
 // node_modules/@cmodjs/core/vendor.js
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
-var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
+var Bt = Object.create;
+var { getPrototypeOf: jt, defineProperty: Ve, getOwnPropertyNames: Gt } = Object;
+var Ye = Object.prototype.hasOwnProperty;
+function Ut(e) {
+  return this[e];
 }
-var __toESMCache_node;
-var __toESMCache_esm;
-var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
+var qt;
+var Ft;
+var Kt = (e, r, t) => {
+  var n = e != null && typeof e === "object";
+  if (n) {
+    var o = r ? qt ??= new WeakMap : Ft ??= new WeakMap, u = o.get(e);
+    if (u)
+      return u;
   }
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  if (mod && typeof mod === "object" || typeof mod === "function") {
-    for (let key of __getOwnPropNames(mod))
-      if (!__hasOwnProp.call(to, key))
-        __defProp(to, key, {
-          get: __accessProp.bind(mod, key),
-          enumerable: true
-        });
+  t = e != null ? Bt(jt(e)) : {};
+  let s = r || !e || !e.__esModule || !Ye.call(e, "default") ? Ve(t, "default", { value: e, enumerable: true }) : t;
+  if (e && typeof e === "object" || typeof e === "function") {
+    for (let i of Gt(e))
+      if (!Ye.call(s, i))
+        Ve(s, i, { get: Ut.bind(e, i), enumerable: true });
   }
-  if (canCache)
-    cache.set(mod, to);
-  return to;
+  if (n)
+    o.set(e, s);
+  return s;
 };
-var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
-var require_constants = __commonJS(function(exports, module) {
-  var WIN_SLASH = "\\\\/";
-  var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
-  var DEFAULT_MAX_EXTGLOB_RECURSION = 0;
-  var DOT_LITERAL = "\\.";
-  var PLUS_LITERAL = "\\+";
-  var QMARK_LITERAL = "\\?";
-  var SLASH_LITERAL = "\\/";
-  var ONE_CHAR = "(?=.)";
-  var QMARK = "[^/]";
-  var END_ANCHOR = `(?:${SLASH_LITERAL}|$)`;
-  var START_ANCHOR = `(?:^|${SLASH_LITERAL})`;
-  var DOTS_SLASH = `${DOT_LITERAL}{1,2}${END_ANCHOR}`;
-  var NO_DOT = `(?!${DOT_LITERAL})`;
-  var NO_DOTS = `(?!${START_ANCHOR}${DOTS_SLASH})`;
-  var NO_DOT_SLASH = `(?!${DOT_LITERAL}{0,1}${END_ANCHOR})`;
-  var NO_DOTS_SLASH = `(?!${DOTS_SLASH})`;
-  var QMARK_NO_DOT = `[^.${SLASH_LITERAL}]`;
-  var STAR = `${QMARK}*?`;
-  var SEP = "/";
-  var POSIX_CHARS = {
-    DOT_LITERAL,
-    PLUS_LITERAL,
-    QMARK_LITERAL,
-    SLASH_LITERAL,
-    ONE_CHAR,
-    QMARK,
-    END_ANCHOR,
-    DOTS_SLASH,
-    NO_DOT,
-    NO_DOTS,
-    NO_DOT_SLASH,
-    NO_DOTS_SLASH,
-    QMARK_NO_DOT,
-    STAR,
-    START_ANCHOR,
-    SEP
-  };
-  var WINDOWS_CHARS = {
-    ...POSIX_CHARS,
-    SLASH_LITERAL: `[${WIN_SLASH}]`,
-    QMARK: WIN_NO_SLASH,
-    STAR: `${WIN_NO_SLASH}*?`,
-    DOTS_SLASH: `${DOT_LITERAL}{1,2}(?:[${WIN_SLASH}]|$)`,
-    NO_DOT: `(?!${DOT_LITERAL})`,
-    NO_DOTS: `(?!(?:^|[${WIN_SLASH}])${DOT_LITERAL}{1,2}(?:[${WIN_SLASH}]|$))`,
-    NO_DOT_SLASH: `(?!${DOT_LITERAL}{0,1}(?:[${WIN_SLASH}]|$))`,
-    NO_DOTS_SLASH: `(?!${DOT_LITERAL}{1,2}(?:[${WIN_SLASH}]|$))`,
-    QMARK_NO_DOT: `[^.${WIN_SLASH}]`,
-    START_ANCHOR: `(?:^|[${WIN_SLASH}])`,
-    END_ANCHOR: `(?:[${WIN_SLASH}]|$)`,
-    SEP: "\\"
-  };
-  var POSIX_REGEX_SOURCE = {
-    __proto__: null,
-    alnum: "a-zA-Z0-9",
-    alpha: "a-zA-Z",
-    ascii: "\\x00-\\x7F",
-    blank: " \\t",
-    cntrl: "\\x00-\\x1F\\x7F",
-    digit: "0-9",
-    graph: "\\x21-\\x7E",
-    lower: "a-z",
-    print: "\\x20-\\x7E ",
-    punct: "\\-!\"#$%&'()\\*+,./:;<=>?@[\\]^_`{|}~",
-    space: " \\t\\r\\n\\v\\f",
-    upper: "A-Z",
-    word: "A-Za-z0-9_",
-    xdigit: "A-Fa-f0-9"
-  };
-  module.exports = {
-    DEFAULT_MAX_EXTGLOB_RECURSION,
-    MAX_LENGTH: 1024 * 64,
-    POSIX_REGEX_SOURCE,
-    REGEX_BACKSLASH: /\\(?![*+?^${}(|)[\]])/g,
-    REGEX_NON_SPECIAL_CHARS: /^[^@![\].,$*+?^{}()|\\/]+/,
-    REGEX_SPECIAL_CHARS: /[-*+?.^${}(|)[\]]/,
-    REGEX_SPECIAL_CHARS_BACKREF: /(\\?)((\W)(\3*))/g,
-    REGEX_SPECIAL_CHARS_GLOBAL: /([-*+?.^${}(|)[\]])/g,
-    REGEX_REMOVE_BACKSLASH: /(?:\[.*?[^\\]\]|\\(?=.))/g,
-    REPLACEMENTS: {
-      __proto__: null,
-      "***": "*",
-      "**/**": "**",
-      "**/**/**": "**"
-    },
-    CHAR_0: 48,
-    CHAR_9: 57,
-    CHAR_UPPERCASE_A: 65,
-    CHAR_LOWERCASE_A: 97,
-    CHAR_UPPERCASE_Z: 90,
-    CHAR_LOWERCASE_Z: 122,
-    CHAR_LEFT_PARENTHESES: 40,
-    CHAR_RIGHT_PARENTHESES: 41,
-    CHAR_ASTERISK: 42,
-    CHAR_AMPERSAND: 38,
-    CHAR_AT: 64,
-    CHAR_BACKWARD_SLASH: 92,
-    CHAR_CARRIAGE_RETURN: 13,
-    CHAR_CIRCUMFLEX_ACCENT: 94,
-    CHAR_COLON: 58,
-    CHAR_COMMA: 44,
-    CHAR_DOT: 46,
-    CHAR_DOUBLE_QUOTE: 34,
-    CHAR_EQUAL: 61,
-    CHAR_EXCLAMATION_MARK: 33,
-    CHAR_FORM_FEED: 12,
-    CHAR_FORWARD_SLASH: 47,
-    CHAR_GRAVE_ACCENT: 96,
-    CHAR_HASH: 35,
-    CHAR_HYPHEN_MINUS: 45,
-    CHAR_LEFT_ANGLE_BRACKET: 60,
-    CHAR_LEFT_CURLY_BRACE: 123,
-    CHAR_LEFT_SQUARE_BRACKET: 91,
-    CHAR_LINE_FEED: 10,
-    CHAR_NO_BREAK_SPACE: 160,
-    CHAR_PERCENT: 37,
-    CHAR_PLUS: 43,
-    CHAR_QUESTION_MARK: 63,
-    CHAR_RIGHT_ANGLE_BRACKET: 62,
-    CHAR_RIGHT_CURLY_BRACE: 125,
-    CHAR_RIGHT_SQUARE_BRACKET: 93,
-    CHAR_SEMICOLON: 59,
-    CHAR_SINGLE_QUOTE: 39,
-    CHAR_SPACE: 32,
-    CHAR_TAB: 9,
-    CHAR_UNDERSCORE: 95,
-    CHAR_VERTICAL_LINE: 124,
-    CHAR_ZERO_WIDTH_NOBREAK_SPACE: 65279,
-    extglobChars(chars) {
-      return {
-        "!": { type: "negate", open: "(?:(?!(?:", close: `))${chars.STAR})` },
-        "?": { type: "qmark", open: "(?:", close: ")?" },
-        "+": { type: "plus", open: "(?:", close: ")+" },
-        "*": { type: "star", open: "(?:", close: ")*" },
-        "@": { type: "at", open: "(?:", close: ")" }
-      };
-    },
-    globChars(win32) {
-      return win32 === true ? WINDOWS_CHARS : POSIX_CHARS;
-    }
-  };
+var me = (e, r) => () => (r || e((r = { exports: {} }).exports, r), r.exports);
+var Se = me(function(Qn, dt) {
+  var lt = { DOT_LITERAL: "\\.", PLUS_LITERAL: "\\+", QMARK_LITERAL: "\\?", SLASH_LITERAL: "\\/", ONE_CHAR: "(?=.)", QMARK: "[^/]", END_ANCHOR: "(?:\\/|$)", DOTS_SLASH: "\\.{1,2}(?:\\/|$)", NO_DOT: "(?!\\.)", NO_DOTS: "(?!(?:^|\\/)\\.{1,2}(?:\\/|$))", NO_DOT_SLASH: "(?!\\.{0,1}(?:\\/|$))", NO_DOTS_SLASH: "(?!\\.{1,2}(?:\\/|$))", QMARK_NO_DOT: "[^.\\/]", STAR: "[^/]*?", START_ANCHOR: "(?:^|\\/)", SEP: "/" }, wr = { ...lt, SLASH_LITERAL: "[\\\\/]", QMARK: "[^\\\\/]", STAR: "[^\\\\/]*?", DOTS_SLASH: "\\.{1,2}(?:[\\\\/]|$)", NO_DOT: "(?!\\.)", NO_DOTS: "(?!(?:^|[\\\\/])\\.{1,2}(?:[\\\\/]|$))", NO_DOT_SLASH: "(?!\\.{0,1}(?:[\\\\/]|$))", NO_DOTS_SLASH: "(?!\\.{1,2}(?:[\\\\/]|$))", QMARK_NO_DOT: "[^.\\\\/]", START_ANCHOR: "(?:^|[\\\\/])", END_ANCHOR: "(?:[\\\\/]|$)", SEP: "\\" }, Or = { __proto__: null, alnum: "a-zA-Z0-9", alpha: "a-zA-Z", ascii: "\\x00-\\x7F", blank: " \\t", cntrl: "\\x00-\\x1F\\x7F", digit: "0-9", graph: "\\x21-\\x7E", lower: "a-z", print: "\\x20-\\x7E ", punct: "\\-!\"#$%&'()\\*+,./:;<=>?@[\\]^_`{|}~", space: " \\t\\r\\n\\v\\f", upper: "A-Z", word: "A-Za-z0-9_", xdigit: "A-Fa-f0-9" };
+  dt.exports = { DEFAULT_MAX_EXTGLOB_RECURSION: 0, MAX_LENGTH: 65536, POSIX_REGEX_SOURCE: Or, REGEX_BACKSLASH: /\\(?![*+?^${}(|)[\]])/g, REGEX_NON_SPECIAL_CHARS: /^[^@![\].,$*+?^{}()|\\/]+/, REGEX_SPECIAL_CHARS: /[-*+?.^${}(|)[\]]/, REGEX_SPECIAL_CHARS_BACKREF: /(\\?)((\W)(\3*))/g, REGEX_SPECIAL_CHARS_GLOBAL: /([-*+?.^${}(|)[\]])/g, REGEX_REMOVE_BACKSLASH: /(?:\[.*?[^\\]\]|\\(?=.))/g, REPLACEMENTS: { __proto__: null, "***": "*", "**/**": "**", "**/**/**": "**" }, CHAR_0: 48, CHAR_9: 57, CHAR_UPPERCASE_A: 65, CHAR_LOWERCASE_A: 97, CHAR_UPPERCASE_Z: 90, CHAR_LOWERCASE_Z: 122, CHAR_LEFT_PARENTHESES: 40, CHAR_RIGHT_PARENTHESES: 41, CHAR_ASTERISK: 42, CHAR_AMPERSAND: 38, CHAR_AT: 64, CHAR_BACKWARD_SLASH: 92, CHAR_CARRIAGE_RETURN: 13, CHAR_CIRCUMFLEX_ACCENT: 94, CHAR_COLON: 58, CHAR_COMMA: 44, CHAR_DOT: 46, CHAR_DOUBLE_QUOTE: 34, CHAR_EQUAL: 61, CHAR_EXCLAMATION_MARK: 33, CHAR_FORM_FEED: 12, CHAR_FORWARD_SLASH: 47, CHAR_GRAVE_ACCENT: 96, CHAR_HASH: 35, CHAR_HYPHEN_MINUS: 45, CHAR_LEFT_ANGLE_BRACKET: 60, CHAR_LEFT_CURLY_BRACE: 123, CHAR_LEFT_SQUARE_BRACKET: 91, CHAR_LINE_FEED: 10, CHAR_NO_BREAK_SPACE: 160, CHAR_PERCENT: 37, CHAR_PLUS: 43, CHAR_QUESTION_MARK: 63, CHAR_RIGHT_ANGLE_BRACKET: 62, CHAR_RIGHT_CURLY_BRACE: 125, CHAR_RIGHT_SQUARE_BRACKET: 93, CHAR_SEMICOLON: 59, CHAR_SINGLE_QUOTE: 39, CHAR_SPACE: 32, CHAR_TAB: 9, CHAR_UNDERSCORE: 95, CHAR_VERTICAL_LINE: 124, CHAR_ZERO_WIDTH_NOBREAK_SPACE: 65279, extglobChars(e) {
+    return { "!": { type: "negate", open: "(?:(?!(?:", close: `))${e.STAR})` }, "?": { type: "qmark", open: "(?:", close: ")?" }, "+": { type: "plus", open: "(?:", close: ")+" }, "*": { type: "star", open: "(?:", close: ")*" }, "@": { type: "at", open: "(?:", close: ")" } };
+  }, globChars(e) {
+    return e === true ? wr : lt;
+  } };
 });
-var require_utils = __commonJS(function(exports) {
-  var {
-    REGEX_BACKSLASH,
-    REGEX_REMOVE_BACKSLASH,
-    REGEX_SPECIAL_CHARS,
-    REGEX_SPECIAL_CHARS_GLOBAL
-  } = require_constants();
-  exports.isObject = (val) => val !== null && typeof val === "object" && !Array.isArray(val);
-  exports.hasRegexChars = (str) => REGEX_SPECIAL_CHARS.test(str);
-  exports.isRegexChar = (str) => str.length === 1 && exports.hasRegexChars(str);
-  exports.escapeRegex = (str) => str.replace(REGEX_SPECIAL_CHARS_GLOBAL, "\\$1");
-  exports.toPosixSlashes = (str) => str.replace(REGEX_BACKSLASH, "/");
-  exports.isWindows = () => {
-    if (typeof navigator !== "undefined" && navigator.platform) {
-      const platform = navigator.platform.toLowerCase();
-      return platform === "win32" || platform === "windows";
+var Te = me(function(kr) {
+  var { REGEX_BACKSLASH: vr, REGEX_REMOVE_BACKSLASH: Tr, REGEX_SPECIAL_CHARS: Ir, REGEX_SPECIAL_CHARS_GLOBAL: Cr } = Se();
+  kr.isObject = (e) => e !== null && typeof e === "object" && !Array.isArray(e);
+  kr.hasRegexChars = (e) => Ir.test(e);
+  kr.isRegexChar = (e) => e.length === 1 && kr.hasRegexChars(e);
+  kr.escapeRegex = (e) => e.replace(Cr, "\\$1");
+  kr.toPosixSlashes = (e) => e.replace(vr, "/");
+  kr.isWindows = () => {
+    if (typeof navigator < "u" && navigator.platform) {
+      let e = navigator.platform.toLowerCase();
+      return e === "win32" || e === "windows";
     }
-    if (false) {}
     return false;
   };
-  exports.removeBackslashes = (str) => {
-    return str.replace(REGEX_REMOVE_BACKSLASH, (match) => {
-      return match === "\\" ? "" : match;
-    });
+  kr.removeBackslashes = (e) => e.replace(Tr, (r) => r === "\\" ? "" : r);
+  kr.escapeLast = (e, r, t) => {
+    let n = e.lastIndexOf(r, t);
+    if (n === -1)
+      return e;
+    if (e[n - 1] === "\\")
+      return kr.escapeLast(e, r, n - 1);
+    return `${e.slice(0, n)}\\${e.slice(n)}`;
   };
-  exports.escapeLast = (input, char, lastIdx) => {
-    const idx = input.lastIndexOf(char, lastIdx);
-    if (idx === -1)
-      return input;
-    if (input[idx - 1] === "\\")
-      return exports.escapeLast(input, char, idx - 1);
-    return `${input.slice(0, idx)}\\${input.slice(idx)}`;
+  kr.removePrefix = (e, r = {}) => {
+    let t = e;
+    if (t.startsWith("./"))
+      t = t.slice(2), r.prefix = "./";
+    return t;
   };
-  exports.removePrefix = (input, state = {}) => {
-    let output = input;
-    if (output.startsWith("./")) {
-      output = output.slice(2);
-      state.prefix = "./";
-    }
-    return output;
+  kr.wrapOutput = (e, r = {}, t = {}) => {
+    let n = t.contains ? "" : "^", o = t.contains ? "" : "$", u = `${n}(?:${e})${o}`;
+    if (r.negated === true)
+      u = `(?:^(?!${u}).*$)`;
+    return u;
   };
-  exports.wrapOutput = (input, state = {}, options = {}) => {
-    const prepend = options.contains ? "" : "^";
-    const append = options.contains ? "" : "$";
-    let output = `${prepend}(?:${input})${append}`;
-    if (state.negated === true) {
-      output = `(?:^(?!${output}).*$)`;
-    }
-    return output;
-  };
-  exports.basename = (path, { windows } = {}) => {
-    const segs = path.split(windows ? /[\\/]/ : "/");
-    const last = segs[segs.length - 1];
-    if (last === "") {
-      return segs[segs.length - 2];
-    }
-    return last;
+  kr.basename = (e, { windows: r } = {}) => {
+    let t = e.split(r ? /[\\/]/ : "/"), n = t[t.length - 1];
+    if (n === "")
+      return t[t.length - 2];
+    return n;
   };
 });
-var require_scan = __commonJS(function(exports, module) {
-  var utils = require_utils();
-  var {
-    CHAR_ASTERISK,
-    CHAR_AT,
-    CHAR_BACKWARD_SLASH,
-    CHAR_COMMA,
-    CHAR_DOT,
-    CHAR_EXCLAMATION_MARK,
-    CHAR_FORWARD_SLASH,
-    CHAR_LEFT_CURLY_BRACE,
-    CHAR_LEFT_PARENTHESES,
-    CHAR_LEFT_SQUARE_BRACKET,
-    CHAR_PLUS,
-    CHAR_QUESTION_MARK,
-    CHAR_RIGHT_CURLY_BRACE,
-    CHAR_RIGHT_PARENTHESES,
-    CHAR_RIGHT_SQUARE_BRACKET
-  } = require_constants();
-  var isPathSeparator = (code) => {
-    return code === CHAR_FORWARD_SLASH || code === CHAR_BACKWARD_SLASH;
-  };
-  var depth = (token) => {
-    if (token.isPrefix !== true) {
-      token.depth = token.isGlobstar ? Infinity : 1;
-    }
-  };
-  var scan = (input, options) => {
-    const opts = options || {};
-    const length = input.length - 1;
-    const scanToEnd = opts.parts === true || opts.tokens === true || opts.scanToEnd === true;
-    const slashes = [];
-    const tokens = [];
-    const parts = [];
-    let str = input;
-    let index = -1;
-    let start = 0;
-    let lastIndex = 0;
-    let isBrace = false;
-    let isBracket = false;
-    let isGlob = false;
-    let isExtglob = false;
-    let isGlobstar = false;
-    let braceEscaped = false;
-    let backslashes = false;
-    let negated = false;
-    let negatedExtglob = false;
-    let finished = false;
-    let braces = 0;
-    let prev;
-    let code;
-    let token = { value: "", depth: 0, isGlob: false };
-    const eos = () => index >= length;
-    const peek = () => str.charCodeAt(index + 1);
-    const advance = () => {
-      prev = code;
-      return str.charCodeAt(++index);
-    };
-    while (index < length) {
-      code = advance();
-      let next;
-      if (code === CHAR_BACKWARD_SLASH) {
-        backslashes = token.backslashes = true;
-        code = advance();
-        if (code === CHAR_LEFT_CURLY_BRACE) {
-          braceEscaped = true;
-        }
+var xt = me(function(Vn, _t) {
+  var Ce = Te(), { CHAR_ASTERISK: Be, CHAR_AT: Gr, CHAR_BACKWARD_SLASH: xe, CHAR_COMMA: Ur, CHAR_DOT: je, CHAR_EXCLAMATION_MARK: Ge, CHAR_FORWARD_SLASH: gt, CHAR_LEFT_CURLY_BRACE: Ue, CHAR_LEFT_PARENTHESES: Ie, CHAR_LEFT_SQUARE_BRACKET: qr, CHAR_PLUS: Fr, CHAR_QUESTION_MARK: ht, CHAR_RIGHT_CURLY_BRACE: Kr, CHAR_RIGHT_PARENTHESES: $t, CHAR_RIGHT_SQUARE_BRACKET: Wr } = Se(), mt = (e) => e === gt || e === xe, yt = (e) => {
+    if (e.isPrefix !== true)
+      e.depth = e.isGlobstar ? 1 / 0 : 1;
+  }, Xr = (e, r) => {
+    let t = r || {}, n = e.length - 1, o = t.parts === true || t.tokens === true || t.scanToEnd === true, u = [], s = [], i = [], h = e, N = -1, _ = 0, w = 0, M = false, K = false, g = false, k = false, ee = false, q = false, L = false, H = false, ne = false, X = false, T = 0, V, A, I = { value: "", depth: 0, isGlob: false }, a = () => N >= n, Q = () => h.charCodeAt(N + 1), C = () => (V = A, h.charCodeAt(++N));
+    while (N < n) {
+      A = C();
+      let P;
+      if (A === xe) {
+        if (L = I.backslashes = true, A = C(), A === Ue)
+          q = true;
         continue;
       }
-      if (braceEscaped === true || code === CHAR_LEFT_CURLY_BRACE) {
-        braces++;
-        while (eos() !== true && (code = advance())) {
-          if (code === CHAR_BACKWARD_SLASH) {
-            backslashes = token.backslashes = true;
-            advance();
+      if (q === true || A === Ue) {
+        T++;
+        while (a() !== true && (A = C())) {
+          if (A === xe) {
+            L = I.backslashes = true, C();
             continue;
           }
-          if (code === CHAR_LEFT_CURLY_BRACE) {
-            braces++;
+          if (A === Ue) {
+            T++;
             continue;
           }
-          if (braceEscaped !== true && code === CHAR_DOT && (code = advance()) === CHAR_DOT) {
-            isBrace = token.isBrace = true;
-            isGlob = token.isGlob = true;
-            finished = true;
-            if (scanToEnd === true) {
+          if (q !== true && A === je && (A = C()) === je) {
+            if (M = I.isBrace = true, g = I.isGlob = true, X = true, o === true)
               continue;
-            }
             break;
           }
-          if (braceEscaped !== true && code === CHAR_COMMA) {
-            isBrace = token.isBrace = true;
-            isGlob = token.isGlob = true;
-            finished = true;
-            if (scanToEnd === true) {
+          if (q !== true && A === Ur) {
+            if (M = I.isBrace = true, g = I.isGlob = true, X = true, o === true)
               continue;
-            }
             break;
           }
-          if (code === CHAR_RIGHT_CURLY_BRACE) {
-            braces--;
-            if (braces === 0) {
-              braceEscaped = false;
-              isBrace = token.isBrace = true;
-              finished = true;
+          if (A === Kr) {
+            if (T--, T === 0) {
+              q = false, M = I.isBrace = true, X = true;
               break;
             }
           }
         }
-        if (scanToEnd === true) {
+        if (o === true)
           continue;
-        }
         break;
       }
-      if (code === CHAR_FORWARD_SLASH) {
-        slashes.push(index);
-        tokens.push(token);
-        token = { value: "", depth: 0, isGlob: false };
-        if (finished === true)
+      if (A === gt) {
+        if (u.push(N), s.push(I), I = { value: "", depth: 0, isGlob: false }, X === true)
           continue;
-        if (prev === CHAR_DOT && index === start + 1) {
-          start += 2;
+        if (V === je && N === _ + 1) {
+          _ += 2;
           continue;
         }
-        lastIndex = index + 1;
+        w = N + 1;
         continue;
       }
-      if (opts.noext !== true) {
-        const isExtglobChar = code === CHAR_PLUS || code === CHAR_AT || code === CHAR_ASTERISK || code === CHAR_QUESTION_MARK || code === CHAR_EXCLAMATION_MARK;
-        if (isExtglobChar === true && peek() === CHAR_LEFT_PARENTHESES) {
-          isGlob = token.isGlob = true;
-          isExtglob = token.isExtglob = true;
-          finished = true;
-          if (code === CHAR_EXCLAMATION_MARK && index === start) {
-            negatedExtglob = true;
-          }
-          if (scanToEnd === true) {
-            let parens = 0;
-            while (eos() !== true && (code = advance())) {
-              if (code === CHAR_BACKWARD_SLASH) {
-                backslashes = token.backslashes = true;
-                advance();
+      if (t.noext !== true) {
+        if ((A === Fr || A === Gr || A === Be || A === ht || A === Ge) === true && Q() === Ie) {
+          if (g = I.isGlob = true, k = I.isExtglob = true, X = true, A === Ge && N === _)
+            ne = true;
+          if (o === true) {
+            let te = 0;
+            while (a() !== true && (A = C())) {
+              if (A === xe) {
+                L = I.backslashes = true, C();
                 continue;
               }
-              if (code === CHAR_LEFT_PARENTHESES) {
-                parens++;
+              if (A === Ie) {
+                te++;
                 continue;
               }
-              if (code === CHAR_RIGHT_PARENTHESES && --parens === 0) {
-                finished = true;
+              if (A === $t && --te === 0) {
+                X = true;
                 break;
               }
             }
@@ -1249,64 +1018,51 @@ var require_scan = __commonJS(function(exports, module) {
           break;
         }
       }
-      if (code === CHAR_ASTERISK) {
-        if (prev === CHAR_ASTERISK)
-          isGlobstar = token.isGlobstar = true;
-        isGlob = token.isGlob = true;
-        finished = true;
-        if (scanToEnd === true) {
+      if (A === Be) {
+        if (V === Be)
+          ee = I.isGlobstar = true;
+        if (g = I.isGlob = true, X = true, o === true)
           continue;
-        }
         break;
       }
-      if (code === CHAR_QUESTION_MARK) {
-        isGlob = token.isGlob = true;
-        finished = true;
-        if (scanToEnd === true) {
+      if (A === ht) {
+        if (g = I.isGlob = true, X = true, o === true)
           continue;
-        }
         break;
       }
-      if (code === CHAR_LEFT_SQUARE_BRACKET) {
-        while (eos() !== true && (next = advance())) {
-          if (next === CHAR_BACKWARD_SLASH) {
-            backslashes = token.backslashes = true;
-            advance();
+      if (A === qr) {
+        while (a() !== true && (P = C())) {
+          if (P === xe) {
+            L = I.backslashes = true, C();
             continue;
           }
-          if (next === CHAR_RIGHT_SQUARE_BRACKET) {
-            isBracket = token.isBracket = true;
-            isGlob = token.isGlob = true;
-            finished = true;
+          if (P === Wr) {
+            K = I.isBracket = true, g = I.isGlob = true, X = true;
             break;
           }
         }
-        if (scanToEnd === true) {
+        if (o === true)
           continue;
-        }
         break;
       }
-      if (opts.nonegate !== true && code === CHAR_EXCLAMATION_MARK && index === start) {
-        negated = token.negated = true;
-        start++;
+      if (t.nonegate !== true && A === Ge && N === _) {
+        H = I.negated = true, _++;
         continue;
       }
-      if (opts.noparen !== true && code === CHAR_LEFT_PARENTHESES) {
-        isGlob = token.isGlob = true;
-        if (scanToEnd === true) {
-          let parens = 1;
-          while (eos() !== true && (code = advance())) {
-            if (code === CHAR_BACKWARD_SLASH) {
-              backslashes = token.backslashes = true;
-              advance();
+      if (t.noparen !== true && A === Ie) {
+        if (g = I.isGlob = true, o === true) {
+          let J = 1;
+          while (a() !== true && (A = C())) {
+            if (A === xe) {
+              L = I.backslashes = true, C();
               continue;
             }
-            if (code === CHAR_LEFT_PARENTHESES) {
-              parens++;
+            if (A === Ie) {
+              J++;
               continue;
             }
-            if (code === CHAR_RIGHT_PARENTHESES && --parens === 0) {
-              finished = true;
+            if (A === $t && --J === 0) {
+              X = true;
               break;
             }
           }
@@ -1314,2804 +1070,1687 @@ var require_scan = __commonJS(function(exports, module) {
         }
         break;
       }
-      if (isGlob === true) {
-        finished = true;
-        if (scanToEnd === true) {
+      if (g === true) {
+        if (X = true, o === true)
           continue;
-        }
         break;
       }
     }
-    if (opts.noext === true) {
-      isExtglob = false;
-      isGlob = false;
+    if (t.noext === true)
+      k = false, g = false;
+    let B = h, l = "", f = "";
+    if (_ > 0)
+      l = h.slice(0, _), h = h.slice(_), w -= _;
+    if (B && g === true && w > 0)
+      B = h.slice(0, w), f = h.slice(w);
+    else if (g === true)
+      B = "", f = h;
+    else
+      B = h;
+    if (B && B !== "" && B !== "/" && B !== h) {
+      if (mt(B.charCodeAt(B.length - 1)))
+        B = B.slice(0, -1);
     }
-    let base = str;
-    let prefix = "";
-    let glob = "";
-    if (start > 0) {
-      prefix = str.slice(0, start);
-      str = str.slice(start);
-      lastIndex -= start;
+    if (t.unescape === true) {
+      if (f)
+        f = Ce.removeBackslashes(f);
+      if (B && L === true)
+        B = Ce.removeBackslashes(B);
     }
-    if (base && isGlob === true && lastIndex > 0) {
-      base = str.slice(0, lastIndex);
-      glob = str.slice(lastIndex);
-    } else if (isGlob === true) {
-      base = "";
-      glob = str;
-    } else {
-      base = str;
+    let Y = { prefix: l, input: e, start: _, base: B, glob: f, isBrace: M, isBracket: K, isGlob: g, isExtglob: k, isGlobstar: ee, negated: H, negatedExtglob: ne };
+    if (t.tokens === true) {
+      if (Y.maxDepth = 0, !mt(A))
+        s.push(I);
+      Y.tokens = s;
     }
-    if (base && base !== "" && base !== "/" && base !== str) {
-      if (isPathSeparator(base.charCodeAt(base.length - 1))) {
-        base = base.slice(0, -1);
-      }
-    }
-    if (opts.unescape === true) {
-      if (glob)
-        glob = utils.removeBackslashes(glob);
-      if (base && backslashes === true) {
-        base = utils.removeBackslashes(base);
-      }
-    }
-    const state = {
-      prefix,
-      input,
-      start,
-      base,
-      glob,
-      isBrace,
-      isBracket,
-      isGlob,
-      isExtglob,
-      isGlobstar,
-      negated,
-      negatedExtglob
-    };
-    if (opts.tokens === true) {
-      state.maxDepth = 0;
-      if (!isPathSeparator(code)) {
-        tokens.push(token);
-      }
-      state.tokens = tokens;
-    }
-    if (opts.parts === true || opts.tokens === true) {
-      let prevIndex;
-      for (let idx = 0;idx < slashes.length; idx++) {
-        const n = prevIndex !== undefined ? prevIndex + 1 : start;
-        const i = slashes[idx];
-        const value = input.slice(n, i);
-        if (opts.tokens) {
-          if (idx === 0 && start !== 0) {
-            tokens[idx].isPrefix = true;
-            tokens[idx].value = prefix;
-          } else {
-            tokens[idx].value = value;
-          }
-          depth(tokens[idx]);
-          state.maxDepth += tokens[idx].depth;
+    if (t.parts === true || t.tokens === true) {
+      let P;
+      for (let W = 0;W < u.length; W++) {
+        let ue = P !== undefined ? P + 1 : _, $e = u[W], fe = e.slice(ue, $e);
+        if (t.tokens) {
+          if (W === 0 && _ !== 0)
+            s[W].isPrefix = true, s[W].value = l;
+          else
+            s[W].value = fe;
+          yt(s[W]), Y.maxDepth += s[W].depth;
         }
-        if (i >= start) {
-          parts.push(value);
-          prevIndex = i;
-        }
+        if ($e >= _)
+          i.push(fe), P = $e;
       }
-      const n = prevIndex !== undefined ? prevIndex + 1 : start;
-      const value = input.slice(n);
-      parts.push(value);
-      if (opts.tokens && prevIndex && prevIndex + 1 < input.length) {
-        tokens[tokens.length - 1].value = value;
-        depth(tokens[tokens.length - 1]);
-        state.maxDepth += tokens[tokens.length - 1].depth;
-      }
-      state.slashes = slashes;
-      state.parts = parts;
+      let J = P !== undefined ? P + 1 : _, te = e.slice(J);
+      if (i.push(te), t.tokens && P && P + 1 < e.length)
+        s[s.length - 1].value = te, yt(s[s.length - 1]), Y.maxDepth += s[s.length - 1].depth;
+      Y.slashes = u, Y.parts = i;
     }
-    return state;
+    return Y;
   };
-  module.exports = scan;
+  _t.exports = Xr;
 });
-var require_parse = __commonJS(function(exports, module) {
-  var constants = require_constants();
-  var utils = require_utils();
-  var {
-    MAX_LENGTH,
-    POSIX_REGEX_SOURCE,
-    REGEX_NON_SPECIAL_CHARS,
-    REGEX_SPECIAL_CHARS_BACKREF,
-    REPLACEMENTS
-  } = constants;
-  var expandRange = (args, options) => {
-    if (typeof options.expandRange === "function") {
-      return options.expandRange(...args, options);
-    }
-    args.sort();
-    const value = `[${args.join("-")}]`;
+var St = me(function(Yn, Et) {
+  var he = Se(), G = Te(), { MAX_LENGTH: ke, POSIX_REGEX_SOURCE: Qr, REGEX_NON_SPECIAL_CHARS: Zr, REGEX_SPECIAL_CHARS_BACKREF: Vr, REPLACEMENTS: At } = he, Yr = (e, r) => {
+    if (typeof r.expandRange === "function")
+      return r.expandRange(...e, r);
+    e.sort();
+    let t = `[${e.join("-")}]`;
     try {
-      new RegExp(value);
-    } catch (ex) {
-      return args.map((v) => utils.escapeRegex(v)).join("..");
+      new RegExp(t);
+    } catch (n) {
+      return e.map((o) => G.escapeRegex(o)).join("..");
     }
-    return value;
-  };
-  var syntaxError = (type, char) => {
-    return `Missing ${type}: "${char}" - use "\\\\${char}" to match literal characters`;
-  };
-  var splitTopLevel = (input) => {
-    const parts = [];
-    let bracket = 0;
-    let paren = 0;
-    let quote = 0;
-    let value = "";
-    let escaped = false;
-    for (const ch of input) {
-      if (escaped === true) {
-        value += ch;
-        escaped = false;
+    return t;
+  }, Ae = (e, r) => `Missing ${e}: "${r}" - use "\\\\${r}" to match literal characters`, Rt = (e) => {
+    let r = [], t = 0, n = 0, o = 0, u = "", s = false;
+    for (let i of e) {
+      if (s === true) {
+        u += i, s = false;
         continue;
       }
-      if (ch === "\\") {
-        value += ch;
-        escaped = true;
+      if (i === "\\") {
+        u += i, s = true;
         continue;
       }
-      if (ch === '"') {
-        quote = quote === 1 ? 0 : 1;
-        value += ch;
+      if (i === '"') {
+        o = o === 1 ? 0 : 1, u += i;
         continue;
       }
-      if (quote === 0) {
-        if (ch === "[") {
-          bracket++;
-        } else if (ch === "]" && bracket > 0) {
-          bracket--;
-        } else if (bracket === 0) {
-          if (ch === "(") {
-            paren++;
-          } else if (ch === ")" && paren > 0) {
-            paren--;
-          } else if (ch === "|" && paren === 0) {
-            parts.push(value);
-            value = "";
+      if (o === 0) {
+        if (i === "[")
+          t++;
+        else if (i === "]" && t > 0)
+          t--;
+        else if (t === 0) {
+          if (i === "(")
+            n++;
+          else if (i === ")" && n > 0)
+            n--;
+          else if (i === "|" && n === 0) {
+            r.push(u), u = "";
             continue;
           }
         }
       }
-      value += ch;
+      u += i;
     }
-    parts.push(value);
-    return parts;
-  };
-  var isPlainBranch = (branch) => {
-    let escaped = false;
-    for (const ch of branch) {
-      if (escaped === true) {
-        escaped = false;
+    return r.push(u), r;
+  }, Jr = (e) => {
+    let r = false;
+    for (let t of e) {
+      if (r === true) {
+        r = false;
         continue;
       }
-      if (ch === "\\") {
-        escaped = true;
+      if (t === "\\") {
+        r = true;
         continue;
       }
-      if (/[?*+@!()[\]{}]/.test(ch)) {
+      if (/[?*+@!()[\]{}]/.test(t))
         return false;
-      }
     }
     return true;
-  };
-  var normalizeSimpleBranch = (branch) => {
-    let value = branch.trim();
-    let changed = true;
-    while (changed === true) {
-      changed = false;
-      if (/^@\([^\\()[\]{}|]+\)$/.test(value)) {
-        value = value.slice(2, -1);
-        changed = true;
-      }
-    }
-    if (!isPlainBranch(value)) {
+  }, Fe = (e) => {
+    let r = e.trim(), t = true;
+    while (t === true)
+      if (t = false, /^@\([^\\()[\]{}|]+\)$/.test(r))
+        r = r.slice(2, -1), t = true;
+    if (!Jr(r))
       return;
-    }
-    return value.replace(/\\(.)/g, "$1");
-  };
-  var hasRepeatedCharPrefixOverlap = (branches) => {
-    const values = branches.map(normalizeSimpleBranch).filter(Boolean);
-    for (let i = 0;i < values.length; i++) {
-      for (let j = i + 1;j < values.length; j++) {
-        const a = values[i];
-        const b = values[j];
-        const char = a[0];
-        if (!char || a !== char.repeat(a.length) || b !== char.repeat(b.length)) {
+    return r.replace(/\\(.)/g, "$1");
+  }, en = (e) => {
+    let r = e.map(Fe).filter(Boolean);
+    for (let t = 0;t < r.length; t++)
+      for (let n = t + 1;n < r.length; n++) {
+        let o = r[t], u = r[n], s = o[0];
+        if (!s || o !== s.repeat(o.length) || u !== s.repeat(u.length))
           continue;
-        }
-        if (a === b || a.startsWith(b) || b.startsWith(a)) {
+        if (o === u || o.startsWith(u) || u.startsWith(o))
           return true;
-        }
       }
-    }
     return false;
-  };
-  var parseRepeatedExtglob = (pattern, requireEnd = true) => {
-    if (pattern[0] !== "+" && pattern[0] !== "*" || pattern[1] !== "(") {
+  }, qe = (e, r = true) => {
+    if (e[0] !== "+" && e[0] !== "*" || e[1] !== "(")
       return;
-    }
-    let bracket = 0;
-    let paren = 0;
-    let quote = 0;
-    let escaped = false;
-    for (let i = 1;i < pattern.length; i++) {
-      const ch = pattern[i];
-      if (escaped === true) {
-        escaped = false;
+    let t = 0, n = 0, o = 0, u = false;
+    for (let s = 1;s < e.length; s++) {
+      let i = e[s];
+      if (u === true) {
+        u = false;
         continue;
       }
-      if (ch === "\\") {
-        escaped = true;
+      if (i === "\\") {
+        u = true;
         continue;
       }
-      if (ch === '"') {
-        quote = quote === 1 ? 0 : 1;
+      if (i === '"') {
+        o = o === 1 ? 0 : 1;
         continue;
       }
-      if (quote === 1) {
+      if (o === 1)
+        continue;
+      if (i === "[") {
+        t++;
         continue;
       }
-      if (ch === "[") {
-        bracket++;
+      if (i === "]" && t > 0) {
+        t--;
         continue;
       }
-      if (ch === "]" && bracket > 0) {
-        bracket--;
+      if (t > 0)
+        continue;
+      if (i === "(") {
+        n++;
         continue;
       }
-      if (bracket > 0) {
-        continue;
-      }
-      if (ch === "(") {
-        paren++;
-        continue;
-      }
-      if (ch === ")") {
-        paren--;
-        if (paren === 0) {
-          if (requireEnd === true && i !== pattern.length - 1) {
+      if (i === ")") {
+        if (n--, n === 0) {
+          if (r === true && s !== e.length - 1)
             return;
-          }
-          return {
-            type: pattern[0],
-            body: pattern.slice(2, i),
-            end: i
-          };
+          return { type: e[0], body: e.slice(2, s), end: s };
         }
       }
     }
-  };
-  var buildCharClassStar = (chars) => {
-    const source = chars.length === 1 ? utils.escapeRegex(chars[0]) : `[${chars.map((ch) => utils.escapeRegex(ch)).join("")}]`;
-    return `${source}*`;
-  };
-  var getStarExtglobSequenceChars = (pattern) => {
-    let index = 0;
-    const chars = [];
-    while (index < pattern.length) {
-      const match = parseRepeatedExtglob(pattern.slice(index), false);
-      if (!match || match.type !== "*") {
+  }, tn = (e) => `${e.length === 1 ? G.escapeRegex(e[0]) : `[${e.map((t) => G.escapeRegex(t)).join("")}]`}*`, rn = (e) => {
+    let r = 0, t = [];
+    while (r < e.length) {
+      let n = qe(e.slice(r), false);
+      if (!n || n.type !== "*")
         return;
-      }
-      const branches = splitTopLevel(match.body).map((branch) => branch.trim());
-      if (branches.length !== 1) {
+      let o = Rt(n.body).map((s) => s.trim());
+      if (o.length !== 1)
         return;
-      }
-      const branch = normalizeSimpleBranch(branches[0]);
-      if (!branch || branch.length !== 1) {
+      let u = Fe(o[0]);
+      if (!u || u.length !== 1)
         return;
-      }
-      chars.push(branch);
-      index += match.end + 1;
+      t.push(u), r += n.end + 1;
     }
-    if (chars.length < 1) {
+    if (t.length < 1)
       return;
-    }
-    return chars;
-  };
-  var repeatedExtglobRecursion = (pattern) => {
-    let depth = 0;
-    let value = pattern.trim();
-    let match = parseRepeatedExtglob(value);
-    while (match) {
-      depth++;
-      value = match.body.trim();
-      match = parseRepeatedExtglob(value);
-    }
-    return depth;
-  };
-  var analyzeRepeatedExtglob = (body, options) => {
-    if (options.maxExtglobRecursion === false) {
+    return t;
+  }, nn = (e) => {
+    let r = 0, t = e.trim(), n = qe(t);
+    while (n)
+      r++, t = n.body.trim(), n = qe(t);
+    return r;
+  }, sn = (e, r) => {
+    if (r.maxExtglobRecursion === false)
       return { risky: false };
-    }
-    const max = typeof options.maxExtglobRecursion === "number" ? options.maxExtglobRecursion : constants.DEFAULT_MAX_EXTGLOB_RECURSION;
-    const branches = splitTopLevel(body).map((branch) => branch.trim());
-    if (branches.length > 1) {
-      if (branches.some((branch) => branch === "") || branches.some((branch) => /^[*?]+$/.test(branch)) || hasRepeatedCharPrefixOverlap(branches)) {
+    let t = typeof r.maxExtglobRecursion === "number" ? r.maxExtglobRecursion : he.DEFAULT_MAX_EXTGLOB_RECURSION, n = Rt(e).map((i) => i.trim());
+    if (n.length > 1) {
+      if (n.some((i) => i === "") || n.some((i) => /^[*?]+$/.test(i)) || en(n))
         return { risky: true };
-      }
     }
-    const safeChars = [];
-    let sawStarSequence = false;
-    let combinable = true;
-    for (const branch of branches) {
-      const chars = getStarExtglobSequenceChars(branch);
-      if (chars) {
-        sawStarSequence = true;
-        safeChars.push(...chars);
+    let o = [], u = false, s = true;
+    for (let i of n) {
+      let h = rn(i);
+      if (h) {
+        u = true, o.push(...h);
         continue;
       }
-      const literal = normalizeSimpleBranch(branch);
-      if (literal && literal.length === 1) {
-        safeChars.push(literal);
+      let N = Fe(i);
+      if (N && N.length === 1) {
+        o.push(N);
         continue;
       }
-      combinable = false;
-      if (repeatedExtglobRecursion(branch) > max) {
+      if (s = false, nn(i) > t)
         return { risky: true };
-      }
     }
-    if (sawStarSequence) {
-      return combinable ? { risky: true, safeOutput: buildCharClassStar([...new Set(safeChars)]) } : { risky: true };
-    }
+    if (u)
+      return s ? { risky: true, safeOutput: tn([...new Set(o)]) } : { risky: true };
     return { risky: false };
-  };
-  var parse = (input, options) => {
-    if (typeof input !== "string") {
-      throw new TypeError("Expected a string");
-    }
-    input = REPLACEMENTS[input] || input;
-    const opts = { ...options };
-    const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
-    let len = input.length;
-    if (len > max) {
-      throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
-    }
-    const bos = { type: "bos", value: "", output: opts.prepend || "" };
-    const tokens = [bos];
-    const capture = opts.capture ? "" : "?:";
-    const PLATFORM_CHARS = constants.globChars(opts.windows);
-    const EXTGLOB_CHARS = constants.extglobChars(PLATFORM_CHARS);
-    const {
-      DOT_LITERAL,
-      PLUS_LITERAL,
-      SLASH_LITERAL,
-      ONE_CHAR,
-      DOTS_SLASH,
-      NO_DOT,
-      NO_DOT_SLASH,
-      NO_DOTS_SLASH,
-      QMARK,
-      QMARK_NO_DOT,
-      STAR,
-      START_ANCHOR
-    } = PLATFORM_CHARS;
-    const globstar = (opts) => {
-      return `(${capture}(?:(?!${START_ANCHOR}${opts.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
-    };
-    const nodot = opts.dot ? "" : NO_DOT;
-    const qmarkNoDot = opts.dot ? QMARK : QMARK_NO_DOT;
-    let star = opts.bash === true ? globstar(opts) : STAR;
-    if (opts.capture) {
-      star = `(${star})`;
-    }
-    if (typeof opts.noext === "boolean") {
-      opts.noextglob = opts.noext;
-    }
-    const state = {
-      input,
-      index: -1,
-      start: 0,
-      dot: opts.dot === true,
-      consumed: "",
-      output: "",
-      prefix: "",
-      backtrack: false,
-      negated: false,
-      brackets: 0,
-      braces: 0,
-      parens: 0,
-      quotes: 0,
-      globstar: false,
-      tokens
-    };
-    input = utils.removePrefix(input, state);
-    len = input.length;
-    const extglobs = [];
-    const braces = [];
-    const stack = [];
-    let prev = bos;
-    let value;
-    const eos = () => state.index === len - 1;
-    const peek = state.peek = (n = 1) => input[state.index + n];
-    const advance = state.advance = () => input[++state.index] || "";
-    const remaining = () => input.slice(state.index + 1);
-    const consume = (value = "", num = 0) => {
-      state.consumed += value;
-      state.index += num;
-    };
-    const append = (token) => {
-      state.output += token.output != null ? token.output : token.value;
-      consume(token.value);
-    };
-    const negate = () => {
-      let count = 1;
-      while (peek() === "!" && (peek(2) !== "(" || peek(3) === "?")) {
-        advance();
-        state.start++;
-        count++;
-      }
-      if (count % 2 === 0) {
+  }, Ke = (e, r) => {
+    if (typeof e !== "string")
+      throw TypeError("Expected a string");
+    e = At[e] || e;
+    let t = { ...r }, n = typeof t.maxLength === "number" ? Math.min(ke, t.maxLength) : ke, o = e.length;
+    if (o > n)
+      throw SyntaxError(`Input length: ${o}, exceeds maximum allowed length: ${n}`);
+    let u = { type: "bos", value: "", output: t.prepend || "" }, s = [u], i = t.capture ? "" : "?:", h = he.globChars(t.windows), N = he.extglobChars(h), { DOT_LITERAL: _, PLUS_LITERAL: w, SLASH_LITERAL: M, ONE_CHAR: K, DOTS_SLASH: g, NO_DOT: k, NO_DOT_SLASH: ee, NO_DOTS_SLASH: q, QMARK: L, QMARK_NO_DOT: H, STAR: ne, START_ANCHOR: X } = h, T = (p) => `(${i}(?:(?!${X}${p.dot ? g : _}).)*?)`, V = t.dot ? "" : k, A = t.dot ? L : H, I = t.bash === true ? T(t) : ne;
+    if (t.capture)
+      I = `(${I})`;
+    if (typeof t.noext === "boolean")
+      t.noextglob = t.noext;
+    let a = { input: e, index: -1, start: 0, dot: t.dot === true, consumed: "", output: "", prefix: "", backtrack: false, negated: false, brackets: 0, braces: 0, parens: 0, quotes: 0, globstar: false, tokens: s };
+    e = G.removePrefix(e, a), o = e.length;
+    let Q = [], C = [], B = [], l = u, f, Y = () => a.index === o - 1, P = a.peek = (p = 1) => e[a.index + p], J = a.advance = () => e[++a.index] || "", te = () => e.slice(a.index + 1), W = (p = "", j = 0) => {
+      a.consumed += p, a.index += j;
+    }, ue = (p) => {
+      a.output += p.output != null ? p.output : p.value, W(p.value);
+    }, $e = () => {
+      let p = 1;
+      while (P() === "!" && (P(2) !== "(" || P(3) === "?"))
+        J(), a.start++, p++;
+      if (p % 2 === 0)
         return false;
+      return a.negated = true, a.start++, true;
+    }, fe = (p) => {
+      a[p]++, B.push(p);
+    }, ae = (p) => {
+      a[p]--, B.pop();
+    }, R = (p) => {
+      if (l.type === "globstar") {
+        let j = a.braces > 0 && (p.type === "comma" || p.type === "brace"), d = p.extglob === true || Q.length && (p.type === "pipe" || p.type === "paren");
+        if (p.type !== "slash" && p.type !== "paren" && !j && !d)
+          a.output = a.output.slice(0, -l.output.length), l.type = "star", l.value = "*", l.output = I, a.output += l.output;
       }
-      state.negated = true;
-      state.start++;
-      return true;
-    };
-    const increment = (type) => {
-      state[type]++;
-      stack.push(type);
-    };
-    const decrement = (type) => {
-      state[type]--;
-      stack.pop();
-    };
-    const push = (tok) => {
-      if (prev.type === "globstar") {
-        const isBrace = state.braces > 0 && (tok.type === "comma" || tok.type === "brace");
-        const isExtglob = tok.extglob === true || extglobs.length && (tok.type === "pipe" || tok.type === "paren");
-        if (tok.type !== "slash" && tok.type !== "paren" && !isBrace && !isExtglob) {
-          state.output = state.output.slice(0, -prev.output.length);
-          prev.type = "star";
-          prev.value = "*";
-          prev.output = star;
-          state.output += prev.output;
-        }
-      }
-      if (extglobs.length && tok.type !== "paren") {
-        extglobs[extglobs.length - 1].inner += tok.value;
-      }
-      if (tok.value || tok.output)
-        append(tok);
-      if (prev && prev.type === "text" && tok.type === "text") {
-        prev.output = (prev.output || prev.value) + tok.value;
-        prev.value += tok.value;
+      if (Q.length && p.type !== "paren")
+        Q[Q.length - 1].inner += p.value;
+      if (p.value || p.output)
+        ue(p);
+      if (l && l.type === "text" && p.type === "text") {
+        l.output = (l.output || l.value) + p.value, l.value += p.value;
         return;
       }
-      tok.prev = prev;
-      tokens.push(tok);
-      prev = tok;
-    };
-    const extglobOpen = (type, value) => {
-      const token = { ...EXTGLOB_CHARS[value], conditions: 1, inner: "" };
-      token.prev = prev;
-      token.parens = state.parens;
-      token.output = state.output;
-      token.startIndex = state.index;
-      token.tokensIndex = tokens.length;
-      const output = (opts.capture ? "(" : "") + token.open;
-      increment("parens");
-      push({ type, value, output: state.output ? "" : ONE_CHAR });
-      push({ type: "paren", extglob: true, value: advance(), output });
-      extglobs.push(token);
-    };
-    const extglobClose = (token) => {
-      const literal = input.slice(token.startIndex, state.index + 1);
-      const body = input.slice(token.startIndex + 2, state.index);
-      const analysis = analyzeRepeatedExtglob(body, opts);
-      if ((token.type === "plus" || token.type === "star") && analysis.risky) {
-        const safeOutput = analysis.safeOutput ? (token.output ? "" : ONE_CHAR) + (opts.capture ? `(${analysis.safeOutput})` : analysis.safeOutput) : undefined;
-        const open = tokens[token.tokensIndex];
-        open.type = "text";
-        open.value = literal;
-        open.output = safeOutput || utils.escapeRegex(literal);
-        for (let i = token.tokensIndex + 1;i < tokens.length; i++) {
-          tokens[i].value = "";
-          tokens[i].output = "";
-          delete tokens[i].suffix;
-        }
-        state.output = token.output + open.output;
-        state.backtrack = true;
-        push({ type: "paren", extglob: true, value, output: "" });
-        decrement("parens");
+      p.prev = l, s.push(p), l = p;
+    }, de = (p, j) => {
+      let d = { ...N[j], conditions: 1, inner: "" };
+      d.prev = l, d.parens = a.parens, d.output = a.output, d.startIndex = a.index, d.tokensIndex = s.length;
+      let O = (t.capture ? "(" : "") + d.open;
+      fe("parens"), R({ type: p, value: j, output: a.output ? "" : K }), R({ type: "paren", extglob: true, value: J(), output: O }), Q.push(d);
+    }, Re = (p) => {
+      let j = e.slice(p.startIndex, a.index + 1), d = e.slice(p.startIndex + 2, a.index), O = sn(d, t);
+      if ((p.type === "plus" || p.type === "star") && O.risky) {
+        let z = O.safeOutput ? (p.output ? "" : K) + (t.capture ? `(${O.safeOutput})` : O.safeOutput) : undefined, re = s[p.tokensIndex];
+        re.type = "text", re.value = j, re.output = z || G.escapeRegex(j);
+        for (let ie = p.tokensIndex + 1;ie < s.length; ie++)
+          s[ie].value = "", s[ie].output = "", delete s[ie].suffix;
+        a.output = p.output + re.output, a.backtrack = true, R({ type: "paren", extglob: true, value: f, output: "" }), ae("parens");
         return;
       }
-      let output = token.close + (opts.capture ? ")" : "");
-      let rest;
-      if (token.type === "negate") {
-        let extglobStar = star;
-        if (token.inner && token.inner.length > 1 && token.inner.includes("/")) {
-          extglobStar = globstar(opts);
+      let D = p.close + (t.capture ? ")" : ""), U;
+      if (p.type === "negate") {
+        let z = I;
+        if (p.inner && p.inner.length > 1 && p.inner.includes("/"))
+          z = T(t);
+        if (z !== I || Y() || /^\)+$/.test(te()))
+          D = p.close = `)$))${z}`;
+        if (p.inner.includes("*") && (U = te()) && /^\.[^\\/.]+$/.test(U)) {
+          let re = Ke(U, { ...r, fastpaths: false }).output;
+          D = p.close = `)${re})${z})`;
         }
-        if (extglobStar !== star || eos() || /^\)+$/.test(remaining())) {
-          output = token.close = `)$))${extglobStar}`;
-        }
-        if (token.inner.includes("*") && (rest = remaining()) && /^\.[^\\/.]+$/.test(rest)) {
-          const expression = parse(rest, { ...options, fastpaths: false }).output;
-          output = token.close = `)${expression})${extglobStar})`;
-        }
-        if (token.prev.type === "bos") {
-          state.negatedExtglob = true;
-        }
+        if (p.prev.type === "bos")
+          a.negatedExtglob = true;
       }
-      push({ type: "paren", extglob: true, value, output });
-      decrement("parens");
+      R({ type: "paren", extglob: true, value: f, output: D }), ae("parens");
     };
-    if (opts.fastpaths !== false && !/(^[*!]|[/()[\]{}"])/.test(input)) {
-      let backslashes = false;
-      let output = input.replace(REGEX_SPECIAL_CHARS_BACKREF, (m, esc, chars, first, rest, index) => {
-        if (first === "\\") {
-          backslashes = true;
-          return m;
+    if (t.fastpaths !== false && !/(^[*!]|[/()[\]{}"])/.test(e)) {
+      let p = false, j = e.replace(Vr, (d, O, D, U, z, re) => {
+        if (U === "\\")
+          return p = true, d;
+        if (U === "?") {
+          if (O)
+            return O + U + (z ? L.repeat(z.length) : "");
+          if (re === 0)
+            return A + (z ? L.repeat(z.length) : "");
+          return L.repeat(D.length);
         }
-        if (first === "?") {
-          if (esc) {
-            return esc + first + (rest ? QMARK.repeat(rest.length) : "");
-          }
-          if (index === 0) {
-            return qmarkNoDot + (rest ? QMARK.repeat(rest.length) : "");
-          }
-          return QMARK.repeat(chars.length);
+        if (U === ".")
+          return _.repeat(D.length);
+        if (U === "*") {
+          if (O)
+            return O + U + (z ? I : "");
+          return I;
         }
-        if (first === ".") {
-          return DOT_LITERAL.repeat(chars.length);
-        }
-        if (first === "*") {
-          if (esc) {
-            return esc + first + (rest ? star : "");
-          }
-          return star;
-        }
-        return esc ? m : `\\${m}`;
+        return O ? d : `\\${d}`;
       });
-      if (backslashes === true) {
-        if (opts.unescape === true) {
-          output = output.replace(/\\/g, "");
-        } else {
-          output = output.replace(/\\+/g, (m) => {
-            return m.length % 2 === 0 ? "\\\\" : m ? "\\" : "";
-          });
-        }
-      }
-      if (output === input && opts.contains === true) {
-        state.output = input;
-        return state;
-      }
-      state.output = utils.wrapOutput(output, state, options);
-      return state;
+      if (p === true)
+        if (t.unescape === true)
+          j = j.replace(/\\/g, "");
+        else
+          j = j.replace(/\\+/g, (d) => d.length % 2 === 0 ? "\\\\" : d ? "\\" : "");
+      if (j === e && t.contains === true)
+        return a.output = e, a;
+      return a.output = G.wrapOutput(j, a, r), a;
     }
-    while (!eos()) {
-      value = advance();
-      if (value === "\x00") {
+    while (!Y()) {
+      if (f = J(), f === "\x00")
         continue;
-      }
-      if (value === "\\") {
-        const next = peek();
-        if (next === "/" && opts.bash !== true) {
+      if (f === "\\") {
+        let d = P();
+        if (d === "/" && t.bash !== true)
+          continue;
+        if (d === "." || d === ";")
+          continue;
+        if (!d) {
+          f += "\\", R({ type: "text", value: f });
           continue;
         }
-        if (next === "." || next === ";") {
-          continue;
+        let O = /^\\+/.exec(te()), D = 0;
+        if (O && O[0].length > 2) {
+          if (D = O[0].length, a.index += D, D % 2 !== 0)
+            f += "\\";
         }
-        if (!next) {
-          value += "\\";
-          push({ type: "text", value });
-          continue;
-        }
-        const match = /^\\+/.exec(remaining());
-        let slashes = 0;
-        if (match && match[0].length > 2) {
-          slashes = match[0].length;
-          state.index += slashes;
-          if (slashes % 2 !== 0) {
-            value += "\\";
-          }
-        }
-        if (opts.unescape === true) {
-          value = advance();
-        } else {
-          value += advance();
-        }
-        if (state.brackets === 0) {
-          push({ type: "text", value });
+        if (t.unescape === true)
+          f = J();
+        else
+          f += J();
+        if (a.brackets === 0) {
+          R({ type: "text", value: f });
           continue;
         }
       }
-      if (state.brackets > 0 && (value !== "]" || prev.value === "[" || prev.value === "[^")) {
-        if (opts.posix !== false && value === ":") {
-          const inner = prev.value.slice(1);
-          if (inner.includes("[")) {
-            prev.posix = true;
-            if (inner.includes(":")) {
-              const idx = prev.value.lastIndexOf("[");
-              const pre = prev.value.slice(0, idx);
-              const rest = prev.value.slice(idx + 2);
-              const posix = POSIX_REGEX_SOURCE[rest];
-              if (posix) {
-                prev.value = pre + posix;
-                state.backtrack = true;
-                advance();
-                if (!bos.output && tokens.indexOf(prev) === 1) {
-                  bos.output = ONE_CHAR;
-                }
+      if (a.brackets > 0 && (f !== "]" || l.value === "[" || l.value === "[^")) {
+        if (t.posix !== false && f === ":") {
+          let d = l.value.slice(1);
+          if (d.includes("[")) {
+            if (l.posix = true, d.includes(":")) {
+              let O = l.value.lastIndexOf("["), D = l.value.slice(0, O), U = l.value.slice(O + 2), z = Qr[U];
+              if (z) {
+                if (l.value = D + z, a.backtrack = true, J(), !u.output && s.indexOf(l) === 1)
+                  u.output = K;
                 continue;
               }
             }
           }
         }
-        if (value === "[" && peek() !== ":" || value === "-" && peek() === "]") {
-          value = `\\${value}`;
-        }
-        if (value === "]" && (prev.value === "[" || prev.value === "[^")) {
-          value = `\\${value}`;
-        }
-        if (opts.posix === true && value === "!" && prev.value === "[") {
-          value = "^";
-        }
-        prev.value += value;
-        append({ value });
+        if (f === "[" && P() !== ":" || f === "-" && P() === "]")
+          f = `\\${f}`;
+        if (f === "]" && (l.value === "[" || l.value === "[^"))
+          f = `\\${f}`;
+        if (t.posix === true && f === "!" && l.value === "[")
+          f = "^";
+        l.value += f, ue({ value: f });
         continue;
       }
-      if (state.quotes === 1 && value !== '"') {
-        value = utils.escapeRegex(value);
-        prev.value += value;
-        append({ value });
+      if (a.quotes === 1 && f !== '"') {
+        f = G.escapeRegex(f), l.value += f, ue({ value: f });
         continue;
       }
-      if (value === '"') {
-        state.quotes = state.quotes === 1 ? 0 : 1;
-        if (opts.keepQuotes === true) {
-          push({ type: "text", value });
-        }
+      if (f === '"') {
+        if (a.quotes = a.quotes === 1 ? 0 : 1, t.keepQuotes === true)
+          R({ type: "text", value: f });
         continue;
       }
-      if (value === "(") {
-        increment("parens");
-        push({ type: "paren", value });
+      if (f === "(") {
+        fe("parens"), R({ type: "paren", value: f });
         continue;
       }
-      if (value === ")") {
-        if (state.parens === 0 && opts.strictBrackets === true) {
-          throw new SyntaxError(syntaxError("opening", "("));
-        }
-        const extglob = extglobs[extglobs.length - 1];
-        if (extglob && state.parens === extglob.parens + 1) {
-          extglobClose(extglobs.pop());
+      if (f === ")") {
+        if (a.parens === 0 && t.strictBrackets === true)
+          throw SyntaxError(Ae("opening", "("));
+        let d = Q[Q.length - 1];
+        if (d && a.parens === d.parens + 1) {
+          Re(Q.pop());
           continue;
         }
-        push({ type: "paren", value, output: state.parens ? ")" : "\\)" });
-        decrement("parens");
+        R({ type: "paren", value: f, output: a.parens ? ")" : "\\)" }), ae("parens");
         continue;
       }
-      if (value === "[") {
-        if (opts.nobracket === true || !remaining().includes("]")) {
-          if (opts.nobracket !== true && opts.strictBrackets === true) {
-            throw new SyntaxError(syntaxError("closing", "]"));
-          }
-          value = `\\${value}`;
-        } else {
-          increment("brackets");
-        }
-        push({ type: "bracket", value });
+      if (f === "[") {
+        if (t.nobracket === true || !te().includes("]")) {
+          if (t.nobracket !== true && t.strictBrackets === true)
+            throw SyntaxError(Ae("closing", "]"));
+          f = `\\${f}`;
+        } else
+          fe("brackets");
+        R({ type: "bracket", value: f });
         continue;
       }
-      if (value === "]") {
-        if (opts.nobracket === true || prev && prev.type === "bracket" && prev.value.length === 1) {
-          push({ type: "text", value, output: `\\${value}` });
+      if (f === "]") {
+        if (t.nobracket === true || l && l.type === "bracket" && l.value.length === 1) {
+          R({ type: "text", value: f, output: `\\${f}` });
           continue;
         }
-        if (state.brackets === 0) {
-          if (opts.strictBrackets === true) {
-            throw new SyntaxError(syntaxError("opening", "["));
-          }
-          push({ type: "text", value, output: `\\${value}` });
+        if (a.brackets === 0) {
+          if (t.strictBrackets === true)
+            throw SyntaxError(Ae("opening", "["));
+          R({ type: "text", value: f, output: `\\${f}` });
           continue;
         }
-        decrement("brackets");
-        const prevValue = prev.value.slice(1);
-        if (prev.posix !== true && prevValue[0] === "^" && !prevValue.includes("/")) {
-          value = `/${value}`;
-        }
-        prev.value += value;
-        append({ value });
-        if (opts.literalBrackets === false || utils.hasRegexChars(prevValue)) {
+        ae("brackets");
+        let d = l.value.slice(1);
+        if (l.posix !== true && d[0] === "^" && !d.includes("/"))
+          f = `/${f}`;
+        if (l.value += f, ue({ value: f }), t.literalBrackets === false || G.hasRegexChars(d))
+          continue;
+        let O = G.escapeRegex(l.value);
+        if (a.output = a.output.slice(0, -l.value.length), t.literalBrackets === true) {
+          a.output += O, l.value = O;
           continue;
         }
-        const escaped = utils.escapeRegex(prev.value);
-        state.output = state.output.slice(0, -prev.value.length);
-        if (opts.literalBrackets === true) {
-          state.output += escaped;
-          prev.value = escaped;
-          continue;
-        }
-        prev.value = `(${capture}${escaped}|${prev.value})`;
-        state.output += prev.value;
+        l.value = `(${i}${O}|${l.value})`, a.output += l.value;
         continue;
       }
-      if (value === "{" && opts.nobrace !== true) {
-        increment("braces");
-        const open = {
-          type: "brace",
-          value,
-          output: "(",
-          outputIndex: state.output.length,
-          tokensIndex: state.tokens.length
-        };
-        braces.push(open);
-        push(open);
+      if (f === "{" && t.nobrace !== true) {
+        fe("braces");
+        let d = { type: "brace", value: f, output: "(", outputIndex: a.output.length, tokensIndex: a.tokens.length };
+        C.push(d), R(d);
         continue;
       }
-      if (value === "}") {
-        const brace = braces[braces.length - 1];
-        if (opts.nobrace === true || !brace) {
-          push({ type: "text", value, output: value });
+      if (f === "}") {
+        let d = C[C.length - 1];
+        if (t.nobrace === true || !d) {
+          R({ type: "text", value: f, output: f });
           continue;
         }
-        let output = ")";
-        if (brace.dots === true) {
-          const arr = tokens.slice();
-          const range = [];
-          for (let i = arr.length - 1;i >= 0; i--) {
-            tokens.pop();
-            if (arr[i].type === "brace") {
+        let O = ")";
+        if (d.dots === true) {
+          let D = s.slice(), U = [];
+          for (let z = D.length - 1;z >= 0; z--) {
+            if (s.pop(), D[z].type === "brace")
               break;
-            }
-            if (arr[i].type !== "dots") {
-              range.unshift(arr[i].value);
-            }
+            if (D[z].type !== "dots")
+              U.unshift(D[z].value);
           }
-          output = expandRange(range, opts);
-          state.backtrack = true;
+          O = Yr(U, t), a.backtrack = true;
         }
-        if (brace.comma !== true && brace.dots !== true) {
-          const out = state.output.slice(0, brace.outputIndex);
-          const toks = state.tokens.slice(brace.tokensIndex);
-          brace.value = brace.output = "\\{";
-          value = output = "\\}";
-          state.output = out;
-          for (const t of toks) {
-            state.output += t.output || t.value;
-          }
+        if (d.comma !== true && d.dots !== true) {
+          let D = a.output.slice(0, d.outputIndex), U = a.tokens.slice(d.tokensIndex);
+          d.value = d.output = "\\{", f = O = "\\}", a.output = D;
+          for (let z of U)
+            a.output += z.output || z.value;
         }
-        push({ type: "brace", value, output });
-        decrement("braces");
-        braces.pop();
+        R({ type: "brace", value: f, output: O }), ae("braces"), C.pop();
         continue;
       }
-      if (value === "|") {
-        if (extglobs.length > 0) {
-          extglobs[extglobs.length - 1].conditions++;
-        }
-        push({ type: "text", value });
+      if (f === "|") {
+        if (Q.length > 0)
+          Q[Q.length - 1].conditions++;
+        R({ type: "text", value: f });
         continue;
       }
-      if (value === ",") {
-        let output = value;
-        const brace = braces[braces.length - 1];
-        if (brace && stack[stack.length - 1] === "braces") {
-          brace.comma = true;
-          output = "|";
-        }
-        push({ type: "comma", value, output });
+      if (f === ",") {
+        let d = f, O = C[C.length - 1];
+        if (O && B[B.length - 1] === "braces")
+          O.comma = true, d = "|";
+        R({ type: "comma", value: f, output: d });
         continue;
       }
-      if (value === "/") {
-        if (prev.type === "dot" && state.index === state.start + 1) {
-          state.start = state.index + 1;
-          state.consumed = "";
-          state.output = "";
-          tokens.pop();
-          prev = bos;
+      if (f === "/") {
+        if (l.type === "dot" && a.index === a.start + 1) {
+          a.start = a.index + 1, a.consumed = "", a.output = "", s.pop(), l = u;
           continue;
         }
-        push({ type: "slash", value, output: SLASH_LITERAL });
+        R({ type: "slash", value: f, output: M });
         continue;
       }
-      if (value === ".") {
-        if (state.braces > 0 && prev.type === "dot") {
-          if (prev.value === ".")
-            prev.output = DOT_LITERAL;
-          const brace = braces[braces.length - 1];
-          prev.type = "dots";
-          prev.output += value;
-          prev.value += value;
-          brace.dots = true;
+      if (f === ".") {
+        if (a.braces > 0 && l.type === "dot") {
+          if (l.value === ".")
+            l.output = _;
+          let d = C[C.length - 1];
+          l.type = "dots", l.output += f, l.value += f, d.dots = true;
           continue;
         }
-        if (state.braces + state.parens === 0 && prev.type !== "bos" && prev.type !== "slash") {
-          push({ type: "text", value, output: DOT_LITERAL });
+        if (a.braces + a.parens === 0 && l.type !== "bos" && l.type !== "slash") {
+          R({ type: "text", value: f, output: _ });
           continue;
         }
-        push({ type: "dot", value, output: DOT_LITERAL });
+        R({ type: "dot", value: f, output: _ });
         continue;
       }
-      if (value === "?") {
-        const isGroup = prev && prev.value === "(";
-        if (!isGroup && opts.noextglob !== true && peek() === "(" && peek(2) !== "?") {
-          extglobOpen("qmark", value);
+      if (f === "?") {
+        if (!(l && l.value === "(") && t.noextglob !== true && P() === "(" && P(2) !== "?") {
+          de("qmark", f);
           continue;
         }
-        if (prev && prev.type === "paren") {
-          const next = peek();
-          let output = value;
-          if (prev.value === "(" && !/[!=<:]/.test(next) || next === "<" && !/<([!=]|\w+>)/.test(remaining())) {
-            output = `\\${value}`;
-          }
-          push({ type: "text", value, output });
+        if (l && l.type === "paren") {
+          let O = P(), D = f;
+          if (l.value === "(" && !/[!=<:]/.test(O) || O === "<" && !/<([!=]|\w+>)/.test(te()))
+            D = `\\${f}`;
+          R({ type: "text", value: f, output: D });
           continue;
         }
-        if (opts.dot !== true && (prev.type === "slash" || prev.type === "bos")) {
-          push({ type: "qmark", value, output: QMARK_NO_DOT });
+        if (t.dot !== true && (l.type === "slash" || l.type === "bos")) {
+          R({ type: "qmark", value: f, output: H });
           continue;
         }
-        push({ type: "qmark", value, output: QMARK });
+        R({ type: "qmark", value: f, output: L });
         continue;
       }
-      if (value === "!") {
-        if (opts.noextglob !== true && peek() === "(") {
-          if (peek(2) !== "?" || !/[!=<:]/.test(peek(3))) {
-            extglobOpen("negate", value);
+      if (f === "!") {
+        if (t.noextglob !== true && P() === "(") {
+          if (P(2) !== "?" || !/[!=<:]/.test(P(3))) {
+            de("negate", f);
             continue;
           }
         }
-        if (opts.nonegate !== true && state.index === 0) {
-          negate();
+        if (t.nonegate !== true && a.index === 0) {
+          $e();
           continue;
         }
       }
-      if (value === "+") {
-        if (opts.noextglob !== true && peek() === "(" && peek(2) !== "?") {
-          extglobOpen("plus", value);
+      if (f === "+") {
+        if (t.noextglob !== true && P() === "(" && P(2) !== "?") {
+          de("plus", f);
           continue;
         }
-        if (prev && prev.value === "(" || opts.regex === false) {
-          push({ type: "plus", value, output: PLUS_LITERAL });
+        if (l && l.value === "(" || t.regex === false) {
+          R({ type: "plus", value: f, output: w });
           continue;
         }
-        if (prev && (prev.type === "bracket" || prev.type === "paren" || prev.type === "brace") || state.parens > 0) {
-          push({ type: "plus", value });
+        if (l && (l.type === "bracket" || l.type === "paren" || l.type === "brace") || a.parens > 0) {
+          R({ type: "plus", value: f });
           continue;
         }
-        push({ type: "plus", value: PLUS_LITERAL });
+        R({ type: "plus", value: w });
         continue;
       }
-      if (value === "@") {
-        if (opts.noextglob !== true && peek() === "(" && peek(2) !== "?") {
-          push({ type: "at", extglob: true, value, output: "" });
+      if (f === "@") {
+        if (t.noextglob !== true && P() === "(" && P(2) !== "?") {
+          R({ type: "at", extglob: true, value: f, output: "" });
           continue;
         }
-        push({ type: "text", value });
+        R({ type: "text", value: f });
         continue;
       }
-      if (value !== "*") {
-        if (value === "$" || value === "^") {
-          value = `\\${value}`;
-        }
-        const match = REGEX_NON_SPECIAL_CHARS.exec(remaining());
-        if (match) {
-          value += match[0];
-          state.index += match[0].length;
-        }
-        push({ type: "text", value });
+      if (f !== "*") {
+        if (f === "$" || f === "^")
+          f = `\\${f}`;
+        let d = Zr.exec(te());
+        if (d)
+          f += d[0], a.index += d[0].length;
+        R({ type: "text", value: f });
         continue;
       }
-      if (prev && (prev.type === "globstar" || prev.star === true)) {
-        prev.type = "star";
-        prev.star = true;
-        prev.value += value;
-        prev.output = star;
-        state.backtrack = true;
-        state.globstar = true;
-        consume(value);
+      if (l && (l.type === "globstar" || l.star === true)) {
+        l.type = "star", l.star = true, l.value += f, l.output = I, a.backtrack = true, a.globstar = true, W(f);
         continue;
       }
-      let rest = remaining();
-      if (opts.noextglob !== true && /^\([^?]/.test(rest)) {
-        extglobOpen("star", value);
+      let p = te();
+      if (t.noextglob !== true && /^\([^?]/.test(p)) {
+        de("star", f);
         continue;
       }
-      if (prev.type === "star") {
-        if (opts.noglobstar === true) {
-          consume(value);
+      if (l.type === "star") {
+        if (t.noglobstar === true) {
+          W(f);
           continue;
         }
-        const prior = prev.prev;
-        const before = prior.prev;
-        const isStart = prior.type === "slash" || prior.type === "bos";
-        const afterStar = before && (before.type === "star" || before.type === "globstar");
-        if (opts.bash === true && (!isStart || rest[0] && rest[0] !== "/")) {
-          push({ type: "star", value, output: "" });
+        let d = l.prev, O = d.prev, D = d.type === "slash" || d.type === "bos", U = O && (O.type === "star" || O.type === "globstar");
+        if (t.bash === true && (!D || p[0] && p[0] !== "/")) {
+          R({ type: "star", value: f, output: "" });
           continue;
         }
-        const isBrace = state.braces > 0 && (prior.type === "comma" || prior.type === "brace");
-        const isExtglob = extglobs.length && (prior.type === "pipe" || prior.type === "paren");
-        if (!isStart && prior.type !== "paren" && !isBrace && !isExtglob) {
-          push({ type: "star", value, output: "" });
+        let z = a.braces > 0 && (d.type === "comma" || d.type === "brace"), re = Q.length && (d.type === "pipe" || d.type === "paren");
+        if (!D && d.type !== "paren" && !z && !re) {
+          R({ type: "star", value: f, output: "" });
           continue;
         }
-        while (rest.slice(0, 3) === "/**") {
-          const after = input[state.index + 4];
-          if (after && after !== "/") {
+        while (p.slice(0, 3) === "/**") {
+          let pe = e[a.index + 4];
+          if (pe && pe !== "/")
             break;
-          }
-          rest = rest.slice(3);
-          consume("/**", 3);
+          p = p.slice(3), W("/**", 3);
         }
-        const isEnd = eos() || state.parens > 0 && rest === ")".repeat(state.parens) && !extglobs.some((extglob) => extglob.type === "negate");
-        if (prior.type === "bos" && eos()) {
-          prev.type = "globstar";
-          prev.value += value;
-          prev.output = globstar(opts);
-          state.output = prev.output;
-          state.globstar = true;
-          consume(value);
+        let ie = Y() || a.parens > 0 && p === ")".repeat(a.parens) && !Q.some((pe) => pe.type === "negate");
+        if (d.type === "bos" && Y()) {
+          l.type = "globstar", l.value += f, l.output = T(t), a.output = l.output, a.globstar = true, W(f);
           continue;
         }
-        if (prior.type === "slash" && prior.prev.type !== "bos" && !afterStar && isEnd) {
-          state.output = state.output.slice(0, -(prior.output + prev.output).length);
-          prior.output = `(?:${prior.output}`;
-          prev.type = "globstar";
-          prev.output = globstar(opts) + (opts.strictSlashes ? ")" : "|$)");
-          prev.value += value;
-          state.globstar = true;
-          state.output += prior.output + prev.output;
-          consume(value);
+        if (d.type === "slash" && d.prev.type !== "bos" && !U && ie) {
+          a.output = a.output.slice(0, -(d.output + l.output).length), d.output = `(?:${d.output}`, l.type = "globstar", l.output = T(t) + (t.strictSlashes ? ")" : "|$)"), l.value += f, a.globstar = true, a.output += d.output + l.output, W(f);
           continue;
         }
-        if (prior.type === "slash" && prior.prev.type !== "bos" && rest[0] === "/") {
-          const end = rest[1] !== undefined ? "|$" : "";
-          state.output = state.output.slice(0, -(prior.output + prev.output).length);
-          prior.output = `(?:${prior.output}`;
-          prev.type = "globstar";
-          prev.output = `${globstar(opts)}${SLASH_LITERAL}|${SLASH_LITERAL}${end})`;
-          prev.value += value;
-          state.output += prior.output + prev.output;
-          state.globstar = true;
-          consume(value + advance());
-          push({ type: "slash", value: "/", output: "" });
+        if (d.type === "slash" && d.prev.type !== "bos" && p[0] === "/") {
+          let pe = p[1] !== undefined ? "|$" : "";
+          a.output = a.output.slice(0, -(d.output + l.output).length), d.output = `(?:${d.output}`, l.type = "globstar", l.output = `${T(t)}${M}|${M}${pe})`, l.value += f, a.output += d.output + l.output, a.globstar = true, W(f + J()), R({ type: "slash", value: "/", output: "" });
           continue;
         }
-        if (prior.type === "bos" && rest[0] === "/") {
-          prev.type = "globstar";
-          prev.value += value;
-          prev.output = `(?:^|${SLASH_LITERAL}|${globstar(opts)}${SLASH_LITERAL})`;
-          state.output = prev.output;
-          state.globstar = true;
-          consume(value + advance());
-          push({ type: "slash", value: "/", output: "" });
+        if (d.type === "bos" && p[0] === "/") {
+          l.type = "globstar", l.value += f, l.output = `(?:^|${M}|${T(t)}${M})`, a.output = l.output, a.globstar = true, W(f + J()), R({ type: "slash", value: "/", output: "" });
           continue;
         }
-        state.output = state.output.slice(0, -prev.output.length);
-        prev.type = "globstar";
-        prev.output = globstar(opts);
-        prev.value += value;
-        state.output += prev.output;
-        state.globstar = true;
-        consume(value);
+        a.output = a.output.slice(0, -l.output.length), l.type = "globstar", l.output = T(t), l.value += f, a.output += l.output, a.globstar = true, W(f);
         continue;
       }
-      const token = { type: "star", value, output: star };
-      if (opts.bash === true) {
-        token.output = ".*?";
-        if (prev.type === "bos" || prev.type === "slash") {
-          token.output = nodot + token.output;
-        }
-        push(token);
+      let j = { type: "star", value: f, output: I };
+      if (t.bash === true) {
+        if (j.output = ".*?", l.type === "bos" || l.type === "slash")
+          j.output = V + j.output;
+        R(j);
         continue;
       }
-      if (prev && (prev.type === "bracket" || prev.type === "paren") && opts.regex === true) {
-        token.output = value;
-        push(token);
+      if (l && (l.type === "bracket" || l.type === "paren") && t.regex === true) {
+        j.output = f, R(j);
         continue;
       }
-      if (state.index === state.start || prev.type === "slash" || prev.type === "dot") {
-        if (prev.type === "dot") {
-          state.output += NO_DOT_SLASH;
-          prev.output += NO_DOT_SLASH;
-        } else if (opts.dot === true) {
-          state.output += NO_DOTS_SLASH;
-          prev.output += NO_DOTS_SLASH;
-        } else {
-          state.output += nodot;
-          prev.output += nodot;
-        }
-        if (peek() !== "*") {
-          state.output += ONE_CHAR;
-          prev.output += ONE_CHAR;
-        }
+      if (a.index === a.start || l.type === "slash" || l.type === "dot") {
+        if (l.type === "dot")
+          a.output += ee, l.output += ee;
+        else if (t.dot === true)
+          a.output += q, l.output += q;
+        else
+          a.output += V, l.output += V;
+        if (P() !== "*")
+          a.output += K, l.output += K;
       }
-      push(token);
+      R(j);
     }
-    while (state.brackets > 0) {
-      if (opts.strictBrackets === true)
-        throw new SyntaxError(syntaxError("closing", "]"));
-      state.output = utils.escapeLast(state.output, "[");
-      decrement("brackets");
+    while (a.brackets > 0) {
+      if (t.strictBrackets === true)
+        throw SyntaxError(Ae("closing", "]"));
+      a.output = G.escapeLast(a.output, "["), ae("brackets");
     }
-    while (state.parens > 0) {
-      if (opts.strictBrackets === true)
-        throw new SyntaxError(syntaxError("closing", ")"));
-      state.output = utils.escapeLast(state.output, "(");
-      decrement("parens");
+    while (a.parens > 0) {
+      if (t.strictBrackets === true)
+        throw SyntaxError(Ae("closing", ")"));
+      a.output = G.escapeLast(a.output, "("), ae("parens");
     }
-    while (state.braces > 0) {
-      if (opts.strictBrackets === true)
-        throw new SyntaxError(syntaxError("closing", "}"));
-      state.output = utils.escapeLast(state.output, "{");
-      decrement("braces");
+    while (a.braces > 0) {
+      if (t.strictBrackets === true)
+        throw SyntaxError(Ae("closing", "}"));
+      a.output = G.escapeLast(a.output, "{"), ae("braces");
     }
-    if (opts.strictSlashes !== true && (prev.type === "star" || prev.type === "bracket")) {
-      push({ type: "maybe_slash", value: "", output: `${SLASH_LITERAL}?` });
+    if (t.strictSlashes !== true && (l.type === "star" || l.type === "bracket"))
+      R({ type: "maybe_slash", value: "", output: `${M}?` });
+    if (a.backtrack === true) {
+      a.output = "";
+      for (let p of a.tokens)
+        if (a.output += p.output != null ? p.output : p.value, p.suffix)
+          a.output += p.suffix;
     }
-    if (state.backtrack === true) {
-      state.output = "";
-      for (const token of state.tokens) {
-        state.output += token.output != null ? token.output : token.value;
-        if (token.suffix) {
-          state.output += token.suffix;
-        }
-      }
-    }
-    return state;
+    return a;
   };
-  parse.fastpaths = (input, options) => {
-    const opts = { ...options };
-    const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
-    const len = input.length;
-    if (len > max) {
-      throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
-    }
-    input = REPLACEMENTS[input] || input;
-    const {
-      DOT_LITERAL,
-      SLASH_LITERAL,
-      ONE_CHAR,
-      DOTS_SLASH,
-      NO_DOT,
-      NO_DOTS,
-      NO_DOTS_SLASH,
-      STAR,
-      START_ANCHOR
-    } = constants.globChars(opts.windows);
-    const nodot = opts.dot ? NO_DOTS : NO_DOT;
-    const slashDot = opts.dot ? NO_DOTS_SLASH : NO_DOT;
-    const capture = opts.capture ? "" : "?:";
-    const state = { negated: false, prefix: "" };
-    let star = opts.bash === true ? ".*?" : STAR;
-    if (opts.capture) {
-      star = `(${star})`;
-    }
-    const globstar = (opts) => {
-      if (opts.noglobstar === true)
-        return star;
-      return `(${capture}(?:(?!${START_ANCHOR}${opts.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
-    };
-    const create = (str) => {
-      switch (str) {
+  Ke.fastpaths = (e, r) => {
+    let t = { ...r }, n = typeof t.maxLength === "number" ? Math.min(ke, t.maxLength) : ke, o = e.length;
+    if (o > n)
+      throw SyntaxError(`Input length: ${o}, exceeds maximum allowed length: ${n}`);
+    e = At[e] || e;
+    let { DOT_LITERAL: u, SLASH_LITERAL: s, ONE_CHAR: i, DOTS_SLASH: h, NO_DOT: N, NO_DOTS: _, NO_DOTS_SLASH: w, STAR: M, START_ANCHOR: K } = he.globChars(t.windows), g = t.dot ? _ : N, k = t.dot ? w : N, ee = t.capture ? "" : "?:", q = { negated: false, prefix: "" }, L = t.bash === true ? ".*?" : M;
+    if (t.capture)
+      L = `(${L})`;
+    let H = (V) => {
+      if (V.noglobstar === true)
+        return L;
+      return `(${ee}(?:(?!${K}${V.dot ? h : u}).)*?)`;
+    }, ne = (V) => {
+      switch (V) {
         case "*":
-          return `${nodot}${ONE_CHAR}${star}`;
+          return `${g}${i}${L}`;
         case ".*":
-          return `${DOT_LITERAL}${ONE_CHAR}${star}`;
+          return `${u}${i}${L}`;
         case "*.*":
-          return `${nodot}${star}${DOT_LITERAL}${ONE_CHAR}${star}`;
+          return `${g}${L}${u}${i}${L}`;
         case "*/*":
-          return `${nodot}${star}${SLASH_LITERAL}${ONE_CHAR}${slashDot}${star}`;
+          return `${g}${L}${s}${i}${k}${L}`;
         case "**":
-          return nodot + globstar(opts);
+          return g + H(t);
         case "**/*":
-          return `(?:${nodot}${globstar(opts)}${SLASH_LITERAL})?${slashDot}${ONE_CHAR}${star}`;
+          return `(?:${g}${H(t)}${s})?${k}${i}${L}`;
         case "**/*.*":
-          return `(?:${nodot}${globstar(opts)}${SLASH_LITERAL})?${slashDot}${star}${DOT_LITERAL}${ONE_CHAR}${star}`;
+          return `(?:${g}${H(t)}${s})?${k}${L}${u}${i}${L}`;
         case "**/.*":
-          return `(?:${nodot}${globstar(opts)}${SLASH_LITERAL})?${DOT_LITERAL}${ONE_CHAR}${star}`;
+          return `(?:${g}${H(t)}${s})?${u}${i}${L}`;
         default: {
-          const match = /^(.*?)\.(\w+)$/.exec(str);
-          if (!match)
+          let A = /^(.*?)\.(\w+)$/.exec(V);
+          if (!A)
             return;
-          const source = create(match[1]);
-          if (!source)
+          let I = ne(A[1]);
+          if (!I)
             return;
-          return source + DOT_LITERAL + match[2];
+          return I + u + A[2];
         }
       }
-    };
-    const output = utils.removePrefix(input, state);
-    let source = create(output);
-    if (source && opts.strictSlashes !== true) {
-      source += `${SLASH_LITERAL}?`;
-    }
-    return source;
+    }, X = G.removePrefix(e, q), T = ne(X);
+    if (T && t.strictSlashes !== true)
+      T += `${s}?`;
+    return T;
   };
-  module.exports = parse;
+  Et.exports = Ke;
 });
-var require_picomatch = __commonJS(function(exports, module) {
-  var scan = require_scan();
-  var parse = require_parse();
-  var utils = require_utils();
-  var constants = require_constants();
-  var isObject = (val) => val && typeof val === "object" && !Array.isArray(val);
-  var picomatch = (glob, options, returnState = false) => {
-    if (Array.isArray(glob)) {
-      const fns = glob.map((input) => picomatch(input, options, returnState));
-      const arrayMatcher = (str) => {
-        for (const isMatch of fns) {
-          const state = isMatch(str);
-          if (state)
-            return state;
+var wt = me(function(Jn, bt) {
+  var on = xt(), He = St(), Ne = Te(), un = Se(), an = (e) => e && typeof e === "object" && !Array.isArray(e), Z = (e, r, t = false) => {
+    if (Array.isArray(e)) {
+      let _ = e.map((M) => Z(M, r, t));
+      return (M) => {
+        for (let K of _) {
+          let g = K(M);
+          if (g)
+            return g;
         }
         return false;
       };
-      return arrayMatcher;
     }
-    const isState = isObject(glob) && glob.tokens && glob.input;
-    if (glob === "" || typeof glob !== "string" && !isState) {
-      throw new TypeError("Expected pattern to be a non-empty string");
+    let n = an(e) && e.tokens && e.input;
+    if (e === "" || typeof e !== "string" && !n)
+      throw TypeError("Expected pattern to be a non-empty string");
+    let o = r || {}, u = o.windows, s = n ? Z.compileRe(e, r) : Z.makeRe(e, r, false, true), i = s.state;
+    delete s.state;
+    let h = () => false;
+    if (o.ignore) {
+      let _ = { ...r, ignore: null, onMatch: null, onResult: null };
+      h = Z(o.ignore, _, t);
     }
-    const opts = options || {};
-    const posix = opts.windows;
-    const regex = isState ? picomatch.compileRe(glob, options) : picomatch.makeRe(glob, options, false, true);
-    const state = regex.state;
-    delete regex.state;
-    let isIgnored = () => false;
-    if (opts.ignore) {
-      const ignoreOpts = { ...options, ignore: null, onMatch: null, onResult: null };
-      isIgnored = picomatch(opts.ignore, ignoreOpts, returnState);
-    }
-    const matcher = (input, returnObject = false) => {
-      const { isMatch, match, output } = picomatch.test(input, regex, options, { glob, posix });
-      const result = { glob, state, regex, posix, input, output, match, isMatch };
-      if (typeof opts.onResult === "function") {
-        opts.onResult(result);
+    let N = (_, w = false) => {
+      let { isMatch: M, match: K, output: g } = Z.test(_, s, r, { glob: e, posix: u }), k = { glob: e, state: i, regex: s, posix: u, input: _, output: g, match: K, isMatch: M };
+      if (typeof o.onResult === "function")
+        o.onResult(k);
+      if (M === false)
+        return k.isMatch = false, w ? k : false;
+      if (h(_)) {
+        if (typeof o.onIgnore === "function")
+          o.onIgnore(k);
+        return k.isMatch = false, w ? k : false;
       }
-      if (isMatch === false) {
-        result.isMatch = false;
-        return returnObject ? result : false;
-      }
-      if (isIgnored(input)) {
-        if (typeof opts.onIgnore === "function") {
-          opts.onIgnore(result);
-        }
-        result.isMatch = false;
-        return returnObject ? result : false;
-      }
-      if (typeof opts.onMatch === "function") {
-        opts.onMatch(result);
-      }
-      return returnObject ? result : true;
+      if (typeof o.onMatch === "function")
+        o.onMatch(k);
+      return w ? k : true;
     };
-    if (returnState) {
-      matcher.state = state;
-    }
-    return matcher;
+    if (t)
+      N.state = i;
+    return N;
   };
-  picomatch.test = (input, regex, options, { glob, posix } = {}) => {
-    if (typeof input !== "string") {
-      throw new TypeError("Expected input to be a string");
-    }
-    if (input === "") {
+  Z.test = (e, r, t, { glob: n, posix: o } = {}) => {
+    if (typeof e !== "string")
+      throw TypeError("Expected input to be a string");
+    if (e === "")
       return { isMatch: false, output: "" };
-    }
-    const opts = options || {};
-    const format = opts.format || (posix ? utils.toPosixSlashes : null);
-    let match = input === glob;
-    let output = match && format ? format(input) : input;
-    if (match === false) {
-      output = format ? format(input) : input;
-      match = output === glob;
-    }
-    if (match === false || opts.capture === true) {
-      if (opts.matchBase === true || opts.basename === true) {
-        match = picomatch.matchBase(input, regex, options, posix);
-      } else {
-        match = regex.exec(output);
-      }
-    }
-    return { isMatch: Boolean(match), match, output };
+    let u = t || {}, s = u.format || (o ? Ne.toPosixSlashes : null), i = e === n, h = i && s ? s(e) : e;
+    if (i === false)
+      h = s ? s(e) : e, i = h === n;
+    if (i === false || u.capture === true)
+      if (u.matchBase === true || u.basename === true)
+        i = Z.matchBase(e, r, t, o);
+      else
+        i = r.exec(h);
+    return { isMatch: Boolean(i), match: i, output: h };
   };
-  picomatch.matchBase = (input, glob, options, posix = options && options.windows) => {
-    const regex = glob instanceof RegExp ? glob : picomatch.makeRe(glob, options);
-    return regex.test(utils.basename(input, { windows: posix }));
+  Z.matchBase = (e, r, t, n = t && t.windows) => (r instanceof RegExp ? r : Z.makeRe(r, t)).test(Ne.basename(e, { windows: n }));
+  Z.isMatch = (e, r, t) => Z(r, t)(e);
+  Z.parse = (e, r) => {
+    if (Array.isArray(e))
+      return e.map((t) => Z.parse(t, r));
+    return He(e, { ...r, fastpaths: false });
   };
-  picomatch.isMatch = (str, patterns, options) => picomatch(patterns, options)(str);
-  picomatch.parse = (pattern, options) => {
-    if (Array.isArray(pattern))
-      return pattern.map((p) => picomatch.parse(p, options));
-    return parse(pattern, { ...options, fastpaths: false });
+  Z.scan = (e, r) => on(e, r);
+  Z.compileRe = (e, r, t = false, n = false) => {
+    if (t === true)
+      return e.output;
+    let o = r || {}, u = o.contains ? "" : "^", s = o.contains ? "" : "$", i = `${u}(?:${e.output})${s}`;
+    if (e && e.negated === true)
+      i = `^(?!${i}).*$`;
+    let h = Z.toRegex(i, r);
+    if (n === true)
+      h.state = e;
+    return h;
   };
-  picomatch.scan = (input, options) => scan(input, options);
-  picomatch.compileRe = (state, options, returnOutput = false, returnState = false) => {
-    if (returnOutput === true) {
-      return state.output;
-    }
-    const opts = options || {};
-    const prepend = opts.contains ? "" : "^";
-    const append = opts.contains ? "" : "$";
-    let source = `${prepend}(?:${state.output})${append}`;
-    if (state && state.negated === true) {
-      source = `^(?!${source}).*$`;
-    }
-    const regex = picomatch.toRegex(source, options);
-    if (returnState === true) {
-      regex.state = state;
-    }
-    return regex;
+  Z.makeRe = (e, r = {}, t = false, n = false) => {
+    if (!e || typeof e !== "string")
+      throw TypeError("Expected a non-empty string");
+    let o = { negated: false, fastpaths: true };
+    if (r.fastpaths !== false && (e[0] === "." || e[0] === "*"))
+      o.output = He.fastpaths(e, r);
+    if (!o.output)
+      o = He(e, r);
+    return Z.compileRe(o, r, t, n);
   };
-  picomatch.makeRe = (input, options = {}, returnOutput = false, returnState = false) => {
-    if (!input || typeof input !== "string") {
-      throw new TypeError("Expected a non-empty string");
-    }
-    let parsed = { negated: false, fastpaths: true };
-    if (options.fastpaths !== false && (input[0] === "." || input[0] === "*")) {
-      parsed.output = parse.fastpaths(input, options);
-    }
-    if (!parsed.output) {
-      parsed = parse(input, options);
-    }
-    return picomatch.compileRe(parsed, options, returnOutput, returnState);
-  };
-  picomatch.toRegex = (source, options) => {
+  Z.toRegex = (e, r) => {
     try {
-      const opts = options || {};
-      return new RegExp(source, opts.flags || (opts.nocase ? "i" : ""));
-    } catch (err) {
-      if (options && options.debug === true)
-        throw err;
+      let t = r || {};
+      return new RegExp(e, t.flags || (t.nocase ? "i" : ""));
+    } catch (t) {
+      if (r && r.debug === true)
+        throw t;
       return /$^/;
     }
   };
-  picomatch.constants = constants;
-  module.exports = picomatch;
+  Z.constants = un;
+  bt.exports = Z;
 });
-var require_quote = __commonJS(function(exports, module) {
-  var OPS = [
-    "||",
-    "&&",
-    ";;&",
-    ";;",
-    ";&",
-    "|&",
-    "<(",
-    ">(",
-    "<<<",
-    "<<-",
-    "<<",
-    ">>",
-    ">&",
-    ">|",
-    "&>>",
-    "&>",
-    "<&",
-    "<>",
-    "&",
-    ";",
-    "(",
-    ")",
-    "|",
-    "<",
-    ">"
-  ];
-  var LINE_TERMINATORS = /[\n\r\u2028\u2029]/;
-  var GLOB_SHELL_SPECIAL = /[\s#!"$&'():;<=>@\\^`|~]/g;
-  module.exports = function quote(xs) {
-    var sawComment = false;
-    return xs.map(function(s) {
-      if (sawComment && typeof s === "string" && LINE_TERMINATORS.test(s)) {
-        throw new TypeError("a token after a `comment` must not contain line terminators");
-      }
-      if (s === "") {
+var vt = me(function(es, Ot) {
+  var fn = ["||", "&&", ";;&", ";;", ";&", "|&", "<(", ">(", "<<<", "<<-", "<<", ">>", ">&", ">|", "&>>", "&>", "<&", "<>", "&", ";", "(", ")", "|", "<", ">"], We = /[\n\r\u2028\u2029]/, ln = /[\s#!"$&'():;<=>@\\^`|~]/g;
+  Ot.exports = function(r) {
+    var t = false;
+    return r.map(function(n) {
+      if (t && typeof n === "string" && We.test(n))
+        throw TypeError("a token after a `comment` must not contain line terminators");
+      if (n === "")
         return "''";
-      }
-      if (s && typeof s === "object") {
-        if ("op" in s && s.op === "glob") {
-          if (typeof s.pattern !== "string") {
-            throw new TypeError("glob token requires a string `pattern`");
-          }
-          if (LINE_TERMINATORS.test(s.pattern)) {
-            throw new TypeError("glob `pattern` must not contain line terminators");
-          }
-          if (s.pattern === "") {
+      if (n && typeof n === "object") {
+        if ("op" in n && n.op === "glob") {
+          if (typeof n.pattern !== "string")
+            throw TypeError("glob token requires a string `pattern`");
+          if (We.test(n.pattern))
+            throw TypeError("glob `pattern` must not contain line terminators");
+          if (n.pattern === "")
             return "''";
-          }
-          return s.pattern.replace(GLOB_SHELL_SPECIAL, "\\$&");
+          return n.pattern.replace(ln, "\\$&");
         }
-        if ("op" in s && typeof s.op === "string") {
-          if (OPS.indexOf(s.op) < 0) {
-            throw new TypeError("invalid `op` value: " + JSON.stringify(s.op));
-          }
-          return s.op.replace(/[\s\S]/g, "\\$&");
+        if ("op" in n && typeof n.op === "string") {
+          if (fn.indexOf(n.op) < 0)
+            throw TypeError("invalid `op` value: " + JSON.stringify(n.op));
+          return n.op.replace(/[\s\S]/g, "\\$&");
         }
-        if ("comment" in s && typeof s.comment === "string") {
-          if (LINE_TERMINATORS.test(s.comment)) {
-            throw new TypeError("`comment` must not contain line terminators");
-          }
-          sawComment = true;
-          return "#" + s.comment;
+        if ("comment" in n && typeof n.comment === "string") {
+          if (We.test(n.comment))
+            throw TypeError("`comment` must not contain line terminators");
+          return t = true, "#" + n.comment;
         }
-        throw new TypeError("unrecognized object token shape");
+        throw TypeError("unrecognized object token shape");
       }
-      if (/'/.test(s) && /!/.test(s)) {
-        return "'" + s.replace(/'/g, `'"'"'`) + "'";
-      }
-      if (/["\s\\]/.test(s) && !/'/.test(s)) {
-        return "'" + s + "'";
-      }
-      if (/["'\s]/.test(s)) {
-        return '"' + s.replace(/(["\\$`])/g, "\\$1") + '"';
-      }
-      return String(s).replace(/([A-Za-z]:)?([#!"$&'()*,:;<=>?@[\\\]^`{|}~])/g, "$1\\$2");
+      if (/'/.test(n) && /!/.test(n))
+        return "'" + n.replace(/'/g, `'"'"'`) + "'";
+      if (/["\s\\]/.test(n) && !/'/.test(n))
+        return "'" + n + "'";
+      if (/["'\s]/.test(n))
+        return '"' + n.replace(/(["\\$`])/g, "\\$1") + '"';
+      return String(n).replace(/([A-Za-z]:)?([#!"$&'()*,:;<=>?@[\\\]^`{|}~])/g, "$1\\$2");
     }).join(" ");
   };
 });
-var require_parse2 = __commonJS(function(exports, module) {
-  var CONTROL = "(?:" + [
-    "\\|\\|",
-    "\\&(?:\\&|>>?)",
-    ";;\\&?",
-    "[;|]\\&",
-    "\\<\\(",
-    "\\<\\<\\<",
-    "\\<\\<-",
-    "\\<\\<(?!\\()",
-    ">>",
-    ">[&|(]",
-    "<[&>]",
-    "[&;()|<>]"
-  ].join("|") + ")";
-  var controlRE = new RegExp("^" + CONTROL + "$");
-  var META = "|&;()<> \\t";
-  var SINGLE_QUOTE = "'([^']*?)'";
-  var ANSI_C_BODY = "(?:\\\\[\\s\\S]|[^\\\\'])*?";
-  var ANSI_C_QUOTE = "\\$'" + ANSI_C_BODY + "'";
-  var ansiCAt = new RegExp("\\$'" + ANSI_C_BODY + "(?:(')|\\\\?$)", "g");
-  var ANSI_C_LETTERS = "abeEfnrtv";
-  var ANSI_C_CHARS = `\x07\b\x1B\x1B\f
-\r	\v`;
-  var hash = /^#$/;
-  var SQ = "'";
-  var DQ = '"';
-  var DS = "$";
-  var TOKEN = "";
-  var mult = 4294967296;
-  for (i = 0;i < 4; i++) {
-    TOKEN += (mult * Math.random()).toString(16);
-  }
-  var i;
-  var startsWithToken = new RegExp("^" + TOKEN);
-  function matchAll(s, r) {
-    var origIndex = r.lastIndex;
-    var matches = [];
-    var matchObj;
-    while (matchObj = r.exec(s)) {
-      matches[matches.length] = matchObj;
-      if (r.lastIndex === matchObj.index) {
+var Pt = me(function(ts, Lt) {
+  var Ht = "(?:" + ["\\|\\|", "\\&(?:\\&|>>?)", ";;\\&?", "[;|]\\&", "\\<\\(", "\\<\\<\\<", "\\<\\<-", "\\<\\<(?!\\()", ">>", ">[&|(]", "<[&>]", "[&;()|<>]"].join("|") + ")", Tt = new RegExp("^" + Ht + "$"), It = "|&;()<> \\t", dn = "'([^']*?)'", Nt = "(?:\\\\[\\s\\S]|[^\\\\'])*?", Ct = "\\$'" + Nt + "'", Pe = new RegExp("\\$'" + Nt + "(?:(')|\\\\?$)", "g"), pn = "abeEfnrtv", cn = `\x07\b\x1B\x1B\f
+\r	\v`, hn = /^#$/, Xe = "'", kt = '"', be = "$", ge = "", $n = 4294967296;
+  for (Le = 0;Le < 4; Le++)
+    ge += ($n * Math.random()).toString(16);
+  var Le, mn = new RegExp("^" + ge);
+  function yn(e, r) {
+    var t = r.lastIndex, n = [], o;
+    while (o = r.exec(e))
+      if (n[n.length] = o, r.lastIndex === o.index)
         r.lastIndex += 1;
-      }
-    }
-    r.lastIndex = origIndex;
-    return matches;
+    return r.lastIndex = t, n;
   }
-  function getVar(env, pre, key) {
-    var r = typeof env === "function" ? env(key) : env[key];
-    if (typeof r === "undefined" && key != "") {
-      r = "";
-    } else if (typeof r === "undefined") {
-      r = "$";
-    }
-    if (typeof r === "object") {
-      return pre + TOKEN + JSON.stringify(r) + TOKEN;
-    }
-    return pre + r;
+  function gn(e, r, t) {
+    var n = typeof e === "function" ? e(t) : e[t];
+    if (typeof n > "u" && t != "")
+      n = "";
+    else if (typeof n > "u")
+      n = "$";
+    if (typeof n === "object")
+      return r + ge + JSON.stringify(n) + ge;
+    return r + n;
   }
-  var ansiCEscape = /\\([0-7]{1,3}|x[\dA-Fa-f]{1,2}|u[\dA-Fa-f]{1,4}|U[\dA-Fa-f]{1,8}|c(?:\\\\|[\s\S])|[abeEfnrtv\\'"?])/g;
-  function expandAnsiCEscape(m, escape) {
-    var kind = escape.charAt(0);
-    if (kind === "c") {
-      var ctrl = escape.charAt(1);
-      return ctrl === "?" ? "\u007f" : String.fromCharCode(ctrl.charCodeAt(0) & 31);
+  var _n = /\\([0-7]{1,3}|x[\dA-Fa-f]{1,2}|u[\dA-Fa-f]{1,4}|U[\dA-Fa-f]{1,8}|c(?:\\\\|[\s\S])|[abeEfnrtv\\'"?])/g;
+  function xn(e, r) {
+    var t = r.charAt(0);
+    if (t === "c") {
+      var n = r.charAt(1);
+      return n === "?" ? "\u007f" : String.fromCharCode(n.charCodeAt(0) & 31);
     }
-    if (kind === "x" || kind === "u" || kind === "U") {
-      var cp = parseInt(escape.slice(1), 16);
-      if (cp > 1114111) {
-        return m;
-      }
-      return String.fromCharCode.apply(null, cp > 65535 ? [55232 + (cp >> 10), 56320 + (cp & 1023)] : [cp]);
+    if (t === "x" || t === "u" || t === "U") {
+      var o = parseInt(r.slice(1), 16);
+      if (o > 1114111)
+        return e;
+      return String.fromCharCode.apply(null, o > 65535 ? [55232 + (o >> 10), 56320 + (o & 1023)] : [o]);
     }
-    if (kind >= "0" && kind <= "7") {
-      return String.fromCharCode(parseInt(escape, 8) & 255);
-    }
-    var letter = ANSI_C_LETTERS.indexOf(escape);
-    return letter < 0 ? escape : ANSI_C_CHARS.charAt(letter);
+    if (t >= "0" && t <= "7")
+      return String.fromCharCode(parseInt(r, 8) & 255);
+    var u = pn.indexOf(r);
+    return u < 0 ? r : cn.charAt(u);
   }
-  function expandAnsiC(body) {
-    return body.replace(ansiCEscape, expandAnsiCEscape).split("\x00")[0];
+  function An(e) {
+    return e.replace(_n, xn).split("\x00")[0];
   }
-  function closesAnsiC(s, i) {
-    ansiCAt.lastIndex = i;
-    return !!ansiCAt.exec(s)[1];
+  function Rn(e, r) {
+    return Pe.lastIndex = r, !!Pe.exec(e)[1];
   }
-  function parseInternal(string, env, opts) {
-    if (!opts) {
-      opts = {};
-    }
-    var BS = opts.escape || "\\";
-    var ifs = opts.splitUnquoted === true ? ` 	
-` : typeof opts.splitUnquoted === "string" ? opts.splitUnquoted : "";
-    var BAREWORD = "(\\" + BS + `['"$\\` + BS + META + "]|\\$\\$|\\$(?!" + ANSI_C_QUOTE.slice(2) + `)|[^\\s'"$` + META + "])+";
-    var DOUBLE_QUOTE = '"(?:\\' + BS + '[\\s\\S]|[^"\\' + BS + '])*"';
-    var chunker = new RegExp([
-      "(" + CONTROL + ")",
-      "(" + ANSI_C_QUOTE + "|" + BAREWORD + "|" + DOUBLE_QUOTE + "|" + SINGLE_QUOTE + ")+"
-    ].join("|"), "g");
-    var matches = matchAll(string, chunker);
-    if (matches.length === 0) {
+  function En(e, r, t) {
+    if (!t)
+      t = {};
+    var n = t.escape || "\\", o = t.splitUnquoted === true ? ` 	
+` : typeof t.splitUnquoted === "string" ? t.splitUnquoted : "", u = "(\\" + n + `['"$\\` + n + It + "]|\\$\\$|\\$(?!" + Ct.slice(2) + `)|[^\\s'"$` + It + "])+", s = '"(?:\\' + n + '[\\s\\S]|[^"\\' + n + '])*"', i = new RegExp(["(" + Ht + ")", "(" + Ct + "|" + u + "|" + s + "|" + dn + ")+"].join("|"), "g"), h = yn(e, i);
+    if (h.length === 0)
       return [];
-    }
-    if (!env) {
-      env = {};
-    }
-    var commented = false;
-    return matches.map(function(match) {
-      var s = match[0];
-      if (!s || commented) {
+    if (!r)
+      r = {};
+    var N = false;
+    return h.map(function(_) {
+      var w = _[0];
+      if (!w || N)
         return;
-      }
-      if (controlRE.test(s)) {
-        return { op: s };
-      }
-      var quote = false;
-      var esc = false;
-      var out = "";
-      var words = [];
-      var sawQuote = false;
-      var pendingNw = null;
-      var isGlob = false;
-      var i;
-      function parseEnvVar() {
-        i += 1;
-        var varend;
-        var varname;
-        var char = s.charAt(i);
-        if (char === "{") {
-          i += 1;
-          if (s.charAt(i) === "}") {
-            throw new Error("Bad substitution: " + s.slice(i - 2, i + 1));
+      if (Tt.test(w))
+        return { op: w };
+      var M = false, K = false, g = "", k = [], ee = false, q = null, L = false, H;
+      function ne() {
+        H += 1;
+        var C, B, l = w.charAt(H);
+        if (l === "{") {
+          if (H += 1, w.charAt(H) === "}")
+            throw Error("Bad substitution: " + w.slice(H - 2, H + 1));
+          var f = 1;
+          C = H;
+          while (f > 0 && C < w.length) {
+            if (w.charAt(C) === "{" && w.charAt(C - 1) === "$")
+              f += 1;
+            else if (w.charAt(C) === "}")
+              f -= 1;
+            C += 1;
           }
-          var depth = 1;
-          varend = i;
-          while (depth > 0 && varend < s.length) {
-            if (s.charAt(varend) === "{" && s.charAt(varend - 1) === "$") {
-              depth += 1;
-            } else if (s.charAt(varend) === "}") {
-              depth -= 1;
-            }
-            varend += 1;
-          }
-          if (depth !== 0) {
-            throw new Error("Bad substitution: " + s.slice(i));
-          }
-          varend -= 1;
-          varname = s.slice(i, varend);
-          i = varend;
-        } else if (/[*@#?$!-]/.test(char)) {
-          varname = char;
-        } else {
-          var slicedFromI = s.slice(i);
-          varend = slicedFromI.match(/[^\w\d_]/);
-          if (!varend) {
-            varname = slicedFromI;
-            i = s.length;
-          } else {
-            varname = slicedFromI.slice(0, varend.index);
-            i += varend.index - 1;
-          }
+          if (f !== 0)
+            throw Error("Bad substitution: " + w.slice(H));
+          C -= 1, B = w.slice(H, C), H = C;
+        } else if (/[*@#?$!-]/.test(l))
+          B = l;
+        else {
+          var Y = w.slice(H);
+          if (C = Y.match(/[^\w\d_]/), !C)
+            B = Y, H = w.length;
+          else
+            B = Y.slice(0, C.index), H += C.index - 1;
         }
-        return getVar(env, "", varname);
+        return gn(r, "", B);
       }
-      function flushRun() {
-        if (pendingNw === null) {
+      function X() {
+        if (q === null)
           return;
-        }
-        if (pendingNw === 0) {
-          if (out !== "") {
-            words[words.length] = out;
-            out = "";
-          }
+        if (q === 0) {
+          if (g !== "")
+            k[k.length] = g, g = "";
         } else {
-          words[words.length] = out;
-          out = "";
-          for (var fe = 1;fe < pendingNw; fe += 1) {
-            words[words.length] = "";
-          }
+          k[k.length] = g, g = "";
+          for (var C = 1;C < q; C += 1)
+            k[k.length] = "";
         }
-        pendingNw = null;
+        q = null;
       }
-      for (i = 0;i < s.length; i++) {
-        var c = s.charAt(i);
-        if (ifs && c !== DS) {
-          flushRun();
-        }
-        isGlob = isGlob || !quote && (c === "*" || c === "?");
-        if (esc) {
-          out += c;
-          esc = false;
-        } else if (quote) {
-          if (c === quote) {
-            quote = false;
-          } else if (quote == SQ) {
-            out += c;
-          } else {
-            if (c === BS) {
-              i += 1;
-              c = s.charAt(i);
-              if (c === DQ || c === BS || c === DS) {
-                out += c;
-              } else {
-                out += BS + c;
-              }
-            } else if (c === DS) {
-              out += parseEnvVar();
-            } else {
-              out += c;
-            }
-          }
-        } else if (c === DQ || c === SQ) {
-          quote = c;
-          sawQuote = true;
-        } else if (controlRE.test(c)) {
-          return { op: s };
-        } else if (hash.test(c)) {
-          commented = true;
-          var commentObj = { comment: string.slice(match.index + i + 1) };
-          if (out.length) {
-            return [out, commentObj];
-          }
-          return [commentObj];
-        } else if (c === BS) {
-          esc = true;
-        } else if (c === DS && s.charAt(i + 1) === SQ && closesAnsiC(s, i)) {
-          flushRun();
-          sawQuote = true;
-          out += expandAnsiC(s.slice(i + 2, ansiCAt.lastIndex - 1));
-          i = ansiCAt.lastIndex - 1;
-        } else if (c === DS) {
-          var value = parseEnvVar();
-          if (!ifs) {
-            out += value;
-          } else {
-            for (var vi = 0;vi < value.length; vi += 1) {
-              var vc = value.charAt(vi);
-              if (ifs.indexOf(vc) < 0) {
-                flushRun();
-                out += vc;
-              } else if (pendingNw === null) {
-                pendingNw = vc === " " || vc === "\t" || vc === `
+      for (H = 0;H < w.length; H++) {
+        var T = w.charAt(H);
+        if (o && T !== be)
+          X();
+        if (L = L || !M && (T === "*" || T === "?"), K)
+          g += T, K = false;
+        else if (M)
+          if (T === M)
+            M = false;
+          else if (M == Xe)
+            g += T;
+          else if (T === n)
+            if (H += 1, T = w.charAt(H), T === kt || T === n || T === be)
+              g += T;
+            else
+              g += n + T;
+          else if (T === be)
+            g += ne();
+          else
+            g += T;
+        else if (T === kt || T === Xe)
+          M = T, ee = true;
+        else if (Tt.test(T))
+          return { op: w };
+        else if (hn.test(T)) {
+          N = true;
+          var V = { comment: e.slice(_.index + H + 1) };
+          if (g.length)
+            return [g, V];
+          return [V];
+        } else if (T === n)
+          K = true;
+        else if (T === be && w.charAt(H + 1) === Xe && Rn(w, H))
+          X(), ee = true, g += An(w.slice(H + 2, Pe.lastIndex - 1)), H = Pe.lastIndex - 1;
+        else if (T === be) {
+          var A = ne();
+          if (!o)
+            g += A;
+          else
+            for (var I = 0;I < A.length; I += 1) {
+              var a = A.charAt(I);
+              if (o.indexOf(a) < 0)
+                X(), g += a;
+              else if (q === null)
+                q = a === " " || a === "\t" || a === `
 ` ? 0 : 1;
-              } else if (vc !== " " && vc !== "\t" && vc !== `
-`) {
-                pendingNw += 1;
-              }
+              else if (a !== " " && a !== "\t" && a !== `
+`)
+                q += 1;
             }
-          }
-        } else {
-          out += c;
+        } else
+          g += T;
+      }
+      if (L)
+        return { op: "glob", pattern: g };
+      if (o) {
+        if (q !== null && q > 0) {
+          k[k.length] = g, g = "";
+          for (var Q = 1;Q < q; Q += 1)
+            k[k.length] = "";
         }
+        if (g !== "" || ee && k.length === 0)
+          k[k.length] = g;
+        return k;
       }
-      if (isGlob) {
-        return { op: "glob", pattern: out };
-      }
-      if (ifs) {
-        if (pendingNw !== null && pendingNw > 0) {
-          words[words.length] = out;
-          out = "";
-          for (var te = 1;te < pendingNw; te += 1) {
-            words[words.length] = "";
-          }
-        }
-        if (out !== "" || sawQuote && words.length === 0) {
-          words[words.length] = out;
-        }
-        return words;
-      }
-      return out;
-    }).reduce(function(prev, arg) {
-      if (typeof arg === "undefined") {
-        return prev;
-      }
-      [].concat(arg).forEach(function(entry) {
-        prev[prev.length] = entry;
-      });
-      return prev;
+      return g;
+    }).reduce(function(_, w) {
+      if (typeof w > "u")
+        return _;
+      return [].concat(w).forEach(function(M) {
+        _[_.length] = M;
+      }), _;
     }, []);
   }
-  module.exports = function parse(s, env, opts) {
-    var mapped = parseInternal(s, env, opts);
-    if (typeof env !== "function") {
-      return mapped;
-    }
-    return mapped.reduce(function(acc, s) {
-      if (typeof s === "object") {
-        acc[acc.length] = s;
-        return acc;
-      }
-      var xs = s.split(RegExp("(" + TOKEN + ".*?" + TOKEN + ")", "g"));
-      if (xs.length === 1) {
-        acc[acc.length] = xs[0];
-        return acc;
-      }
-      xs.filter(Boolean).forEach(function(x) {
-        acc[acc.length] = startsWithToken.test(x) ? JSON.parse(x.split(TOKEN)[1]) : x;
-      });
-      return acc;
+  Lt.exports = function(r, t, n) {
+    var o = En(r, t, n);
+    if (typeof t !== "function")
+      return o;
+    return o.reduce(function(u, s) {
+      if (typeof s === "object")
+        return u[u.length] = s, u;
+      var i = s.split(RegExp("(" + ge + ".*?" + ge + ")", "g"));
+      if (i.length === 1)
+        return u[u.length] = i[0], u;
+      return i.filter(Boolean).forEach(function(h) {
+        u[u.length] = mn.test(h) ? JSON.parse(h.split(ge)[1]) : h;
+      }), u;
     }, []);
   };
 });
-function deepCompareStrict(a, b) {
-  const typeofa = typeof a;
-  if (typeofa !== typeof b) {
+function _e(e, r) {
+  let t = typeof e;
+  if (t !== typeof r)
     return false;
-  }
-  if (Array.isArray(a)) {
-    if (!Array.isArray(b)) {
+  if (Array.isArray(e)) {
+    if (!Array.isArray(r))
       return false;
-    }
-    const length = a.length;
-    if (length !== b.length) {
+    let n = e.length;
+    if (n !== r.length)
       return false;
-    }
-    for (let i = 0;i < length; i++) {
-      if (!deepCompareStrict(a[i], b[i])) {
+    for (let o = 0;o < n; o++)
+      if (!_e(e[o], r[o]))
         return false;
-      }
-    }
     return true;
   }
-  if (typeofa === "object") {
-    if (!a || !b) {
-      return a === b;
-    }
-    const aKeys = Object.keys(a);
-    const bKeys = Object.keys(b);
-    const length = aKeys.length;
-    if (length !== bKeys.length) {
+  if (t === "object") {
+    if (!e || !r)
+      return e === r;
+    let n = Object.keys(e), o = Object.keys(r);
+    if (n.length !== o.length)
       return false;
-    }
-    for (const k of aKeys) {
-      if (!deepCompareStrict(a[k], b[k])) {
+    for (let s of n)
+      if (!_e(e[s], r[s]))
         return false;
-      }
-    }
     return true;
   }
-  return a === b;
+  return e === r;
 }
-function encodePointer(p) {
-  return encodeURI(escapePointer(p));
+function oe(e) {
+  return encodeURI(Wt(e));
 }
-function escapePointer(p) {
-  return p.replace(/~/g, "~0").replace(/\//g, "~1");
+function Wt(e) {
+  return e.replace(/~/g, "~0").replace(/\//g, "~1");
 }
-var schemaArrayKeyword = {
-  prefixItems: true,
-  items: true,
-  allOf: true,
-  anyOf: true,
-  oneOf: true
-};
-var schemaMapKeyword = {
-  $defs: true,
-  definitions: true,
-  properties: true,
-  patternProperties: true,
-  dependentSchemas: true
-};
-var ignoredKeyword = {
-  id: true,
-  $id: true,
-  $ref: true,
-  $schema: true,
-  $anchor: true,
-  $vocabulary: true,
-  $comment: true,
-  default: true,
-  enum: true,
-  const: true,
-  required: true,
-  type: true,
-  maximum: true,
-  minimum: true,
-  exclusiveMaximum: true,
-  exclusiveMinimum: true,
-  multipleOf: true,
-  maxLength: true,
-  minLength: true,
-  pattern: true,
-  format: true,
-  maxItems: true,
-  minItems: true,
-  uniqueItems: true,
-  maxProperties: true,
-  minProperties: true
-};
-var initialBaseURI = typeof self !== "undefined" && self.location && self.location.origin !== "null" ? new URL(self.location.origin + self.location.pathname + location.search) : new URL("https://github.com/cfworker");
-function dereference(schema, lookup = Object.create(null), baseURI = initialBaseURI, basePointer = "") {
-  if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-    const id = schema.$id || schema.id;
-    if (id) {
-      const url = new URL(id, baseURI.href);
-      if (url.hash.length > 1) {
-        lookup[url.href] = schema;
-      } else {
-        url.hash = "";
-        if (basePointer === "") {
-          baseURI = url;
-        } else {
-          dereference(schema, lookup, baseURI);
-        }
-      }
+var Xt = { prefixItems: true, items: true, allOf: true, anyOf: true, oneOf: true };
+var Qt = { $defs: true, definitions: true, properties: true, patternProperties: true, dependentSchemas: true };
+var Zt = { id: true, $id: true, $ref: true, $schema: true, $anchor: true, $vocabulary: true, $comment: true, default: true, enum: true, const: true, required: true, type: true, maximum: true, minimum: true, exclusiveMaximum: true, exclusiveMinimum: true, multipleOf: true, maxLength: true, minLength: true, pattern: true, format: true, maxItems: true, minItems: true, uniqueItems: true, maxProperties: true, minProperties: true };
+var Vt = typeof self < "u" && self.location && self.location.origin !== "null" ? new URL(self.location.origin + self.location.pathname + location.search) : new URL("https://github.com/cfworker");
+function ce(e, r = Object.create(null), t = Vt, n = "") {
+  if (e && typeof e === "object" && !Array.isArray(e)) {
+    let u = e.$id || e.id;
+    if (u) {
+      let s = new URL(u, t.href);
+      if (s.hash.length > 1)
+        r[s.href] = e;
+      else if (s.hash = "", n === "")
+        t = s;
+      else
+        ce(e, r, t);
     }
-  } else if (schema !== true && schema !== false) {
-    return lookup;
+  } else if (e !== true && e !== false)
+    return r;
+  let o = t.href + (n ? "#" + n : "");
+  if (r[o] !== undefined)
+    throw Error(`Duplicate schema URI "${o}".`);
+  if (r[o] = e, e === true || e === false)
+    return r;
+  if (e.__absolute_uri__ === undefined)
+    Object.defineProperty(e, "__absolute_uri__", { enumerable: false, value: o });
+  if (e.$ref && e.__absolute_ref__ === undefined) {
+    let u = new URL(e.$ref, t.href);
+    u.hash = u.hash, Object.defineProperty(e, "__absolute_ref__", { enumerable: false, value: u.href });
   }
-  const schemaURI = baseURI.href + (basePointer ? "#" + basePointer : "");
-  if (lookup[schemaURI] !== undefined) {
-    throw new Error(`Duplicate schema URI "${schemaURI}".`);
+  if (e.$recursiveRef && e.__absolute_recursive_ref__ === undefined) {
+    let u = new URL(e.$recursiveRef, t.href);
+    u.hash = u.hash, Object.defineProperty(e, "__absolute_recursive_ref__", { enumerable: false, value: u.href });
   }
-  lookup[schemaURI] = schema;
-  if (schema === true || schema === false) {
-    return lookup;
+  if (e.$anchor) {
+    let u = new URL("#" + e.$anchor, t.href);
+    r[u.href] = e;
   }
-  if (schema.__absolute_uri__ === undefined) {
-    Object.defineProperty(schema, "__absolute_uri__", {
-      enumerable: false,
-      value: schemaURI
-    });
-  }
-  if (schema.$ref && schema.__absolute_ref__ === undefined) {
-    const url = new URL(schema.$ref, baseURI.href);
-    url.hash = url.hash;
-    Object.defineProperty(schema, "__absolute_ref__", {
-      enumerable: false,
-      value: url.href
-    });
-  }
-  if (schema.$recursiveRef && schema.__absolute_recursive_ref__ === undefined) {
-    const url = new URL(schema.$recursiveRef, baseURI.href);
-    url.hash = url.hash;
-    Object.defineProperty(schema, "__absolute_recursive_ref__", {
-      enumerable: false,
-      value: url.href
-    });
-  }
-  if (schema.$anchor) {
-    const url = new URL("#" + schema.$anchor, baseURI.href);
-    lookup[url.href] = schema;
-  }
-  for (let key in schema) {
-    if (ignoredKeyword[key]) {
+  for (let u in e) {
+    if (Zt[u])
       continue;
-    }
-    const keyBase = `${basePointer}/${encodePointer(key)}`;
-    const subSchema = schema[key];
-    if (Array.isArray(subSchema)) {
-      if (schemaArrayKeyword[key]) {
-        const length = subSchema.length;
-        for (let i = 0;i < length; i++) {
-          dereference(subSchema[i], lookup, baseURI, `${keyBase}/${i}`);
-        }
+    let s = `${n}/${oe(u)}`, i = e[u];
+    if (Array.isArray(i)) {
+      if (Xt[u]) {
+        let h = i.length;
+        for (let N = 0;N < h; N++)
+          ce(i[N], r, t, `${s}/${N}`);
       }
-    } else if (schemaMapKeyword[key]) {
-      for (let subKey in subSchema) {
-        dereference(subSchema[subKey], lookup, baseURI, `${keyBase}/${encodePointer(subKey)}`);
-      }
-    } else {
-      dereference(subSchema, lookup, baseURI, keyBase);
-    }
+    } else if (Qt[u])
+      for (let h in i)
+        ce(i[h], r, t, `${s}/${oe(h)}`);
+    else
+      ce(i, r, t, s);
   }
-  return lookup;
+  return r;
 }
-var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
-var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-var TIME = /^(\d\d):(\d\d):(\d\d)(\.\d+)?(z|[+-]\d\d(?::?\d\d)?)?$/i;
-var HOSTNAME = /^(?=.{1,253}\.?$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-0-9a-z]{0,61}[0-9a-z])?)*\.?$/i;
-var URIREF = /^(?:[a-z][a-z0-9+\-.]*:)?(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'"()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})*)*)?(?:\?(?:[a-z0-9\-._~!$&'"()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'"()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-var URITEMPLATE = /^(?:(?:[^\x00-\x20"'<>%\\^`{|}]|%[0-9a-f]{2})|\{[+#./;?&=,!@|]?(?:[a-z0-9_]|%[0-9a-f]{2})+(?::[1-9][0-9]{0,3}|\*)?(?:,(?:[a-z0-9_]|%[0-9a-f]{2})+(?::[1-9][0-9]{0,3}|\*)?)*\})*$/i;
-var URL_ = /^(?:(?:https?|ftp):\/\/)(?:\S+(?::\S*)?@)?(?:(?!10(?:\.\d{1,3}){3})(?!127(?:\.\d{1,3}){3})(?!169\.254(?:\.\d{1,3}){2})(?!192\.168(?:\.\d{1,3}){2})(?!172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(?:[1-9]\d?|1\d\d|2[01]\d|22[0-3])(?:\.(?:1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(?:(?:[a-z\u{00a1}-\u{ffff}0-9]+-?)*[a-z\u{00a1}-\u{ffff}0-9]+)(?:\.(?:[a-z\u{00a1}-\u{ffff}0-9]+-?)*[a-z\u{00a1}-\u{ffff}0-9]+)*(?:\.(?:[a-z\u{00a1}-\u{ffff}]{2,})))(?::\d{2,5})?(?:\/[^\s]*)?$/iu;
-var UUID = /^(?:urn:uuid:)?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-var JSON_POINTER = /^(?:\/(?:[^~/]|~0|~1)*)*$/;
-var JSON_POINTER_URI_FRAGMENT = /^#(?:\/(?:[a-z0-9_\-.!$&'()*+,;:=@]|%[0-9a-f]{2}|~0|~1)*)*$/i;
-var RELATIVE_JSON_POINTER = /^(?:0|[1-9][0-9]*)(?:#|(?:\/(?:[^~/]|~0|~1)*)*)$/;
-var EMAIL = (input) => {
-  if (input[0] === '"')
+var Yt = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
+var Jt = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+var er = /^(\d\d):(\d\d):(\d\d)(\.\d+)?(z|[+-]\d\d(?::?\d\d)?)?$/i;
+var tr = /^(?=.{1,253}\.?$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-0-9a-z]{0,61}[0-9a-z])?)*\.?$/i;
+var rr = /^(?:[a-z][a-z0-9+\-.]*:)?(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'"()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'"()*+,;=:@]|%[0-9a-f]{2})*)*)?(?:\?(?:[a-z0-9\-._~!$&'"()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'"()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
+var nr = /^(?:(?:[^\x00-\x20"'<>%\\^`{|}]|%[0-9a-f]{2})|\{[+#./;?&=,!@|]?(?:[a-z0-9_]|%[0-9a-f]{2})+(?::[1-9][0-9]{0,3}|\*)?(?:,(?:[a-z0-9_]|%[0-9a-f]{2})+(?::[1-9][0-9]{0,3}|\*)?)*\})*$/i;
+var sr = /^(?:(?:https?|ftp):\/\/)(?:\S+(?::\S*)?@)?(?:(?!10(?:\.\d{1,3}){3})(?!127(?:\.\d{1,3}){3})(?!169\.254(?:\.\d{1,3}){2})(?!192\.168(?:\.\d{1,3}){2})(?!172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(?:[1-9]\d?|1\d\d|2[01]\d|22[0-3])(?:\.(?:1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(?:(?:[a-z\u{00a1}-\u{ffff}0-9]+-?)*[a-z\u{00a1}-\u{ffff}0-9]+)(?:\.(?:[a-z\u{00a1}-\u{ffff}0-9]+-?)*[a-z\u{00a1}-\u{ffff}0-9]+)*(?:\.(?:[a-z\u{00a1}-\u{ffff}]{2,})))(?::\d{2,5})?(?:\/[^\s]*)?$/iu;
+var or = /^(?:urn:uuid:)?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+var ur = /^(?:\/(?:[^~/]|~0|~1)*)*$/;
+var ir = /^#(?:\/(?:[a-z0-9_\-.!$&'()*+,;:=@]|%[0-9a-f]{2}|~0|~1)*)*$/i;
+var ar = /^(?:0|[1-9][0-9]*)(?:#|(?:\/(?:[^~/]|~0|~1)*)*)$/;
+var fr = (e) => {
+  if (e[0] === '"')
     return false;
-  const [name, host, ...rest] = input.split("@");
-  if (!name || !host || rest.length !== 0 || name.length > 64 || host.length > 253)
+  let [r, t, ...n] = e.split("@");
+  if (!r || !t || n.length !== 0 || r.length > 64 || t.length > 253)
     return false;
-  if (name[0] === "." || name.endsWith(".") || name.includes(".."))
+  if (r[0] === "." || r.endsWith(".") || r.includes(".."))
     return false;
-  if (!/^[a-z0-9.-]+$/i.test(host) || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/i.test(name))
+  if (!/^[a-z0-9.-]+$/i.test(t) || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/i.test(r))
     return false;
-  return host.split(".").every((part) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(part));
+  return t.split(".").every((o) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(o));
 };
-var IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
-var IPV6 = /^((([0-9a-f]{1,4}:){7}([0-9a-f]{1,4}|:))|(([0-9a-f]{1,4}:){6}(:[0-9a-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9a-f]{1,4}:){5}(((:[0-9a-f]{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9a-f]{1,4}:){4}(((:[0-9a-f]{1,4}){1,3})|((:[0-9a-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-f]{1,4}:){3}(((:[0-9a-f]{1,4}){1,4})|((:[0-9a-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-f]{1,4}:){2}(((:[0-9a-f]{1,4}){1,5})|((:[0-9a-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-f]{1,4}:){1}(((:[0-9a-f]{1,4}){1,6})|((:[0-9a-f]{1,4}){0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(:(((:[0-9a-f]{1,4}){1,7})|((:[0-9a-f]{1,4}){0,5}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))$/i;
-var DURATION = (input) => input.length > 1 && input.length < 80 && (/^P\d+([.,]\d+)?W$/.test(input) || /^P[\dYMDTHS]*(\d[.,]\d+)?[YMDHS]$/.test(input) && /^P([.,\d]+Y)?([.,\d]+M)?([.,\d]+D)?(T([.,\d]+H)?([.,\d]+M)?([.,\d]+S)?)?$/.test(input));
-function bind2(r) {
-  return r.test.bind(r);
+var lr = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
+var dr = /^((([0-9a-f]{1,4}:){7}([0-9a-f]{1,4}|:))|(([0-9a-f]{1,4}:){6}(:[0-9a-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9a-f]{1,4}:){5}(((:[0-9a-f]{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9a-f]{1,4}:){4}(((:[0-9a-f]{1,4}){1,3})|((:[0-9a-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-f]{1,4}:){3}(((:[0-9a-f]{1,4}){1,4})|((:[0-9a-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-f]{1,4}:){2}(((:[0-9a-f]{1,4}){1,5})|((:[0-9a-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-f]{1,4}:){1}(((:[0-9a-f]{1,4}){1,6})|((:[0-9a-f]{1,4}){0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(:(((:[0-9a-f]{1,4}){1,7})|((:[0-9a-f]{1,4}){0,5}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))$/i;
+var pr = (e) => e.length > 1 && e.length < 80 && (/^P\d+([.,]\d+)?W$/.test(e) || /^P[\dYMDTHS]*(\d[.,]\d+)?[YMDHS]$/.test(e) && /^P([.,\d]+Y)?([.,\d]+M)?([.,\d]+D)?(T([.,\d]+H)?([.,\d]+M)?([.,\d]+S)?)?$/.test(e));
+function le(e) {
+  return e.test.bind(e);
 }
-var format = {
-  date,
-  time: time.bind(undefined, false),
-  "date-time": date_time,
-  duration: DURATION,
-  uri,
-  "uri-reference": bind2(URIREF),
-  "uri-template": bind2(URITEMPLATE),
-  url: bind2(URL_),
-  email: EMAIL,
-  hostname: bind2(HOSTNAME),
-  ipv4: bind2(IPV4),
-  ipv6: bind2(IPV6),
-  regex,
-  uuid: bind2(UUID),
-  "json-pointer": bind2(JSON_POINTER),
-  "json-pointer-uri-fragment": bind2(JSON_POINTER_URI_FRAGMENT),
-  "relative-json-pointer": bind2(RELATIVE_JSON_POINTER)
-};
-function isLeapYear(year) {
-  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+var Me = { date: Je, time: et.bind(undefined, false), "date-time": $r, duration: pr, uri: gr, "uri-reference": le(rr), "uri-template": le(nr), url: le(sr), email: fr, hostname: le(tr), ipv4: le(lr), ipv6: le(dr), regex: xr, uuid: le(or), "json-pointer": le(ur), "json-pointer-uri-fragment": le(ir), "relative-json-pointer": le(ar) };
+function cr(e) {
+  return e % 4 === 0 && (e % 100 !== 0 || e % 400 === 0);
 }
-function date(str) {
-  const matches = str.match(DATE);
-  if (!matches)
+function Je(e) {
+  let r = e.match(Yt);
+  if (!r)
     return false;
-  const year = +matches[1];
-  const month = +matches[2];
-  const day = +matches[3];
-  return month >= 1 && month <= 12 && day >= 1 && day <= (month == 2 && isLeapYear(year) ? 29 : DAYS[month]);
+  let t = +r[1], n = +r[2], o = +r[3];
+  return n >= 1 && n <= 12 && o >= 1 && o <= (n == 2 && cr(t) ? 29 : Jt[n]);
 }
-function time(full, str) {
-  const matches = str.match(TIME);
-  if (!matches)
+function et(e, r) {
+  let t = r.match(er);
+  if (!t)
     return false;
-  const hour = +matches[1];
-  const minute = +matches[2];
-  const second = +matches[3];
-  const timeZone = !!matches[5];
-  return (hour <= 23 && minute <= 59 && second <= 59 || hour == 23 && minute == 59 && second == 60) && (!full || timeZone);
+  let n = +t[1], o = +t[2], u = +t[3], s = !!t[5];
+  return (n <= 23 && o <= 59 && u <= 59 || n == 23 && o == 59 && u == 60) && (!e || s);
 }
-var DATE_TIME_SEPARATOR = /t|\s/i;
-function date_time(str) {
-  const dateTime = str.split(DATE_TIME_SEPARATOR);
-  return dateTime.length == 2 && date(dateTime[0]) && time(true, dateTime[1]);
+var hr = /t|\s/i;
+function $r(e) {
+  let r = e.split(hr);
+  return r.length == 2 && Je(r[0]) && et(true, r[1]);
 }
-var NOT_URI_FRAGMENT = /\/|:/;
-var URI_PATTERN = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-function uri(str) {
-  return NOT_URI_FRAGMENT.test(str) && URI_PATTERN.test(str);
+var mr = /\/|:/;
+var yr = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
+function gr(e) {
+  return mr.test(e) && yr.test(e);
 }
-var Z_ANCHOR = /[^\\]\\Z/;
-function regex(str) {
-  if (Z_ANCHOR.test(str))
+var _r = /[^\\]\\Z/;
+function xr(e) {
+  if (_r.test(e))
     return false;
   try {
-    new RegExp(str, "u");
-    return true;
-  } catch (e) {
+    return new RegExp(e, "u"), true;
+  } catch (r) {
     return false;
   }
 }
-function ucs2length(s) {
-  let result = 0;
-  let length = s.length;
-  let index = 0;
-  let charCode;
-  while (index < length) {
-    result++;
-    charCode = s.charCodeAt(index++);
-    if (charCode >= 55296 && charCode <= 56319 && index < length) {
-      charCode = s.charCodeAt(index);
-      if ((charCode & 64512) == 56320) {
-        index++;
-      }
+function tt(e) {
+  let r = 0, t = e.length, n = 0, o;
+  while (n < t)
+    if (r++, o = e.charCodeAt(n++), o >= 55296 && o <= 56319 && n < t) {
+      if (o = e.charCodeAt(n), (o & 64512) == 56320)
+        n++;
     }
-  }
-  return result;
+  return r;
 }
-function validate(instance, schema, draft = "2019-09", lookup = dereference(schema), shortCircuit = true, recursiveAnchor = null, instanceLocation = "#", schemaLocation = "#", evaluated = Object.create(null)) {
-  if (schema === true) {
+function F(e, r, t = "2019-09", n = ce(r), o = true, u = null, s = "#", i = "#", h = Object.create(null)) {
+  if (r === true)
     return { valid: true, errors: [] };
-  }
-  if (schema === false) {
-    return {
-      valid: false,
-      errors: [
-        {
-          instanceLocation,
-          keyword: "false",
-          keywordLocation: instanceLocation,
-          error: "False boolean schema."
-        }
-      ]
-    };
-  }
-  const rawInstanceType = typeof instance;
-  let instanceType;
-  switch (rawInstanceType) {
+  if (r === false)
+    return { valid: false, errors: [{ instanceLocation: s, keyword: "false", keywordLocation: s, error: "False boolean schema." }] };
+  let N = typeof e, _;
+  switch (N) {
     case "boolean":
     case "number":
     case "string":
-      instanceType = rawInstanceType;
+      _ = N;
       break;
     case "object":
-      if (instance === null) {
-        instanceType = "null";
-      } else if (Array.isArray(instance)) {
-        instanceType = "array";
-      } else {
-        instanceType = "object";
-      }
+      if (e === null)
+        _ = "null";
+      else if (Array.isArray(e))
+        _ = "array";
+      else
+        _ = "object";
       break;
     default:
-      throw new Error(`Instances of "${rawInstanceType}" type are not supported.`);
+      throw Error(`Instances of "${N}" type are not supported.`);
   }
-  const { $ref, $recursiveRef, $recursiveAnchor, type: $type, const: $const, enum: $enum, required: $required, not: $not, anyOf: $anyOf, allOf: $allOf, oneOf: $oneOf, if: $if, then: $then, else: $else, format: $format, properties: $properties, patternProperties: $patternProperties, additionalProperties: $additionalProperties, unevaluatedProperties: $unevaluatedProperties, minProperties: $minProperties, maxProperties: $maxProperties, propertyNames: $propertyNames, dependentRequired: $dependentRequired, dependentSchemas: $dependentSchemas, dependencies: $dependencies, prefixItems: $prefixItems, items: $items, additionalItems: $additionalItems, unevaluatedItems: $unevaluatedItems, contains: $contains, minContains: $minContains, maxContains: $maxContains, minItems: $minItems, maxItems: $maxItems, uniqueItems: $uniqueItems, minimum: $minimum, maximum: $maximum, exclusiveMinimum: $exclusiveMinimum, exclusiveMaximum: $exclusiveMaximum, multipleOf: $multipleOf, minLength: $minLength, maxLength: $maxLength, pattern: $pattern, __absolute_ref__, __absolute_recursive_ref__ } = schema;
-  const errors = [];
-  if ($recursiveAnchor === true && recursiveAnchor === null) {
-    recursiveAnchor = schema;
+  let { $ref: w, $recursiveRef: M, $recursiveAnchor: K, type: g, const: k, enum: ee, required: q, not: L, anyOf: H, allOf: ne, oneOf: X, if: T, then: V, else: A, format: I, properties: a, patternProperties: Q, additionalProperties: C, unevaluatedProperties: B, minProperties: l, maxProperties: f, propertyNames: Y, dependentRequired: P, dependentSchemas: J, dependencies: te, prefixItems: W, items: ue, additionalItems: $e, unevaluatedItems: fe, contains: ae, minContains: R, maxContains: de, minItems: Re, maxItems: p, uniqueItems: j, minimum: d, maximum: O, exclusiveMinimum: D, exclusiveMaximum: U, multipleOf: z, minLength: re, maxLength: ie, pattern: pe, __absolute_ref__: we, __absolute_recursive_ref__: zt } = r, m = [];
+  if (K === true && u === null)
+    u = r;
+  if (M === "#") {
+    let E = u === null ? n[zt] : u, x = `${i}/$recursiveRef`, v = F(e, u === null ? r : u, t, n, o, E, s, x, h);
+    if (!v.valid)
+      m.push({ instanceLocation: s, keyword: "$recursiveRef", keywordLocation: x, error: "A subschema had errors." }, ...v.errors);
   }
-  if ($recursiveRef === "#") {
-    const refSchema = recursiveAnchor === null ? lookup[__absolute_recursive_ref__] : recursiveAnchor;
-    const keywordLocation = `${schemaLocation}/$recursiveRef`;
-    const result = validate(instance, recursiveAnchor === null ? schema : recursiveAnchor, draft, lookup, shortCircuit, refSchema, instanceLocation, keywordLocation, evaluated);
-    if (!result.valid) {
-      errors.push({
-        instanceLocation,
-        keyword: "$recursiveRef",
-        keywordLocation,
-        error: "A subschema had errors."
-      }, ...result.errors);
-    }
-  }
-  if ($ref !== undefined) {
-    const uri = __absolute_ref__ || $ref;
-    const refSchema = lookup[uri];
-    if (refSchema === undefined) {
-      let message = `Unresolved $ref "${$ref}".`;
-      if (__absolute_ref__ && __absolute_ref__ !== $ref) {
-        message += `  Absolute URI "${__absolute_ref__}".`;
-      }
-      message += `
+  if (w !== undefined) {
+    let x = n[we || w];
+    if (x === undefined) {
+      let c = `Unresolved $ref "${w}".`;
+      if (we && we !== w)
+        c += `  Absolute URI "${we}".`;
+      throw c += `
 Known schemas:
-- ${Object.keys(lookup).join(`
-- `)}`;
-      throw new Error(message);
+- ${Object.keys(n).join(`
+- `)}`, Error(c);
     }
-    const keywordLocation = `${schemaLocation}/$ref`;
-    const result = validate(instance, refSchema, draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, keywordLocation, evaluated);
-    if (!result.valid) {
-      errors.push({
-        instanceLocation,
-        keyword: "$ref",
-        keywordLocation,
-        error: "A subschema had errors."
-      }, ...result.errors);
-    }
-    if (draft === "4" || draft === "7") {
-      return { valid: errors.length === 0, errors };
-    }
+    let v = `${i}/$ref`, y = F(e, x, t, n, o, u, s, v, h);
+    if (!y.valid)
+      m.push({ instanceLocation: s, keyword: "$ref", keywordLocation: v, error: "A subschema had errors." }, ...y.errors);
+    if (t === "4" || t === "7")
+      return { valid: m.length === 0, errors: m };
   }
-  if (Array.isArray($type)) {
-    let length = $type.length;
-    let valid = false;
-    for (let i = 0;i < length; i++) {
-      if (instanceType === $type[i] || $type[i] === "integer" && instanceType === "number" && instance % 1 === 0 && instance === instance) {
-        valid = true;
+  if (Array.isArray(g)) {
+    let E = g.length, x = false;
+    for (let v = 0;v < E; v++)
+      if (_ === g[v] || g[v] === "integer" && _ === "number" && e % 1 === 0 && e === e) {
+        x = true;
         break;
       }
-    }
-    if (!valid) {
-      errors.push({
-        instanceLocation,
-        keyword: "type",
-        keywordLocation: `${schemaLocation}/type`,
-        error: `Instance type "${instanceType}" is invalid. Expected "${$type.join('", "')}".`
-      });
-    }
-  } else if ($type === "integer") {
-    if (instanceType !== "number" || instance % 1 || instance !== instance) {
-      errors.push({
-        instanceLocation,
-        keyword: "type",
-        keywordLocation: `${schemaLocation}/type`,
-        error: `Instance type "${instanceType}" is invalid. Expected "${$type}".`
-      });
-    }
-  } else if ($type !== undefined && instanceType !== $type) {
-    errors.push({
-      instanceLocation,
-      keyword: "type",
-      keywordLocation: `${schemaLocation}/type`,
-      error: `Instance type "${instanceType}" is invalid. Expected "${$type}".`
-    });
+    if (!x)
+      m.push({ instanceLocation: s, keyword: "type", keywordLocation: `${i}/type`, error: `Instance type "${_}" is invalid. Expected "${g.join('", "')}".` });
+  } else if (g === "integer") {
+    if (_ !== "number" || e % 1 || e !== e)
+      m.push({ instanceLocation: s, keyword: "type", keywordLocation: `${i}/type`, error: `Instance type "${_}" is invalid. Expected "${g}".` });
+  } else if (g !== undefined && _ !== g)
+    m.push({ instanceLocation: s, keyword: "type", keywordLocation: `${i}/type`, error: `Instance type "${_}" is invalid. Expected "${g}".` });
+  if (k !== undefined) {
+    if (_ === "object" || _ === "array") {
+      if (!_e(e, k))
+        m.push({ instanceLocation: s, keyword: "const", keywordLocation: `${i}/const`, error: `Instance does not match ${JSON.stringify(k)}.` });
+    } else if (e !== k)
+      m.push({ instanceLocation: s, keyword: "const", keywordLocation: `${i}/const`, error: `Instance does not match ${JSON.stringify(k)}.` });
   }
-  if ($const !== undefined) {
-    if (instanceType === "object" || instanceType === "array") {
-      if (!deepCompareStrict(instance, $const)) {
-        errors.push({
-          instanceLocation,
-          keyword: "const",
-          keywordLocation: `${schemaLocation}/const`,
-          error: `Instance does not match ${JSON.stringify($const)}.`
-        });
-      }
-    } else if (instance !== $const) {
-      errors.push({
-        instanceLocation,
-        keyword: "const",
-        keywordLocation: `${schemaLocation}/const`,
-        error: `Instance does not match ${JSON.stringify($const)}.`
-      });
-    }
+  if (ee !== undefined) {
+    if (_ === "object" || _ === "array") {
+      if (!ee.some((E) => _e(e, E)))
+        m.push({ instanceLocation: s, keyword: "enum", keywordLocation: `${i}/enum`, error: `Instance does not match any of ${JSON.stringify(ee)}.` });
+    } else if (!ee.some((E) => e === E))
+      m.push({ instanceLocation: s, keyword: "enum", keywordLocation: `${i}/enum`, error: `Instance does not match any of ${JSON.stringify(ee)}.` });
   }
-  if ($enum !== undefined) {
-    if (instanceType === "object" || instanceType === "array") {
-      if (!$enum.some((value) => deepCompareStrict(instance, value))) {
-        errors.push({
-          instanceLocation,
-          keyword: "enum",
-          keywordLocation: `${schemaLocation}/enum`,
-          error: `Instance does not match any of ${JSON.stringify($enum)}.`
-        });
-      }
-    } else if (!$enum.some((value) => instance === value)) {
-      errors.push({
-        instanceLocation,
-        keyword: "enum",
-        keywordLocation: `${schemaLocation}/enum`,
-        error: `Instance does not match any of ${JSON.stringify($enum)}.`
-      });
-    }
+  if (L !== undefined) {
+    let E = `${i}/not`;
+    if (F(e, L, t, n, o, u, s, E).valid)
+      m.push({ instanceLocation: s, keyword: "not", keywordLocation: E, error: 'Instance matched "not" schema.' });
   }
-  if ($not !== undefined) {
-    const keywordLocation = `${schemaLocation}/not`;
-    const result = validate(instance, $not, draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, keywordLocation);
-    if (result.valid) {
-      errors.push({
-        instanceLocation,
-        keyword: "not",
-        keywordLocation,
-        error: 'Instance matched "not" schema.'
-      });
+  let Oe = [];
+  if (H !== undefined) {
+    let E = `${i}/anyOf`, x = m.length, v = false;
+    for (let y = 0;y < H.length; y++) {
+      let c = H[y], b = Object.create(h), S = F(e, c, t, n, o, K === true ? u : null, s, `${E}/${y}`, b);
+      if (m.push(...S.errors), v = v || S.valid, S.valid)
+        Oe.push(b);
     }
+    if (v)
+      m.length = x;
+    else
+      m.splice(x, 0, { instanceLocation: s, keyword: "anyOf", keywordLocation: E, error: "Instance does not match any subschemas." });
   }
-  let subEvaluateds = [];
-  if ($anyOf !== undefined) {
-    const keywordLocation = `${schemaLocation}/anyOf`;
-    const errorsLength = errors.length;
-    let anyValid = false;
-    for (let i = 0;i < $anyOf.length; i++) {
-      const subSchema = $anyOf[i];
-      const subEvaluated = Object.create(evaluated);
-      const result = validate(instance, subSchema, draft, lookup, shortCircuit, $recursiveAnchor === true ? recursiveAnchor : null, instanceLocation, `${keywordLocation}/${i}`, subEvaluated);
-      errors.push(...result.errors);
-      anyValid = anyValid || result.valid;
-      if (result.valid) {
-        subEvaluateds.push(subEvaluated);
-      }
+  if (ne !== undefined) {
+    let E = `${i}/allOf`, x = m.length, v = true;
+    for (let y = 0;y < ne.length; y++) {
+      let c = ne[y], b = Object.create(h), S = F(e, c, t, n, o, K === true ? u : null, s, `${E}/${y}`, b);
+      if (m.push(...S.errors), v = v && S.valid, S.valid)
+        Oe.push(b);
     }
-    if (anyValid) {
-      errors.length = errorsLength;
-    } else {
-      errors.splice(errorsLength, 0, {
-        instanceLocation,
-        keyword: "anyOf",
-        keywordLocation,
-        error: "Instance does not match any subschemas."
-      });
-    }
+    if (v)
+      m.length = x;
+    else
+      m.splice(x, 0, { instanceLocation: s, keyword: "allOf", keywordLocation: E, error: "Instance does not match every subschema." });
   }
-  if ($allOf !== undefined) {
-    const keywordLocation = `${schemaLocation}/allOf`;
-    const errorsLength = errors.length;
-    let allValid = true;
-    for (let i = 0;i < $allOf.length; i++) {
-      const subSchema = $allOf[i];
-      const subEvaluated = Object.create(evaluated);
-      const result = validate(instance, subSchema, draft, lookup, shortCircuit, $recursiveAnchor === true ? recursiveAnchor : null, instanceLocation, `${keywordLocation}/${i}`, subEvaluated);
-      errors.push(...result.errors);
-      allValid = allValid && result.valid;
-      if (result.valid) {
-        subEvaluateds.push(subEvaluated);
-      }
-    }
-    if (allValid) {
-      errors.length = errorsLength;
-    } else {
-      errors.splice(errorsLength, 0, {
-        instanceLocation,
-        keyword: "allOf",
-        keywordLocation,
-        error: `Instance does not match every subschema.`
-      });
-    }
-  }
-  if ($oneOf !== undefined) {
-    const keywordLocation = `${schemaLocation}/oneOf`;
-    const errorsLength = errors.length;
-    const matches = $oneOf.filter((subSchema, i) => {
-      const subEvaluated = Object.create(evaluated);
-      const result = validate(instance, subSchema, draft, lookup, shortCircuit, $recursiveAnchor === true ? recursiveAnchor : null, instanceLocation, `${keywordLocation}/${i}`, subEvaluated);
-      errors.push(...result.errors);
-      if (result.valid) {
-        subEvaluateds.push(subEvaluated);
-      }
-      return result.valid;
+  if (X !== undefined) {
+    let E = `${i}/oneOf`, x = m.length, v = X.filter((y, c) => {
+      let b = Object.create(h), S = F(e, y, t, n, o, K === true ? u : null, s, `${E}/${c}`, b);
+      if (m.push(...S.errors), S.valid)
+        Oe.push(b);
+      return S.valid;
     }).length;
-    if (matches === 1) {
-      errors.length = errorsLength;
-    } else {
-      errors.splice(errorsLength, 0, {
-        instanceLocation,
-        keyword: "oneOf",
-        keywordLocation,
-        error: `Instance does not match exactly one subschema (${matches} matches).`
-      });
+    if (v === 1)
+      m.length = x;
+    else
+      m.splice(x, 0, { instanceLocation: s, keyword: "oneOf", keywordLocation: E, error: `Instance does not match exactly one subschema (${v} matches).` });
+  }
+  if (_ === "object" || _ === "array")
+    Object.assign(h, ...Oe);
+  if (T !== undefined) {
+    let E = `${i}/if`;
+    if (F(e, T, t, n, o, u, s, E, h).valid) {
+      if (V !== undefined) {
+        let v = F(e, V, t, n, o, u, s, `${i}/then`, h);
+        if (!v.valid)
+          m.push({ instanceLocation: s, keyword: "if", keywordLocation: E, error: 'Instance does not match "then" schema.' }, ...v.errors);
+      }
+    } else if (A !== undefined) {
+      let v = F(e, A, t, n, o, u, s, `${i}/else`, h);
+      if (!v.valid)
+        m.push({ instanceLocation: s, keyword: "if", keywordLocation: E, error: 'Instance does not match "else" schema.' }, ...v.errors);
     }
   }
-  if (instanceType === "object" || instanceType === "array") {
-    Object.assign(evaluated, ...subEvaluateds);
-  }
-  if ($if !== undefined) {
-    const keywordLocation = `${schemaLocation}/if`;
-    const conditionResult = validate(instance, $if, draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, keywordLocation, evaluated).valid;
-    if (conditionResult) {
-      if ($then !== undefined) {
-        const thenResult = validate(instance, $then, draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, `${schemaLocation}/then`, evaluated);
-        if (!thenResult.valid) {
-          errors.push({
-            instanceLocation,
-            keyword: "if",
-            keywordLocation,
-            error: `Instance does not match "then" schema.`
-          }, ...thenResult.errors);
+  if (_ === "object") {
+    if (q !== undefined) {
+      for (let y of q)
+        if (!(y in e))
+          m.push({ instanceLocation: s, keyword: "required", keywordLocation: `${i}/required`, error: `Instance does not have required property "${y}".` });
+    }
+    let E = Object.keys(e);
+    if (l !== undefined && E.length < l)
+      m.push({ instanceLocation: s, keyword: "minProperties", keywordLocation: `${i}/minProperties`, error: `Instance does not have at least ${l} properties.` });
+    if (f !== undefined && E.length > f)
+      m.push({ instanceLocation: s, keyword: "maxProperties", keywordLocation: `${i}/maxProperties`, error: `Instance does not have at least ${f} properties.` });
+    if (Y !== undefined) {
+      let y = `${i}/propertyNames`;
+      for (let c in e) {
+        let b = `${s}/${oe(c)}`, S = F(c, Y, t, n, o, u, b, y);
+        if (!S.valid)
+          m.push({ instanceLocation: s, keyword: "propertyNames", keywordLocation: y, error: `Property name "${c}" does not match schema.` }, ...S.errors);
+      }
+    }
+    if (P !== undefined) {
+      let y = `${i}/dependantRequired`;
+      for (let c in P)
+        if (c in e) {
+          let b = P[c];
+          for (let S of b)
+            if (!(S in e))
+              m.push({ instanceLocation: s, keyword: "dependentRequired", keywordLocation: y, error: `Instance has "${c}" but does not have "${S}".` });
+        }
+    }
+    if (J !== undefined)
+      for (let y in J) {
+        let c = `${i}/dependentSchemas`;
+        if (y in e) {
+          let b = F(e, J[y], t, n, o, u, s, `${c}/${oe(y)}`, h);
+          if (!b.valid)
+            m.push({ instanceLocation: s, keyword: "dependentSchemas", keywordLocation: c, error: `Instance has "${y}" but does not match dependant schema.` }, ...b.errors);
         }
       }
-    } else if ($else !== undefined) {
-      const elseResult = validate(instance, $else, draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, `${schemaLocation}/else`, evaluated);
-      if (!elseResult.valid) {
-        errors.push({
-          instanceLocation,
-          keyword: "if",
-          keywordLocation,
-          error: `Instance does not match "else" schema.`
-        }, ...elseResult.errors);
-      }
-    }
-  }
-  if (instanceType === "object") {
-    if ($required !== undefined) {
-      for (const key of $required) {
-        if (!(key in instance)) {
-          errors.push({
-            instanceLocation,
-            keyword: "required",
-            keywordLocation: `${schemaLocation}/required`,
-            error: `Instance does not have required property "${key}".`
-          });
-        }
-      }
-    }
-    const keys = Object.keys(instance);
-    if ($minProperties !== undefined && keys.length < $minProperties) {
-      errors.push({
-        instanceLocation,
-        keyword: "minProperties",
-        keywordLocation: `${schemaLocation}/minProperties`,
-        error: `Instance does not have at least ${$minProperties} properties.`
-      });
-    }
-    if ($maxProperties !== undefined && keys.length > $maxProperties) {
-      errors.push({
-        instanceLocation,
-        keyword: "maxProperties",
-        keywordLocation: `${schemaLocation}/maxProperties`,
-        error: `Instance does not have at least ${$maxProperties} properties.`
-      });
-    }
-    if ($propertyNames !== undefined) {
-      const keywordLocation = `${schemaLocation}/propertyNames`;
-      for (const key in instance) {
-        const subInstancePointer = `${instanceLocation}/${encodePointer(key)}`;
-        const result = validate(key, $propertyNames, draft, lookup, shortCircuit, recursiveAnchor, subInstancePointer, keywordLocation);
-        if (!result.valid) {
-          errors.push({
-            instanceLocation,
-            keyword: "propertyNames",
-            keywordLocation,
-            error: `Property name "${key}" does not match schema.`
-          }, ...result.errors);
-        }
-      }
-    }
-    if ($dependentRequired !== undefined) {
-      const keywordLocation = `${schemaLocation}/dependantRequired`;
-      for (const key in $dependentRequired) {
-        if (key in instance) {
-          const required = $dependentRequired[key];
-          for (const dependantKey of required) {
-            if (!(dependantKey in instance)) {
-              errors.push({
-                instanceLocation,
-                keyword: "dependentRequired",
-                keywordLocation,
-                error: `Instance has "${key}" but does not have "${dependantKey}".`
-              });
-            }
-          }
-        }
-      }
-    }
-    if ($dependentSchemas !== undefined) {
-      for (const key in $dependentSchemas) {
-        const keywordLocation = `${schemaLocation}/dependentSchemas`;
-        if (key in instance) {
-          const result = validate(instance, $dependentSchemas[key], draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, `${keywordLocation}/${encodePointer(key)}`, evaluated);
-          if (!result.valid) {
-            errors.push({
-              instanceLocation,
-              keyword: "dependentSchemas",
-              keywordLocation,
-              error: `Instance has "${key}" but does not match dependant schema.`
-            }, ...result.errors);
-          }
-        }
-      }
-    }
-    if ($dependencies !== undefined) {
-      const keywordLocation = `${schemaLocation}/dependencies`;
-      for (const key in $dependencies) {
-        if (key in instance) {
-          const propsOrSchema = $dependencies[key];
-          if (Array.isArray(propsOrSchema)) {
-            for (const dependantKey of propsOrSchema) {
-              if (!(dependantKey in instance)) {
-                errors.push({
-                  instanceLocation,
-                  keyword: "dependencies",
-                  keywordLocation,
-                  error: `Instance has "${key}" but does not have "${dependantKey}".`
-                });
-              }
-            }
+    if (te !== undefined) {
+      let y = `${i}/dependencies`;
+      for (let c in te)
+        if (c in e) {
+          let b = te[c];
+          if (Array.isArray(b)) {
+            for (let S of b)
+              if (!(S in e))
+                m.push({ instanceLocation: s, keyword: "dependencies", keywordLocation: y, error: `Instance has "${c}" but does not have "${S}".` });
           } else {
-            const result = validate(instance, propsOrSchema, draft, lookup, shortCircuit, recursiveAnchor, instanceLocation, `${keywordLocation}/${encodePointer(key)}`);
-            if (!result.valid) {
-              errors.push({
-                instanceLocation,
-                keyword: "dependencies",
-                keywordLocation,
-                error: `Instance has "${key}" but does not match dependant schema.`
-              }, ...result.errors);
-            }
+            let S = F(e, b, t, n, o, u, s, `${y}/${oe(c)}`);
+            if (!S.valid)
+              m.push({ instanceLocation: s, keyword: "dependencies", keywordLocation: y, error: `Instance has "${c}" but does not match dependant schema.` }, ...S.errors);
           }
+        }
+    }
+    let x = Object.create(null), v = false;
+    if (a !== undefined) {
+      let y = `${i}/properties`;
+      for (let c in a) {
+        if (!(c in e))
+          continue;
+        let b = `${s}/${oe(c)}`, S = F(e[c], a[c], t, n, o, u, b, `${y}/${oe(c)}`);
+        if (S.valid)
+          h[c] = x[c] = true;
+        else if (v = o, m.push({ instanceLocation: s, keyword: "properties", keywordLocation: y, error: `Property "${c}" does not match schema.` }, ...S.errors), v)
+          break;
+      }
+    }
+    if (!v && Q !== undefined) {
+      let y = `${i}/patternProperties`;
+      for (let c in Q) {
+        let b = new RegExp(c, "u"), S = Q[c];
+        for (let se in e) {
+          if (!b.test(se))
+            continue;
+          let Qe = `${s}/${oe(se)}`, Ze = F(e[se], S, t, n, o, u, Qe, `${y}/${oe(c)}`);
+          if (Ze.valid)
+            h[se] = x[se] = true;
+          else
+            v = o, m.push({ instanceLocation: s, keyword: "patternProperties", keywordLocation: y, error: `Property "${se}" matches pattern "${c}" but does not match associated schema.` }, ...Ze.errors);
         }
       }
     }
-    const thisEvaluated = Object.create(null);
-    let stop = false;
-    if ($properties !== undefined) {
-      const keywordLocation = `${schemaLocation}/properties`;
-      for (const key in $properties) {
-        if (!(key in instance)) {
+    if (!v && C !== undefined) {
+      let y = `${i}/additionalProperties`;
+      for (let c in e) {
+        if (x[c])
           continue;
+        let b = `${s}/${oe(c)}`, S = F(e[c], C, t, n, o, u, b, y);
+        if (S.valid)
+          h[c] = true;
+        else
+          v = o, m.push({ instanceLocation: s, keyword: "additionalProperties", keywordLocation: y, error: `Property "${c}" does not match additional properties schema.` }, ...S.errors);
+      }
+    } else if (!v && B !== undefined) {
+      let y = `${i}/unevaluatedProperties`;
+      for (let c in e)
+        if (!h[c]) {
+          let b = `${s}/${oe(c)}`, S = F(e[c], B, t, n, o, u, b, y);
+          if (S.valid)
+            h[c] = true;
+          else
+            m.push({ instanceLocation: s, keyword: "unevaluatedProperties", keywordLocation: y, error: `Property "${c}" does not match unevaluated properties schema.` }, ...S.errors);
         }
-        const subInstancePointer = `${instanceLocation}/${encodePointer(key)}`;
-        const result = validate(instance[key], $properties[key], draft, lookup, shortCircuit, recursiveAnchor, subInstancePointer, `${keywordLocation}/${encodePointer(key)}`);
-        if (result.valid) {
-          evaluated[key] = thisEvaluated[key] = true;
-        } else {
-          stop = shortCircuit;
-          errors.push({
-            instanceLocation,
-            keyword: "properties",
-            keywordLocation,
-            error: `Property "${key}" does not match schema.`
-          }, ...result.errors);
-          if (stop)
+    }
+  } else if (_ === "array") {
+    if (p !== undefined && e.length > p)
+      m.push({ instanceLocation: s, keyword: "maxItems", keywordLocation: `${i}/maxItems`, error: `Array has too many items (${e.length} > ${p}).` });
+    if (Re !== undefined && e.length < Re)
+      m.push({ instanceLocation: s, keyword: "minItems", keywordLocation: `${i}/minItems`, error: `Array has too few items (${e.length} < ${Re}).` });
+    let E = e.length, x = 0, v = false;
+    if (W !== undefined) {
+      let y = `${i}/prefixItems`, c = Math.min(W.length, E);
+      for (;x < c; x++) {
+        let b = F(e[x], W[x], t, n, o, u, `${s}/${x}`, `${y}/${x}`);
+        if (h[x] = true, !b.valid) {
+          if (v = o, m.push({ instanceLocation: s, keyword: "prefixItems", keywordLocation: y, error: "Items did not match schema." }, ...b.errors), v)
             break;
         }
       }
     }
-    if (!stop && $patternProperties !== undefined) {
-      const keywordLocation = `${schemaLocation}/patternProperties`;
-      for (const pattern in $patternProperties) {
-        const regex = new RegExp(pattern, "u");
-        const subSchema = $patternProperties[pattern];
-        for (const key in instance) {
-          if (!regex.test(key)) {
-            continue;
-          }
-          const subInstancePointer = `${instanceLocation}/${encodePointer(key)}`;
-          const result = validate(instance[key], subSchema, draft, lookup, shortCircuit, recursiveAnchor, subInstancePointer, `${keywordLocation}/${encodePointer(pattern)}`);
-          if (result.valid) {
-            evaluated[key] = thisEvaluated[key] = true;
-          } else {
-            stop = shortCircuit;
-            errors.push({
-              instanceLocation,
-              keyword: "patternProperties",
-              keywordLocation,
-              error: `Property "${key}" matches pattern "${pattern}" but does not match associated schema.`
-            }, ...result.errors);
-          }
-        }
-      }
-    }
-    if (!stop && $additionalProperties !== undefined) {
-      const keywordLocation = `${schemaLocation}/additionalProperties`;
-      for (const key in instance) {
-        if (thisEvaluated[key]) {
-          continue;
-        }
-        const subInstancePointer = `${instanceLocation}/${encodePointer(key)}`;
-        const result = validate(instance[key], $additionalProperties, draft, lookup, shortCircuit, recursiveAnchor, subInstancePointer, keywordLocation);
-        if (result.valid) {
-          evaluated[key] = true;
-        } else {
-          stop = shortCircuit;
-          errors.push({
-            instanceLocation,
-            keyword: "additionalProperties",
-            keywordLocation,
-            error: `Property "${key}" does not match additional properties schema.`
-          }, ...result.errors);
-        }
-      }
-    } else if (!stop && $unevaluatedProperties !== undefined) {
-      const keywordLocation = `${schemaLocation}/unevaluatedProperties`;
-      for (const key in instance) {
-        if (!evaluated[key]) {
-          const subInstancePointer = `${instanceLocation}/${encodePointer(key)}`;
-          const result = validate(instance[key], $unevaluatedProperties, draft, lookup, shortCircuit, recursiveAnchor, subInstancePointer, keywordLocation);
-          if (result.valid) {
-            evaluated[key] = true;
-          } else {
-            errors.push({
-              instanceLocation,
-              keyword: "unevaluatedProperties",
-              keywordLocation,
-              error: `Property "${key}" does not match unevaluated properties schema.`
-            }, ...result.errors);
-          }
-        }
-      }
-    }
-  } else if (instanceType === "array") {
-    if ($maxItems !== undefined && instance.length > $maxItems) {
-      errors.push({
-        instanceLocation,
-        keyword: "maxItems",
-        keywordLocation: `${schemaLocation}/maxItems`,
-        error: `Array has too many items (${instance.length} > ${$maxItems}).`
-      });
-    }
-    if ($minItems !== undefined && instance.length < $minItems) {
-      errors.push({
-        instanceLocation,
-        keyword: "minItems",
-        keywordLocation: `${schemaLocation}/minItems`,
-        error: `Array has too few items (${instance.length} < ${$minItems}).`
-      });
-    }
-    const length = instance.length;
-    let i = 0;
-    let stop = false;
-    if ($prefixItems !== undefined) {
-      const keywordLocation = `${schemaLocation}/prefixItems`;
-      const length2 = Math.min($prefixItems.length, length);
-      for (;i < length2; i++) {
-        const result = validate(instance[i], $prefixItems[i], draft, lookup, shortCircuit, recursiveAnchor, `${instanceLocation}/${i}`, `${keywordLocation}/${i}`);
-        evaluated[i] = true;
-        if (!result.valid) {
-          stop = shortCircuit;
-          errors.push({
-            instanceLocation,
-            keyword: "prefixItems",
-            keywordLocation,
-            error: `Items did not match schema.`
-          }, ...result.errors);
-          if (stop)
-            break;
-        }
-      }
-    }
-    if ($items !== undefined) {
-      const keywordLocation = `${schemaLocation}/items`;
-      if (Array.isArray($items)) {
-        const length2 = Math.min($items.length, length);
-        for (;i < length2; i++) {
-          const result = validate(instance[i], $items[i], draft, lookup, shortCircuit, recursiveAnchor, `${instanceLocation}/${i}`, `${keywordLocation}/${i}`);
-          evaluated[i] = true;
-          if (!result.valid) {
-            stop = shortCircuit;
-            errors.push({
-              instanceLocation,
-              keyword: "items",
-              keywordLocation,
-              error: `Items did not match schema.`
-            }, ...result.errors);
-            if (stop)
+    if (ue !== undefined) {
+      let y = `${i}/items`;
+      if (Array.isArray(ue)) {
+        let c = Math.min(ue.length, E);
+        for (;x < c; x++) {
+          let b = F(e[x], ue[x], t, n, o, u, `${s}/${x}`, `${y}/${x}`);
+          if (h[x] = true, !b.valid) {
+            if (v = o, m.push({ instanceLocation: s, keyword: "items", keywordLocation: y, error: "Items did not match schema." }, ...b.errors), v)
               break;
           }
         }
-      } else {
-        for (;i < length; i++) {
-          const result = validate(instance[i], $items, draft, lookup, shortCircuit, recursiveAnchor, `${instanceLocation}/${i}`, keywordLocation);
-          evaluated[i] = true;
-          if (!result.valid) {
-            stop = shortCircuit;
-            errors.push({
-              instanceLocation,
-              keyword: "items",
-              keywordLocation,
-              error: `Items did not match schema.`
-            }, ...result.errors);
-            if (stop)
+      } else
+        for (;x < E; x++) {
+          let c = F(e[x], ue, t, n, o, u, `${s}/${x}`, y);
+          if (h[x] = true, !c.valid) {
+            if (v = o, m.push({ instanceLocation: s, keyword: "items", keywordLocation: y, error: "Items did not match schema." }, ...c.errors), v)
               break;
           }
         }
-      }
-      if (!stop && $additionalItems !== undefined) {
-        const keywordLocation = `${schemaLocation}/additionalItems`;
-        for (;i < length; i++) {
-          const result = validate(instance[i], $additionalItems, draft, lookup, shortCircuit, recursiveAnchor, `${instanceLocation}/${i}`, keywordLocation);
-          evaluated[i] = true;
-          if (!result.valid) {
-            stop = shortCircuit;
-            errors.push({
-              instanceLocation,
-              keyword: "additionalItems",
-              keywordLocation,
-              error: `Items did not match additional items schema.`
-            }, ...result.errors);
-          }
+      if (!v && $e !== undefined) {
+        let c = `${i}/additionalItems`;
+        for (;x < E; x++) {
+          let b = F(e[x], $e, t, n, o, u, `${s}/${x}`, c);
+          if (h[x] = true, !b.valid)
+            v = o, m.push({ instanceLocation: s, keyword: "additionalItems", keywordLocation: c, error: "Items did not match additional items schema." }, ...b.errors);
         }
       }
     }
-    if ($contains !== undefined) {
-      if (length === 0 && $minContains === undefined) {
-        errors.push({
-          instanceLocation,
-          keyword: "contains",
-          keywordLocation: `${schemaLocation}/contains`,
-          error: `Array is empty. It must contain at least one item matching the schema.`
-        });
-      } else if ($minContains !== undefined && length < $minContains) {
-        errors.push({
-          instanceLocation,
-          keyword: "minContains",
-          keywordLocation: `${schemaLocation}/minContains`,
-          error: `Array has less items (${length}) than minContains (${$minContains}).`
-        });
-      } else {
-        const keywordLocation = `${schemaLocation}/contains`;
-        const errorsLength = errors.length;
-        let contained = 0;
-        for (let j = 0;j < length; j++) {
-          const result = validate(instance[j], $contains, draft, lookup, shortCircuit, recursiveAnchor, `${instanceLocation}/${j}`, keywordLocation);
-          if (result.valid) {
-            evaluated[j] = true;
-            contained++;
-          } else {
-            errors.push(...result.errors);
-          }
+    if (ae !== undefined)
+      if (E === 0 && R === undefined)
+        m.push({ instanceLocation: s, keyword: "contains", keywordLocation: `${i}/contains`, error: "Array is empty. It must contain at least one item matching the schema." });
+      else if (R !== undefined && E < R)
+        m.push({ instanceLocation: s, keyword: "minContains", keywordLocation: `${i}/minContains`, error: `Array has less items (${E}) than minContains (${R}).` });
+      else {
+        let y = `${i}/contains`, c = m.length, b = 0;
+        for (let S = 0;S < E; S++) {
+          let se = F(e[S], ae, t, n, o, u, `${s}/${S}`, y);
+          if (se.valid)
+            h[S] = true, b++;
+          else
+            m.push(...se.errors);
         }
-        if (contained >= ($minContains || 0)) {
-          errors.length = errorsLength;
-        }
-        if ($minContains === undefined && $maxContains === undefined && contained === 0) {
-          errors.splice(errorsLength, 0, {
-            instanceLocation,
-            keyword: "contains",
-            keywordLocation,
-            error: `Array does not contain item matching schema.`
-          });
-        } else if ($minContains !== undefined && contained < $minContains) {
-          errors.push({
-            instanceLocation,
-            keyword: "minContains",
-            keywordLocation: `${schemaLocation}/minContains`,
-            error: `Array must contain at least ${$minContains} items matching schema. Only ${contained} items were found.`
-          });
-        } else if ($maxContains !== undefined && contained > $maxContains) {
-          errors.push({
-            instanceLocation,
-            keyword: "maxContains",
-            keywordLocation: `${schemaLocation}/maxContains`,
-            error: `Array may contain at most ${$maxContains} items matching schema. ${contained} items were found.`
-          });
-        }
+        if (b >= (R || 0))
+          m.length = c;
+        if (R === undefined && de === undefined && b === 0)
+          m.splice(c, 0, { instanceLocation: s, keyword: "contains", keywordLocation: y, error: "Array does not contain item matching schema." });
+        else if (R !== undefined && b < R)
+          m.push({ instanceLocation: s, keyword: "minContains", keywordLocation: `${i}/minContains`, error: `Array must contain at least ${R} items matching schema. Only ${b} items were found.` });
+        else if (de !== undefined && b > de)
+          m.push({ instanceLocation: s, keyword: "maxContains", keywordLocation: `${i}/maxContains`, error: `Array may contain at most ${de} items matching schema. ${b} items were found.` });
       }
-    }
-    if (!stop && $unevaluatedItems !== undefined) {
-      const keywordLocation = `${schemaLocation}/unevaluatedItems`;
-      for (i;i < length; i++) {
-        if (evaluated[i]) {
+    if (!v && fe !== undefined) {
+      let y = `${i}/unevaluatedItems`;
+      for (x;x < E; x++) {
+        if (h[x])
           continue;
-        }
-        const result = validate(instance[i], $unevaluatedItems, draft, lookup, shortCircuit, recursiveAnchor, `${instanceLocation}/${i}`, keywordLocation);
-        evaluated[i] = true;
-        if (!result.valid) {
-          errors.push({
-            instanceLocation,
-            keyword: "unevaluatedItems",
-            keywordLocation,
-            error: `Items did not match unevaluated items schema.`
-          }, ...result.errors);
-        }
+        let c = F(e[x], fe, t, n, o, u, `${s}/${x}`, y);
+        if (h[x] = true, !c.valid)
+          m.push({ instanceLocation: s, keyword: "unevaluatedItems", keywordLocation: y, error: "Items did not match unevaluated items schema." }, ...c.errors);
       }
     }
-    if ($uniqueItems) {
-      for (let j = 0;j < length; j++) {
-        const a = instance[j];
-        const ao = typeof a === "object" && a !== null;
-        for (let k = 0;k < length; k++) {
-          if (j === k) {
+    if (j)
+      for (let y = 0;y < E; y++) {
+        let c = e[y], b = typeof c === "object" && c !== null;
+        for (let S = 0;S < E; S++) {
+          if (y === S)
             continue;
-          }
-          const b = instance[k];
-          const bo = typeof b === "object" && b !== null;
-          if (a === b || ao && bo && deepCompareStrict(a, b)) {
-            errors.push({
-              instanceLocation,
-              keyword: "uniqueItems",
-              keywordLocation: `${schemaLocation}/uniqueItems`,
-              error: `Duplicate items at indexes ${j} and ${k}.`
-            });
-            j = Number.MAX_SAFE_INTEGER;
-            k = Number.MAX_SAFE_INTEGER;
-          }
+          let se = e[S];
+          if (c === se || b && (typeof se === "object" && se !== null) && _e(c, se))
+            m.push({ instanceLocation: s, keyword: "uniqueItems", keywordLocation: `${i}/uniqueItems`, error: `Duplicate items at indexes ${y} and ${S}.` }), y = Number.MAX_SAFE_INTEGER, S = Number.MAX_SAFE_INTEGER;
         }
       }
-    }
-  } else if (instanceType === "number") {
-    if (draft === "4") {
-      if ($minimum !== undefined && ($exclusiveMinimum === true && instance <= $minimum || instance < $minimum)) {
-        errors.push({
-          instanceLocation,
-          keyword: "minimum",
-          keywordLocation: `${schemaLocation}/minimum`,
-          error: `${instance} is less than ${$exclusiveMinimum ? "or equal to " : ""} ${$minimum}.`
-        });
-      }
-      if ($maximum !== undefined && ($exclusiveMaximum === true && instance >= $maximum || instance > $maximum)) {
-        errors.push({
-          instanceLocation,
-          keyword: "maximum",
-          keywordLocation: `${schemaLocation}/maximum`,
-          error: `${instance} is greater than ${$exclusiveMaximum ? "or equal to " : ""} ${$maximum}.`
-        });
-      }
+  } else if (_ === "number") {
+    if (t === "4") {
+      if (d !== undefined && (D === true && e <= d || e < d))
+        m.push({ instanceLocation: s, keyword: "minimum", keywordLocation: `${i}/minimum`, error: `${e} is less than ${D ? "or equal to " : ""} ${d}.` });
+      if (O !== undefined && (U === true && e >= O || e > O))
+        m.push({ instanceLocation: s, keyword: "maximum", keywordLocation: `${i}/maximum`, error: `${e} is greater than ${U ? "or equal to " : ""} ${O}.` });
     } else {
-      if ($minimum !== undefined && instance < $minimum) {
-        errors.push({
-          instanceLocation,
-          keyword: "minimum",
-          keywordLocation: `${schemaLocation}/minimum`,
-          error: `${instance} is less than ${$minimum}.`
-        });
-      }
-      if ($maximum !== undefined && instance > $maximum) {
-        errors.push({
-          instanceLocation,
-          keyword: "maximum",
-          keywordLocation: `${schemaLocation}/maximum`,
-          error: `${instance} is greater than ${$maximum}.`
-        });
-      }
-      if ($exclusiveMinimum !== undefined && instance <= $exclusiveMinimum) {
-        errors.push({
-          instanceLocation,
-          keyword: "exclusiveMinimum",
-          keywordLocation: `${schemaLocation}/exclusiveMinimum`,
-          error: `${instance} is less than ${$exclusiveMinimum}.`
-        });
-      }
-      if ($exclusiveMaximum !== undefined && instance >= $exclusiveMaximum) {
-        errors.push({
-          instanceLocation,
-          keyword: "exclusiveMaximum",
-          keywordLocation: `${schemaLocation}/exclusiveMaximum`,
-          error: `${instance} is greater than or equal to ${$exclusiveMaximum}.`
-        });
-      }
+      if (d !== undefined && e < d)
+        m.push({ instanceLocation: s, keyword: "minimum", keywordLocation: `${i}/minimum`, error: `${e} is less than ${d}.` });
+      if (O !== undefined && e > O)
+        m.push({ instanceLocation: s, keyword: "maximum", keywordLocation: `${i}/maximum`, error: `${e} is greater than ${O}.` });
+      if (D !== undefined && e <= D)
+        m.push({ instanceLocation: s, keyword: "exclusiveMinimum", keywordLocation: `${i}/exclusiveMinimum`, error: `${e} is less than ${D}.` });
+      if (U !== undefined && e >= U)
+        m.push({ instanceLocation: s, keyword: "exclusiveMaximum", keywordLocation: `${i}/exclusiveMaximum`, error: `${e} is greater than or equal to ${U}.` });
     }
-    if ($multipleOf !== undefined) {
-      const remainder = instance % $multipleOf;
-      if (Math.abs(0 - remainder) >= 0.00000011920929 && Math.abs($multipleOf - remainder) >= 0.00000011920929) {
-        errors.push({
-          instanceLocation,
-          keyword: "multipleOf",
-          keywordLocation: `${schemaLocation}/multipleOf`,
-          error: `${instance} is not a multiple of ${$multipleOf}.`
-        });
-      }
+    if (z !== undefined) {
+      let E = e % z;
+      if (Math.abs(0 - E) >= 0.00000011920929 && Math.abs(z - E) >= 0.00000011920929)
+        m.push({ instanceLocation: s, keyword: "multipleOf", keywordLocation: `${i}/multipleOf`, error: `${e} is not a multiple of ${z}.` });
     }
-  } else if (instanceType === "string") {
-    const length = $minLength === undefined && $maxLength === undefined ? 0 : ucs2length(instance);
-    if ($minLength !== undefined && length < $minLength) {
-      errors.push({
-        instanceLocation,
-        keyword: "minLength",
-        keywordLocation: `${schemaLocation}/minLength`,
-        error: `String is too short (${length} < ${$minLength}).`
-      });
-    }
-    if ($maxLength !== undefined && length > $maxLength) {
-      errors.push({
-        instanceLocation,
-        keyword: "maxLength",
-        keywordLocation: `${schemaLocation}/maxLength`,
-        error: `String is too long (${length} > ${$maxLength}).`
-      });
-    }
-    if ($pattern !== undefined && !new RegExp($pattern, "u").test(instance)) {
-      errors.push({
-        instanceLocation,
-        keyword: "pattern",
-        keywordLocation: `${schemaLocation}/pattern`,
-        error: `String does not match pattern.`
-      });
-    }
-    if ($format !== undefined && format[$format] && !format[$format](instance)) {
-      errors.push({
-        instanceLocation,
-        keyword: "format",
-        keywordLocation: `${schemaLocation}/format`,
-        error: `String does not match format "${$format}".`
-      });
-    }
+  } else if (_ === "string") {
+    let E = re === undefined && ie === undefined ? 0 : tt(e);
+    if (re !== undefined && E < re)
+      m.push({ instanceLocation: s, keyword: "minLength", keywordLocation: `${i}/minLength`, error: `String is too short (${E} < ${re}).` });
+    if (ie !== undefined && E > ie)
+      m.push({ instanceLocation: s, keyword: "maxLength", keywordLocation: `${i}/maxLength`, error: `String is too long (${E} > ${ie}).` });
+    if (pe !== undefined && !new RegExp(pe, "u").test(e))
+      m.push({ instanceLocation: s, keyword: "pattern", keywordLocation: `${i}/pattern`, error: "String does not match pattern." });
+    if (I !== undefined && Me[I] && !Me[I](e))
+      m.push({ instanceLocation: s, keyword: "format", keywordLocation: `${i}/format`, error: `String does not match format "${I}".` });
   }
-  return { valid: errors.length === 0, errors };
+  return { valid: m.length === 0, errors: m };
 }
 
-class Validator {
+class rt {
   schema;
   draft;
   shortCircuit;
   lookup;
-  constructor(schema, draft = "2019-09", shortCircuit = true) {
-    this.schema = schema;
-    this.draft = draft;
-    this.shortCircuit = shortCircuit;
-    this.lookup = dereference(schema);
+  constructor(e, r = "2019-09", t = true) {
+    this.schema = e, this.draft = r, this.shortCircuit = t, this.lookup = ce(e);
   }
-  validate(instance) {
-    return validate(instance, this.schema, this.draft, this.lookup, this.shortCircuit);
+  validate(e) {
+    return F(e, this.schema, this.draft, this.lookup, this.shortCircuit);
   }
-  addSchema(schema, id) {
-    if (id) {
-      schema = { ...schema, $id: id };
-    }
-    dereference(schema, this.lookup);
+  addSchema(e, r) {
+    if (r)
+      e = { ...e, $id: r };
+    ce(e, this.lookup);
   }
 }
-var _DRIVE_LETTER_START_RE = /^[A-Za-z]:\//;
-function normalizeWindowsPath(input = "") {
-  if (!input) {
-    return input;
-  }
-  return input.replace(/\\/g, "/").replace(_DRIVE_LETTER_START_RE, (r) => r.toUpperCase());
+var Ar = /^[A-Za-z]:\//;
+function Ee(e = "") {
+  if (!e)
+    return e;
+  return e.replace(/\\/g, "/").replace(Ar, (r) => r.toUpperCase());
 }
-var _IS_ABSOLUTE_RE = /^[/\\](?![/\\])|^[/\\]{2}(?!\.)|^[A-Za-z]:[/\\]/;
-function cwd() {
-  if (false) {}
+var Er = /^[/\\](?![/\\])|^[/\\]{2}(?!\.)|^[A-Za-z]:[/\\]/;
+function br() {
   return "/";
 }
-var resolve = function(...arguments_) {
-  arguments_ = arguments_.map((argument) => normalizeWindowsPath(argument));
-  let resolvedPath = "";
-  let resolvedAbsolute = false;
-  for (let index = arguments_.length - 1;index >= -1 && !resolvedAbsolute; index--) {
-    const path = index >= 0 ? arguments_[index] : cwd();
-    if (!path || path.length === 0) {
+var ve = function(...e) {
+  e = e.map((n) => Ee(n));
+  let r = "", t = false;
+  for (let n = e.length - 1;n >= -1 && !t; n--) {
+    let o = n >= 0 ? e[n] : br();
+    if (!o || o.length === 0)
       continue;
-    }
-    resolvedPath = `${path}/${resolvedPath}`;
-    resolvedAbsolute = isAbsolute(path);
+    r = `${o}/${r}`, t = ye(o);
   }
-  resolvedPath = normalizeString(resolvedPath, !resolvedAbsolute);
-  if (resolvedAbsolute && !isAbsolute(resolvedPath)) {
-    return `/${resolvedPath}`;
-  }
-  return resolvedPath.length > 0 ? resolvedPath : ".";
+  if (r = ze(r, !t), t && !ye(r))
+    return `/${r}`;
+  return r.length > 0 ? r : ".";
 };
-function normalizeString(path, allowAboveRoot) {
-  let res = "";
-  let lastSegmentLength = 0;
-  let lastSlash = -1;
-  let dots = 0;
-  let char = null;
-  for (let index = 0;index <= path.length; ++index) {
-    if (index < path.length) {
-      char = path[index];
-    } else if (char === "/") {
+function ze(e, r) {
+  let t = "", n = 0, o = -1, u = 0, s = null;
+  for (let i = 0;i <= e.length; ++i) {
+    if (i < e.length)
+      s = e[i];
+    else if (s === "/")
       break;
-    } else {
-      char = "/";
-    }
-    if (char === "/") {
-      if (lastSlash === index - 1 || dots === 1)
+    else
+      s = "/";
+    if (s === "/") {
+      if (o === i - 1 || u === 1)
         ;
-      else if (dots === 2) {
-        if (res.length < 2 || lastSegmentLength !== 2 || res[res.length - 1] !== "." || res[res.length - 2] !== ".") {
-          if (res.length > 2) {
-            const lastSlashIndex = res.lastIndexOf("/");
-            if (lastSlashIndex === -1) {
-              res = "";
-              lastSegmentLength = 0;
-            } else {
-              res = res.slice(0, lastSlashIndex);
-              lastSegmentLength = res.length - 1 - res.lastIndexOf("/");
-            }
-            lastSlash = index;
-            dots = 0;
+      else if (u === 2) {
+        if (t.length < 2 || n !== 2 || t[t.length - 1] !== "." || t[t.length - 2] !== ".") {
+          if (t.length > 2) {
+            let h = t.lastIndexOf("/");
+            if (h === -1)
+              t = "", n = 0;
+            else
+              t = t.slice(0, h), n = t.length - 1 - t.lastIndexOf("/");
+            o = i, u = 0;
             continue;
-          } else if (res.length > 0) {
-            res = "";
-            lastSegmentLength = 0;
-            lastSlash = index;
-            dots = 0;
+          } else if (t.length > 0) {
+            t = "", n = 0, o = i, u = 0;
             continue;
           }
         }
-        if (allowAboveRoot) {
-          res += res.length > 0 ? "/.." : "..";
-          lastSegmentLength = 2;
-        }
+        if (r)
+          t += t.length > 0 ? "/.." : "..", n = 2;
       } else {
-        if (res.length > 0) {
-          res += `/${path.slice(lastSlash + 1, index)}`;
-        } else {
-          res = path.slice(lastSlash + 1, index);
-        }
-        lastSegmentLength = index - lastSlash - 1;
+        if (t.length > 0)
+          t += `/${e.slice(o + 1, i)}`;
+        else
+          t = e.slice(o + 1, i);
+        n = i - o - 1;
       }
-      lastSlash = index;
-      dots = 0;
-    } else if (char === "." && dots !== -1) {
-      ++dots;
-    } else {
-      dots = -1;
-    }
+      o = i, u = 0;
+    } else if (s === "." && u !== -1)
+      ++u;
+    else
+      u = -1;
   }
-  return res;
+  return t;
 }
-var isAbsolute = function(p) {
-  return _IS_ABSOLUTE_RE.test(p);
+var ye = function(e) {
+  return Er.test(e);
 };
-var basename = function(p, extension) {
-  const segments = normalizeWindowsPath(p).split("/");
-  let lastSegment = "";
-  for (let i = segments.length - 1;i >= 0; i--) {
-    const val = segments[i];
-    if (val) {
-      lastSegment = val;
+var ft = function(e, r) {
+  let t = Ee(e).split("/"), n = "";
+  for (let o = t.length - 1;o >= 0; o--) {
+    let u = t[o];
+    if (u) {
+      n = u;
       break;
     }
   }
-  return extension && lastSegment.endsWith(extension) ? lastSegment.slice(0, -extension.length) : lastSegment;
+  return r && n.endsWith(r) ? n.slice(0, -r.length) : n;
 };
-var import_posix = __toESM(require_picomatch(), 1);
-var $quote = require_quote();
-var $parse = require_parse2();
-var export_picomatch = import_posix.default;
+var Sn = Kt(wt(), 1);
+var Mt = vt();
+var Dt = Pt();
+var $s = Sn.default;
 
 // node_modules/@cmodjs/core/utils/paths.js
 var missingPath = /(?:^|: )(?:ENOENT|ENOTDIR)\b/;
@@ -4289,7 +2928,7 @@ function unplacedOf(row, isInTask) {
   if (text === "")
     return [];
   if (text.startsWith(skillPrefix))
-    return [{ ...base, type: Skill, name: basename2(text.slice(skillPrefix.length).split(`
+    return [{ ...base, type: Skill, name: basename(text.slice(skillPrefix.length).split(`
 `)[0]?.trim() ?? ""), text }];
   if (text.startsWith("<task-notification"))
     return [{ ...base, type: Note, text: tagOf(text, "summary") ?? text, from: { type: Task } }];
@@ -4386,7 +3025,7 @@ function promptText(text) {
   const args = tagOf(text, "command-args") ?? "";
   return args === "" ? command : `${command} ${args}`;
 }
-function basename2(path) {
+function basename(path) {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
@@ -4670,7 +3309,7 @@ function relayOf(e) {
   return isFromCmod ? relayTag.exec(e.text)?.[1] : undefined;
 }
 function installBefore({ claude, router, hooks }) {
-  const { place, wants, fold } = hooks;
+  const { place, wants, fold, failedBefore } = hooks;
   const now = () => new Date().toISOString();
   const asked = async (event, change, decide) => await decide(event, change) ?? {};
   const message = (where, unplaced, task, isInTurn = true) => {
@@ -4679,6 +3318,23 @@ function installBefore({ claude, router, hooks }) {
     const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined;
     return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...turn === undefined ? {} : { turn: turn.prompt.id }, ...task === undefined ? {} : { task } } };
   };
+  const submitted = (e) => (where) => message(where, { id: "", at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false);
+  const received = (e) => (where) => message(where, { id: "", at: now(), type: Prompt, text: e.text, from: { type: "session" } }, e.agentId, false);
+  const refusedOnFailure = (event, change, error, next) => next.called ? undefined : failedBefore(event, change, error)?.refuse;
+  const toolCalled = (e, cwd) => (where) => message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input: toolInputOf(e), cwd, files: noFiles }, e.agentId);
+  const cwdOf = async (agentId) => (agentId === undefined ? undefined : agentFolders.get(agentId)) ?? await claude.session.cwd();
+  const startedTask = (e, where) => ({ id: "", title: e.description, ...ownerOfSpawn(e.subagentType, where.session), model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId }, context: where.context });
+  const attachmentOf = (e) => {
+    if (e.type === "nested_memory")
+      return { event: InstructionFile, found: { id: "", at: now(), type: InstructionFile, path: instructionPathOf(e.text), text: e.text, isRule: isRulePath(instructionPathOf(e.text)) } };
+    const attachmentType = attachmentTypeOf(e.type);
+    return attachmentType === undefined ? undefined : { event: AttachedFile, found: { id: "", at: now(), type: AttachedFile, path: attachedPathOf(e.text), attachmentType, text: e.text } };
+  };
+  const contextClosed = (e) => (where) => {
+    const task = e.agentId === undefined ? undefined : where.tasks[e.agentId];
+    return e.agentId !== undefined && task === undefined ? undefined : { type: ContextEnd, context: closingContext(where, task, now()) };
+  };
+  const turnEnded = (turn) => turn === undefined ? undefined : { type: TurnEnd2, turn: { ...turn, closedAt: now() } };
   const titles = new Map;
   const spawned = new Map;
   const startedBy = new Map;
@@ -4690,12 +3346,12 @@ function installBefore({ claude, router, hooks }) {
     return waiting.length === 1 ? waiting[0]?.[0] : undefined;
   };
   const agentFolders = new Map;
-  const askedAtStop = (turn, signal) => new Promise((resolve, reject) => {
+  const askedAtStop = (change, signal) => new Promise((resolve, reject) => {
     if (signal.aborted)
       return resolve({});
     const cancelled = () => resolve({});
     signal.addEventListener("abort", cancelled, { once: true });
-    asked(TurnEnd2, { type: TurnEnd2, turn: { ...turn, closedAt: now() } }, fold(signal)).then(resolve, reject).finally(() => signal.removeEventListener("abort", cancelled));
+    asked(TurnEnd2, change, fold(signal)).then(resolve, reject).finally(() => signal.removeEventListener("abort", cancelled));
   });
   const answeredStop = (below, answer, signal) => {
     if (signal.aborted)
@@ -4721,8 +3377,7 @@ function installBefore({ claude, router, hooks }) {
     router.add("prompt.submit", async (e, next) => {
       if (!await wants(Prompt))
         return next(e);
-      const where = await place();
-      const answer = await asked(Prompt, message(where, { id: "", at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false), fold(next.signal));
+      const answer = await asked(Prompt, submitted(e)(await place()), fold(next.signal));
       if (answer.refuse !== undefined)
         return { drop: answer.refuse };
       const text = answer.text ?? e.text;
@@ -4737,6 +3392,9 @@ function installBefore({ claude, router, hooks }) {
           titles.set(ran.text, passed);
       }
       return ran;
+    }, (e, error, next) => {
+      const refusal = refusedOnFailure(Prompt, submitted(e), error, next);
+      return refusal === undefined ? undefined : { drop: refusal };
     }),
     router.add("classic.UserPromptSubmit", async (e, next) => {
       const named = titles.get(e.prompt);
@@ -4749,11 +3407,13 @@ function installBefore({ claude, router, hooks }) {
     router.add("session.receive", async (e, next) => {
       if (!await wants(Prompt) || relayOf(e) !== undefined)
         return next(e);
-      const where = await place();
-      const answer = await asked(Prompt, message(where, { id: "", at: now(), type: Prompt, text: e.text, from: { type: "session" } }, e.agentId, false), fold(next.signal));
+      const answer = await asked(Prompt, received(e)(await place()), fold(next.signal));
       if (answer.refuse !== undefined)
         return { consumed: answer.refuse };
       return next(answer.text === undefined ? e : { ...e, text: answer.text });
+    }, (e, error, next) => {
+      const refusal = relayOf(e) === undefined ? refusedOnFailure(Prompt, received(e), error, next) : undefined;
+      return refusal === undefined ? undefined : { consumed: refusal };
     }),
     router.add("skill.prompt", async (e, next) => {
       if (!await wants(Skill))
@@ -4763,16 +3423,17 @@ function installBefore({ claude, router, hooks }) {
       return answer.text === undefined ? next(e) : { text: answer.text };
     }),
     router.add("prompt.attachment", async (e, next) => {
-      const attachmentType = attachmentTypeOf(e.type);
-      const event = e.type === "nested_memory" ? InstructionFile : attachmentType === undefined ? undefined : AttachedFile;
-      if (event === undefined || !await wants(event))
+      const attachment = attachmentOf(e);
+      if (attachment === undefined || !await wants(attachment.event))
         return next(e);
-      const where = await place();
-      const found = attachmentType === undefined ? { id: "", at: now(), type: InstructionFile, path: instructionPathOf(e.text), text: e.text, isRule: isRulePath(instructionPathOf(e.text)) } : { id: "", at: now(), type: AttachedFile, path: attachedPathOf(e.text), attachmentType, text: e.text };
-      const answer = await asked(event, message(where, found, e.agentId), fold(next.signal));
+      const answer = await asked(attachment.event, message(await place(), attachment.found, e.agentId), fold(next.signal));
       if (answer.refuse !== undefined)
         return { text: null };
       return answer.text === undefined ? next(e) : { text: answer.text };
+    }, (e, error, next) => {
+      const attachment = attachmentOf(e);
+      const refusal = attachment === undefined ? undefined : refusedOnFailure(attachment.event, (where) => message(where, attachment.found, e.agentId), error, next);
+      return refusal === undefined ? undefined : { text: null };
     }),
     router.add("session.append", async (e, next) => {
       const wanted = new Set((await Promise.all(appended.map(async (event) => await wants(event) ? [event] : []))).flat());
@@ -4798,17 +3459,19 @@ function installBefore({ claude, router, hooks }) {
       if (!await wants(ToolCall))
         return next(e);
       const where = await place();
-      const input = toolInputOf(e);
-      const cwd = (e.agentId === undefined ? undefined : agentFolders.get(e.agentId)) ?? await claude.session.cwd();
-      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd, files: noFiles }, e.agentId), fold(next.signal));
+      const answer = await asked(ToolCall, toolCalled(e, await cwdOf(e.agentId))(where), fold(next.signal));
       if (answer.refuse !== undefined)
         return { deny: answer.refuse };
       if (answer.result !== undefined)
         return withContext({ result: answer.result }, answer.note);
       if (answer.input === undefined)
         return withContext(await next(e), answer.note);
+      const input = toolInputOf(e);
       const reserved = Object.fromEntries(Object.entries(e).filter(([key]) => !(key in input)));
       return withContext(await next({ ...reserved, ...answer.input }), answer.note);
+    }, async (e, error, next) => {
+      const refusal = refusedOnFailure(ToolCall, toolCalled(e, await cwdOf(e.agentId)), error, next);
+      return refusal === undefined ? undefined : { deny: refusal };
     }),
     router.add("agent.spawn", async (e, next) => {
       spawned.set(e.tool_use_id, { prompt: e.prompt, agentType: e.subagentType });
@@ -4820,14 +3483,13 @@ function installBefore({ claude, router, hooks }) {
           startedBy.set(started.agentId, e.tool_use_id);
         const folder = args.isTeammate === true ? undefined : args.cwd ?? (args.parentAgentId === undefined ? undefined : agentFolders.get(args.parentAgentId));
         if (started.agentId !== undefined && folder !== undefined)
-          agentFolders.set(started.agentId, resolve(await claude.session.cwd(), folder));
+          agentFolders.set(started.agentId, ve(await claude.session.cwd(), folder));
         return started;
       };
       if (!await wants(TaskStart))
         return start(e);
-      const where = await place();
-      const task = { id: "", title: e.description, ...ownerOfSpawn(e.subagentType, where.session), model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId } };
-      const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } }, fold(next.signal));
+      const task = startedTask(e, await place());
+      const answer = await asked(TaskStart, { type: TaskStart, task }, fold(next.signal));
       if (answer.refuse !== undefined) {
         spawned.delete(e.tool_use_id);
         return { deny: answer.refuse };
@@ -4848,6 +3510,12 @@ function installBefore({ claude, router, hooks }) {
       };
       spawned.set(e.tool_use_id, { prompt: answered.prompt, agentType: answered.subagentType });
       return start(answered);
+    }, (e, error, next) => {
+      const refusal = refusedOnFailure(TaskStart, (where) => ({ type: TaskStart, task: startedTask(e, where) }), error, next);
+      if (refusal === undefined)
+        return;
+      spawned.delete(e.tool_use_id);
+      return { deny: refusal };
     }),
     router.add("classic.SubagentStart", async (e, next) => {
       const where = await place();
@@ -4873,32 +3541,40 @@ function installBefore({ claude, router, hooks }) {
       };
       if (next.signal.aborted || !await wants(TurnEnd2))
         return stopped(await next(e));
-      const turn = (await place()).taskTurns[e.agent_id];
-      if (turn === undefined)
+      const change = turnEnded((await place()).taskTurns[e.agent_id]);
+      if (change === undefined)
         return stopped(await next(e));
-      const answer = await askedAtStop(turn, next.signal);
+      const answer = await askedAtStop(change, next.signal);
       return stopped(answeredStop(await next(e), answer, next.signal));
+    }, async (e, error, next) => {
+      const refusal = refusedOnFailure(TurnEnd2, (where) => turnEnded(where.taskTurns[e.agent_id]), error, next);
+      return refusal === undefined ? undefined : { ...await next(e), block: refusal };
     }),
     router.add("classic.Stop", async (e, next) => {
       if (next.signal.aborted || !await wants(TurnEnd2))
         return next(e);
-      const { turn } = await place();
-      if (turn === undefined)
+      const change = turnEnded((await place()).turn);
+      if (change === undefined)
         return next(e);
-      const answer = await askedAtStop(turn, next.signal);
+      const answer = await askedAtStop(change, next.signal);
       return answeredStop(await next(e), answer, next.signal);
+    }, async (e, error, next) => {
+      const refusal = refusedOnFailure(TurnEnd2, (where) => turnEnded(where.turn), error, next);
+      return refusal === undefined ? undefined : { ...await next(e), block: refusal };
     }),
     router.add("session.compact", async (e, next) => {
       if (!await wants(ContextEnd) || e.trigger === "precompute")
         return next(e);
-      const where = await place();
-      const task = e.agentId === undefined ? undefined : where.tasks[e.agentId];
-      if (e.agentId !== undefined && task === undefined)
+      const change = contextClosed(e)(await place());
+      if (change === undefined)
         return next(e);
-      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) }, fold(next.signal));
+      const answer = await asked(ContextEnd, change, fold(next.signal));
       if (answer.refuse !== undefined)
         return { skip: answer.refuse };
       return answer.summary === undefined ? next(e) : { messages: [{ role: "user", text: answer.summary, toolUses: [] }] };
+    }, (e, error, next) => {
+      const refusal = e.trigger === "precompute" ? undefined : refusedOnFailure(ContextEnd, contextClosed(e), error, next);
+      return refusal === undefined ? undefined : { skip: refusal };
     })
   ];
   return { remove: () => added.forEach((each) => each.remove()) };
@@ -5009,6 +3685,13 @@ async function isHeld(claude, lock, staleMs) {
   const holders = await claude.fs.list(lock).catch(ifMissing([]));
   const touched = await Promise.all(holders.map(async ({ name }) => (await claude.fs.stat(`${lock}/${name}`).catch(ifMissing(undefined)))?.mtimeMs ?? 0));
   return touched.some((at) => now - at < staleMs);
+}
+async function newestCmodVersion(claude) {
+  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
+  return readCmodVersion({
+    list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
+    exists: async (path) => await claude.fs.stat(path).catch(ifMissing(undefined)) !== undefined
+  }, store);
 }
 async function runCmod(claude, args, session) {
   const lines = [];
@@ -5384,7 +4067,7 @@ function parseLine(line, folder, result) {
   }
   try {
     const { text, markers } = scan(line, 0, false);
-    walk($parse(text, (name) => name === "" ? undefined : `$${name}`), markers, folder, result);
+    walk(Dt(text, (name) => name === "" ? undefined : `$${name}`), markers, folder, result);
   } catch (error) {
     if (!(error instanceof SyntaxError) && !(error instanceof Error && error.message.startsWith("Bad substitution: ")))
       throw error;
@@ -5741,7 +4424,7 @@ function wordOf(token, markers, folder, result) {
   return {
     text: raw.replace(markerPattern, (_, index) => markers[Number(index)].raw),
     isGlob: typeof token !== "string",
-    isDynamic: /[$\u0001]/.test(basename(raw))
+    isDynamic: /[$\u0001]/.test(ft(raw))
   };
 }
 function finish(command, operator, folder, result) {
@@ -5786,7 +4469,7 @@ function addRedirect({ operator, target }, folder, result) {
 function addCommand(first, args, folder, stdin, result) {
   if (first.isDynamic || first.isGlob)
     result.isFullyParsed = false;
-  const program = basename(first.text);
+  const program = ft(first.text);
   if (program === "git")
     addGit(first, args, folder, result);
   else if (program === "find")
@@ -5946,7 +4629,7 @@ function addCopy(program, args, folder, result) {
   const target = options.findLast((option) => program.targetOptions?.includes(option.name) === true)?.value;
   const only = operands[0];
   if (program.linksHere === true && target === undefined && operands.length === 1 && only !== undefined) {
-    addPath(result, "writes", { ...only, text: basename(only.text) }, folder);
+    addPath(result, "writes", { ...only, text: ft(only.text) }, folder);
     return;
   }
   const destination = target ?? operands.at(-1);
@@ -5958,7 +4641,7 @@ function addCopy(program, args, folder, result) {
     if (program.sources !== undefined)
       addPath(result, program.sources, source, folder);
     if (isLocal(destination) && !source.isGlob && !destination.isGlob)
-      addPathText(result, "writes", `${destination.text.replace(/\/+$/, "")}/${basename(source.text)}`, folder);
+      addPathText(result, "writes", `${destination.text.replace(/\/+$/, "")}/${ft(source.text)}`, folder);
   }
   if (isLocal(destination))
     addPath(result, "writes", destination, folder);
@@ -6077,7 +4760,7 @@ function literal(text) {
 // node_modules/@cmodjs/core/utils/call-effects.js
 function callEffects(use, workspace) {
   const { fs } = workspace;
-  const absolute = (path, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home, workspace.configRoot));
+  const absolute = (path, folder = workspace.cwd) => ve(folder, expandHome(path, workspace.home, workspace.configRoot));
   const access = (path) => ({ path: absolute(path), contents: undefined });
   const effects = { shell: undefined, reads: [], writes: [], urls: [], subagent: undefined };
   if (use.tool === "Bash") {
@@ -6972,6 +5655,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   const ownWatches = new Map;
   let watchers = [];
   let watching = Promise.resolve();
+  let hasReadWatchers = false;
   let published = new Set;
   let publishing = Promise.resolve();
   let session = "";
@@ -7064,23 +5748,28 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     follower = undefined;
     if (args.length === 0)
       return;
+    const version = newestCmodVersion(claude);
     const stream = spawnCmod(claude, ["history", "follow", ...args, "--json", "--project", project()], session);
     const started = { sessions: wanted, stop: () => void stream.return(undefined) };
     follower = started;
-    readLines(stream, (line) => {
+    const followed = readLines(stream, (line) => {
       if (line.trim() === "")
         return;
       const parsed = JSON.parse(line);
       dispatch(parsed.session, [parsed.change], parsed.isInProject);
-    }).then(({ code, lastError }) => {
+    });
+    Promise.all([version, followed]).then(([, { code, lastError }]) => {
       if (follower === started)
         throw new Error(`cmod history follow ${formatExit(code, lastError)}`);
-    }).catch((error) => {
+    }).catch(async (error) => {
       if (follower !== started)
         return;
       follower = undefined;
-      report("follow", "Stopped hearing the other sessions", error);
-    });
+      started.stop();
+      if (await newestCmodVersion(claude) === await version)
+        throw error;
+      follow();
+    }).catch((error) => report("follow", "Stopped hearing the other sessions", error));
   };
   const follow = () => void restartFollower().catch((error) => report("follow", "Stopped hearing the other sessions", error));
   const post = async (to, relay) => {
@@ -7264,7 +5953,7 @@ ${watcher.mod}`, watcher])).values()];
         return true;
     return false;
   };
-  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard, matcher === undefined ? undefined : receivedMatcher(matcher), change));
+  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard, matcher, scope }) => change === undefined ? heard === event : isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard, matcher === undefined ? undefined : receivedMatcher(matcher), change));
   const askAway = async (watcher, event, change, endsAt) => {
     try {
       const leftMs = Math.min(beforeDeadlineMs, endsAt - await claude.clock.now());
@@ -7288,8 +5977,15 @@ ${watcher.mod}`, watcher])).values()];
     }
   };
   const wants = async (event) => {
-    await Promise.all([starting, watching]);
+    await watching;
     return deciders(event).length > 0;
+  };
+  const failedBefore = (event, change, error) => {
+    if (!hasReadWatchers)
+      return { refuse: `${cmodPluginName}: ${error.message}` };
+    const changed = change(place());
+    const refusing = deciders(event).find((watcher) => refuses(watcher, event, changed));
+    return refusing === undefined ? undefined : { refuse: `${refusing.mod}: ${error.message}` };
   };
   const decide = (cancel) => {
     let endsAt;
@@ -7324,7 +6020,8 @@ ${watcher.mod}`, watcher])).values()];
         return place();
       },
       wants,
-      fold: decide
+      fold: decide,
+      failedBefore
     }
   });
   const start = (id, source) => {
@@ -7351,6 +6048,11 @@ ${watcher.mod}`, watcher])).values()];
       return;
     });
     reloadWatchers();
+    hasReadWatchers = false;
+    watching.then(() => {
+      if (session === id)
+        hasReadWatchers = true;
+    });
     if (subscribed.size > 0)
       Promise.all([previous === "" ? undefined : clearListeners(previous), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
     if (ownWatches.size === 0)
@@ -7546,7 +6248,7 @@ ${watcher.mod}`, watcher])).values()];
       ...textArg("--agent", owner.agentType ?? fresh.agentType),
       ...textArg("--model", owner.model ?? fresh.model),
       "--cwd",
-      folder === undefined ? here : resolve(here, folder),
+      folder === undefined ? here : ve(here, folder),
       "--json",
       "--",
       answer?.prompt ?? task.prompt
@@ -8046,14 +6748,14 @@ var ownKey = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 function resolvedPath(path, places) {
   const configured = /^~\/\.claude(?=\/|$)/.exec(path);
   if (configured !== null && places.configRoot !== undefined)
-    return resolve(`${places.configRoot}${path.slice(configured[0].length)}`);
+    return ve(`${places.configRoot}${path.slice(configured[0].length)}`);
   const prefix = homePrefix.exec(path)?.[0];
   if (prefix !== undefined) {
     if (places.home === undefined)
       throw new Error(`${path} starts with ${prefix}, and HOME is not set. Start Claude Code with HOME set.`);
-    return resolve(expandHome(path, places.home, places.configRoot));
+    return ve(expandHome(path, places.home, places.configRoot));
   }
-  return path.startsWith("/") ? resolve(path) : resolve(places.projectRoot(), path);
+  return path.startsWith("/") ? ve(path) : ve(places.projectRoot(), path);
 }
 function createModFiles({ name, claude, places, report }) {
   const prefix = `${name}.`;
@@ -8106,10 +6808,10 @@ function createModFiles({ name, claude, places, report }) {
   };
   const matchesOf = async (pattern) => {
     const absolute = resolvedPath(pattern, places);
-    const scanned = export_picomatch.scan(absolute);
+    const scanned = $s.scan(absolute);
     if (!scanned.isGlob)
       return (await claude.fs.stat(absolute).catch(skipped(absolute, undefined)))?.kind === "file" ? [absolute] : [];
-    const isMatch = export_picomatch(absolute, { dot: true });
+    const isMatch = $s(absolute, { dot: true });
     const entersSkipped = skippedFolders.filter((folder) => scanned.glob.split("/").includes(folder));
     const maxDepth = scanned.glob.includes("**") ? Number.POSITIVE_INFINITY : scanned.glob.split("/").length;
     const found = [];
@@ -9307,14 +8009,16 @@ function createRouter() {
       };
       return call(0, e);
     },
-    async dispatchFailure(event, e, error, next) {
-      const signalled = Object.assign((passed) => next(passed), { signal: unaborted });
-      for (const route of routes.get(event) ?? []) {
-        const answer = await route.failed?.(e, error, signalled);
-        if (answer !== undefined)
-          return answer;
-      }
-      return next(e);
+    dispatchFailure(event, e, error, next, called) {
+      const chain = routes.get(event);
+      const fail = async (index, current) => {
+        const route = chain?.[index];
+        if (route === undefined)
+          return next(current);
+        const answer = await route.failed?.(current, error, Object.assign((passed) => fail(index + 1, passed), { signal: unaborted, called }));
+        return answer === undefined ? fail(index + 1, current) : answer;
+      };
+      return fail(0, e);
     }
   };
 }
@@ -9742,7 +8446,7 @@ ${description ?? ""}`.includes(sentence));
     disarm(entry);
     changed();
   };
-  const row = (entry) => {
+  const row = (entry, columns) => {
     const { description } = entry.options;
     const isText = typeof description === "string";
     const icon = entry.type === "loading" || entry.trying !== undefined ? { glyph: isSpinning(entry) ? spinner[frame % spinner.length] : still, color: "claude" } : icons[entry.type];
@@ -9751,17 +8455,25 @@ ${description ?? ""}`.includes(sentence));
     const fixed = (child) => Box({ flexShrink: 0, children: child });
     const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? "✕" : "Hide", onPress: () => hide(entry) });
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? "action" : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }));
-    const buttons = Box({ gap: 2, flexWrap: "wrap", children: [...actions, close, Text({ dimColor: true, children: clockTime(entry.at) })].map(fixed) });
+    const buttons = Box({ gap: 2, flexWrap: "wrap", children: [...actions, Text({ dimColor: true, children: clockTime(entry.at) })].map(fixed) });
     const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: "Trying again:" }), typeof entry.trying === "string" ? Text({ dimColor: true, wrap: "truncate-end", children: entry.trying }) : entry.trying] });
     const text = details === undefined ? [message] : [message, trying ?? details];
     const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting);
     return Box({
+      width: columns,
       gap: 2,
+      justifyContent: "space-between",
       children: [
-        fixed(Text({ ...icon.color === undefined ? {} : { color: icon.color }, children: icon.glyph })),
-        fixed(Text({ dimColor: true, children: name })),
-        Box({ flexDirection: "column", flexGrow: 1, flexShrink: 1, children: entry.hides === undefined ? text : [...text, ...under] }),
-        ...entry.hides === undefined ? [...actions.map(fixed), fixed(close)] : []
+        Box({
+          gap: 2,
+          flexShrink: 1,
+          children: [
+            fixed(Text({ ...icon.color === undefined ? {} : { color: icon.color }, children: icon.glyph })),
+            fixed(Text({ dimColor: true, children: name })),
+            Box({ flexDirection: "column", flexShrink: 1, children: entry.hides === undefined ? text : [...text, ...under] })
+          ]
+        }),
+        Box({ gap: 2, flexShrink: 0, alignSelf: "flex-end", children: entry.hides === undefined ? [...actions, close] : [close] })
       ]
     });
   };
@@ -9825,7 +8537,7 @@ ${description ?? ""}`.includes(sentence));
           changed();
         }
       });
-      return drawWith(table, () => Box({ flexDirection: "column", children: [drawn, ...hidden > 0 ? [more] : [], ...all.slice(hidden).map(row)] }));
+      return drawWith(table, () => Box({ flexDirection: "column", children: [drawn, ...hidden > 0 ? [more] : [], ...all.slice(hidden).map((entry) => row(entry, band.bodyColumns))] }));
     }
   };
 }
@@ -10463,7 +9175,7 @@ async function readPlugin(claude) {
   const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
   const steps = readSteps(await readJson(read, `${root}/package.json`)) ?? {};
   if (name === cmodPluginName) {
-    const installed = await cmodVersion(claude);
+    const installed = await newestCmodVersion(claude);
     return { name, root, version, store, steps, isInstalled: version !== undefined && installed !== undefined && isAtLeast(installed, version), shouldRecord: false };
   }
   const plugin = { name, root, version, store, steps };
@@ -10501,17 +9213,11 @@ async function readJson(read, path) {
     throw new Error(`${path} is not JSON (${messageOf(error)}). Fix it, then press Retry.`);
   }
 }
-async function cmodVersion(claude) {
-  const store = storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() });
-  return readCmodVersion({
-    list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
-    exists: async (path) => await claude.fs.stat(path).catch(ifMissing(undefined)) !== undefined
-  }, store);
-}
 function createLifecycle(definition, permissionRoutes = () => {
   return;
 }, options = {}, asksPerson = true) {
   let router = createRouter();
+  let startingRouter;
   let phase = "starting";
   let runtime;
   let programs;
@@ -10600,7 +9306,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     claude().ui.invalidate("ui.render");
   };
   const recordThroughCmod = async () => {
-    if (plugin === undefined || await cmodVersion(claude()) === undefined)
+    if (plugin === undefined || await newestCmodVersion(claude()) === undefined)
       return;
     let failed;
     const { code, lastError } = await readLines(claude().process.spawn({ argv: ["cmod", "setup", plugin.root, "--events"] }), (text) => {
@@ -10689,12 +9395,15 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (runtime === undefined || plugin === undefined)
       return;
     const activeRouter = createRouter();
+    startingRouter = activeRouter;
     const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw }).catch(async (error) => {
       if (error instanceof MissingOptions && await askOptions(error))
         return;
       await installer.close();
       fail(messageOf(error), error instanceof MissingOptions ? `Retry asks for ${error.keys.length === 1 ? "it" : "them"}.` : undefined, begin, error);
       throw error;
+    }).finally(() => {
+      startingRouter = undefined;
     });
     if (active === undefined)
       return activate();
@@ -10749,7 +9458,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (plugin.name === cmodPluginName)
       return bootstrap(plugin.root);
     phase = "installing";
-    const found = await cmodVersion(claude());
+    const found = await newestCmodVersion(claude());
     if (!fits(found))
       return waitForcmod(found);
     if (!isQuiet)
@@ -10782,7 +9491,7 @@ function createLifecycle(definition, permissionRoutes = () => {
       longWait.cancel();
     };
     const poll = (ms) => claude().clock.every(ms, () => {
-      check ??= cmodVersion(claude()).then((version) => {
+      check ??= newestCmodVersion(claude()).then((version) => {
         check = undefined;
         latest = version;
         if (!fits(version))
@@ -10902,20 +9611,20 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (activation !== undefined && phase !== "active")
       await activation;
   };
-  const held = (work, signal) => runtime === undefined ? work : new Promise((resolve) => {
-    const limit = claude().clock.after(startHoldMs, resolve);
+  const held = (work, signal) => runtime === undefined ? work.then(() => false) : new Promise((resolve) => {
+    const limit = claude().clock.after(startHoldMs, () => resolve(true));
     if (signal?.aborted === true)
-      resolve();
-    signal?.addEventListener("abort", () => resolve(), { once: true });
+      resolve(false);
+    signal?.addEventListener("abort", () => resolve(false), { once: true });
     work.then(() => {
       limit.cancel();
-      resolve();
+      resolve(false);
     });
   });
   const holdUntilStarted = (signal) => held(startSettled.then(whenActive), signal);
   const holdUntilActive = (signal) => {
     const activating = whenActive();
-    return activation !== undefined && phase !== "active" ? held(activating, signal) : activating;
+    return activation !== undefined && phase !== "active" ? held(activating, signal) : activating.then(() => false);
   };
   const routed = async (event, e, next, signal) => {
     if (imports !== undefined)
@@ -10946,7 +9655,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     const isCallToThisMod = event === "cmod.call" && e.to === definition.name || event === "tool.call" && typeof tool === "string" && tool.startsWith(`mcp__${definition.name}__`);
     if (event === "cmod.call" && !isCallToThisMod)
       return next(e);
-    await (event === "classic.SessionStart" || event === "session.append" || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal));
+    const isLate = await (event === "classic.SessionStart" || event === "session.append" || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal));
     if (event === "classic.SessionStart" && phase !== "active") {
       missedSessionStart = e;
       return next(e);
@@ -10960,6 +9669,8 @@ ${String(asked.input.session)}`, asked);
       }
       return { deny: phase === "failed" ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` };
     }
+    if (isLate && phase !== "active")
+      return (startingRouter ?? router).dispatchFailure(event, e, new Error(`it was still starting after ${startHoldMs / 1000} s`), next, false);
     const call = e;
     if (event === "cmod.call" && call.to === definition.name && mod !== undefined) {
       if (call.method === pendingStepsMethod)
@@ -11053,7 +9764,7 @@ ${String(asked.input.session)}`, asked);
       }, messageOf) : undefined;
       if (failedBeneath === undefined || failedBeneath !== message)
         toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, "")} hook`, error });
-      return router.dispatchFailure(event, e, error, next);
+      return (startingRouter ?? router).dispatchFailure(event, e, error, next, called);
     }
   };
 }
@@ -11697,7 +10408,7 @@ function answerOf(name, reply) {
   return { ...reply.text === undefined ? {} : { text: reply.text }, ...reply.note === undefined ? {} : { context: [modNote(name, reply.note)] } };
 }
 function splitWords(args) {
-  return $parse(args, (key) => `$${key}`).flatMap((entry) => {
+  return Dt(args, (key) => `$${key}`).flatMap((entry) => {
     if (typeof entry === "string")
       return [entry];
     if ("comment" in entry)
@@ -11732,7 +10443,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-IKLKJ1/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -11810,11 +10521,7 @@ function failureLog(mod) {
   let writing = Promise.resolve();
   const cmodVersion = fs.read(`${claude.plugin.root}/.claude-plugin/plugin.json`).then((text) => String(JSON.parse(text).version)).catch((error) => `unknown (${messageOf(error)})`);
   const versionsOf = async (failure) => {
-    const store = await storeOf(mod);
-    const program = await readCmodVersion({
-      list: async (folder) => (await claude.fs.list(folder).catch(ifMissing([]))).map((entry) => entry.name),
-      exists: async (path) => await claude.fs.stat(path).catch(ifMissing(undefined)) !== undefined
-    }, store).catch((error) => `unknown (${messageOf(error)})`);
+    const program = await newestCmodVersion(claude).catch((error) => `unknown (${messageOf(error)})`);
     const claudeCode = await claude.session.version().catch((error) => `unknown (${messageOf(error)})`);
     return { ...failure.version === undefined ? {} : { mod: failure.version }, ...failure.core === undefined ? {} : { core: failure.core }, cmod: await cmodVersion, ...program === undefined ? {} : { program }, claudeCode };
   };
@@ -12210,7 +10917,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-IKLKJ1/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12427,7 +11134,7 @@ function tool(options) {
     if (reserved.length > 0)
       throw new Error(`${mod.name}: the ${name} tool's inputSchema has the property ${reserved.join(", ")}, which Claude Code keeps for itself. Rename it.`);
     const named = reserveName("tool", name, `${mod.name}: the tool ${name} is already added. Give each tool its own name.`);
-    const validator = new Validator(inputSchema ?? { type: "object" }, "2020-12", false);
+    const validator = new rt(inputSchema ?? { type: "object" }, "2020-12", false);
     let registered;
     claude.tool.register({ name, description, ...inputSchema === undefined ? {} : { inputSchema }, ...isDeferred === undefined ? {} : { isDeferred } }).then((answer) => {
       registered = answer.tool;
@@ -12467,7 +11174,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-IKLKJ1/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12521,7 +11228,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-IKLKJ1/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12542,7 +11249,7 @@ var reloadEcho = "<command-name>/reload-plugins</command-name>";
 var reloadNote = "<local-command-caveat>cmod reloaded the plugins.</local-command-caveat>";
 var reloadToast = "reload";
 var oldReloadKey = /^cmod:(hiding-reload|versions-before-reload):/;
-var shownUpdates = 3;
+var shownChanges = 3;
 async function tipOf(mod) {
   const messages = await engineOf(mod).claude.session.messages();
   if (messages.length === 0)
@@ -12597,12 +11304,11 @@ var cmodPlugin = defineMod({
     const changed = pluginsChangedPath(store);
     const configRoot = await configRootOf(mod);
     const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`;
-    const pluginsState = async () => JSON.stringify([
-      await fs.read(changed).catch(ifMissing("")),
-      pluginsFile === undefined ? "" : await fs.read(pluginsFile).catch(ifMissing("")),
-      (await settings.user.read())["enabledPlugins"] ?? null
-    ]);
-    const sessionKey = async (name) => sessionKeyOf(mod.name, name, await claude.session.id());
+    const pluginsState = async () => {
+      const mark = await fs.read(changed).catch(ifMissing(""));
+      return { mark, text: JSON.stringify([mark, pluginsFile === undefined ? "" : await fs.read(pluginsFile).catch(ifMissing("")), (await settings.user.read())["enabledPlugins"] ?? null]) };
+    };
+    const hidingReloadKey = async () => sessionKeyOf(mod.name, "hidingReload", await claude.session.id());
     const forgetOldReloadKeys = async () => {
       for (const key of await claude.store.keys())
         if (oldReloadKey.test(key))
@@ -12624,14 +11330,7 @@ var cmodPlugin = defineMod({
       }));
       return Object.fromEntries(versions.flat());
     };
-    const takeVersionsBeforeReload = async () => {
-      const key = await sessionKey("versionsBeforeReload");
-      const before = await claude.store.get(key);
-      await claude.store.delete(key);
-      return before;
-    };
-    const showUpdates = async (isAfterOwnReload) => {
-      const before = await takeVersionsBeforeReload();
+    const readLoaded = async () => {
       const previous = loaded;
       loaded = await loadedVersions();
       for (const id of Object.keys(previous))
@@ -12639,20 +11338,12 @@ var cmodPlugin = defineMod({
           unloaded.add(nameOf2(id));
       for (const id of Object.keys(loaded))
         unloaded.delete(nameOf2(id));
-      if (!isAfterOwnReload || before === undefined)
-        return;
-      const updates = Object.entries(loaded).filter(([id, version]) => before[id] !== undefined && before[id] !== version).map(([id, version]) => `${nameOf2(id)} updated to ${version}`);
-      if (updates.length > shownUpdates)
-        claude.ui.toast(`${updates.length} plugins updated`);
-      else
-        for (const update of updates)
-          claude.ui.toast(update);
     };
-    const reportUpdates = (error) => report({ id: "updates", message: "Could not show which plugins updated", error });
-    const announceUpdates = (isAfterOwnReload) => showUpdates(isAfterOwnReload).catch(reportUpdates);
-    const announceStartUpdates = async () => showUpdates(await claude.store.get(await sessionKey("hidingReload")) === true);
-    announceStartUpdates().catch(reportUpdates).finally(finishRead);
-    let seenChange = await pluginsState();
+    const keepLoaded = () => readLoaded().catch((error) => report({ id: "loaded", message: "Could not read which plugins this session loaded", error }));
+    keepLoaded().finally(finishRead);
+    const started = await pluginsState();
+    let loadedState = started.text;
+    let seenMark = started.mark;
     let isReloadDue = false;
     let quietWait;
     const reloadAfter = (ms) => {
@@ -12669,33 +11360,81 @@ var cmodPlugin = defineMod({
         await reload();
       }).catch((error) => report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true }));
     };
-    const reloadIfChanged = async () => {
-      const change = await pluginsState();
-      if (change === seenChange)
+    let offered;
+    const offer = (description, hasButton) => {
+      if (offered === description)
         return;
-      seenChange = change;
+      offered = description;
+      mod.toast.info("Plugins changed", { id: reloadToast, description, ...hasButton ? { action: { label: "Reload", onClick: pressReload } } : {}, duration: Infinity });
+    };
+    const withdrawOffer = () => {
+      offered = undefined;
+      mod.toast.dismiss(reloadToast);
+    };
+    const changesOf = async () => {
+      const now = await loadedVersions();
+      return [
+        ...Object.entries(now).filter(([id, version]) => loaded[id] !== undefined && loaded[id] !== version).map(([id, version]) => `${nameOf2(id)} updated to ${version}`),
+        ...Object.keys(now).filter((id) => loaded[id] === undefined).map((id) => `${nameOf2(id)} turned on`),
+        ...Object.keys(loaded).filter((id) => now[id] === undefined).map((id) => `${nameOf2(id)} turned off`)
+      ];
+    };
+    const offerReload = async () => {
+      const changes = await changesOf();
+      if (changes.length === 0)
+        return offer("Reload to use the changes in this session.", true);
+      offer(`${changes.length > shownChanges ? `${changes.length} plugins changed` : changes.join(", ")}. Reload to use them in this session.`, true);
+    };
+    const pressReload = () => {
+      isReloadDue = true;
+      if (isWorking)
+        offer("Reloads when this turn ends.", false);
+      reloadAfter(1);
+    };
+    const isInside = async (checkout) => {
+      if (checkout === undefined)
+        return false;
+      const root = await claude.session.root();
+      const project = (await claude.fs.stat(root, { resolve: true }).catch(ifMissing(undefined)))?.realPath ?? root;
+      return project === checkout || project.startsWith(`${checkout}/`);
+    };
+    const checkChanges = async () => {
+      const { mark, text } = await pluginsState();
+      const isNewMark = mark !== seenMark;
+      seenMark = mark;
       if ((await claude.session.surfaces()).length === 0)
         return;
-      isReloadDue = true;
-      reloadAfter(changesQuietMs);
+      if (text === loadedState)
+        return withdrawOffer();
+      if (isNewMark && await isInside(markedCheckout(mark))) {
+        isReloadDue = true;
+        return reloadAfter(changesQuietMs);
+      }
+      if (!isReloadDue)
+        await offerReload();
+    };
+    const reloaded = (state) => {
+      loadedState = state.text;
+      seenMark = state.mark;
+      loading = keepLoaded();
     };
     const reload = async () => {
-      mod.toast.dismiss(reloadToast);
+      withdrawOffer();
       try {
-        seenChange = await pluginsState();
-        await claude.store.set(await sessionKey("versionsBeforeReload"), loaded);
-        await claude.store.set(await sessionKey("hidingReload"), true);
+        const state = await pluginsState();
+        await claude.store.set(await hidingReloadKey(), true);
         await claude.command.run({ command: "reload-plugins" });
-        loading = announceUpdates(true);
+        reloaded(state);
         await widgets.recheck();
       } catch (error) {
-        await claude.store.delete(await sessionKey("hidingReload"));
-        await takeVersionsBeforeReload();
+        await claude.store.delete(await hidingReloadKey());
         if (messageOf(error).includes(heldInput))
           isReloadDue = true;
         else
           report({ id: reloadToast, message: "Could not reload the plugins", error, retry: reload, isCritical: true });
+        return;
       }
+      await checkChanges();
     };
     const stopWorking = () => {
       isWorking = false;
@@ -12717,10 +11456,17 @@ var cmodPlugin = defineMod({
     router.add("session.append", async (e, next) => {
       if (e.door !== "command" || e.message.isMeta === true)
         return next(e);
-      const hidingReload = await sessionKey("hidingReload");
+      const isReloadEcho = JSON.stringify(e.message.content).includes(reloadEcho);
+      const isOwnReload = isReloadEcho && e.origin.kind === "plugin" && "name" in e.origin && e.origin.name === mod.name;
+      if (isReloadEcho && !isOwnReload) {
+        pluginsState().then((state) => {
+          reloaded(state);
+          withdrawOffer();
+        }).catch((error) => report({ id: reloadToast, message: "Could not read which plugins this session loaded", error }));
+      }
+      const hidingReload = await hidingReloadKey();
       if (await claude.store.get(hidingReload) !== true)
         return next(e);
-      const isOwnReload = e.origin.kind === "plugin" && "name" in e.origin && e.origin.name === mod.name && JSON.stringify(e.message.content).includes(reloadEcho);
       if (!isOwnReload) {
         await claude.store.delete(hidingReload).catch((error) => claude.ui.warn("reload:hide", `cmod: kept hiding /reload-plugins rows, because Claude Code's store refused the change: ${messageOf(error)}`));
         if (e.message.type !== "system")
@@ -12819,12 +11565,12 @@ var cmodPlugin = defineMod({
       startWatching();
       checkPlugins({ isForced: false });
       if (path === pluginsFile)
-        return reloadIfChanged();
+        return checkChanges();
       followBuildFailures();
-      return Promise.all([widgets.reload(), reloadIfChanged(), refreshPreferences(mod)]);
+      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod)]);
     });
-    settings.beforeFileChange({ source: "user" }, () => void mod.after(reloadDelayMs, reloadIfChanged));
-    sessions.current.onPrompt(() => reloadIfChanged());
+    settings.beforeFileChange({ source: "user" }, () => void mod.after(reloadDelayMs, checkChanges));
+    sessions.current.onPrompt(() => checkChanges());
     setUpMods(mod).then(async (mods) => mods.length > 0 ? runCmod(claude, ["history", "index"], await claude.session.id()) : undefined).catch((error) => claude.ui.warn("history:index", `cmod: the conversation index did not catch up: ${messageOf(error)}`));
     const tearDown = async (name) => {
       const { exitCode, stdout, stderr } = await process.run(["cmod", "teardown", name, "--events"], { timeoutMs: longestMs });
@@ -12939,7 +11685,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-IKLKJ1/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);

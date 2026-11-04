@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.7.0] - 2026-11-04
+
+### Changed
+- A session whose plugins changed no longer reloads by itself. It keeps running what it loaded and shows one `Plugins changed` toast with a Reload button, which names each plugin updated, turned on, or turned off, and updates in place as more change. Reload pressed while Claude works reloads when the turn ends. Only a session working inside a linked checkout reloads by itself after that checkout builds, so an edit to a linked mod no longer reloads every open session. The corner toasts after a reload are gone, because the offer named each change.
+- Every toast takes the band's whole width, with its close button at the right end of its last line, so pressing one spot again and again closes a stack of toasts.
+
+### Fixed
+- An older session keeps hearing the other sessions after a newer cmod replaces the conversation index. Before, it showed `Stopped hearing the other sessions` for good.
+- `cmod check` skips every file git ignores, such as scratch work in an ignored `docs/agents/` folder, so a file no release holds no longer fails the imports, metadata, or binaries check.
+- `cmod check` keeps a minimum cmod you write in `.claude-plugin/plugin.json` above the oldest cmod your `@cmodjs/core` runs on, such as `>=5.6.0` for a mod that calls `page.focus`, and `cmod publish` releases it. Before, `cmod check` lowered it to that oldest cmod, `>=5.4.0`, and `cmod publish` refused any other range, so a mod could not require the cmod it needs. A minimum below that oldest cmod is still raised to it.
+- A `beforePrompt` listener with `onFailure: 'refuse'` drops the prompt when Claude Code stops cmod's own prompt hook before the listener answered, with the mod and the stop as the reason. Before, the prompt reached Claude. A session no mod gates still lets its prompts in.
+- Every other `before` listener with `onFailure: 'refuse'` holds too when Claude Code stops cmod's own hook before the listener answered: `beforeToolCall` and `beforeTaskStart` deny the call or the spawn, `beforeAttachedFile` and `beforeInstructionFile` drop the attachment, `beforeContextEnd` skips the compaction, and `beforeTurnEnd` keeps Claude working, each with the mod and the stop as the reason. A prompt, tool call, spawn, attachment, compaction, or stop that waits on cmod's setup after cmod installs itself or recovers from a failed start is refused once cmod's 9 s start limit passes, because cmod has not yet read which mods refuse it. Before, each of them went through ungated.
+- A mod's release is about 35 KB smaller, and a mod that styles reply blocks with `Paragraph`, `List`, or another kind from `ui/markdown.js` about 110 KB, because `@cmodjs/core` ships the packages it bundles, the markdown reader among them, minified. So a mod that styles reply blocks fits under Claude Code's 1 MB limit on a hooks module again: the inbox mod's went from 1,084,988 to 974,028 bytes.
+- A resumed session no longer waits up to 2 minutes for another cmod that holds the conversation index. cmod reads the session's earlier turns without writing the index, and a session no `before` listener gates never waits on them, so Claude Code no longer stops cmod's prompt, Stop, and transcript hooks while it waited.
+
 ## [5.6.0] - 2026-11-04
 
 ### Added
