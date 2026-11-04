@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.6.0] - 2026-11-04
+
+### Added
+- `page.focus(key)` and `pane.focus(key)` move the keyboard once to the `Button`, `Input`, or `Select` the page or pane drew with that key, such as an answer box from the page's own `a` key. Unlike `autoFocus`, which takes the keyboard each time the Sidebar shows, the box does not take it back after the person leaves it, so the page's other keys keep working. `tested.shown.page.focusedKey()` and `tested.shown.pane.focusedKey()` name the element that holds the keyboard in a test.
+
+### Changed
+- cmod starts in about half the time, because it loads only the command it runs.
+
 ## [5.5.4] - 2026-11-03
 
 ### Fixed
