@@ -314,7 +314,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     changed()
   }
 
-  const row = (entry: Entry): RenderElement => {
+  const row = (entry: Entry, columns: number): RenderElement => {
     const { description } = entry.options
     const isText = typeof description === 'string'
     const icon = entry.type === 'loading' || entry.trying !== undefined ? { glyph: isSpinning(entry) ? (spinner[frame % spinner.length] as string) : still, color: 'claude' } : icons[entry.type]
@@ -323,17 +323,25 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const fixed = (child: RenderElement) => Box({ flexShrink: 0, children: child })
     const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? '✕' : 'Hide', onPress: () => hide(entry) })
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? 'action' : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }))
-    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, close, Text({ dimColor: true, children: clockTime(entry.at) })].map(fixed) })
+    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, Text({ dimColor: true, children: clockTime(entry.at) })].map(fixed) })
     const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: 'Trying again:' }), typeof entry.trying === 'string' ? Text({ dimColor: true, wrap: 'truncate-end', children: entry.trying }) : entry.trying] })
     const text = details === undefined ? [message] : [message, trying ?? details]
     const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting)
     return Box({
+      width: columns,
       gap: 2,
+      justifyContent: 'space-between',
       children: [
-        fixed(Text({ ...(icon.color === undefined ? {} : { color: icon.color }), children: icon.glyph })),
-        fixed(Text({ dimColor: true, children: name })),
-        Box({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, children: entry.hides === undefined ? text : [...text, ...under] }),
-        ...(entry.hides === undefined ? [...actions.map(fixed), fixed(close)] : []),
+        Box({
+          gap: 2,
+          flexShrink: 1,
+          children: [
+            fixed(Text({ ...(icon.color === undefined ? {} : { color: icon.color }), children: icon.glyph })),
+            fixed(Text({ dimColor: true, children: name })),
+            Box({ flexDirection: 'column', flexShrink: 1, children: entry.hides === undefined ? text : [...text, ...under] }),
+          ],
+        }),
+        Box({ gap: 2, flexShrink: 0, alignSelf: 'flex-end', children: entry.hides === undefined ? [...actions, close] : [close] }),
       ],
     })
   }
@@ -397,7 +405,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
           changed()
         },
       })
-      return drawWith(table, () => Box({ flexDirection: 'column', children: [drawn, ...(hidden > 0 ? [more] : []), ...all.slice(hidden).map(row)] }))
+      return drawWith(table, () => Box({ flexDirection: 'column', children: [drawn, ...(hidden > 0 ? [more] : []), ...all.slice(hidden).map((entry) => row(entry, band.bodyColumns))] }))
     },
   }
 }

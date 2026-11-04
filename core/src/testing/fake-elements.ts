@@ -132,7 +132,7 @@ function boxRows({ props, children = [] }: Drawn, width: number): string[] {
   const ordered = direction.endsWith('-reverse') ? [...flowing].reverse() : flowing
   const outer = Math.min(width, size('width') ?? width)
   const inner = outer - left - right - border * 2
-  const rows = direction.startsWith('column') ? stacked(ordered, inner, size('rowGap') ?? size('gap') ?? 0) : sideBySide(ordered, inner, size('columnGap') ?? size('gap') ?? 0, props['justifyContent'] === 'space-between')
+  const rows = direction.startsWith('column') ? stacked(ordered, inner, size('rowGap') ?? size('gap') ?? 0) : sideBySide(ordered, inner, size('columnGap') ?? size('gap') ?? 0, props['justifyContent'] === 'space-between', props['alignItems'])
   const content = border === 1 && Number.isFinite(inner) ? inner : right === 0 && border === 0 ? 0 : Math.max(widthOf(rows), (size('minWidth') ?? 0) - left - right - border * 2)
   const padded = [...blankRows(space('Top', 'Y')), ...rows.map((row) => `${' '.repeat(left)}${paddedTo(row, content)}${' '.repeat(right)}`), ...blankRows(space('Bottom', 'Y'))]
   const framed = border === 0 ? padded : framedRows(padded, left + content + right, props['borderStyle'])
@@ -176,7 +176,7 @@ function stacked(children: readonly RenderNode[], width: number, gap: number): s
   return blocks.flatMap((block, index) => [...blankRows(index === 0 ? 0 : gap), ...block])
 }
 
-function sideBySide(children: readonly RenderNode[], width: number, gap: number, isSpread = false): string[] {
+function sideBySide(children: readonly RenderNode[], width: number, gap: number, isSpread: boolean, alignItems: unknown): string[] {
   const laid = children
     .map((child) => ({ child, natural: rowsOf(child, Number.POSITIVE_INFINITY) }))
     .filter(({ natural }) => natural.length > 0)
@@ -189,7 +189,19 @@ function sideBySide(children: readonly RenderNode[], width: number, gap: number,
   const spaces = blocks.length - 1
   const free = isSpread && Number.isFinite(width) ? Math.max(width - columns.reduce((sum, each) => sum + each, 0) - gap * spaces, 0) : 0
   const gapAfter = (index: number) => gap + Math.floor(free / spaces) + (index < free % spaces ? 1 : 0)
-  return Array.from({ length: height }, (_, row) => blocks.map((block, index) => `${paddedTo(block[row] ?? '', index === spaces ? 0 : (columns[index] ?? 0))}${index === spaces ? '' : ' '.repeat(gapAfter(index))}`).join(''))
+  const tops = laid.map(({ child }, index) => topOf(alignOf(child, alignItems), height - (blocks[index]?.length ?? 0)))
+  return Array.from({ length: height }, (_, row) => blocks.map((block, index) => `${paddedTo(block[row - (tops[index] ?? 0)] ?? '', index === spaces ? 0 : (columns[index] ?? 0))}${index === spaces ? '' : ' '.repeat(gapAfter(index))}`).join(''))
+}
+
+function alignOf(node: RenderNode, alignItems: unknown): unknown {
+  const alignSelf = typeof node === 'string' ? undefined : insideOf(node).props['alignSelf']
+  return alignSelf === undefined || alignSelf === 'auto' ? alignItems : alignSelf
+}
+
+function topOf(align: unknown, spare: number): number {
+  if (align === 'flex-end') return spare
+  if (align === 'center') return Math.floor(spare / 2)
+  return 0
 }
 
 function minWidthOf(node: RenderNode): number {

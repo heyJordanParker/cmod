@@ -452,7 +452,13 @@ test("toasts and a mod's AbovePrompt widget share Claude Code's band above the p
   const band = (hasSurvey: boolean) => ({ surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey, isWorking: false, maxRows: 12, bodyColumns: 75, scroll: { offset: 0, bodyRows: 12 }, view: {} } }) as never
   const lines = async (hasSurvey: boolean) => rowsOf(await tested.fire('ui.render', band(hasSurvey), Box({})), 75).map((row) => row.trimEnd())
 
-  expect(await lines(false)).toEqual(['⠋  indexer  Indexing files  ✕', '            ████░░░░', '✓  indexer  Installed                 Settings  ✕', '            Adds the Prompts widget.', '3 prompts'])
+  expect(await lines(false)).toEqual([
+    '⠋  indexer  Indexing files',
+    `            ████░░░░${' '.repeat(54)}✕`,
+    '✓  indexer  Installed',
+    `            Adds the Prompts widget.${' '.repeat(28)}Settings  ✕`,
+    '3 prompts',
+  ])
   expect(await lines(true)).toEqual([''])
   toast?.dismiss()
   expect(await lines(false)).toEqual(['3 prompts'])

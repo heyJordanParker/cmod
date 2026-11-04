@@ -1,5 +1,5 @@
 import { beforeEach, expect, setSystemTime, test } from 'bun:test'
-import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement } from 'claude-code'
+import type { Args, ClassicHookInputs, EventResult, Frozen, FsEntry, HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RenderElement, RenderPropsOf } from 'claude-code'
 import { installPage } from '../../src/runtime/installer.js'
 import { permissions } from '../../src/jobs/permissions.js'
 import { slashCommand } from '../../src/jobs/slash-command.js'
@@ -14,7 +14,8 @@ import { engineOf } from '../../src/runtime/engine.js'
 import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../src/runtime/lifecycle.js'
 import { permissionRoutes } from '../../src/runtime/permission-check.js'
 import { sessionKeyOf } from '../../src/runtime/state.js'
-import { oldestCmodVersion, readSteps, scriptsSha256 } from '../../src/records.js'
+import { installFix, oldestCmodVersion, readSteps, scriptsSha256, secretFix } from '../../src/records.js'
+import { createToaster } from '../../src/runtime/toaster.js'
 import type { ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
 import { elements, findElement, rowsOf, textOf } from '../../src/testing/fake-elements.js'
@@ -235,8 +236,8 @@ test('a mod with a pending install registers nothing until done, then runs setup
   expect(runs).toEqual([])
   expect(rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())).toEqual([
     '>',
-    '⠋  safe-delete  Installing                                  ✕',
-    `                ${'█'.repeat(12)}${'░'.repeat(12)}  Installing trash`,
+    '⠋  safe-delete  Installing',
+    `                ${'█'.repeat(12)}${'░'.repeat(12)}  Installing trash${' '.repeat(41)}✕`,
   ])
 
   step.print('progress 4 4 Adding the zsh alias')
@@ -530,9 +531,31 @@ test('Retry on a failure with a description shows its progress in the descriptio
   second.exit(0)
   await fake.settle()
 
-  expect(failed.slice(2)).toEqual(['                Trying again in 2 s.', '                Retry  Report  Hide  09:05'])
-  expect(trying.slice(2)).toEqual(['                Trying again: Installing', '                Retry  Report  Hide  09:05'])
+  expect(failed.slice(2)).toEqual(['                Trying again in 2 s.', `                Retry  Report  09:05${' '.repeat(60)}Hide`])
+  expect(trying.slice(2)).toEqual(['                Trying again: Installing', `                Retry  Report  09:05${' '.repeat(60)}Hide`])
   expect(trying[1]?.slice(1)).toBe(failed[1]?.slice(1))
+})
+
+test('every failure toast in a stack takes the band width and ends its last row with Hide at the right edge, whatever its text, mod, and buttons', () => {
+  const fake = fakeClaude({ name: 'failer', root })
+  const failer = createToaster(fake.claude, 'failer', () => '0.1.0')
+  const nightly = createToaster(fake.claude, 'nightly-report-builder', () => '0.1.0')
+  nightly.fail({ id: 'setup', message: 'its setup function threw: could not reach the build server', retry: () => undefined, isCritical: true })
+  nightly.fail({ id: 'token', message: 'The Token hotkey failed', error: new Error(`failer has no GitHub token. ${secretFix}`), isCritical: true })
+  failer.fail({ id: 'quick', message: 'The Quick hotkey failed', error: new Error('disk full'), isCritical: true })
+  failer.fail({ id: 'long', message: `The Long hotkey failed, because ${'the index is locked by another process '.repeat(4)}`, isCritical: true })
+  failer.fail({ id: 'plugins', message: 'The Dependency hotkey failed', error: new Error(`failer needs the file-tree mod. ${installFix}`), isCritical: true })
+  const band = { hasSurvey: false, isWorking: false, maxRows: 40, bodyColumns: 100 } as RenderPropsOf['AbovePrompt']
+  const prompt = Text({ children: '>' })
+
+  const rows = rowsOf(nightly.draw(failer.draw(prompt, elements, band, 'band'), elements, band, 'band'), 120).map((row) => row.trimEnd())
+  const hides = rows.flatMap((row, index) => (row.endsWith('Hide') ? [index] : []))
+
+  expect(['Retry', 'Open /config', 'Plugins'].map((label) => rows.some((row) => row.includes(label)))).toEqual([true, true, true])
+  expect(hides).toHaveLength(5)
+  expect(hides.map((index) => rows[index]?.length)).toEqual([100, 100, 100, 100, 100])
+  expect(hides.map((index) => rows[index + 1]?.[0] ?? 'end')).toEqual(['✗', '✗', '✗', '✗', 'end'])
+  expect(rows.every((row) => row.length <= 100)).toBe(true)
 })
 
 test("an update shows no toast of the mod's own, because the cmod plugin's toast names the new version", async () => {
@@ -1083,15 +1106,17 @@ test('an install error longer than the band wraps its message across the band, w
 
   expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
     '>',
-    '✗  safe-delete  cmod bootstrap: cmod is',
-    '                installed at',
-    '                /home/me/.local/bin/cmod',
-    '                , but PATH finds no',
-    '                cmod. Put',
-    '                /home/me/.local/bin',
-    '                first on PATH, then',
-    '                restart Claude Code.',
-    '                Retry  Report  Hide  09:05',
+    '✗  safe-delete  cmod bootstrap:',
+    '                cmod is installed',
+    '                at',
+    '                /home/me/.local/bi',
+    '                n/cmod, but PATH',
+    '                finds no cmod. Put',
+    '                /home/me/.local/bi',
+    '                n first on PATH,',
+    '                then restart',
+    '                Claude Code.',
+    '                Retry  Report  09:05  Hide',
   ])
 })
 
