@@ -17,11 +17,13 @@ bun cli/src/main.ts link .
 
 `cmod link .` refuses when `PATH` finds another `cmod` in a folder ahead of `~/.local/bin`, such as one `npm i -g @cmodjs/cli` installed: `PATH finds cmod at <path> ahead of ~/.local/bin, so the cmod program cmod installs would never run.` It also refuses a `~/.local/bin/cmod` that cmod did not make. Uninstall that `cmod`, such as with `npm uninstall -g @cmodjs/cli`, or put `~/.local/bin` before its folder in `PATH`, then run `bun cli/src/main.ts link .` again.
 
-The build and the tests read Claude Code's types from `.claude-plugin/types/`, which git ignores. Claude Code writes the folder the first time a session loads the checkout. In a checkout without it, such as a new worktree, run this from the repository root first:
+The build and the type checks read Claude Code's types from `types/claude-code/` and `types/claude-code-tools/`, which git tracks at the Claude Code version AGENTS.md names, so a fresh clone builds with no Claude Code installed. To move them to another Claude Code version, run this from the repository root, then run the gate and commit `types/`:
 
 ```sh
-claude --plugin-dir . -p ok
+types/write-claude-code.sh <version>
 ```
+
+The script installs that Claude Code into a scratch folder, loads the checkout in it with a config of its own, and copies the types it writes. The [Latest Claude Code workflow](.github/workflows/claude-code.yml) runs it daily with `latest` and runs every Linux suite on the result, so a Claude Code release that breaks cmod shows within a day.
 
 To build a mod against library changes that are not on npm yet, run `bun run --cwd core build`, then `env -C core bun pm pack`, and set `CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz` before `cmod new`. Only a `.tgz` works: a folder installs as links into that folder, and `claude plugin validate --strict` refuses the mod. Then move out of the clone, such as with `cd ..`, before `cmod new`, so the new mod is not created inside the cmod checkout.
 
@@ -64,7 +66,7 @@ env HOME=<scratch home> bun run cli/src/main.ts check <sample>
 The [release workflow](.github/workflows/release.yml) then runs on GitHub:
 
 1. It fails when the three versions differ.
-2. On Linux, it installs Claude Code to write `.claude-plugin/types/` while it tests the lint rules in `lint/` and `@cmodjs/core` and checks `@cmodjs/cli`, which read no types, then checks and builds `@cmodjs/core` and tests `@cmodjs/cli`.
+2. On Linux, it tests the lint rules in `lint/` and `@cmodjs/core`, checks `@cmodjs/cli`, checks and builds `@cmodjs/core` on the types in `types/`, and tests `@cmodjs/cli`.
 3. On Linux, it unpacks that `@cmodjs/core` into the cmod plugin's `node_modules` and tests the cmod plugin on it.
 4. On macOS, at the same time, it runs the tests that reach code only macOS runs: the keychain, the device a Mac reads, the launcher's macOS build, and `cmod try`'s Claude Code credentials.
 5. Once both pass, on Linux, it publishes `@cmodjs/core` and `@cmodjs/cli` to npm through npm trusted publishing, with provenance.

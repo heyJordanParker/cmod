@@ -18,7 +18,7 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "skipLibCheck": true,
-    "typeRoots": ["../.claude-plugin/types"],
+    "typeRoots": ["../types"],
     "types": ["claude-code", "claude-code-tools"],
     "paths": { "@cmodjs/core/*": ["./src/*"] }
   },

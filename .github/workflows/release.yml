@@ -40,55 +40,7 @@ jobs:
           if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then echo "release=done" >> "$GITHUB_OUTPUT"; fi
 
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-
-      - name: Write Claude Code's types while the suites that need none run
-        run: |
-          (
-            curl -fsSL https://claude.ai/install.sh | bash -s latest
-            CLAUDE_CODE_PLUGIN_DIR_WATCH=1 "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
-          ) > "$RUNNER_TEMP/claude-code.log" 2>&1 &
-          claude_code=$!
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          bun install --cwd lint --frozen-lockfile
-          bun install --cwd core --frozen-lockfile
-          bun install --cwd cli --frozen-lockfile
-          bun run --cwd lint test
-          (cd core && bun test)
-          bun run --cwd cli check
-          code=0
-          wait "$claude_code" || code=$?
-          cat "$RUNNER_TEMP/claude-code.log"
-          [ "$code" = 0 ]
-          test -d .claude-plugin/types
-
-      - name: Test and build @cmodjs/core and @cmodjs/cli
-        run: |
-          bun run --cwd core check
-          bun run --cwd core build
-          bun run --cwd cli test
-
-      - name: Test the cmod plugin on this @cmodjs/core
-        run: |
-          bun install --frozen-lockfile
-          (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")
-          rm -rf node_modules/@cmodjs/core
-          mkdir node_modules/@cmodjs/core
-          tar -xzf "$RUNNER_TEMP"/cmodjs-core-*.tgz -C node_modules/@cmodjs/core --strip-components=1
-          bun test
-          bun x tsc --noEmit
-          OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
+    uses: ./.github/workflows/test.yml
 
   macos:
     runs-on: macos-latest
@@ -140,13 +92,11 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Build @cmodjs/core into the cmod plugin, with Claude Code's types
+      - name: Build @cmodjs/core into the cmod plugin, and install the Claude Code cmod publish validates it with
         if: steps.main.outputs.changed != 'true'
         run: |
           curl -fsSL https://claude.ai/install.sh | bash -s latest
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          CLAUDE_CODE_PLUGIN_DIR_WATCH=1 "$HOME/.local/bin/claude" --plugin-dir . -p ok || true
-          test -d .claude-plugin/types
           bun install --cwd core --frozen-lockfile
           bun install --cwd cli --frozen-lockfile
           bun install --frozen-lockfile

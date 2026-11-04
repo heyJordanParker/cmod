@@ -9,7 +9,7 @@
       "settings": { "title": "Show or hide Settings", "default": "meta+m" }
     }
   },
-  "files": ["cli/bin/cmod", "cli/package.json", "hooks", "setup", "src", "types"],
+  "files": ["cli/bin/cmod", "cli/package.json", "hooks", "setup", "src", "types/index.d.ts"],
   "dependencies": {
     "@cmodjs/core": "^5.4.0"
   }
