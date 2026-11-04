@@ -15,6 +15,7 @@ import { declaredMachines, machineWords, unsupportedSystems } from '../program.j
 import { interruptProgress, startProgress } from '../progress.js'
 import { buildRelease } from './publish.js'
 import * as update from './update.js'
+import { withoutIgnored } from './watch.js'
 import { linkedFolders } from '../settings.js'
 import { storePath } from '../store.js'
 
@@ -424,10 +425,19 @@ async function runTool(program: string, args: string[], cwd: string): Promise<{ 
 }
 
 async function walk(folder: string, root = folder): Promise<string[]> {
+  const files = (await filesBelow(folder, root)).map((file) => relative(root, file))
+  const kept = await withoutIgnored(root, files).catch((error: unknown) => {
+    process.stderr.write(`cmod check: checks every file in ${root}, because git could not say which files it ignores: ${messageOf(error)}\n`)
+    return files
+  })
+  return kept.map((file) => join(root, file))
+}
+
+async function filesBelow(folder: string, root: string): Promise<string[]> {
   const files: string[] = []
   for (const entry of await readdir(folder, { withFileTypes: true })) {
     const path = join(folder, entry.name)
-    if (entry.isDirectory() && !skippedFolders.has(entry.name) && path !== join(root, 'cli') && path !== join(root, '.claude-plugin', 'types')) files.push(...(await walk(path, root)))
+    if (entry.isDirectory() && !skippedFolders.has(entry.name) && path !== join(root, 'cli') && path !== join(root, '.claude-plugin', 'types')) files.push(...(await filesBelow(path, root)))
     if (entry.isFile()) files.push(path)
   }
   return files

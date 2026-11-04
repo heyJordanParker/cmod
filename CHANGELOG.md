@@ -4,6 +4,9 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Fixed
+- `cmod check` skips every file git ignores, such as scratch work in an ignored `docs/agents/` folder, so a file no release holds no longer fails the imports, metadata, or binaries check.
+
 ## [5.6.0] - 2026-11-04
 
 ### Added

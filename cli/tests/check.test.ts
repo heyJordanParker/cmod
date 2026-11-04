@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version as cmodVersion } from '../package.json'
+import { capture } from '../src/process.js'
 import { claudeAnswering, cmod, cmodOnPath, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
@@ -545,4 +546,27 @@ test('cmod check skips only the root cli/ folder, so a src/cli/ file is still ch
 
   expect(result.stdout).toContain('src/cli/args.ts imports node:process')
   expect(result.stdout).not.toContain('cli/main.ts imports')
+})
+
+test('cmod check skips a file git ignores, which no release holds, and checks the same file once git keeps it', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+    '.gitignore': 'docs/agents/\n',
+    'cli/src/main.ts': 'export const main = () => 0\n',
+    'docs/agents/x.ts': "import { main } from '../../cli/src/main.ts'\nexport const run = main\n",
+  })
+  expect((await capture(['git', 'init', '-q', root])).exitCode).toBe(0)
+
+  const ignored = await cmod(home, 'check', root)
+
+  expect(ignored.stdout).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
+
+  await writeFiles(root, { '.gitignore': '' })
+  const kept = await cmod(home, 'check', root)
+
+  expect(kept.stdout).toContain("Checking imports…\n✘ 1 problem with the mod's imports\n    fix: docs/agents/x.ts imports ../../cli/src/main.ts from cli/, which the release leaves out: move the shared code into src/\n")
 })

@@ -71,6 +71,8 @@ Runs every check this machine can run on the mod at `path` (default: the current
 15. Runs, with `claude plugin test`, the test files that import `claude-code/testing`. It skips this when none does.
 16. Checks its name against other plugins. Only a project plugin, in `.claude/skills/<name>/` of a repository, runs this check: it fails when an installed or linked plugin has the same name and hides the project plugin. Any other mod passes it at once.
 
+The checks that read the mod's files, the metadata, imports, binaries, permission check, and test files, skip every file git ignores, such as scratch work in an ignored folder, because no release holds it.
+
 `cmod check` fetches `tsc` 7.0.2 and `oxlint` 1.86.0 into the cmod store the first time. A check it cannot run, such as one that needs Claude Code on a machine without it, fails with the reason, and the later checks still run. It ends with a count of passed, failed, and skipped checks, and exits 1 when one failed.
 
 ### cmod try

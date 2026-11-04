@@ -40,15 +40,21 @@ const pollMs = 5000
 
 const skipped = new Set(['node_modules', '.git'])
 
+export async function withoutIgnored(folder: string, files: readonly string[]): Promise<string[]> {
+  if (files.length === 0) return []
+  const checked = await capture(['git', '-C', folder, 'check-ignore', '--stdin'], { stdin: { text: `${files.join('\n')}\n` } })
+  if (checked.exitCode > 1) return [...files]
+  const ignored = new Set(checked.stdout.split('\n'))
+  return files.filter((file) => !ignored.has(file))
+}
+
 async function isAnySource(folder: string, files: readonly string[]): Promise<boolean> {
   if (files.length === 0 || files.includes('')) return true
-  const checked = await capture(['git', '-C', folder, 'check-ignore', '--stdin'], { stdin: { text: `${files.join('\n')}\n` } }).catch((error: unknown) => {
+  const sources = await withoutIgnored(folder, files).catch((error: unknown) => {
     process.stderr.write(`cmod watch: reloads for every change in ${folder}, because git could not say which files it ignores: ${messageOf(error)}\n`)
-    return undefined
+    return files
   })
-  if (checked === undefined || checked.exitCode > 1) return true
-  const ignored = new Set(checked.stdout.split('\n'))
-  return files.some((file) => !ignored.has(file))
+  return sources.length > 0
 }
 
 export async function run(argv: string[]): Promise<number> {
