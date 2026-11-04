@@ -59,7 +59,11 @@ The Harness refuses every `claude` command but `--version` and `--help` in build
 
 ## 4. Run each step and keep its Evidence
 
-Save each step's capture or matched debug-log line as `<NN>-<step>.txt` beside `RUN.md`. Before each `tmux -S <socket> send-keys`, capture the screen and check that the screen the step names is showing.
+Save each step's capture or matched debug-log line as `<NN>-<step>.txt` beside `RUN.md`.
+
+### Capture the whole screen before each key, in its own call after the last key returned
+A capture sent beside a key shows the screen before Claude Code read the key. A permission dialog's cursor starts on `1. Yes`, so an `Enter` sent on a stale capture approves the prompt as the person.
+Never: a `send-keys` in the same parallel batch as the capture it relies on, or an `Enter` while the pane shows `Do you want to proceed?`.
 
 ## 5. Correct the fake with every difference
 
