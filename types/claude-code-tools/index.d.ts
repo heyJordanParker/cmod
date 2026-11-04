@@ -70,13 +70,6 @@ declare module 'claude-code' {
       favicon?: string
       /** One short generic word for the artifact's browser-tab icon, such as chart, calendar, recipe, code or map — a plain signifier, not a product or brand name. Include it on every page's first publish; omit when republishing to keep the current icon, and pass a new one only when the user asks. */
       icon?: string
-      /** publish: small changes to make to the file at `file_path` in this same call, instead of editing the file with Edit and publishing after. Use it on a page (add `url` to update an artifact from another conversation). Each old_str is text copied exactly from the file as it now stands and must occur in it exactly once; new_str takes its place (empty deletes it). The edits apply in order, all or none: the file is published with them and then saved with them on disk, so it stays the source for later changes; on a miss nothing is changed or published, and the result says which edit failed and why. */
-      edits?: Array<{
-        /** Text copied exactly from the file; must occur once. */
-        old_str: string
-        /** Its replacement; empty deletes old_str. */
-        new_str: string
-      }>
       /** list only: maximum artifacts to return (default 25). */
       limit?: number
       /** list only: the `next_page_token` a listing of the same scope gave, to list the artifacts after it. */

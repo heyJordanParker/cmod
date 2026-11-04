@@ -214,10 +214,12 @@ test('new --project refuses a folder that is not a repository root', async () =>
 })
 
 async function typeCheck(root: string): Promise<{ output: string; exitCode: number }> {
-  const checkout = join(import.meta.dir, '..', '..')
-  const types = join(checkout, '.claude-plugin', 'types')
-  if (!existsSync(types)) throw new Error(`${types} is missing. Claude Code writes it when it first loads the checkout: run claude --plugin-dir . -p ok in ${checkout}, then run the tests again.`)
-  await cp(types, join(root, '.claude-plugin', 'types'), { recursive: true })
+  const types = join(import.meta.dir, '..', '..', 'types')
+  for (const written of ['tsconfig.json', 'claude-code', 'claude-code-tools', 'claude-code-mcp']) {
+    const committed = join(types, written)
+    if (!existsSync(committed)) throw new Error(`${committed} is missing. types/write-claude-code.sh writes it from the Claude Code version AGENTS.md names: run it, then run the tests again.`)
+    await cp(committed, join(root, '.claude-plugin', 'types', written), { recursive: true })
+  }
   let output = ''
   let exitCode = 0
   for (const config of ['tsconfig.json', 'tests/tsconfig.json']) {

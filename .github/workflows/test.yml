@@ -34,8 +34,10 @@ jobs:
         with:
           name: claude-code-types
           path: |
+            types/tsconfig.json
             types/claude-code/
             types/claude-code-tools/
+            types/claude-code-mcp/
 
       - name: Test the lint rules, @cmodjs/core, and @cmodjs/cli
         run: |

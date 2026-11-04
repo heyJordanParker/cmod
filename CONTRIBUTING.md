@@ -17,7 +17,7 @@ bun cli/src/main.ts link .
 
 `cmod link .` refuses when `PATH` finds another `cmod` in a folder ahead of `~/.local/bin`, such as one `npm i -g @cmodjs/cli` installed: `PATH finds cmod at <path> ahead of ~/.local/bin, so the cmod program cmod installs would never run.` It also refuses a `~/.local/bin/cmod` that cmod did not make. Uninstall that `cmod`, such as with `npm uninstall -g @cmodjs/cli`, or put `~/.local/bin` before its folder in `PATH`, then run `bun cli/src/main.ts link .` again.
 
-The build and the type checks read Claude Code's types from `types/claude-code/` and `types/claude-code-tools/`, which git tracks at the Claude Code version AGENTS.md names, so a fresh clone builds with no Claude Code installed. To move them to another Claude Code version, run this from the repository root, then run the gate and commit `types/`:
+`types/` holds what Claude Code writes into a plugin's `.claude-plugin/types/`: `tsconfig.json`, `claude-code/`, `claude-code-tools/`, and `claude-code-mcp/`, which git tracks at the Claude Code version AGENTS.md names, so a fresh clone builds and runs every type check with no Claude Code installed. The build and the type checks read `claude-code/` and `claude-code-tools/`, and the `cmod new` tests copy all four into each new mod's `.claude-plugin/types/`. To move them to another Claude Code version, run this from the repository root, then run the gate and commit `types/`:
 
 ```sh
 types/write-claude-code.sh <version>

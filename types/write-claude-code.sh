@@ -22,13 +22,13 @@ rm -rf "$root/.claude-plugin/types"
     "$claude" --plugin-dir . -p ok > "$scratch/claude.log" 2>&1 || true
 )
 
-for types in claude-code claude-code-tools; do
-  if [ ! -f "$root/.claude-plugin/types/$types/index.d.ts" ]; then
+for file in tsconfig.json claude-code/index.d.ts claude-code-tools/index.d.ts claude-code-mcp/index.d.ts; do
+  if [ ! -f "$root/.claude-plugin/types/$file" ]; then
     cat "$scratch/claude.log" >&2
-    echo "Claude Code $written wrote no .claude-plugin/types/$types/index.d.ts when it loaded $root." >&2
+    echo "Claude Code $written wrote no .claude-plugin/types/$file when it loaded $root." >&2
     exit 1
   fi
-  mkdir -p "$root/types/$types"
-  cp "$root/.claude-plugin/types/$types/index.d.ts" "$root/types/$types/index.d.ts"
+  mkdir -p "$(dirname "$root/types/$file")"
+  cp "$root/.claude-plugin/types/$file" "$root/types/$file"
 done
-echo "Wrote types/claude-code/ and types/claude-code-tools/ from Claude Code $written."
+echo "Wrote types/tsconfig.json, types/claude-code/, types/claude-code-tools/, and types/claude-code-mcp/ from Claude Code $written."
