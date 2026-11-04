@@ -329,7 +329,7 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.5.4";
+var coreVersion = "5.6.0";
 var oldestCmodVersion = "5.4.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
@@ -8277,6 +8277,18 @@ function elementOf(data, keyPrefix, press) {
   const props = elementOf(fields["props"], keyPrefix, press);
   return constructors[name](typeof props["key"] === "string" ? { ...props, key: `${keyPrefix}${props["key"]}` } : props);
 }
+var focusable = new Set(["Button", "Input", "Select"]);
+function drawsFocusable(data, key) {
+  if (typeof data !== "object" || data === null)
+    return false;
+  if (Array.isArray(data))
+    return data.some((each) => drawsFocusable(each, key));
+  const fields = data;
+  const props = fields["props"];
+  if (focusable.has(fields[elementKey]) && props?.["key"] === key)
+    return true;
+  return Object.values(fields).some((each) => drawsFocusable(each, key));
+}
 var Box = element("Box");
 var Text = element("Text");
 var Button = element("Button");
@@ -8758,6 +8770,11 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       },
       toggle: (options) => openPanes.has(init.id) ? pane.close() : pane.open(options),
       scrollTo: (target, options) => scrollIn(init.id, target, options),
+      async focus(key) {
+        const { deny } = await claude.ui.focus({ requestId: init.id, key });
+        if (deny !== undefined)
+          throw new Error(`${name}: Claude Code did not focus "${key}" in the ${init.title} pane: ${deny}`);
+      },
       remove() {
         if (panes.get(init.id) !== added)
           return;
@@ -8805,6 +8822,12 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       },
       scrollTo: async (target, options) => {
         await send({ requests: [{ scroll: init.id, to: target, ...options?.block === undefined ? {} : { block: options.block } }] });
+      },
+      focus: async (key) => {
+        const latest = [...latestDraws.get(`page:${init.id}`)?.values() ?? []].at(-1);
+        if (latest === undefined || !drawsFocusable(treeOf(latest.render, []), key))
+          throw new Error(`${name}: the ${init.title} page draws no Button, Input, or Select with the key "${key}".`);
+        await send({ requests: [{ focus: init.id, key }] });
       },
       remove() {
         if (pages.get(init.id) !== added)
@@ -11709,7 +11732,7 @@ function changelogSections(markdown) {
 `).trim() }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/settings.ts
+// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/settings.ts
 var settingsMemory = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, "preferences.json") };
 var settingsSession = { selected: null, section: "options", pageParams: null, notice: null, widget: null };
 var areaTitles = {
@@ -12187,7 +12210,7 @@ function settings2(mod) {
   };
 }
 
-// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/sidebar.ts
+// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/sidebar.ts
 var dashboardTab = "dashboard";
 var settingsTab = "settings";
 var pageHotkeys = 8;
@@ -12352,6 +12375,8 @@ function sidebar(mod, settings) {
       } else if ("scroll" in request) {
         const to = typeof request.to === "string" ? request.to : { key: `${name}/${request.scroll}:${request.to.key}` };
         await pane.scrollTo(to, request.block === undefined ? {} : { block: request.block });
+      } else if ("focus" in request) {
+        await pane.focus(`${name}/${request.focus}:${request.key}`);
       } else if ("settings" in request) {
         show(settingsTab);
         await pane.open({ focus: true });
@@ -12442,7 +12467,7 @@ function resultOf2(value) {
   return JSON.stringify(value);
 }
 
-// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/tools.ts
+// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/tools.ts
 var carryOn = "The conversation was compacted. Carry on with the work from before the compaction.";
 function addClaudeTools(mod) {
   const { report } = engineOf(mod);
@@ -12496,7 +12521,7 @@ function addClaudeTools(mod) {
   }));
 }
 
-// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/src/mod.ts
+// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/src/mod.ts
 var cmodGlobal = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null };
 var cmodSession = { tip: null, ...sidebarSession, ...settingsSession };
 var nameOf2 = (id) => id.replace(/@[^@]*$/, "");
@@ -12914,7 +12939,7 @@ var cmodPlugin = defineMod({
   }
 });
 
-// ../../../../../tmp/cmod-publish-cmod-OjKqtU/release/hooks/register.ts
+// ../../../../../tmp/cmod-publish-cmod-vafb8f/release/hooks/register.ts
 function register(addHook, options) {
   addHook("engine.create", async (_$, eventInput, passOn) => {
     const built = await passOn(eventInput);
