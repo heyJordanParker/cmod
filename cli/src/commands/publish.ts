@@ -9,7 +9,7 @@ import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { cmodPluginEntry, listPlugins, validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
-import { cmodFloor, cmodRangeOf, readDeclared, readPlugin, type Plugin } from '../plugin.js'
+import { cmodFloor, cmodRangeOf, raisedCmodRange, readDeclared, readPlugin, type Plugin } from '../plugin.js'
 import { capture, run as runCommand } from '../process.js'
 import { buildProgram, declaredMachines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
@@ -100,8 +100,8 @@ export async function run(argv: string[]): Promise<number> {
   }
   const floor = await cmodFloor(plugin)
   const range = cmodRangeOf(written)
-  if (floor !== undefined && range !== `>=${floor.cmod}`) {
-    throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.core}, which runs on cmod ${floor.cmod} or later, so it needs ">=${floor.cmod}", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
+  if (floor !== undefined && range !== raisedCmodRange(range, floor.cmod)) {
+    throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.core}, which runs on cmod ${floor.cmod} or later, so it needs ">=${floor.cmod}", or ">=" a newer cmod it needs. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
   }
   const dependedOn = (Array.isArray(written['dependencies']) ? written['dependencies'] : [])
     .map((dependency: unknown) => (isObject(dependency) ? dependency['name'] : dependency))

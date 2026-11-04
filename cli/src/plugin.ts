@@ -130,6 +130,11 @@ export function cmodRangeOf(manifest: unknown): string | undefined {
   return isObject(entry) && typeof entry['version'] === 'string' ? entry['version'] : undefined
 }
 
+export function raisedCmodRange(range: string | undefined, floor: string): string {
+  const minimum = /^>=\s*(\d+\.\d+\.\d+)$/.exec(range?.trim() ?? '')?.[1]
+  return `>=${minimum !== undefined && isAtLeast(minimum, floor) ? minimum : floor}`
+}
+
 export async function writeCmodFloor(root: string, floor: string): Promise<boolean> {
   const path = `${root}/.claude-plugin/plugin.json`
   const text = (await readText(path)) ?? '{}\n'

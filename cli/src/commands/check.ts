@@ -9,7 +9,7 @@ import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/me
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { addClaudeApi, listPlugins, testPlugin, validatePlugin, type InstalledPlugin } from '../claude.js'
 import { listFiles, readJson, readText, writeAtomically } from '../files.js'
-import { cmodFloor, installPackages, readDeclared, readPlugin, writeCmodFloor, writeHotkeys, writeUserConfig, type Declared, type Plugin } from '../plugin.js'
+import { cmodFloor, cmodRangeOf, installPackages, raisedCmodRange, readDeclared, readPlugin, writeCmodFloor, writeHotkeys, writeUserConfig, type Declared, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
 import { interruptProgress, startProgress } from '../progress.js'
@@ -252,7 +252,7 @@ async function checkCmodFloor(plugin: Plugin): Promise<Result> {
   const floor = await cmodFloor(plugin)
   if (floor === undefined) return { status: 'skip', text: plugin.name === 'cmod' ? 'The cmod plugin depends on no cmod' : 'No @cmodjs/core 4 or later in node_modules, so the mod keeps its own cmod range' }
   const { core, cmod } = floor
-  const range = `>=${cmod}`
+  const range = raisedCmodRange(cmodRangeOf(await readJson(join(plugin.root, '.claude-plugin', 'plugin.json'))), cmod)
   const isOlder = (copy: InstalledPlugin) => !isAtLeast(copy.version, cmod)
   let copies = await cmodCopies()
   const isUpdated = copies.some((copy) => !copy.isLinked && isOlder(copy))
@@ -269,9 +269,10 @@ async function checkCmodFloor(plugin: Plugin): Promise<Result> {
   const linked = copies.find((copy) => copy.isLinked && isOlder(copy))
   if (linked !== undefined) return { status: 'fail', text: `cmod is linked from ${linked.installPath}, at ${linked.version}`, fix: `Pull it to ${cmod} or newer, then run cmod check again.` }
   const isWritten = await writeCmodFloor(plugin.root, range)
+  const floorText = `the oldest cmod the @cmodjs/core ${core} this mod bundles runs on`
   const lines = [
     ...(isUpdated && oldest !== undefined ? [`Updated cmod to ${oldest} through Claude Code, so it runs the @cmodjs/core this mod bundles`] : []),
-    `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${range}", the oldest cmod the @cmodjs/core ${core} this mod bundles runs on, so every newer cmod runs it`,
+    `${isWritten ? 'Wrote' : 'plugin.json holds'} the cmod dependency "${range}", ${range === `>=${cmod}` ? `${floorText}, so every newer cmod runs it` : `the minimum the mod names, above cmod ${cmod}, ${floorText}`}`,
   ]
   return { status: 'pass', text: lines.join('\n    ') }
 }

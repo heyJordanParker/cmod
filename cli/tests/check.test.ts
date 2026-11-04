@@ -144,6 +144,36 @@ test("cmod check writes the cmod dependency as >= the oldest cmod the mod's @cmo
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).not.toContain('plugin update')
 })
 
+const core560 = {
+  'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.6.0' }),
+  'node_modules/@cmodjs/core/records.js': "export const coreVersion = '5.6.0'\nexport const oldestCmodVersion = '5.4.0'\n",
+  'package.json': JSON.stringify({ name: 'demo' }),
+}
+
+test('cmod check keeps a minimum cmod the author wrote above the oldest cmod the bundled @cmodjs/core runs on', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('5.6.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, { ...core560, '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', version: '>=5.6.0' }] }) })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ plugin.json holds the cmod dependency ">=5.6.0", the minimum the mod names, above cmod 5.4.0, the oldest cmod the @cmodjs/core 5.6.0 this mod bundles runs on\n')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=5.6.0' }])
+})
+
+test('cmod check raises a minimum cmod the author wrote below the oldest cmod the bundled @cmodjs/core runs on', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { 'bin/claude': claudeAnswering([cmodAt('5.6.0')]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, { ...core560, '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', version: '>=5.0.0' }] }) })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=5.4.0", the oldest cmod the @cmodjs/core 5.6.0 this mod bundles runs on, so every newer cmod runs it\n')
+  expect(await dependenciesOf(root)).toEqual([{ name: 'cmod', version: '>=5.4.0' }])
+})
+
 test('cmod check keeps the cmod range of a mod on @cmodjs/core 3, which cmod 4 does not run', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')

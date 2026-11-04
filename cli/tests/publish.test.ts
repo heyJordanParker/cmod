@@ -228,21 +228,33 @@ test('publish refuses a dependency installed nowhere here before it builds anyth
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
 })
 
-test('publish refuses a cmod dependency other than >= the oldest cmod the bundled @cmodjs/core runs on, and names cmod check', async () => {
+const greeterRequiring = (range: string) => ({
+  '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'cmod', version: range }] }),
+  'package.json': JSON.stringify({ name: 'greeter' }),
+  'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.1.0' }),
+  'node_modules/@cmodjs/core/records.js': "export const oldestCmodVersion = '5.0.0'\n",
+})
+
+test('publish refuses a cmod dependency below the oldest cmod the bundled @cmodjs/core runs on, and names cmod check', async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'cmod', version: '>=5.1.0' }] }),
-    'package.json': JSON.stringify({ name: 'greeter' }),
-    'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.1.0' }),
-    'node_modules/@cmodjs/core/records.js': "export const oldestCmodVersion = '5.0.0'\n",
-  })
+  const root = await committedHooksMod(home, greeterRequiring('>=4.3.4'))
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toBe(
-    'cmod publish: .claude-plugin/plugin.json depends on cmod ">=5.1.0", and this mod bundles @cmodjs/core 5.1.0, which runs on cmod 5.0.0 or later, so it needs ">=5.0.0", which every newer cmod satisfies. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.\n',
+    'cmod publish: .claude-plugin/plugin.json depends on cmod ">=4.3.4", and this mod bundles @cmodjs/core 5.1.0, which runs on cmod 5.0.0 or later, so it needs ">=5.0.0", or ">=" a newer cmod it needs. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.\n',
   )
+})
+
+test('publish releases a mod whose cmod dependency names a newer minimum than the oldest cmod the bundled @cmodjs/core runs on', async () => {
+  const home = await temporaryHome()
+  const root = await committedHooksMod(home, greeterRequiring('>=5.6.0'))
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+
+  expect(result.stderr).toBe('')
+  expect(result.exitCode).toBe(0)
 })
 
 test('publish of the cmod plugin, which installs @cmodjs/core and depends on no cmod, releases it', async () => {
