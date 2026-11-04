@@ -26,6 +26,7 @@ These Facts were observed in Claude Code 2.1.289. Under a newer `claude --versio
 Every fixture, home, log, and socket lives under a new `/private/tmp/<task-slug>/`. The real `~/.claude`, `~/.config`, and `~/.local` stay untouched.
 
 - `127.0.0.1:8317` is the local model proxy, so `ANTHROPIC_API_KEY` takes a placeholder.
+- Once any plugin hears `classic.MessageDisplay`, which every mod does, Claude Code 2.1.317 draws a reply's text only in the first text block that carries its API `message.id`. A fake model that answers every request with one id draws its first reply and hides every reply after it, so a fake model gives each response its own id, as the API does.
 - Claude Code fetches its official plugin catalog over the network even with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
 - Each hook event a chain of mods handles logs a `hooks module <plugins> <event> settled in <ms>` line in the `--debug-file` log, and each call a mod makes logs a `$.<noun>.<method> (<mod>)` line.
 - `CMOD_DIST_SERVER=file://<folder>` points the cmod bootstrap at a local release folder holding `v<version>/cmod-<os>-<arch>` and its `SHA256SUMS`.
