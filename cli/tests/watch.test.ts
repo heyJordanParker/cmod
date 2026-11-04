@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { chmod, mkdir, readFile, symlink } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version } from '../package.json'
 import { cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
