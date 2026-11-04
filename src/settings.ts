@@ -1,6 +1,6 @@
 import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
@@ -50,6 +50,7 @@ export type ModView = {
   readonly options: readonly ConfigRow[]
   readonly pendingSteps: readonly string[]
   readonly changelog: readonly ChangelogSection[]
+  readonly isService: boolean
 }
 
 const preferenceTitles = {
@@ -216,7 +217,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
 
     const read = (path: string) => fs.read(path).catch(ifMissing(undefined))
 
-    const viewOf = async (name: string, root: string, version: string, isOn: boolean, rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
+    const viewOf = async (store: string, name: string, root: string, version: string, isOn: boolean, rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
       const manifest: unknown = await read(`${root}/package.json`).then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const plugin: unknown = await read(`${root}/.claude-plugin/plugin.json`).then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const steps = isObject(manifest) ? readSteps(manifest) : undefined
@@ -237,6 +238,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         options: rows.filter((row) => row.key.startsWith(`${name}.`)),
         pendingSteps: await ask(pendingStepsMethod),
         changelog: changelogSections((await read(`${root}/CHANGELOG.md`)) ?? ''),
+        isService: (await fs.list(serviceFolder(store, name)).catch(ifMissing([]))).some((entry) => entry.name.endsWith('.json')),
       }
     }
 
@@ -249,8 +251,8 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       const turnedOff = enabled.filter(({ name, isEnabled }) => isEnabled === false && !enabled.some((each) => each.name === name && each.isEnabled === true)).map(({ name }) => name)
       const records = (await Promise.all((await setUpMods(mod)).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
       const own = JSON.parse((await read(`${mod.folder}/.claude-plugin/plugin.json`)) ?? '{}') as { readonly version?: string }
-      const cmod = await viewOf(mod.name, mod.folder, own.version ?? '', true, [], combos)
-      const views = await Promise.all(records.map((record) => viewOf(record.name, record.root, record.version, !turnedOff.includes(record.name), rows, combos)))
+      const cmod = await viewOf(store, mod.name, mod.folder, own.version ?? '', true, [], combos)
+      const views = await Promise.all(records.map((record) => viewOf(store, record.name, record.root, record.version, !turnedOff.includes(record.name), rows, combos)))
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))]
     }
 
@@ -481,6 +483,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
           children: [
             Box({ justifyContent: 'space-between', columnGap: 2, flexWrap: 'wrap', children: [Text({ dimColor: true, children: view.version }), ...actions] }),
             ...(view.description === undefined ? [] : [Text({ dimColor: true, wrap: 'wrap', children: view.description })]),
+            ...(view.isService ? [Text({ dimColor: true, wrap: 'wrap', children: 'Runs as a service of this computer' })] : []),
           ],
         })
         const removal =

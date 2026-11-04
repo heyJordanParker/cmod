@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.9.0] - 2026-11-04
+
+### Added
+- A mod's program can run whenever you are logged in, with no Claude Code open. `program({ command, isService: true })` makes it a service of the computer: a launchd agent on macOS and a systemd user service on Linux, which starts at login and again whenever the program exits, while every session reaches the one running copy through `ready()`. The first session that starts the mod writes the service, `cmod setup` restarts it on each new version, and `cmod remove` stops and deletes it, so a mod writes no service file. Settings shows `Runs as a service of this computer` on the mod's page, and `cmod list` names the program. On a computer that does not take the service, such as a Linux machine without a systemd user session, the program runs while a session is open, as a `singleInstance` program does.
+
+### Changed
+- A mod built on `@cmodjs/core` 5.9.0 runs on cmod 5.9.0 or later, because its `isService` programs need the newer cmod program. `cmod check` writes the new minimum, and a session on an older cmod updates it by itself.
+
 ## [5.8.0] - 2026-11-04
 
 ### Fixed
