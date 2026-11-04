@@ -8,17 +8,17 @@ export type RoutedNext<N extends RoutedEvent> = RouterNext<N> & { readonly signa
 
 export type RoutedHook<N extends RoutedEvent> = (e: Frozen<Args<N>>, next: RoutedNext<N>) => EventResult<N> | Promise<EventResult<N>>
 
-export type RoutedFailure<N extends RoutedEvent> = (e: Frozen<Args<N>>, error: Error, next: RoutedNext<N>) => EventResult<N> | undefined | Promise<EventResult<N> | undefined>
+export type RoutedFailure<N extends RoutedEvent> = (e: Frozen<Args<N>>, error: Error, next: RoutedNext<N> & { readonly called: boolean }) => EventResult<N> | undefined | Promise<EventResult<N> | undefined>
 
 export type Router = {
   add<N extends RoutedEvent>(event: N, hook: RoutedHook<N>, failed?: RoutedFailure<N>): Subscription
   dispatch<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, signal?: AbortSignal): Promise<EventResult<N>>
-  dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>): Promise<EventResult<N>>
+  dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>, called: boolean): Promise<EventResult<N>>
 }
 
 type Next = ((e: unknown) => Promise<unknown>) & { readonly signal: AbortSignal }
 
-type Route = { readonly hook: (e: unknown, next: Next) => unknown; readonly failed?: (e: unknown, error: Error, next: Next) => unknown }
+type Route = { readonly hook: (e: unknown, next: Next) => unknown; readonly failed?: (e: unknown, error: Error, next: Next & { readonly called: boolean }) => unknown }
 
 export const unaborted = new AbortController().signal
 
@@ -46,8 +46,8 @@ export function createRouter(): Router {
       }
       return call(0, e) as Promise<EventResult<N>>
     },
-    async dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>): Promise<EventResult<N>> {
-      const signalled = Object.assign((passed: unknown) => next(passed as Frozen<Args<N>>), { signal: unaborted })
+    async dispatchFailure<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, error: Error, next: RouterNext<N>, called: boolean): Promise<EventResult<N>> {
+      const signalled = Object.assign((passed: unknown) => next(passed as Frozen<Args<N>>), { signal: unaborted, called })
       for (const route of routes.get(event) ?? []) {
         const answer = await route.failed?.(e, error, signalled)
         if (answer !== undefined) return answer as EventResult<N>

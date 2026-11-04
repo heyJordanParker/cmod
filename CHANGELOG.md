@@ -6,6 +6,8 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ### Fixed
 - `cmod check` skips every file git ignores, such as scratch work in an ignored `docs/agents/` folder, so a file no release holds no longer fails the imports, metadata, or binaries check.
+- A `beforePrompt` listener with `onFailure: 'refuse'` drops the prompt when Claude Code stops cmod's own prompt hook before the listener answered, with the mod and the stop as the reason. Before, the prompt reached Claude. A session no mod gates still lets its prompts in.
+- A resumed session no longer waits up to 2 minutes for another cmod that holds the conversation index. cmod reads the session's earlier turns without writing the index, and a session no `before` listener gates never waits on them, so Claude Code no longer stops cmod's prompt, Stop, and transcript hooks while it waited.
 
 ## [5.6.0] - 2026-11-04
 

@@ -226,7 +226,7 @@ Reads every conversation Claude Code saved, as the sessions, contexts, turns, ta
 - `goal` prints what the conversation is for: the goal a mod set, or its first prompt.
 - `usage` prints the model and the context's tokens as of the last reply.
 - `--task` reads `turns`, `contexts`, `goal`, and `usage` of the session a task's owner runs, the way they read the conversation's.
-- `state` prints what a running conversation resumes from.
+- `state` prints what a running conversation resumes from. It reads the index without writing to it, so it never waits for another cmod that is writing the index.
 - `follow` prints each message, turn, context, task, and goal change of the sessions named as Claude Code saves it, until stopped with Ctrl+C. `--running` follows every running session of the project too, and each one that starts later. The cmod plugin runs it to hear other running sessions.
 - `--json` prints JSON instead of one line each.
 - `index` reads every saved conversation into the index at `~/.local/share/cmod/history-12.sqlite`, which holds where each message is in its transcript, not a copy of it, and each conversation's turns, with the device each ran on, contexts, and tasks. While cmod has set up a mod other than cmod, the cmod plugin runs it in the background at each session's start, and a second run while one is running exits at once. The index forgets a conversation whose transcript is deleted.

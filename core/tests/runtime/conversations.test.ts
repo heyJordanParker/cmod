@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
-import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Args, Caught, Frozen, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
 import { defineMod, notInstalled, sessions } from '../../src/mod.js'
 import { coreVersion, storeFolder } from '../../src/records.js'
+import type { Claude } from '../../src/runtime/claude.js'
 import { serveConversations } from '../../src/runtime/conversations.js'
+import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { conversationMethods } from '../../src/runtime/sessions.js'
 import { testMod } from '../../src/testing.js'
@@ -351,6 +353,51 @@ test("another session's refusing listener lets the event through when that sessi
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: denied } as never, { text: denied } as never)
 
   expect(await submitted).toMatchObject({ text: 'Deploy to prod' })
+})
+
+const unending = () =>
+  (async function* () {
+    await new Promise<never>(() => undefined)
+    yield { stream: 'stdout', text: '' }
+  })() as never
+
+async function resumedOnLockedIndex(files: { readonly list?: Claude['fs']['list'] } = {}) {
+  const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  Object.assign(fake.fakes.fs, fakeFiles({}), files)
+  fake.fakes.process.spawn = (request) => (request.argv.includes('state') ? unending() : printed('[]'))
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup() {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'cmod', root: '/plugins/cmod', version: coreVersion, store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }))
+  await lifecycle.route('classic.SessionStart', { session_id: 'test-session', source: 'resume' } as never, async () => ({}))
+  await fake.settle()
+  return lifecycle
+}
+
+const typed = { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false } as unknown as Frozen<Args<'prompt.submit'>>
+const entered = async (e: Frozen<Args<'prompt.submit'>>) => ({ text: e.text })
+const stopped = (called: boolean): Caught => ({ error: { kind: 'timeout', budget: 10_000 }, called })
+
+test("a refusing beforePrompt listener drops the prompt when Claude Code stops the cmod plugin's prompt hook before it answered", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+  await lifecycle.route('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt', onFailure: 'refuse' }] }, caller: 'anyhost' } as never, async () => ({ deny: 'unanswered' }))
+  void lifecycle.route('prompt.submit', typed, entered)
+  const delivered = { origin: { kind: 'peer' }, text: 'Deploy to prod' } as unknown as Frozen<Args<'session.receive'>>
+
+  expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(false))).toEqual({ drop: 'anyhost: it ran past the 10 s Claude Code gives a hook' })
+  expect(await lifecycle.caught('session.receive', delivered, async (e) => ({ text: e.text }), stopped(false))).toEqual({ consumed: 'anyhost: it ran past the 10 s Claude Code gives a hook' })
+  expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(true))).toEqual({ text: 'Deploy to prod' })
+})
+
+test("a prompt no mod gates enters while the conversation index is locked, and passes when Claude Code stops the cmod plugin's prompt hook", async () => {
+  const lifecycle = await resumedOnLockedIndex()
+
+  expect(await lifecycle.route('prompt.submit', typed, entered)).toEqual({ text: 'Deploy to prod' })
+  expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(false))).toEqual({ text: 'Deploy to prod' })
+})
+
+test("a prompt is dropped when Claude Code stops the cmod plugin's prompt hook before it read which mods gate the session", async () => {
+  const lifecycle = await resumedOnLockedIndex({ list: async (path) => (path?.endsWith('/before') === true ? new Promise<never>(() => undefined) : []) })
+
+  expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(false))).toEqual({ drop: 'cmod: it ran past the 10 s Claude Code gives a hook' })
 })
 
 test('a mod listening on this session and on every session is asked once before a prompt', async () => {

@@ -425,6 +425,7 @@ export function testMod<State extends object, Declared extends Options = Options
       place: async () => conversations.place(),
       wants: async (event) => conversations.wants(name, event),
       fold: decide,
+      failedBefore: () => undefined,
     },
   })
 

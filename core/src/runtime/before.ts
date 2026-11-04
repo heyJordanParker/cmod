@@ -41,7 +41,12 @@ export type Answers = {
   readonly summary: string
 }
 
-export type BeforeHooks = { readonly place: () => Promise<Place>; readonly wants: (event: BeforeEvent) => Promise<boolean>; readonly fold: (cancel: AbortSignal) => Decide }
+export type BeforeHooks = {
+  readonly place: () => Promise<Place>
+  readonly wants: (event: BeforeEvent) => Promise<boolean>
+  readonly fold: (cancel: AbortSignal) => Decide
+  readonly failedBefore: (event: BeforeEvent, change: (where: Place) => SessionChange, error: Error) => { readonly refuse: string } | undefined
+}
 
 const appended: readonly BeforeEvent[] = [Note, Reply, Notice]
 
@@ -63,7 +68,7 @@ export function relayOf(e: Frozen<Args<'session.receive'>>): string | undefined 
 }
 
 export function installBefore({ claude, router, hooks }: { readonly claude: Claude; readonly router: Router; readonly hooks: BeforeHooks }): Subscription {
-  const { place, wants, fold } = hooks
+  const { place, wants, fold, failedBefore } = hooks
   const now = () => new Date().toISOString()
   const asked = async (event: BeforeEvent, change: SessionChange, decide: Decide) => (await decide(event, change)) ?? {}
   const message = (where: Place, unplaced: Unplaced, task: string | undefined, isInTurn = true): SessionChange => {
@@ -72,6 +77,9 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     const call = unplaced.type === ToolResult ? where.openCalls?.[unplaced.callId] : undefined
     return { type: Message, message: { ...unplaced, ...call, session: where.session, context, ...(turn === undefined ? {} : { turn: turn.prompt.id }), ...(task === undefined ? {} : { task }) } as Message }
   }
+  const submitted = (e: Frozen<Args<'prompt.submit'>>) => (where: Place) => message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false)
+  const received = (e: Frozen<Args<'session.receive'>>) => (where: Place) => message(where, { id: '', at: now(), type: Prompt, text: e.text, from: { type: 'session' } }, e.agentId, false)
+  const refusedOnFailure = (event: BeforeEvent, change: (where: Place) => SessionChange, error: Error, next: { readonly called: boolean }) => (next.called ? undefined : failedBefore(event, change, error)?.refuse)
   const titles = new Map<string, string>()
   const spawned = new Map<string, { readonly prompt: string; readonly agentType: string }>()
   const startedBy = new Map<string, string>()
@@ -112,8 +120,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
   const added: Subscription[] = [
     router.add('prompt.submit', async (e, next) => {
       if (!(await wants(Prompt))) return next(e)
-      const where = await place()
-      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false), fold(next.signal))
+      const answer = await asked(Prompt, submitted(e)(await place()), fold(next.signal))
       if (answer.refuse !== undefined) return { drop: answer.refuse }
       const text = answer.text ?? e.text
       if (answer.title !== undefined) titles.set(text, answer.title)
@@ -125,6 +132,9 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
         if (!('drop' in ran) && typeof ran.text === 'string') titles.set(ran.text, passed)
       }
       return ran
+    }, (e, error, next) => {
+      const refusal = refusedOnFailure(Prompt, submitted(e), error, next)
+      return refusal === undefined ? undefined : { drop: refusal }
     }),
     router.add('classic.UserPromptSubmit', async (e, next) => {
       const named = titles.get(e.prompt)
@@ -136,10 +146,12 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
     router.add('classic.PostToolUseFailure', toolResultHook(true) as never),
     router.add('session.receive', async (e, next) => {
       if (!(await wants(Prompt)) || relayOf(e) !== undefined) return next(e)
-      const where = await place()
-      const answer = await asked(Prompt, message(where, { id: '', at: now(), type: Prompt, text: e.text, from: { type: 'session' } }, e.agentId, false), fold(next.signal))
+      const answer = await asked(Prompt, received(e)(await place()), fold(next.signal))
       if (answer.refuse !== undefined) return { consumed: answer.refuse }
       return next(answer.text === undefined ? e : { ...e, text: answer.text })
+    }, (e, error, next) => {
+      const refusal = relayOf(e) === undefined ? refusedOnFailure(Prompt, received(e), error, next) : undefined
+      return refusal === undefined ? undefined : { consumed: refusal }
     }),
     router.add('skill.prompt', async (e, next) => {
       if (!(await wants(Skill))) return next(e)

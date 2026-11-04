@@ -651,8 +651,12 @@ function backgroundTasks(session: string): TaskData[] {
 }
 
 export function readState(db: Database, request: { readonly session: string; readonly project: string }): ConversationState {
-  readSession(db, sessionTranscripts(request.session, request.project))
-  const state = stateOf(db, request.session) ?? emptyConversation(request.session)
+  const transcripts = sessionTranscripts(request.session, request.project)
+  const [saved, indexed] = db.transaction(() => [stateOf(db, request.session), offsetsOf(db)] as const)()
+  const isRewritten = transcripts.some((transcript) => (indexed.get(transcript.path) ?? 0) > sizeOf(transcript.path))
+  const conversation = createConversation((isRewritten ? undefined : saved) ?? emptyConversation(request.session))
+  stepThrough(conversation, transcripts, isRewritten ? new Map() : indexed, () => undefined)
+  const { state } = conversation
   const goal = savedGoal(request.session)
   return goal === undefined ? state : { ...state, goal }
 }

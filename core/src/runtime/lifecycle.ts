@@ -712,7 +712,7 @@ export function createLifecycle<State extends object, Declared extends Options =
       const error = new Error(reason)
       const failedBeneath = called && kind === 'throw' ? await next(e).then(() => undefined, messageOf) : undefined
       if (failedBeneath === undefined || failedBeneath !== message) toastFailure({ id: `stopped:${event}`, message: `Claude Code stopped its ${event.replace(/^classic\./, '')} hook`, error })
-      return router.dispatchFailure(event, e, error, next)
+      return router.dispatchFailure(event, e, error, next, called)
     },
   }
 }

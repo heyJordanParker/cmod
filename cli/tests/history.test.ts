@@ -39,6 +39,19 @@ async function writeHistory(home: string): Promise<{ project: string; other: str
   return { project, other }
 }
 
+function writeLockOn(home: string): Database {
+  const before = process.env['XDG_DATA_HOME']
+  process.env['XDG_DATA_HOME'] = join(home, '.local/share')
+  try {
+    const holder = openHistory()
+    holder.exec('begin immediate')
+    return holder
+  } finally {
+    if (before === undefined) delete process.env['XDG_DATA_HOME']
+    else process.env['XDG_DATA_HOME'] = before
+  }
+}
+
 const json = async (home: string, ...args: string[]): Promise<unknown> => {
   const result = await cmod(home, 'history', ...args, '--json')
   expect(result.stderr).toBe('')
@@ -478,8 +491,7 @@ test('reading an unchanged transcript takes no write lock on the index', async (
   await appendFile(join(home, `${projectFolder(project)}/s1.jsonl`), '{"type":"user","uuid":"half-written"')
   await json(home, 'sessions', '--project', project)
   await json(home, 'messages', 's1', '--project', project)
-  const holder = new Database(join(home, '.local/share/cmod/history-3.sqlite'))
-  holder.exec('begin immediate')
+  const holder = writeLockOn(home)
 
   const startedAt = Date.now()
   const listed = await cmod(home, 'history', 'sessions', '--project', project, '--json')
@@ -489,6 +501,22 @@ test('reading an unchanged transcript takes no write lock on the index', async (
 
   expect([listed.exitCode, read.exitCode, Date.now() - startedAt < 5000]).toEqual([0, 0, true])
 })
+
+test("history state reads the lines the index has not yet saved while another cmod holds the index's write lock", async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  await json(home, 'messages', 's1', '--project', project)
+  await appendFile(join(home, `${projectFolder(project)}/s1.jsonl`), lines([{ type: 'user', uuid: 'u9', timestamp: at(9), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Now the file pane' } }]))
+  const holder = writeLockOn(home)
+
+  const startedAt = Date.now()
+  const state = await cmod(home, 'history', 'state', 's1', '--project', project)
+  holder.exec('rollback')
+  holder.close()
+
+  expect([state.exitCode, Date.now() - startedAt < 5000]).toEqual([0, true])
+  expect(JSON.parse(state.stdout)).toMatchObject({ session: 's1', context: 1, turn: { prompt: { id: 'u9', text: 'Now the file pane' } } })
+}, 15_000)
 
 test.concurrent('a transcript rewritten under the index returns its new messages', async () => {
   const home = await temporaryHome()

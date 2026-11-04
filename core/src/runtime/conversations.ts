@@ -98,6 +98,7 @@ export function serveConversations({
   const ownWatches = new Map<string, Watch>()
   let watchers: readonly Watcher[] = []
   let watching: Promise<void> = Promise.resolve()
+  let hasReadWatchers = false
   let published = new Set<string>()
   let publishing: Promise<unknown> = Promise.resolve()
   let session = ''
@@ -416,8 +417,14 @@ export function serveConversations({
   }
 
   const wants = async (event: BeforeEvent) => {
-    await Promise.all([starting, watching])
+    await watching
     return deciders(event).length > 0
+  }
+
+  const failedBefore = (event: BeforeEvent, change: (where: Place) => SessionChange, error: Error) => {
+    if (!hasReadWatchers) return { refuse: `${cmodPluginName}: ${error.message}` }
+    const refusing = deciders(event).find((watcher) => refuses(watcher, event, change(place())))
+    return refusing === undefined ? undefined : { refuse: `${refusing.mod}: ${error.message}` }
   }
 
   const decide = (cancel?: AbortSignal): Decide => {
@@ -458,6 +465,7 @@ export function serveConversations({
       },
       wants,
       fold: decide,
+      failedBefore,
     },
   })
 
@@ -487,6 +495,10 @@ export function serveConversations({
       .then(follow)
     starting = Promise.all([starting, restored]).then(() => undefined)
     reloadWatchers()
+    hasReadWatchers = false
+    void watching.then(() => {
+      if (session === id) hasReadWatchers = true
+    })
     if (subscribed.size > 0) void Promise.all([previous === '' ? undefined : clearListeners(previous), saveListeners()]).catch((error: unknown) => report('follow', 'Kept telling the mods about the session from before', error))
     if (ownWatches.size === 0) return
     void Promise.all([previous === '' ? undefined : clearWatches(previous), publishWatches()]).catch((error: unknown) => report('before', 'Kept its before listeners on the session from before', error))
