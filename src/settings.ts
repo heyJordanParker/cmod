@@ -2,6 +2,7 @@ import type { ConfigRow, RenderElement } from 'claude-code'
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
 import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
+import { isStillInstalling } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
 import { cmodError, newestCmodVersion } from '../node_modules/@cmodjs/core/runtime/programs.js'
@@ -11,7 +12,7 @@ import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Input, Markdown, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { changelogSections, unreleased, type ChangelogSection } from '../node_modules/@cmodjs/core/utils/changelog.js'
-import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
+import { ifMissing, relativePath } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import type { SettingsView } from './sidebar.js'
 
@@ -157,8 +158,16 @@ export function failureLog<State extends SettingsState>(mod: Mod<State>): (failu
     writing = Promise.allSettled([added])
     await added
     if (level === 'warning') return { showsToast: false }
-    return { showsToast: failure.isCritical || marketplaceOf(failure.root, failure.mod) === undefined || (await readPreferences(mod)).showsInstalledModErrors }
+    if (failure.isCritical) return { showsToast: true }
+    if (marketplaceOf(failure.root, failure.mod) === undefined) return { showsToast: await isInside(mod, failure.root) }
+    return { showsToast: (await readPreferences(mod)).showsInstalledModErrors }
   }
+}
+
+export async function isInside(mod: object, folder: string): Promise<boolean> {
+  const { claude } = engineOf(mod)
+  const real = async (path: string) => (await claude.fs.stat(path, { resolve: true }).catch(ifMissing(undefined)))?.realPath ?? path
+  return relativePath(await real(folder), await real(await claude.session.root())) !== undefined
 }
 
 export async function writePreference(mod: Mod<object>, key: keyof Preferences, isOn: boolean): Promise<void> {
@@ -225,7 +234,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       const ask = async (method: string): Promise<readonly string[]> => {
         if (name === mod.name) return []
         const answer = await claude.cmod.call({ to: name, method, input: null }).catch((error: unknown) => {
-          claude.ui.warn(`settings:${name}:${method}`, `cmod: ${name} did not answer ${method}: ${messageOf(error)}`)
+          if (!isStillInstalling(name, error)) claude.ui.warn(`settings:${name}:${method}`, `cmod: ${name} did not answer ${method}: ${messageOf(error)}`)
           return undefined
         })
         return Array.isArray(answer) ? (answer as string[]) : []
