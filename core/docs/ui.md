@@ -452,10 +452,12 @@ Every error cmod catches for a mod, such as a listener that throws, goes to the 
 An error also shows as a toast when any of these holds:
 
 - it is critical: the mod's install or setup failed, its program stopped, or a button or hotkey the person pressed failed
-- the mod runs from its checkout, linked with [`cmod link`](commands.md#cmod-link) or loaded with `--plugin-dir`, because the person is its author
+- the mod runs from its checkout, linked with [`cmod link`](commands.md#cmod-link) or loaded with `--plugin-dir`, and the session works in that checkout or a folder inside it, because there the person is its author
 - `Show errors from installed mods` is on, in Settings on cmod's page under Preferences
 
 A cmod older than 4.3.0 keeps no Log, so there every error shows its toast.
+
+So a listener or handler that fails throws its error and lets cmod report it. A `mod.toast.error` for the same failure reaches no Log and shows in every session, so a broken config of a mod the person runs in 30 sessions shows in all 30.
 
 The error toast stays, with its buttons and the time on a line under the message, and `Hide` in the place of `✕`, at the right end of that line:
 
