@@ -52,6 +52,7 @@ async function serve(): Promise<number> {
   }
   const path = webPath(store)
   const server = serveWeb({ port: parseWebUi(await readJson(path), path)?.port ?? 0 })
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => void server.stop().finally(() => process.exit(0)))
   try {
     await writeAtomically(path, `${JSON.stringify({ port: server.port }, null, 2)}\n`)
     process.stdout.write(`127.0.0.1:${server.port}\n`)

@@ -241,6 +241,22 @@ test.concurrent('opening a replied session marks it read, done and unread move i
   expect(after.html).not.toContain('Replied')
 }, 30_000)
 
+test.concurrent('read marks pressed back to back reach the file in the order pressed, and cmod web serve stopped at once still writes the last', async () => {
+  const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.' } })
+  const first = await served(home)
+  const browser = await browsed(first.base)
+  const replied = await browser.showing('Replied 1')
+  await browser.press(replied, 'row:s1', 'data-press', { kind: 'press' })
+  const read = await browser.showing('Idle 1')
+  await browser.press(read, 'unread', 'data-press', { kind: 'press' })
+  await browser.press(read, 'done', 'data-press', { kind: 'press' })
+  browser.close()
+  first.serving.child.kill()
+  await first.serving.done
+
+  expect(JSON.parse(readFileSync(store(home, 'web-read.json'), 'utf8'))).toEqual({ s1: at(3) })
+}, 30_000)
+
 test.concurrent("a session's poll stays open its whole 15 seconds, past Bun's 10-second idle timeout, and then answers with nothing new", async () => {
   const { base, serving } = await served(await homeWith({}))
   await fetch(`${base}/api/sessions/one`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ about: { tabs: [], pages: [] } }) })

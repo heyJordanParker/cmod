@@ -225,10 +225,12 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
     return true
   }
 
+  let markWrites = Promise.resolve()
   const writeMarks = () => {
     const running = new Set(agents.keys())
     marks = new Map([...marks].filter(([id]) => running.has(id)))
-    void writeAtomically(marksPath, `${JSON.stringify(Object.fromEntries(marks), null, 2)}\n`).catch((error: unknown) => report(`kept the read marks only in memory, because ${marksPath} could not be written`, error))
+    const text = `${JSON.stringify(Object.fromEntries(marks), null, 2)}\n`
+    markWrites = markWrites.then(() => writeAtomically(marksPath, text)).catch((error: unknown) => void report(`kept the read marks only in memory, because ${marksPath} could not be written`, error))
   }
 
   const actionsOf = (stream: Stream): ScreenActions => {
@@ -611,6 +613,7 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
       registry.close()
       following.abort()
       await server.stop(true)
+      await markWrites
       db.close()
     },
   }
