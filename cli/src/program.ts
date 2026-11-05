@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { dataFolder, isObject, pluginName, programPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, instancePath, isObject, pluginName, programPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
@@ -9,11 +9,15 @@ import type { Plugin } from './plugin.js'
 import { capture, runStep } from './process.js'
 import type { Progress } from './progress.js'
 import { isLinked } from './settings.js'
-import { deleteSecrets, storePath, takeLock } from './store.js'
+import { deleteSecrets, isHolding, storePath, takeLock } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
 
+export type Instance = { readonly address: string; readonly pid: number; readonly started: string }
+
 export const programSteps = 3
+
+export const killMs = 5000
 
 const failedBuildLines = 5
 
@@ -180,7 +184,7 @@ async function storeBuild(program: Program, version: string, progress: Progress,
       await mkdir(dirname(target), { recursive: true })
       await copyFile(built as string, `${target}.${process.pid}.tmp`)
       await chmod(`${target}.${process.pid}.tmp`, 0o755)
-      await rename(`${target}.${process.pid}.tmp`, target)
+      await replacingProgram(program.name, () => rename(`${target}.${process.pid}.tmp`, target))
       return { target, isChanged: true }
     },
     environment,
@@ -276,6 +280,45 @@ export function programsFolder(): string {
 
 export async function linkDownloaded(name: string, path: string): Promise<void> {
   await placeLink(join(programsFolder(), name), path)
+  await stopCopies(name)
+}
+
+export async function stopCopy(pid: number, started: string): Promise<void> {
+  if (!(await isHolding(pid, started))) return
+  send(pid, 'SIGTERM')
+  const killAt = Date.now() + killMs
+  while (await isHolding(pid, started)) {
+    if (Date.now() >= killAt) send(pid, 'SIGKILL')
+    await Bun.sleep(100)
+  }
+}
+
+function send(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+  }
+}
+
+async function replacingProgram<Result>(name: string, replace: () => Promise<Result>): Promise<Result> {
+  const linked = join(programsFolder(), name)
+  const before = await stat(linked).catch(ifMissing(undefined))
+  try {
+    return await replace()
+  } finally {
+    const after = await stat(linked).catch(ifMissing(undefined))
+    if (after !== undefined && (before === undefined || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs)) await stopCopies(name)
+  }
+}
+
+async function stopCopies(name: string): Promise<void> {
+  const store = storeFolder(process.env)
+  for (const mod of await readdir(storePath('instances')).catch(ifMissing([]))) {
+    if (!pluginName.test(mod)) continue
+    const copy = (await readJson(instancePath(store, mod, name))) as Instance | undefined
+    if (copy !== undefined) await stopCopy(copy.pid, copy.started)
+  }
 }
 
 export async function removeData(name: string): Promise<void> {
@@ -329,7 +372,7 @@ export async function download(url: string, missing: string, onProgress: (receiv
 }
 
 async function linkProgram(name: string, target: string): Promise<string | undefined> {
-  await placeLink(join(programsFolder(), name), target)
+  await replacingProgram(name, () => placeLink(join(programsFolder(), name), target))
   const entry = commandEntry(name)
   if ((await lstat(entry).catch(ifMissing(undefined))) !== undefined && !(await isLinkedFromStore(entry, name))) return undefined
   await placeLink(entry, target)

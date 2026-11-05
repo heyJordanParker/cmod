@@ -26,9 +26,9 @@ then runs by its name, or builds it from the checkout's cli/ when cmod link
 loaded the mod, and links it into ~/.local/bin for a terminal,
 runs the mod's install step from its package.json "cmod" key,
 saves its uninstall step, binds the default combos its "cmod.hotkeys" declares in
-Claude Code's keybindings.json, records the mod as set up, and restarts each
-service of the computer that cmod program --service made for it, so the service
-runs the new program. A hotkey you
+Claude Code's keybindings.json, and records the mod as set up. Linking a new
+version of the program stops its running copy, as cmod program describes, so the
+copy's next holder, or its service, starts the new program. A hotkey you
 rebound keeps your combo, and a combo you already bound to something else
 stays yours, and the setup prints the line to add. An unchanged mod runs
 nothing. While a setup or teardown of the mod runs, another setup waits for it,

@@ -24,8 +24,8 @@ Watches each folder cmod link linked. Once a folder has had no change for 2
 seconds, it bundles its hooks module. When a changed file is one the program's
 build reads, a file in cli/ or one its JavaScript or TypeScript entry imports,
 it also builds the program cli/ declares, as cmod link does, into cmod's
-programs folder, where the running copy stops and the next one starts on the
-new build. A build that writes the same program leaves the file and its running
+programs folder, then stops the program's running copy, so the next one starts
+the new build. A build that writes the same program leaves the file and its running
 copy as they are. Once both build, each session
 whose project is that folder or inside it reloads its mods once, and every
 other session offers Reload. A change only to files git ignores, such as the

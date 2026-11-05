@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from 'node:fs'
-import { chmod, mkdir, rename, rm, symlink } from 'node:fs/promises'
+import { chmod, mkdir, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, environment, isGone, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
@@ -256,6 +256,82 @@ test.concurrent("a build that writes the same bytes keeps the held program's cop
   await holder.done
 }, 60000)
 
+const holderWithoutBuildCheck = `import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+const [file, program] = process.argv.slice(2)
+const startTime = (pid) => Bun.spawnSync(['/bin/ps', '-o', 'lstart=', '-p', String(pid)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } }).stdout.toString().trim()
+mkdirSync(file + '.lock', { recursive: true })
+writeFileSync(file + '.lock/' + process.pid, startTime(process.pid))
+const copy = Bun.spawn([program], { stdout: 'pipe' })
+const parent = process.ppid
+setInterval(() => {
+  try {
+    process.kill(parent, 0)
+  } catch {
+    copy.kill()
+  }
+}, 1000).unref()
+const reader = copy.stdout.getReader()
+let output = ''
+while (!output.includes('\\n')) output += new TextDecoder().decode((await reader.read()).value)
+writeFileSync(file, JSON.stringify({ address: output.split('\\n')[0], pid: copy.pid, started: startTime(copy.pid) }) + '\\n')
+await copy.exited
+rmSync(file, { force: true })
+rmSync(file + '.lock', { recursive: true, force: true })
+`
+
+async function startHolderWithoutBuildCheck(home: string, instance: string, program: string): Promise<Bun.Subprocess> {
+  await writeFiles(home, { 'holder-without-build-check.mjs': holderWithoutBuildCheck })
+  const holder = Bun.spawn([process.execPath, join(home, 'holder-without-build-check.mjs'), instance, join(home, '.local/share/cmod/programs', program)], { cwd: home, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  await until(() => existsSync(instance))
+  return holder
+}
+
+test.concurrent("a build that changes the held program's file stops the copy of a holder that never checks for a new build, as an older cmod program's holder does, and the waiting holder starts the new build", async () => {
+  const { home, checkout } = await linkedServerHome()
+  const old = await startHolderWithoutBuildCheck(home, join(instances(home), 'linked-server.json'), 'linked-server')
+  const [first] = serverIds(home, 'start')
+  const waiting = startCmod(home, 'program', 'tools', '--', 'linked-server')
+  await waiting.waitForOutput(`unix:${home}/${first}.sock`)
+
+  await writeFiles(home, { 'server-build': fakeServer.replace('.sock', '-rebuilt.sock') })
+  expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
+  await until(() => serverIds(home, 'start').length === 2)
+  const next = serverIds(home, 'start')[1] as string
+
+  await waiting.waitForOutput(`unix:${home}/${next}-rebuilt.sock`)
+  expect(await old.exited).toBe(0)
+  expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${next}`])
+  waiting.child.kill()
+  await waiting.done
+}, 60000)
+
+test.concurrent("cmod download of a held program, which an install step runs, stops the copy of a holder with no build check, and the waiting holder starts the downloaded file", async () => {
+  const home = await serverHome()
+  const builds: Record<string, string> = { first: fakeServer, second: fakeServer.replace('.sock', '-downloaded.sock') }
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: (request) => new Response(builds[new URL(request.url).pathname.slice(1)]) })
+  const download = (build: string) =>
+    cmodWith(home, { CMOD_DATA: join(home, '.local/share/cmod/data/tools') }, 'download', 'fake-server', `${process.platform}-${process.arch}`, `${server.url}${build}`, new Bun.CryptoHasher('sha256').update(builds[build] as string).digest('hex'))
+  try {
+    expect((await download('first')).exitCode).toBe(0)
+    const old = await startHolderWithoutBuildCheck(home, join(instances(home), 'fake-server.json'), 'fake-server')
+    const [first] = serverIds(home, 'start')
+    const waiting = startCmod(home, 'program', 'tools', '--', 'fake-server')
+    await waiting.waitForOutput(`unix:${home}/${first}.sock`)
+
+    expect((await download('second')).exitCode).toBe(0)
+    await until(() => serverIds(home, 'start').length === 2)
+    const next = serverIds(home, 'start')[1] as string
+
+    await waiting.waitForOutput(`unix:${home}/${next}-downloaded.sock`)
+    expect(await old.exited).toBe(0)
+    expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${next}`])
+    waiting.child.kill()
+    await waiting.done
+  } finally {
+    await server.stop(true)
+  }
+}, 60000)
+
 const uid = process.getuid?.() ?? 0
 
 const isMac = process.platform === 'darwin'
@@ -294,10 +370,18 @@ function listings(home: string): string[] {
   return existsSync(join(home, 'listings')) ? readFileSync(join(home, 'listings'), 'utf8').trim().split('\n') : []
 }
 
-async function replaceProgram(home: string, text: string): Promise<void> {
-  const program = join(home, '.local/share/cmod/programs/fake-server')
-  await writeExecutables(home, { '.local/share/cmod/programs/fake-server.next': text })
-  await rename(`${program}.next`, program)
+async function versionedServerHome(install = '#!/bin/sh\n'): Promise<{ home: string; root: string; instance: string }> {
+  const home = await serviceHome()
+  const root = join(home, 'demo')
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { program: 'fake-server', install: './setup/install.sh' } }),
+    'setup/install.sh': install,
+  })
+  await writeExecutables(home, { '.local/share/cmod/bin/fake-server/0.1.0/fake-server': fakeServer, '.local/share/cmod/bin/fake-server/0.2.0/fake-server': fakeServer.replace('.sock', '-0.2.0.sock') })
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  return { home, root, instance: join(home, '.local/share/cmod/instances/demo/fake-server.json') }
 }
 
 test.concurrent("cmod program --service writes a launchd agent on macOS, which sends standard error to the service's log in the cmod store, and a systemd user service on Linux, that runs cmod program with the program's command, home, and a restart on every exit, loads it, and prints held once the service holds the lock", async () => {
@@ -505,25 +589,57 @@ test.concurrent("a cmod program --service whose environment changed rewrites the
 }, 60000)
 
 test.concurrent("cmod setup of a new version of a mod calls no service manager, and the service's holder restarts the copy once on the new program", async () => {
-  const home = await serviceHome()
-  const root = await createMod(home)
-  const instance = join(home, '.local/share/cmod/instances/demo/fake-server.json')
-  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  const { home, root, instance } = await versionedServerHome()
   expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
   await until(() => serverIds(home, 'start').length === 1)
   const [old] = serverIds(home, 'start')
-  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
   const loaded = serviceCalls(home).length
 
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
-  await replaceProgram(home, fakeServer.replace('.sock', '-new.sock'))
   await until(() => serverIds(home, 'start').length === 2)
   const next = serverIds(home, 'start')[1] as string
   await until(() => existsSync(instance))
 
   expect(serverLog(home)).toEqual([`start ${old}`, `stop ${old}`, `start ${next}`])
-  expect(JSON.parse(readFileSync(instance, 'utf8'))).toMatchObject({ address: `unix:${home}/${next}-new.sock`, pid: Number(next) })
+  expect(JSON.parse(readFileSync(instance, 'utf8'))).toMatchObject({ address: `unix:${home}/${next}-0.2.0.sock`, pid: Number(next) })
   expect(serviceCalls(home).slice(loaded)).toEqual([])
+}, 60000)
+
+test.concurrent('cmod setup of a new version stops the copy of the old version that a holder with no build check runs, and the waiting holder starts the new version', async () => {
+  const { home, root, instance } = await versionedServerHome()
+  const old = await startHolderWithoutBuildCheck(home, instance, 'fake-server')
+  const [first] = serverIds(home, 'start')
+  const waiting = startCmod(home, 'program', 'demo', '--', 'fake-server')
+  await waiting.waitForOutput(`unix:${home}/${first}.sock`)
+
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  await until(() => serverIds(home, 'start').length === 2)
+  const next = serverIds(home, 'start')[1] as string
+
+  await waiting.waitForOutput(`unix:${home}/${next}-0.2.0.sock`)
+  expect(await old.exited).toBe(0)
+  expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${next}`])
+  waiting.child.kill()
+  await waiting.done
+}, 60000)
+
+test.concurrent("a new version whose install step fails links the old program back and stops the new version's copy, so the service runs the old program again", async () => {
+  const failsOnceTheNewCopyRuns = `#!/bin/sh
+[ "$CMOD_VERSION" = 0.2.0 ] || exit 0
+tries=0
+while [ $tries -lt 200 ] && ! grep -q 0.2.0.sock "$HOME/.local/share/cmod/instances/demo/fake-server.json" 2>/dev/null; do sleep 0.1; tries=$((tries + 1)); done
+exit 1
+`
+  const { home, root, instance } = await versionedServerHome(failsOnceTheNewCopyRuns)
+  expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
+  await until(() => existsSync(instance))
+
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(1)
+  await until(() => serverIds(home, 'start').length === 3 && existsSync(instance))
+
+  const [first, failed, restored] = serverIds(home, 'start')
+  expect(serverLog(home)).toEqual([`start ${first}`, `stop ${first}`, `start ${failed}`, `stop ${failed}`, `start ${restored}`])
+  expect(JSON.parse(readFileSync(instance, 'utf8'))).toMatchObject({ address: `unix:${home}/${restored}.sock`, pid: Number(restored) })
 }, 60000)
 
 test.concurrent("a build of a linked checkout that changes a service's program restarts the service on the new build", async () => {
