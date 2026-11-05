@@ -177,6 +177,21 @@ test.concurrent('a second take of a lock in the same process waits until the fir
   expect(existsSync(lock)).toBe(false)
 })
 
+test.concurrent('four processes taking one lock over and over never take it from each other', async () => {
+  const home = await temporaryHome()
+  const lock = join(home, '.local/share/cmod/builds/demo.lock')
+  const log = join(home, 'log')
+  await writeFiles(home, {
+    'taker.ts': `import { appendFileSync } from 'node:fs'\nimport { takeLock } from ${JSON.stringify(join(import.meta.dir, '../src/store.ts'))}\nfor (let round = 0; round < 500; round += 1) {\n  const held = await takeLock(${JSON.stringify(lock)})\n  appendFileSync(${JSON.stringify(log)}, 'in\\n')\n  await Bun.sleep(1)\n  appendFileSync(${JSON.stringify(log)}, 'out\\n')\n  await held[Symbol.asyncDispose]()\n}\n`,
+  })
+  const takers = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, join(home, 'taker.ts')], { env: { ...process.env, HOME: home }, stderr: 'pipe' }))
+
+  const results = await Promise.all(takers.map(async (taker) => ({ exitCode: await taker.exited, stderr: await new Response(taker.stderr).text() })))
+
+  expect(results).toEqual(takers.map(() => ({ exitCode: 0, stderr: '' })))
+  expect((await readFile(log, 'utf8')).replaceAll('in\nout\n', '')).toBe('')
+}, 30_000)
+
 test.concurrent('a take that does not wait gets nothing while its own process holds the lock', async () => {
   const lock = join(await temporaryHome(), '.local/share/cmod/watch.lock')
   const held = await takeLock(lock)

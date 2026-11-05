@@ -90,7 +90,9 @@ async function placeOnceFree(path: string, cancel: AbortSignal | undefined): Pro
     })
     const live: string[] = []
     for (const holder of holders) {
-      if (await isHolding(Number(holder), await readText(join(path, holder)))) live.push(holder)
+      const started = await readText(join(path, holder))
+      if (started === undefined) continue
+      if (await isHolding(Number(holder), started)) live.push(holder)
       else await rm(join(path, holder), { force: true })
     }
     if (live.length === 0) continue
