@@ -186,7 +186,7 @@ test.concurrent('four processes taking one lock over and over never take it from
   })
   const takers = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, join(home, 'taker.ts')], { env: { ...process.env, HOME: home }, stderr: 'pipe' }))
 
-  const results = await Promise.all(takers.map(async (taker) => ({ exitCode: await taker.exited, stderr: await new Response(taker.stderr).text() })))
+  const results = await Promise.all(takers.map(async (taker) => ({ exitCode: await taker.exited, stderr: (await new Response(taker.stderr).text()).replace(/^Waiting for .+, which process \d+ holds\.\n/gm, '') })))
 
   expect(results).toEqual(takers.map(() => ({ exitCode: 0, stderr: '' })))
   expect((await readFile(log, 'utf8')).replaceAll('in\nout\n', '')).toBe('')
