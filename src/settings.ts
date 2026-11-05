@@ -55,6 +55,7 @@ export type ModView = {
 
 const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
+  servesWebUi: 'Show the Sidebar in your browser',
 } satisfies Partial<Record<keyof Preferences, string>>
 
 const pageSection = 'page:'
@@ -160,7 +161,7 @@ export function failureLog<State extends SettingsState>(mod: Mod<State>): (failu
   }
 }
 
-async function writePreference(mod: Mod<object>, key: keyof Preferences, isOn: boolean): Promise<void> {
+export async function writePreference(mod: Mod<object>, key: keyof Preferences, isOn: boolean): Promise<void> {
   const store = await storeOf(mod)
   const path = preferencesPath(store)
   const saved = await readJson(path)

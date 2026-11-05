@@ -15,6 +15,7 @@ import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime
 import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
+import { webUi } from './web.js'
 
 export type CmodPluginState = {
   readonly global: { installedPlugins: readonly string[] | null; areHotkeysBound: boolean; pluginsCheckedAt: readonly [number | null, number | null] | null }
@@ -102,7 +103,8 @@ export const cmodPlugin = defineMod({
     unloaded.clear()
 
     addClaudeTools(mod)
-    const shown = sidebar(mod, settingsView(mod))
+    const shown = sidebar(mod, settingsView(mod), (): Promise<void> => web.openInBrowser())
+    const web = webUi(mod, shown)
     mod.hotkeys.sidebar.onPress(() => shown.toggle())
     mod.hotkeys.settings.onPress(() => shown.toggleSettings())
 
@@ -376,7 +378,7 @@ export const cmodPlugin = defineMod({
       checkPlugins({ isForced: false })
       if (path === pluginsFile) return checkChanges()
       void followBuildFailures()
-      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod)])
+      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod).then(web.serve)])
     })
     settings.beforeFileChange({ source: 'user' }, () => void mod.after(reloadDelayMs, checkChanges))
     sessions.current.onPrompt(() => checkChanges())

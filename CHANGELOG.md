@@ -4,6 +4,17 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.11.0] - 2026-11-05
+
+### Added
+- Run every Claude Code session on your computer from one page in your browser. `open in browser` on the Sidebar's key bar, or `cmod web`, opens `http://127.0.0.1:<port>/`, which lists every running session of every project under Needs you (a permission prompt, a question, or a turn that failed or was stopped), Replied, Working, and Idle, each with why it is there, such as `Wants to run Bash: git init` or the tool it runs now. Open a session to read its conversation, type a prompt that runs in that session as yours, or stop its turn, which leaves a command Claude ran running in the session's background and says so, and use the tabs beside it for its Dashboard, pages, and Settings. `j` and `k` move, `Enter` opens, `Esc` goes back, `e` marks a reply done, and `u` marks it unread. A permission prompt or a question is still answered in the session's terminal. The page needs no sign-in, and answers only on 127.0.0.1. `open in browser` turns the page on, and Settings turns it off, under cmod, Preferences, `Show the Sidebar in your browser`.
+
+### Fixed
+- A program that runs as a service can run `cmod` commands that need Claude Code, such as `cmod options`. Before, they failed with `claude is not on PATH`, because a service has neither the session's `PATH` nor Claude Code as its parent. The service now names the Claude Code of the session that wrote it, by the path Claude Code's updates keep, such as `~/.local/bin/claude`, so a Claude Code update neither restarts the service nor leaves it pointing at a deleted version.
+- A service that the computer took but could not start is removed as `cmod remove` removes it, with its unit, its systemd enable link, and its record, and the program fails with the service manager's error. Before, cmod ran the program in the session instead, and on Linux left a dangling link in `~/.config/systemd/user/default.target.wants`. A computer that does not take the service at all still runs the program while a session is open.
+- A service whose program never starts within 15 seconds is removed the same way, so a broken service no longer restarts at every login. Sessions that start a mod at the same moment, as every open session does after an update, now write and load its service one at a time, and wait for `cmod setup` of the mod.
+- A service that fails to start on macOS says where its error is. Its program's standard error now goes to `~/.local/share/cmod/services/<mod>/<program>.log`, which stays after cmod removes the failed service, and the error names that file. Before, it named `launchctl print`, which finds nothing once the service is removed, and the program's own error was lost. Once the log passes 1 MiB, it keeps only its newest 512 KiB, so a program that fails at every restart never fills the disk. A program that exits at once now counts as failing to start. Before, a service could report it started because its program held cmod's lock for a moment before it exited. Linux keeps the program's output in `journalctl` as before.
+
 ## [5.10.0] - 2026-11-05
 
 ### Changed
