@@ -1,6 +1,6 @@
 {
   "name": "@cmodjs/cli",
-  "version": "5.12.0",
+  "version": "5.12.1",
   "description": "Claude Mod Manager: install, try, build, check, and publish Claude Code mods.",
   "license": "MIT",
   "type": "module",

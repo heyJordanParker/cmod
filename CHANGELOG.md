@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.12.1] - 2026-11-05
+
+### Fixed
+- A mod's `singleInstance` or `isService` program now restarts on a new version or a new build of its linked checkout within a few seconds, whichever cmod started its running copy. In 5.12.0 only a copy started by cmod 5.12.0 restarted, so a session open since an older cmod kept the old server running until it ended. `cmod setup`, `cmod link`, `cmod watch`, and `cmod download` now stop the running copy themselves once they change the program, and a failed install step that puts the old version back stops the new version's copy the same way. A build that writes the same bytes still restarts nothing.
+
 ## [5.12.0] - 2026-11-05
 
 ### Fixed
