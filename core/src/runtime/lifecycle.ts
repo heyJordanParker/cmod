@@ -733,7 +733,13 @@ export function createLifecycle<State extends object, Declared extends Options =
 async function createMod<State extends object, Declared extends Options>(definition: ModDefinition<State, string, Declared>, runtime: ModRuntime): Promise<ActiveMod<State, Declared>> {
   const { router, toaster } = runtime
   const report = (failure: Failure) => void toaster.fail(failure)
-  const claude = answeringOwnCalls(withBareRefusals(runtime.claude), router)
+  const redraws = new Set<() => void>()
+  const calling = answeringOwnCalls(withBareRefusals(runtime.claude), router)
+  const invalidate: Claude['ui']['invalidate'] = (event) => {
+    calling.ui.invalidate(event)
+    if (event === 'ui.render') for (const redraw of redraws) redraw()
+  }
+  const claude: Claude = { ...calling, ui: { ...calling.ui, invalidate } }
   const added: string[] = []
   const announce = (feature: string) => {
     added.push(feature)
@@ -1090,6 +1096,10 @@ async function createMod<State extends object, Declared extends Options>(definit
     answerInput: area.answerInput,
     spawnCmod: (args, env) => spawnCmod(claude, args, session, env),
     watches,
+    onRedraw(listener) {
+      redraws.add(listener)
+      return { remove: () => void redraws.delete(listener) }
+    },
     ...(widgets === undefined ? {} : { widgets }),
     ...(pages === undefined ? {} : { pages }),
   })

@@ -4,7 +4,7 @@ import { findProjectScope, type Workspace } from '../../../src/jobs/permissions/
 import type { Call } from '../../../src/utils/call-effects.js'
 import { fakeFiles } from '../../../src/testing/fake-files.js'
 
-const home = '/Users/jordan'
+const home = '/Users/me'
 const root = '/work/dent'
 const pluginRoot = `${root}/.claude/skills/dent`
 const files = {
@@ -67,7 +67,7 @@ describe('findProjectScope', () => {
 })
 
 describe('a project-scope plugin acts only on its own repository', () => {
-  test("a path in <root>/worktrees/design/Domain.md matches write: 'Domain.md' relative to the design worktree, and /Users/jordan/dotfiles/Domain.md does not", async () => {
+  test("a path in <root>/worktrees/design/Domain.md matches write: 'Domain.md' relative to the design worktree, and ~/dotfiles/Domain.md does not", async () => {
     const rules: PermissionRules<null> = { deny: [{ write: 'Domain.md' }] }
     const workspace = await dentWorkspace()
     expect(await decidePermission(rules, edit(`${root}/worktrees/design/Domain.md`), workspace, null, (run) => Promise.resolve(run()))).toEqual({ decision: 'deny' })

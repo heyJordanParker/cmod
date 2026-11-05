@@ -1,8 +1,9 @@
 import { readdir, rm, rmdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { isObject, serviceFolder, servicePath, storeFolder } from '@cmodjs/core/src/records.js'
+import { isObject, serviceFolder, serviceLogPath, servicePath, storeFolder } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { home, ifMissing, readJson, readText, writeAtomically } from './files.js'
+import { claudeCodeLauncher } from './claude.js'
+import { home, ifMissing, readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture, run } from './process.js'
 import { programsFolder } from './program.js'
 
@@ -10,11 +11,12 @@ type Service = { readonly label: string; readonly unit: string }
 
 type Manager = {
   unit(label: string): string
-  text(mod: string, executable: string, label: string, argv: readonly string[], environment: Readonly<Record<string, string>>): string
+  text(mod: string, executable: string, label: string, argv: readonly string[], environment: Readonly<Record<string, string>>, log: string): string
   start(label: string, unit: string, isChanged: boolean): Promise<void>
   restart(label: string): Promise<void>
   remove(label: string, unit: string): Promise<void>
-  status(label: string): string
+  hasTaken(label: string): Promise<boolean>
+  status(label: string, log: string): string
 }
 
 const passedVariables = ['XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR']
@@ -26,16 +28,22 @@ export async function startService(mod: string, command: readonly string[], vari
   const label = `com.claudemodmanager.${mod}.${executable}`
   const unit = manager.unit(label)
   const record = servicePath(storeFolder(process.env), mod, executable)
+  const log = serviceLogPath(storeFolder(process.env), mod, executable)
   const passed = Object.fromEntries([...passedVariables, ...variables].flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])))
-  const environment = { HOME: home(), PATH: [programsFolder(), ...systemFolders].join(':'), ...passed }
-  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, '--', ...command], environment)
+  const launcher = claudeCodeLauncher()
+  const environment = { HOME: home(), PATH: [programsFolder(), ...systemFolders].join(':'), ...(launcher === undefined ? {} : { CLAUDE_CODE_EXECPATH: launcher }), ...passed }
+  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, '--', ...command], environment, log)
   try {
     await writeAtomically(record, `${JSON.stringify({ label, unit } satisfies Service)}\n`)
     const isChanged = (await readText(unit)) !== text
     if (isChanged) await writeAtomically(unit, text, { mode: 0o600 })
     await manager.start(label, unit, isChanged)
-    return { label, status: manager.status(label) }
+    return { label, status: manager.status(label, log) }
   } catch (error) {
+    if (await manager.hasTaken(label)) {
+      await removeService(mod, executable, { keepsLog: true })
+      throw new Error(`the ${label} service did not start ${executable}: ${messageOf(error)}\ncmod removed the service. ${manager.status(label, log)} shows why.`)
+    }
     await rm(unit, { force: true })
     await removeRecord(record)
     process.stderr.write(`cmod program: ${executable} of ${mod} runs only while a session is open, because this computer did not take it as a service: ${messageOf(error)}\n`)
@@ -49,11 +57,12 @@ export async function restartServices(mod: string): Promise<string[]> {
   return services.map(({ name }) => name)
 }
 
-export async function removeService(mod: string, program: string): Promise<void> {
+export async function removeService(mod: string, program: string, { keepsLog = false }: { keepsLog?: boolean } = {}): Promise<void> {
   const record = servicePath(storeFolder(process.env), mod, program)
   const service = await readService(record)
   if (service === undefined) return
   await manager.remove(service.label, service.unit)
+  if (!keepsLog) await rm(serviceLogPath(storeFolder(process.env), mod, program), { force: true })
   await removeRecord(record)
 }
 
@@ -108,7 +117,7 @@ const xml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt
 
 const launchd: Manager = {
   unit: (label) => join(home(), 'Library', 'LaunchAgents', `${label}.plist`),
-  text: (_mod, _executable, label, argv, environment) =>
+  text: (_mod, _executable, label, argv, environment, log) =>
     [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -124,6 +133,8 @@ const launchd: Manager = {
       '  <dict>',
       ...Object.entries(environment).flatMap(([name, value]) => [`    <key>${xml(name)}</key>`, `    <string>${xml(value)}</string>`]),
       '  </dict>',
+      '  <key>StandardErrorPath</key>',
+      `  <string>${xml(log)}</string>`,
       '  <key>RunAtLoad</key>',
       '  <true/>',
       '  <key>KeepAlive</key>',
@@ -145,7 +156,8 @@ const launchd: Manager = {
     await bootOut(label)
     await rm(unit, { force: true })
   },
-  status: (label) => `launchctl print ${domain()}/${label}`,
+  hasTaken: isLoadedInLaunchd,
+  status: (_label, log) => tilde(log),
 }
 
 const quoted = (text: string) => `"${text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n').replaceAll('%', '%%')}"`
@@ -184,6 +196,7 @@ const systemd: Manager = {
     await rm(unit, { force: true })
     await run(['systemctl', '--user', 'daemon-reload'])
   },
+  hasTaken: async (label) => Bun.which('systemctl') !== null && (await capture(['systemctl', '--user', 'is-enabled', '--quiet', `${label}.service`])).exitCode === 0,
   status: (label) => `journalctl --user -u ${label}.service`,
 }
 

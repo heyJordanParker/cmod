@@ -111,20 +111,67 @@ export function foldersIn(scope: Pick<Scope, 'project' | 'everyProject'>): strin
   return existsSync(projectsFolder()) ? readdirSync(projectsFolder(), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(projectsFolder(), entry.name)) : []
 }
 
-function runningFolder(): string {
+export function runningFolder(): string {
   return join(configRoot(), 'sessions')
 }
 
-function runningEntries(): { readonly session: string; readonly cwd: string }[] {
+export type RunningEntry = { readonly session: string; readonly cwd: string; readonly pid: number; readonly entrypoint: string; readonly name?: string; readonly status?: string; readonly waitingFor?: string }
+
+type RegistryRecord = { readonly changedAt: bigint; readonly size: bigint; readonly entry: RunningEntry | undefined; readonly procStart: string | undefined }
+
+const registryRecords = new Map<string, RegistryRecord>()
+let startedAsRecorded = new Map<string, boolean>()
+
+export function runningEntries(): RunningEntry[] {
   const folder = runningFolder()
   if (!existsSync(folder)) return []
-  const running: { session: string; cwd: string }[] = []
-  for (const name of readdirSync(folder)) {
-    if (!name.endsWith('.json')) continue
-    const entry = parsedRow(readFileSync(join(folder, name), 'utf8'))
-    if (typeof entry?.['pid'] === 'number' && typeof entry['sessionId'] === 'string' && isAlive(entry['pid'])) running.push({ session: entry['sessionId'], cwd: typeof entry['cwd'] === 'string' ? entry['cwd'] : '' })
+  const files = readdirSync(folder).filter((name) => name.endsWith('.json'))
+  for (const name of registryRecords.keys()) if (!files.includes(name)) registryRecords.delete(name)
+  const alive = files.flatMap((name) => {
+    const record = registryRecordOf(join(folder, name), registryRecords.get(name))
+    registryRecords.set(name, record)
+    return record.entry !== undefined && isAlive(record.entry.pid) ? [{ entry: record.entry, procStart: record.procStart }] : []
+  })
+  const pairOf = ({ entry, procStart }: { readonly entry: RunningEntry; readonly procStart: string | undefined }) => `${entry.pid} ${procStart}`
+  const started = startTimes(alive.flatMap((record) => (record.procStart === undefined || startedAsRecorded.has(pairOf(record)) ? [] : [record.entry.pid])))
+  const checked = new Map(alive.flatMap((record) => (record.procStart === undefined ? [] : [[pairOf(record), startedAsRecorded.get(pairOf(record)) ?? started.get(record.entry.pid) === record.procStart] as const])))
+  startedAsRecorded = checked
+  return alive.filter((record) => record.procStart === undefined || checked.get(pairOf(record)) === true).map(({ entry }) => entry)
+}
+
+function registryRecordOf(path: string, known: RegistryRecord | undefined): RegistryRecord {
+  const { mtimeNs, size } = statSync(path, { bigint: true })
+  if (known?.changedAt === mtimeNs && known.size === size) return known
+  const row = parsedRow(readFileSync(path, 'utf8'))
+  if (typeof row?.['pid'] !== 'number' || typeof row['sessionId'] !== 'string') return { changedAt: mtimeNs, size, entry: undefined, procStart: undefined }
+  return {
+    changedAt: mtimeNs,
+    size,
+    entry: {
+      session: row['sessionId'],
+      cwd: typeof row['cwd'] === 'string' ? row['cwd'] : '',
+      pid: row['pid'],
+      entrypoint: typeof row['entrypoint'] === 'string' ? row['entrypoint'] : '',
+      ...(typeof row['name'] === 'string' && row['name'] !== '' ? { name: row['name'] } : {}),
+      ...(typeof row['status'] === 'string' ? { status: row['status'] } : {}),
+      ...(typeof row['waitingFor'] === 'string' ? { waitingFor: row['waitingFor'] } : {}),
+    },
+    procStart: typeof row['procStart'] === 'string' ? row['procStart'].replace(/\s+/g, ' ') : undefined,
   }
-  return running
+}
+
+function startTimes(pids: readonly number[]): Map<number, string> {
+  if (pids.length === 0 || !existsSync('/bin/ps')) return new Map()
+  const listed = Bun.spawnSync(['/bin/ps', '-o', 'pid=,lstart=', '-p', [...new Set(pids)].join(',')], { cwd: '/', env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } })
+  return new Map(
+    listed.stdout
+      .toString()
+      .split('\n')
+      .flatMap((line) => {
+        const [, pid, started] = /^\s*(\d+)\s+(.+?)\s*$/.exec(line) ?? []
+        return pid === undefined || started === undefined ? [] : [[Number(pid), started.replace(/\s+/g, ' ')] as const]
+      }),
+  )
 }
 
 export function runningSessions(): Set<string> {
@@ -169,6 +216,10 @@ function taskTranscripts(main: Transcript): Transcript[] {
 function sessionFolder(session: string, project: string): string | undefined {
   const preferred = folderOf(project)
   return [preferred, ...foldersIn({ project, everyProject: true }).filter((folder) => folder !== preferred)].find((each) => existsSync(join(each, `${session}.jsonl`)))
+}
+
+export function hasTranscript(session: string, project: string): boolean {
+  return sessionFolder(session, project) !== undefined
 }
 
 export function sessionTranscripts(session: string, project: string): Transcript[] {

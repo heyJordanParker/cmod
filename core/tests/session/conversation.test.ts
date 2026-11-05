@@ -144,7 +144,7 @@ test('an instruction file Claude Code adds as it runs names its path, with or wi
   expect(instructionPathOf('Contents of /work/src/cart/CLAUDE.md:\n\nUse tabs.')).toBe('/work/src/cart/CLAUDE.md')
   expect(instructionPathOf('Contents of /work/rules/code.md (project instructions, checked into the codebase):\n\nUse tabs.')).toBe('/work/rules/code.md')
   expect(instructionPathOf('<system-reminder>\nContents of /work/src/CLAUDE.md:\n\nUse tabs.')).toBe('/work/src/CLAUDE.md')
-  expect(instructionPathOf('Contents of /Users/j/Dropbox (Personal)/app/CLAUDE.md (project instructions, checked into the codebase):\n\nUse tabs.')).toBe('/Users/j/Dropbox (Personal)/app/CLAUDE.md')
+  expect(instructionPathOf('Contents of /Users/me/Dropbox (Personal)/app/CLAUDE.md (project instructions, checked into the codebase):\n\nUse tabs.')).toBe('/Users/me/Dropbox (Personal)/app/CLAUDE.md')
 })
 
 test('a slash command reads as the command a person typed, and its local output adds no message', () => {

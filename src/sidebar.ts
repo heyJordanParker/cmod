@@ -4,6 +4,7 @@ import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { installPage } from '../node_modules/@cmodjs/core/runtime/installer.js'
 import type { PageRequest, SettingsTab } from '../node_modules/@cmodjs/core/runtime/ui.js'
+import type { SidebarTab } from '../node_modules/@cmodjs/core/runtime/web.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
@@ -50,10 +51,11 @@ export type SettingsView = {
 
 const keyOf = ({ mod, page }: Pick<OpenPage, 'mod' | 'page'>) => `${mod}/${page}`
 
-export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void) => SettingsView) {
+export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void) => SettingsView, openInBrowser: () => Promise<void>) {
   const { pages, widgets } = engineOf(mod)
   if (pages === undefined || widgets === undefined) throw new Error('cmod draws no Sidebar, because the cmod plugin started without its pages and widgets.')
   const told = new Set<string>()
+  let inBrowser: ReadonlySet<string> = new Set()
 
   const titleOf = (open: OpenPage) => (open.page === installPage ? `Install ${open.mod}` : (pages.declared().find((each) => each.mod === open.mod)?.pages.find((page) => page.id === open.page)?.title ?? open.page))
 
@@ -64,8 +66,9 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     const mods = new Set([...told, ...open.map((each) => each.mod), ...(inSettings === undefined ? [] : [inSettings.mod])])
     for (const name of mods) {
       const own = open.filter((each) => each.mod === name)
-      const shownPage = inSettings?.mod === name ? inSettings.page : isShown ? (own.find((each) => keyOf(each) === shown)?.page ?? null) : null
-      pages.tell(name, { open: own.map(({ page, params }) => ({ id: page, params })), shown: shownPage, isFocused: shownPage !== null && pane.isFocused })
+      const inPane = inSettings?.mod === name ? inSettings.page : isShown ? own.find((each) => keyOf(each) === shown)?.page : undefined
+      const shownPage = inPane ?? own.find((each) => inBrowser.has(keyOf(each)))?.page ?? null
+      pages.tell(name, { open: own.map(({ page, params }) => ({ id: page, params })), shown: shownPage, isFocused: inPane !== undefined && pane.isFocused })
       if (own.length === 0 && shownPage === null) told.delete(name)
       else told.add(name)
     }
@@ -130,16 +133,26 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       ],
     })
 
-  const body = (columns: number, isFocused: boolean): RenderElement => {
-    const { pages: open, shown } = mod.state.session
-    if (shown === settingsTab) return view.draw(columns, isFocused)
-    const page = open.find((each) => keyOf(each) === shown)
+  const bodyOf = (tab: string, columns: number, isFocused: boolean): RenderElement => {
+    if (tab === settingsTab) return view.draw(columns, isFocused)
+    const page = mod.state.session.pages.find((each) => keyOf(each) === tab)
     if (page === undefined) {
       const rows = widgets.rows(Dashboard, columns - panelColumns)
       return Panel({ title: 'Widgets', children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: 'column', children: rows }) })
     }
     return Panel({ title: page.mod, children: pages.element(page.mod, page.page, page.params, columns - panelColumns, isFocused) ?? Text({ dimColor: true, children: `Drawing ${titleOf(page)}…` }) })
   }
+
+  const tabViews = (shownTab: string): { readonly left: readonly TabView[]; readonly right: TabView } => ({
+    left: [
+      { key: dashboardTab, label: 'Dashboard', hotkey: '0', isShown: shownTab === dashboardTab, onClose: undefined },
+      ...mod.state.session.pages.map((each, index): TabView => {
+        const key = keyOf(each)
+        return { key, label: titleOf(each), hotkey: index < pageHotkeys ? `${index + 1}` : undefined, isShown: key === shownTab, onClose: () => void closePage(key) }
+      }),
+    ],
+    right: { key: settingsTab, label: 'Settings', hotkey: '9', isShown: shownTab === settingsTab, onClose: undefined },
+  })
 
   const pane: Pane = mod.panes.add({
     id: 'sidebar',
@@ -149,14 +162,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       const { pages: open, shown } = current.state.session
       const isPageShown = open.some((each) => keyOf(each) === shown)
       const shownTab = shown === settingsTab || isPageShown ? shown : dashboardTab
-      const left: TabView[] = [
-        { key: dashboardTab, label: 'Dashboard', hotkey: '0', isShown: shownTab === dashboardTab, onClose: undefined },
-        ...open.map((each, index): TabView => {
-          const key = keyOf(each)
-          return { key, label: titleOf(each), hotkey: index < pageHotkeys ? `${index + 1}` : undefined, isShown: key === shownTab, onClose: () => void closePage(key) }
-        }),
-      ]
-      const right: TabView = { key: settingsTab, label: 'Settings', hotkey: '9', isShown: shownTab === settingsTab, onClose: undefined }
+      const { left, right } = tabViews(shownTab)
       const tabBar = Box({
         flexDirection: 'column',
         children: [
@@ -170,13 +176,13 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         paddingX: 1,
         columnGap: 2,
         flexWrap: 'wrap',
-        children: (isFocused ? focusedKeys : unfocusedKeys).map(([keys, does]) => Text({ wrap: 'truncate-end', children: [keys, Text({ dimColor: true, children: ` ${does}` })] })),
+        children: [...(isFocused ? focusedKeys : unfocusedKeys).map(([keys, does]) => Text({ wrap: 'truncate-end', children: [keys, Text({ dimColor: true, children: ` ${does}` })] })), Button({ plain: true, key: 'open-in-browser', label: 'open in browser', onPress: () => void openInBrowser() })],
       })
       return Box({
         flexDirection: 'column',
         gap: 1,
         ...(placement === 'dock' ? { minHeight: scroll.bodyRows } : {}),
-        children: [tabBar, Box({ flexDirection: 'column', flexGrow: 1, paddingX: 1, children: body(bodyColumns - 2, isFocused) }), keyBar],
+        children: [tabBar, Box({ flexDirection: 'column', flexGrow: 1, paddingX: 1, children: bodyOf(shownTab, bodyColumns - 2, isFocused) }), keyBar],
       })
     },
     onClose: () => tell(),
@@ -186,6 +192,11 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
 
   const placeOf = (name: string, page: string) => pages.declared().find((each) => each.mod === name)?.pages.find((each) => each.id === page)?.place
 
+  const addTab = (opened: OpenPage) => {
+    const open = mod.state.session.pages
+    mod.state.session.pages = open.some((each) => keyOf(each) === keyOf(opened)) ? open.map((each) => (keyOf(each) === keyOf(opened) ? opened : each)) : [...open, opened]
+  }
+
   const apply = async (name: string, requests: readonly PageRequest[]) => {
     for (const request of requests) {
       if ('open' in request && placeOf(name, request.open) === 'settings') {
@@ -194,8 +205,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
         await view.show(name, `page:${request.open}`, request.params)
       } else if ('open' in request) {
         const opened: OpenPage = { mod: name, page: request.open, params: request.params }
-        const open = mod.state.session.pages
-        mod.state.session.pages = open.some((each) => keyOf(each) === keyOf(opened)) ? open.map((each) => (keyOf(each) === keyOf(opened) ? opened : each)) : [...open, opened]
+        addTab(opened)
         show(keyOf(opened))
         await pane.open(request.focus === true ? { focus: true } : {})
       } else if ('close' in request) {
@@ -236,6 +246,20 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       show(settingsTab)
       await pane.open({ focus: true })
       if (name !== undefined) await view.show(name)
+      tell()
+    },
+    tabs(): SidebarTab[] {
+      const { left, right } = tabViews(mod.state.session.shown)
+      return [...left, right].map(({ key, label, onClose }) => ({ key, label, isClosable: onClose !== undefined }))
+    },
+    draw: (tab: string, columns: number) => bodyOf(tab, columns, true),
+    closeTab: (tab: string) => closePage(tab),
+    addTab(opened: OpenPage) {
+      addTab(opened)
+      tell()
+    },
+    showInBrowser(tabs: ReadonlySet<string>) {
+      inBrowser = tabs
       tell()
     },
   }

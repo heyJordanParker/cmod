@@ -1,4 +1,4 @@
-import { existsSync, readlinkSync } from 'node:fs'
+import { existsSync, readlinkSync, realpathSync } from 'node:fs'
 import { mkdtemp, readdir, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -6,7 +6,7 @@ import { isObject } from '@cmodjs/core/src/records.js'
 import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../package.json'
-import { readJson, readText, tilde, writeAtomically } from './files.js'
+import { home, readJson, readText, tilde, writeAtomically } from './files.js'
 import { readPlugin, type Plugin } from './plugin.js'
 import { capture, run, runAttached, spawn, type Captured } from './process.js'
 import { linkedEntries, linkedMarketplaceFile, linkedPlugins, pluginFolders, removePluginFolder, type LinkedEntry } from './settings.js'
@@ -29,6 +29,13 @@ let startedBy: string | undefined
 const claudeCode = (): string => (startedBy ??= present(process.env['CLAUDE_CODE_EXECPATH']) ?? parentClaudeCode() ?? 'claude')
 
 const present = (path: string | undefined) => (path !== undefined && path !== '' && existsSync(path) ? path : undefined)
+
+export function claudeCodeLauncher(): string | undefined {
+  const running = claudeCode() === 'claude' ? (Bun.which('claude') ?? undefined) : claudeCode()
+  const launcher = join(home(), '.local', 'bin', 'claude')
+  if (!existsSync(launcher)) return running
+  return running === undefined || dirname(realpathSync(launcher)) === dirname(realpathSync(running)) ? launcher : running
+}
 
 function parentClaudeCode(): string | undefined {
   const parent = process.platform === 'linux' ? readlinkOf(`/proc/${process.ppid}/exe`) : Bun.spawnSync(['/bin/ps', '-o', 'comm=', '-p', String(process.ppid)]).stdout.toString().trim()

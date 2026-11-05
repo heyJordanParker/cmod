@@ -1,8 +1,8 @@
 import { existsSync, watch } from 'node:fs'
-import { mkdir, readdir, rm, utimes } from 'node:fs/promises'
+import { mkdir, open, readdir, rm, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { instancePath, storeFolder } from '@cmodjs/core/src/records.js'
+import { instancePath, serviceLogPath, storeFolder } from '@cmodjs/core/src/records.js'
 import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
 import { programsFolder } from '../program.js'
@@ -34,22 +34,34 @@ a launchd agent in ~/Library/LaunchAgents on macOS, and a systemd user service
 in ~/.config/systemd/user on Linux. The service runs cmod program <mod> --
 <command…> at login and again whenever it exits, with HOME, XDG_DATA_HOME,
 CLAUDE_CONFIG_DIR, a PATH of the store's programs folder and the system
-folders, and each --env variable, and cmod records it in
-services/<mod>/<program>.json. It loads the service when it is new,
-changed, or not loaded, waits up to 15 seconds for a holder, prints held, and
-exits 0. When the computer does not take the service, it runs as --no-wait
-does.
+folders, CLAUDE_CODE_EXECPATH naming this session's Claude Code by the path
+its updates keep, such as ~/.local/bin/claude, and each --env variable, and
+cmod records it in services/<mod>/<program>.json. On macOS the service writes
+its standard error to services/<mod>/<program>.log, which each holder cuts to
+the last whole lines of its last 512 KiB once it passes 1 MiB, and Linux keeps
+it in the journal. Holding the mod's lock in the cmod store, it loads the
+service when it is new, changed, or not loaded, waits up to 15 seconds for the
+program to print its address, prints held, and exits 0. A service whose
+program printed none by then, and whose lock no holder holds, is removed as
+cmod remove does, and it fails. When the computer does not take the service,
+it deletes the service's file and record and runs as --no-wait does. When the
+computer took the service and could not start it, it stops, disables, and
+deletes the service and its record, as cmod remove does, and fails with the
+error. Both failures keep the log and name it, or the journalctl command on
+Linux.
 
 With --remove-service, which a session passes for each service in
 services/<mod>/ that the mod's setup no longer adds, it stops the program's
-service, deletes its unit and its record, and exits 0. A program with no
-service changes nothing.`
+service, deletes its unit, its record, and its log, and exits 0. A program
+with no service changes nothing.`
 
 const checkMs = 5000
 
 const killMs = 5000
 
 const serviceStartMs = 15_000
+
+const logBytes = 1_048_576
 
 const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
 
@@ -73,11 +85,21 @@ export async function run(argv: string[]): Promise<number> {
   const file = instancePath(storeFolder(process.env), mod, basename(executable))
   const lockPath = `${file}.lock`
   await mkdir(dirname(file), { recursive: true })
-  const service = values.service ? await startService(mod, [executable, ...args], values.env) : undefined
-  if (service !== undefined) {
-    if (!(await isHeldWithin(lockPath, serviceStartMs))) throw new Error(`the ${service.label} service did not start ${executable} within ${serviceStartMs / 1000} seconds. ${service.status} shows why.`)
-    process.stdout.write('held\n')
-    return 0
+  if (values.service) {
+    const lock = await takeLock(modLock(mod))
+    try {
+      const service = await startService(mod, [executable, ...args], values.env)
+      if (service !== undefined) {
+        if (!(await isStartedWithin(file, serviceStartMs))) {
+          await removeService(mod, basename(executable), { keepsLog: true })
+          throw new Error(`the ${service.label} service did not start ${executable} within ${serviceStartMs / 1000} seconds, so cmod removed it. ${service.status} shows why.`)
+        }
+        process.stdout.write('held\n')
+        return 0
+      }
+    } finally {
+      await lock[Symbol.asyncDispose]()
+    }
   }
   const isNoWait = values['no-wait'] || values.service
   const ending = new AbortController()
@@ -103,7 +125,7 @@ export async function run(argv: string[]): Promise<number> {
       const lock = await takeLock(lockPath, AbortSignal.abort())
       if (lock !== undefined) {
         try {
-          return await hold(file, executable, args, ending.signal)
+          return await hold(file, serviceLogPath(storeFolder(process.env), mod, basename(executable)), executable, args, ending.signal)
         } finally {
           await lock[Symbol.asyncDispose]()
         }
@@ -135,10 +157,11 @@ export async function run(argv: string[]): Promise<number> {
   }
 }
 
-async function hold(file: string, executable: string, args: readonly string[], ending: AbortSignal): Promise<number> {
+async function hold(file: string, log: string, executable: string, args: readonly string[], ending: AbortSignal): Promise<number> {
   const left = (await readJson(file)) as Instance | undefined
   if (left !== undefined) await stopCopy(left.pid, left.started)
   await rm(file, { force: true })
+  await trimLog(log)
   const linked = join(programsFolder(), executable)
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'CLAUDE_CODE_SESSION_ID'))
   const child = spawn([existsSync(linked) ? linked : executable, ...args], { env, stdout: 'pipe', stderr: 'inherit' })
@@ -169,13 +192,31 @@ async function hold(file: string, executable: string, args: readonly string[], e
   }
 }
 
-async function isHeldWithin(lock: string, ms: number): Promise<boolean> {
+async function isStartedWithin(file: string, ms: number): Promise<boolean> {
   const deadline = Date.now() + ms
   do {
-    for (const holder of await readdir(lock).catch(ifMissing([]))) if (await isHolding(Number(holder), await readText(join(lock, holder)))) return true
+    const instance = (await readJson(file)) as Instance | undefined
+    if (instance !== undefined && (await isHolding(instance.pid, instance.started))) return true
     await Bun.sleep(100)
   } while (Date.now() < deadline)
+  for (const holder of await readdir(`${file}.lock`).catch(ifMissing([]))) if (await isHolding(Number(holder), await readText(join(`${file}.lock`, holder)))) return true
   return false
+}
+
+async function trimLog(path: string): Promise<void> {
+  const log = await open(path, 'r+').catch(ifMissing(undefined))
+  if (log === undefined) return
+  try {
+    const { size } = await log.stat()
+    if (size <= logBytes) return
+    const tail = Buffer.alloc(logBytes / 2)
+    await log.read(tail, 0, tail.length, size - tail.length)
+    const kept = tail.subarray(tail.indexOf('\n') + 1)
+    await log.truncate(0)
+    await log.write(kept, 0, kept.length, 0)
+  } finally {
+    await log.close()
+  }
 }
 
 async function touchHolders(lock: string): Promise<void> {

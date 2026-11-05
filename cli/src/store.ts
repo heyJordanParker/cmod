@@ -2,8 +2,9 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { consentPath, isObject, linksPath, parseConsent, parseLinks, pluginsChangedMark, pluginsChangedPath, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
-import { home, readJson, readText, tilde, writeAtomically } from './files.js'
+import { consentPath, isAtLeast, isObject, linksPath, parseConsent, parseLinks, pluginsChangedMark, pluginsChangedPath, readCmodVersion, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
+import { version } from '../package.json'
+import { home, ifMissing, readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
 import { interruptProgress } from './progress.js'
 
@@ -20,6 +21,11 @@ export async function markPluginsChanged(checkout?: string): Promise<void> {
   if (!existsSync(store)) return
   await writeAtomically(pluginsChangedPath(store), pluginsChangedMark(Date.now(), process.pid, checkout))
   await markStoreChanged()
+}
+
+export async function isNewerCmodInstalled(): Promise<boolean> {
+  const installed = await readCmodVersion({ list: (folder) => readdir(folder).catch(ifMissing([])), exists: async (path) => existsSync(path) }, storeFolder(process.env))
+  return installed !== undefined && !isAtLeast(version, installed)
 }
 
 export async function markStoreChanged(): Promise<void> {

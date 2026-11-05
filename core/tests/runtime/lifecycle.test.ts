@@ -17,7 +17,7 @@ import { permissionRoutes } from '../../src/runtime/permission-check.js'
 import { sessionKeyOf } from '../../src/runtime/state.js'
 import { installFix, oldestCmodVersion, readSteps, scriptsSha256, secretFix } from '../../src/records.js'
 import { createToaster } from '../../src/runtime/toaster.js'
-import type { ShownToast } from '../../src/testing.js'
+import { testMod, type ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
 import { elements, findElement, rowsOf, textOf } from '../../src/testing/fake-elements.js'
 import { fakeFiles } from '../../src/testing/fake-files.js'
@@ -2817,4 +2817,67 @@ test('a mod that finishes installing hears the start of the session it installed
   await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'second', source: 'clear' }, {})
 
   expect(seen).toEqual(['startup first', 'clear second'])
+})
+
+test("engineOf(mod).onRedraw hears each redraw the mod asks of Claude Code's renders, until it is removed", async () => {
+  const heard: number[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'notes',
+      state: { session: { count: 0 } },
+      setup(mod) {
+        mod.panes.add({ id: 'list', title: 'List', render: (current) => Text({ children: `${current.state.session.count}` }) })
+        const redraws = engineOf(mod).onRedraw(() => void heard.push(mod.state.session.count))
+        return {
+          async bump() {
+            mod.state.session.count += 1
+          },
+          async stop() {
+            redraws.remove()
+          },
+        }
+      },
+    }),
+  )
+  await tested.start()
+
+  await tested.api['bump']?.()
+  await tested.settle()
+  await tested.api['stop']?.()
+  await tested.api['bump']?.()
+  await tested.settle()
+
+  expect(heard).toEqual([1])
+  expect(tested.calls.filter((call) => call.call === 'ui.invalidate' && call.args[0] === 'ui.render').length).toBeGreaterThanOrEqual(2)
+})
+
+test("a listener on the engine's onRedraw hears each state change that redraws the mod's pane, and nothing once removed", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
+  let heard = 0
+  let started: Mod<{ session: { count: number } }> | undefined
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'safe-delete',
+      state: { session: { count: 0 } },
+      setup(mod) {
+        mod.panes.add({ id: 'trash', title: 'Trash', render: (current) => Text({ children: `${current.state.session.count}` }) })
+        started = mod
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+  const mod = started as Mod<{ session: { count: number } }>
+  const listening = engineOf(mod).onRedraw(() => void (heard += 1))
+
+  mod.state.session.count = 1
+  await fake.settle()
+  const afterChange = heard
+  listening.remove()
+  mod.state.session.count = 2
+  await fake.settle()
+
+  expect(afterChange).toBe(1)
+  expect(heard).toBe(1)
 })

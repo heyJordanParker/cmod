@@ -1,10 +1,10 @@
 import { Database } from 'bun:sqlite'
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, spyOn, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { appendFile, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { openHistory, readSession, searchQuery } from '../src/history.js'
-import { cmod, cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { openHistory, readSession, runningEntries, searchQuery } from '../src/history.js'
+import { cmod, cmodWith, deleteTemporaryHomes, startCmod, startOf, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -139,7 +139,7 @@ test.concurrent("each mod's note in a hook row is indexed as a Note from that mo
 test.concurrent("each turn ran on the device the cmod plugin's last note before it names, and a transcript without such a note has turns without a device", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
-  const mac = { id: '6649fe3715ce42ba91d9ea8ff5b8f67f', name: 'Jordans-Mac-mini', os: 'darwin', arch: 'arm64' }
+  const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Office-Mac-mini', os: 'darwin', arch: 'arm64' }
   const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' }
   const noted = (uuid: string, second: number, device: typeof mac) => ({
     type: 'attachment',
@@ -344,6 +344,50 @@ test.concurrent("sessions lists the project's conversations newest first, and --
   expect(ids(await json(home, 'sessions', '--project', project, '--since', '2026-10-05'))).toEqual(['s1'])
   expect(ids(await json(home, 'sessions', '--project', project, '--running'))).toEqual(['s1'])
   expect(ids(await json(home, 'search', 'tree pane', '--project', project, '--running'))).toEqual(['u1'])
+})
+
+test.concurrent('a running session whose process started at another time than Claude Code recorded is a reused pid, so it does not count as running', async () => {
+  const home = await temporaryHome()
+  const { project } = await writeHistory(home)
+  const started = await startOf(process.pid)
+  await writeFiles(home, { '.claude/sessions/1.json': JSON.stringify({ pid: process.pid, sessionId: 's1', cwd: project, procStart: 'Mon Jan  1 00:00:00 2001' }), '.claude/sessions/2.json': JSON.stringify({ pid: process.pid, sessionId: 's0', cwd: project, procStart: started }) })
+
+  expect(ids(await json(home, 'sessions', '--project', project, '--running'))).toEqual(['s0'])
+})
+
+test('a registry write that changes only a status starts no process, and only a new pid is checked, in one ps run', async () => {
+  const home = await temporaryHome()
+  const project = join(home, 'work/app')
+  const other = Bun.spawn(['/bin/sleep', '30'])
+  const record = (session: string, pid: number, procStart: string, status: string) => JSON.stringify({ pid, sessionId: session, cwd: project, procStart, status })
+  const ownStart = await startOf(process.pid)
+  const otherStart = await startOf(other.pid)
+  const listed = () => {
+    const configRoot = process.env['CLAUDE_CONFIG_DIR']
+    process.env['CLAUDE_CONFIG_DIR'] = join(home, '.claude')
+    try {
+      return runningEntries().map(({ session, status }) => `${session} ${status}`)
+    } finally {
+      if (configRoot === undefined) delete process.env['CLAUDE_CONFIG_DIR']
+      else process.env['CLAUDE_CONFIG_DIR'] = configRoot
+    }
+  }
+  const spawned = spyOn(Bun, 'spawnSync')
+  const psRuns: unknown[] = []
+  try {
+    await writeFiles(home, { '.claude/sessions/1.json': record('s1', process.pid, ownStart, 'busy') })
+    expect(listed()).toEqual(['s1 busy'])
+    await writeFiles(home, { '.claude/sessions/1.json': record('s1', process.pid, ownStart, 'idle') })
+    expect(listed()).toEqual(['s1 idle'])
+    await writeFiles(home, { '.claude/sessions/2.json': record('s2', other.pid, otherStart, 'busy') })
+    expect(listed().sort()).toEqual(['s1 idle', 's2 busy'])
+    for (const [command] of spawned.mock.calls) if (Array.isArray(command) && command[0] === '/bin/ps') psRuns.push(command.at(-1))
+  } finally {
+    spawned.mockRestore()
+    other.kill()
+  }
+
+  expect(psRuns).toEqual([String(process.pid), String(other.pid)])
 })
 
 test.concurrent('sessions carries the color each session last took with /color, and none after a reset to default', async () => {

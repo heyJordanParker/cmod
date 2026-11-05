@@ -145,6 +145,8 @@ type Page<Params = undefined> = {
 - A `render` that throws draws `The <title> page could not draw: <error>` in the page, and cmod shows the error toast `The <title> page could not draw` once, until the page draws again.
 - A press on a `Button` from an older drawing, such as one drawn before the mod reloaded, runs nothing. cmod shows the toast `The <mod> button was from an older drawing, so nothing ran` and draws the page again.
 
+The person can run their sessions from the browser app too, which `open in browser` on the Sidebar's key bar opens and Settings, under cmod, turns off. It lists every running session, and an open session shows its Dashboard, pages, and Settings in tabs beside its conversation, as in the Sidebar. A page needs no change: the browser draws the same `render`, with `props.columns` the browser's width in characters and `props.isFocused` true. A `Button`, `Input`, `Select`, or Markdown link pressed there runs the same handler, with `surface: 'desktop'`, and the page redraws in the browser and in the Sidebar. A page the browser shows counts as `isShown`. The browser draws an `Image` from a file or shared memory as its `alt` text, and `Code` without syntax colors.
+
 A hotkey is the usual way in:
 
 ```tsx

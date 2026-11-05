@@ -2,6 +2,7 @@ import type { HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-c
 import type { Claude } from './claude.js'
 import type { Pages } from './pages.js'
 import type { Router } from './router.js'
+import type { Subscription } from '../utils/subscription.js'
 import type { Failure } from './toaster.js'
 import type { ToolCalls } from './tool-calls.js'
 import type { Watches } from './watches.js'
@@ -16,6 +17,7 @@ export type Engine = {
   readonly answerInput: <Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>) => Promise<Answer>
   readonly spawnCmod: (args: readonly string[], env?: Readonly<Record<string, string>>) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>
   readonly watches: Watches
+  readonly onRedraw: (listener: () => void) => Subscription
   readonly widgets?: Widgets
   readonly pages?: Pages
 }

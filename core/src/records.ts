@@ -272,6 +272,10 @@ export function servicePath(store: string, mod: string, executable: string): str
   return `${serviceFolder(store, mod)}/${checkedName(executable)}.json`
 }
 
+export function serviceLogPath(store: string, mod: string, executable: string): string {
+  return `${serviceFolder(store, mod)}/${checkedName(executable)}.log`
+}
+
 export type Links = { readonly marketplaces: Readonly<Record<string, string>>; readonly turnedOff: Readonly<Record<string, readonly string[]>> }
 
 export function parseLinks(value: unknown, path: string): Links {
@@ -300,12 +304,26 @@ export function preferencesPath(store: string): string {
   return `${store}/preferences.json`
 }
 
-export type Preferences = { readonly showsInstalledModErrors: boolean }
+export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean }
+
+const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi'] as const satisfies readonly (keyof Preferences)[]
 
 export function parsePreferences(value: unknown, path: string): Preferences {
-  if (value === undefined) return { showsInstalledModErrors: false }
-  if (!isObject(value) || (value['showsInstalledModErrors'] !== undefined && typeof value['showsInstalledModErrors'] !== 'boolean')) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
-  return { showsInstalledModErrors: value['showsInstalledModErrors'] === true }
+  if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== 'boolean'))) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
+  const saved = isObject(value) ? value : {}
+  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true }
+}
+
+export function webPath(store: string): string {
+  return `${store}/web.json`
+}
+
+export type WebUi = { readonly port: number }
+
+export function parseWebUi(value: unknown, path: string): WebUi | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value) || !Number.isInteger(value['port'])) throw new Error(`${path} is not the web UI's port. Delete it, and cmod web serve writes it again.`)
+  return { port: value['port'] as number }
 }
 
 export type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
@@ -377,7 +395,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.10.0'
+export const coreVersion = '5.11.0'
 
 export const oldestCmodVersion = '5.10.0'
 

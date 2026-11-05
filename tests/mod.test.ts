@@ -100,7 +100,7 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
 })
 
 test("the note Claude reads at every session start, clear, resume, and compaction names the device the session runs on and when, so Claude Code, which drops a resume's note that repeats an earlier one, keeps each", async () => {
-  const mac = { id: '6649fe3715ce42ba91d9ea8ff5b8f67f', name: 'Jordans-Mac-mini', os: 'darwin', arch: 'arm64' } as const
+  const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Office-Mac-mini', os: 'darwin', arch: 'arm64' } as const
   const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' } as const
   const startedOn = async (device: typeof mac | typeof devbox, starts: readonly (readonly ['startup' | 'resume' | 'clear' | 'compact', string])[]) => {
     const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
@@ -898,7 +898,7 @@ test("an empty Dashboard says what goes there, and Arrange widgets opens cmod's 
     ` │ Arrange widgets${' '.repeat(60)}│`,
     ` ╰${'─'.repeat(76)}╯`,
     '',
-    ' ↑↓ scroll  tab move  esc hide',
+    ' ↑↓ scroll  tab move  esc hide  open in browser',
   ])
   expect(tested.state.session.shown).toBe('settings')
   expect(tested.state.session.selected).toBe('cmod')
@@ -918,7 +918,7 @@ test("a mod's install page is a Sidebar tab named for the mod, drawn by the mod,
   await tested.shown.pane.press('close:ci-watch/cmod:install')
   await tested.settle()
 
-  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install ci-watch  ×${' '.repeat(31)}9: Settings`, '▀'.repeat(80), '', ` ╭─ ci-watch ${'─'.repeat(65)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide'])
+  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install ci-watch  ×${' '.repeat(31)}9: Settings`, '▀'.repeat(80), '', ` ╭─ ci-watch ${'─'.repeat(65)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide  open in browser'])
   expect(called).toContain('ci-watch cmod:draw')
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
@@ -979,7 +979,7 @@ test('Settings draws a Mods panel with a status mark beside each mod, and a pane
     '                  │ Value main                             │',
     '                  ╰────────────────────────────────────────╯',
     '',
-    ' ↑↓ scroll  tab move  esc hide',
+    ' ↑↓ scroll  tab move  esc hide  open in browser',
   ])
 })
 
@@ -1045,7 +1045,7 @@ test('the key bar of a Sidebar without the focus says a click focuses it, and na
   await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'ci-watch' } as never)
   await tested.settle()
 
-  expect((await tested.shown.pane.lines()).at(-1)).toBe(' click focus')
+  expect((await tested.shown.pane.lines()).at(-1)).toBe(' click focus  open in browser')
 })
 
 async function unansweredCall(): Promise<Cmod['call']> {
@@ -2244,7 +2244,7 @@ test("the Sidebar's Dashboard shows the widgets the person moved onto it", async
   await tested.shown.pane.lines()
   await tested.settle()
 
-  expect(await tested.shown.pane.lines()).toEqual(['▄'.repeat(80), ` 0: Dashboard${' '.repeat(55)}9: Settings`, '▀'.repeat(80), '', ` ╭─ Widgets ${'─'.repeat(66)}╮`, ` │ main, 74 columns${' '.repeat(59)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide'])
+  expect(await tested.shown.pane.lines()).toEqual(['▄'.repeat(80), ` 0: Dashboard${' '.repeat(55)}9: Settings`, '▀'.repeat(80), '', ` ╭─ Widgets ${'─'.repeat(66)}╮`, ` │ main, 74 columns${' '.repeat(59)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide  open in browser'])
 })
 
 test('a widget layout another session saves redraws here once the store-changed stamp moves', async () => {
@@ -2280,4 +2280,68 @@ test('the Widgets section of cmod in Settings moves the picked widget, and hides
   await tested.settle()
 
   expect(await saved()).toEqual({ ...layout, areas: { ...layout.areas, belowPrompt: [], working: [], dashboard: [{ left: ['git/branch'], right: [] }] }, hidden: ['git/branch'] })
+})
+
+async function settledUntil(tested: ReturnType<typeof testMod>, isDone: () => boolean) {
+  for (let tries = 0; tries < 50 && !isDone(); tries += 1) {
+    await tested.settle()
+    await Bun.sleep(1)
+  }
+}
+
+function servingWeb(tested: ReturnType<typeof testMod>) {
+  const started: string[][] = []
+  tested.fakes.process.spawn = (request) => {
+    started.push([...request.argv])
+    async function* serving(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+      await tested.fakes.fs.write?.(`${store}/web.json`, JSON.stringify({ port: 4567 }))
+      yield { stream: 'stdout', text: '127.0.0.1:4567\n' }
+      return await new Promise<ProcessSpawnResult>(() => undefined)
+    }
+    return Object.assign(serving(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  }
+  return started
+}
+
+const webServe = [cmodProgram, 'program', 'cmod', '--no-wait', '--', 'cmod', 'web', 'serve']
+
+test('a session with the web UI on runs cmod web serve once, as the single copy cmod program keeps for the computer', async () => {
+  const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/preferences.json`]: JSON.stringify({ servesWebUi: true }) } })
+  const started = servingWeb(tested)
+  await tested.start()
+  await settledUntil(tested, () => started.length > 1)
+
+  expect(started).toEqual([webServe])
+})
+
+test('a session with the web UI off runs no cmod web serve and reaches no web UI', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  const started = servingWeb(tested)
+  const fetched: string[] = []
+  tested.fakes.http.fetch = async (url) => (fetched.push(url), { status: 404, ok: false, headers: {}, text: '' })
+  await tested.start()
+  await settledUntil(tested, () => started.length > 0)
+
+  expect(started).toEqual([])
+  expect(fetched).toEqual([])
+})
+
+test('open in browser turns the browser app on, starts cmod web serve, and opens the address cmod web prints', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  const started = servingWeb(tested)
+  const ran: string[] = []
+  const home = 'http://127.0.0.1:4567/'
+  tested.fakes.process.run = async (argv) => (ran.push(argv.join(' ')), { exitCode: 0, stdout: argv[1] === 'web' ? `${home}\n` : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  await tested.start()
+  await tested.hotkey('sidebar')
+  await tested.shown.pane.lines()
+  await tested.settle()
+
+  await tested.shown.pane.press('open-in-browser')
+  await settledUntil(tested, () => tested.shown.toasts.length > 0)
+
+  expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/preferences.json`)) ?? '{}')).toEqual({ servesWebUi: true })
+  expect(started).toEqual([webServe])
+  expect(ran).toContain(`${cmodProgram} web`)
+  expect(tested.shown.toasts).toContainEqual(expect.objectContaining({ type: 'success', message: 'The browser app is open' }))
 })

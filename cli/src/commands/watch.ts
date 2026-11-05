@@ -1,18 +1,17 @@
 import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { readdir, rm, utimes } from 'node:fs/promises'
+import { rm, utimes } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { buildFailuresPath, isAtLeast, readCmodVersion, storeFolder } from '@cmodjs/core/src/records.js'
+import { buildFailuresPath, storeFolder } from '@cmodjs/core/src/records.js'
 import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { version } from '../../package.json'
 import { relinkPluginFolders } from '../claude.js'
-import { ifMissing, readJson, writeAtomically } from '../files.js'
+import { readJson, writeAtomically } from '../files.js'
 import { readPlugin } from '../plugin.js'
 import { capture } from '../process.js'
 import { buildReadsAny, installProgram, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
 import { linkedFolders } from '../settings.js'
-import { markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
+import { isNewerCmodInstalled, markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
 import { bundledHooks } from './publish.js'
 
 export const summary = 'Reload the sessions inside a linked mod once it builds after a change.'
@@ -102,11 +101,6 @@ export async function run(argv: string[]): Promise<number> {
 
   const nameOf = async (folder: string) => ((await readJson(join(folder, '.claude-plugin', 'plugin.json'))) as { readonly name: string }).name
 
-  const isOutdated = async () => {
-    const installed = await readCmodVersion({ list: (folder) => readdir(folder).catch(ifMissing([])), exists: async (path) => existsSync(path) }, storeFolder(process.env))
-    return installed !== undefined && !isAtLeast(version, installed)
-  }
-
   const settle = async (folder: string) => {
     const files = [...(changedFiles.get(folder) ?? [])]
     changedFiles.delete(folder)
@@ -165,7 +159,7 @@ export async function run(argv: string[]): Promise<number> {
     }
   }
 
-  while (!(await isOutdated())) {
+  while (!(await isNewerCmodInstalled())) {
     await follow().catch((error: unknown) => process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`))
     const now = new Date()
     await utimes(heartbeat, now, now)

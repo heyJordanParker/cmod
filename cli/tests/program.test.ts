@@ -1,8 +1,8 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { chmod, mkdir, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, environment, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, environment, isGone, startCmod, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -217,14 +217,32 @@ const unitOf = (home: string, mod: string) => (isMac ? join(home, 'Library/Launc
 
 const servicesOf = (home: string, mod: string) => join(home, '.local/share/cmod/services', mod)
 
+const pathVariableOf = (home: string) => `${join(home, '.local/share/cmod/programs')}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`
+
 function serviceCalls(home: string): string[] {
   return existsSync(join(home, 'service-calls')) ? readFileSync(join(home, 'service-calls'), 'utf8').trim().split('\n') : []
 }
 
-async function serviceHome(mod: string): Promise<string> {
+async function writeExecutables(home: string, files: Record<string, string>): Promise<void> {
+  await writeFiles(home, files)
+  for (const path of Object.keys(files)) await chmod(join(home, path), 0o755)
+}
+
+async function serviceHome(): Promise<string> {
   const home = await serverHome()
-  await writeFiles(home, { 'bin/cmod': cmodFromSource, 'start-service.sh': `#!/bin/sh\n"$HOME/bin/cmod" program ${mod} -- fake-server\n` })
+  await writeExecutables(home, { '.local/share/cmod/programs/cmod': cmodFromSource, '.local/share/cmod/programs/fake-server': fakeServer })
   return home
+}
+
+const listingServer = `#!/bin/sh
+trap 'echo "stop $$" >> "$HOME/server-log"; exit 0' TERM
+echo "start $$" >> "$HOME/server-log"
+echo "unix:$HOME/$$.sock"
+while :; do cmod list --json > /dev/null 2>> "$HOME/listing-errors" & wait $!; echo "$?" >> "$HOME/listings"; sleep 0.2; done
+`
+
+function listings(home: string): string[] {
+  return existsSync(join(home, 'listings')) ? readFileSync(join(home, 'listings'), 'utf8').trim().split('\n') : []
 }
 
 async function stopService(home: string, mod: string): Promise<void> {
@@ -233,9 +251,9 @@ async function stopService(home: string, mod: string): Promise<void> {
   await until(() => serverIds(home, 'stop').length === serverIds(home, 'start').length)
 }
 
-test.concurrent("cmod program --service writes a launchd agent on macOS and a systemd user service on Linux that runs cmod program with the program's command, home, and a restart on every exit, loads it, and prints held once the service holds the lock", async () => {
-  const home = await serviceHome('tools')
-  const path = `${join(home, '.local/share/cmod/programs')}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`
+test.concurrent("cmod program --service writes a launchd agent on macOS, which sends standard error to the service's log in the cmod store, and a systemd user service on Linux, that runs cmod program with the program's command, home, and a restart on every exit, loads it, and prints held once the service holds the lock", async () => {
+  const home = await serviceHome()
+  const path = pathVariableOf(home)
   const cmodProgram = join(home, '.local/share/cmod/programs/cmod')
 
   const { exitCode, stdout } = await cmodWith(home, { TOOLS_DEVICE: 'mac-1' }, 'program', 'tools', '--service', '--env', 'TOOLS_DEVICE', '--', 'fake-server', '--port', '0')
@@ -264,9 +282,13 @@ test.concurrent("cmod program --service writes a launchd agent on macOS and a sy
     <string>${home}</string>
     <key>PATH</key>
     <string>${path}</string>
+    <key>CLAUDE_CODE_EXECPATH</key>
+    <string>${home}/bin/claude</string>
     <key>TOOLS_DEVICE</key>
     <string>mac-1</string>
   </dict>
+  <key>StandardErrorPath</key>
+  <string>${home}/.local/share/cmod/services/tools/fake-server.log</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -283,6 +305,7 @@ Description=fake-server of the tools mod, which cmod runs
 ExecStart="${cmodProgram}" "program" "tools" "--" "fake-server" "--port" "0"
 Environment="HOME=${home}"
 Environment="PATH=${path}"
+Environment="CLAUDE_CODE_EXECPATH=${home}/bin/claude"
 Environment="TOOLS_DEVICE=mac-1"
 Restart=always
 RestartSec=10
@@ -296,8 +319,117 @@ WantedBy=default.target
   await stopService(home, 'tools')
 }, 60000)
 
+test.concurrent("a cmod command the service's program runs finds the Claude Code of the session that wrote the service, though the service's PATH holds no claude", async () => {
+  const home = await serviceHome()
+  await writeExecutables(home, { '.local/share/cmod/programs/fake-server': listingServer })
+
+  expect(await cmod(home, 'program', 'tools', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  await until(() => listings(home).length > 0)
+
+  expect(Bun.which('claude', { PATH: pathVariableOf(home) })).toBeNull()
+  expect(listings(home)[0]).toBe('0')
+  expect(readFileSync(join(home, 'claude-calls'), 'utf8')).toContain('plugin list --json\n')
+  await stopService(home, 'tools')
+}, 60000)
+
+test.concurrent("after Claude Code updates itself and deletes the version the service was written from, the service's cmod commands still find it, and a session on the new version leaves the service as it was", async () => {
+  const home = await serviceHome()
+  const versions = join(home, '.local/share/claude/versions')
+  const launcher = join(home, '.local/bin/claude')
+  await writeExecutables(home, { '.local/share/cmod/programs/fake-server': listingServer, '.local/share/claude/versions/2.1.318': claudeAnswering(cmodPluginListed) })
+  await mkdir(join(home, '.local/bin'))
+  await symlink(join(versions, '2.1.318'), launcher)
+  expect(await cmodWith(home, { CLAUDE_CODE_EXECPATH: join(versions, '2.1.318') }, 'program', 'tools', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  const unit = readFileSync(unitOf(home, 'tools'), 'utf8')
+  const loaded = serviceCalls(home).length
+
+  await writeExecutables(home, { '.local/share/claude/versions/2.1.319': claudeAnswering(cmodPluginListed) })
+  await rm(launcher)
+  await symlink(join(versions, '2.1.319'), launcher)
+  await rm(join(versions, '2.1.318'))
+  const listed = listings(home).length
+  await until(() => listings(home).length > listed + 2)
+
+  expect(listings(home).at(-1)).toBe('0')
+  expect(await cmodWith(home, { CLAUDE_CODE_EXECPATH: join(versions, '2.1.319') }, 'program', 'tools', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  expect(readFileSync(unitOf(home, 'tools'), 'utf8')).toBe(unit)
+  expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl print gui/${uid}/${label('tools')}`] : [`systemctl --user start ${label('tools')}.service`])
+  await stopService(home, 'tools')
+}, 60000)
+
+test.concurrent('cmod program --service whose service holds nothing within 15 seconds removes the service and its record, and fails', async () => {
+  const home = await serviceHome()
+  await writeExecutables(home, { '.local/share/cmod/programs/cmod': '#!/bin/sh\necho "this cmod cannot start" >&2\nexit 1\n' })
+
+  const { exitCode, stderr } = await cmod(home, 'program', 'tools', '--service', '--', 'fake-server')
+
+  expect(exitCode).toBe(1)
+  expect(stderr).toContain(`the ${label('tools')} service did not start fake-server within 15 seconds, so cmod removed it.`)
+  expect(existsSync(unitOf(home, 'tools'))).toBe(false)
+  expect(existsSync(join(servicesOf(home, 'tools'), 'fake-server.json'))).toBe(false)
+  expect(await isGone(join(home, '.config/systemd/user/default.target.wants', `${label('tools')}.service`))).toBe(true)
+  expect(serverIds(home, 'start')).toEqual([])
+}, 60000)
+
+test.concurrent.skipIf(!isMac)("cmod program --service on macOS whose program exits at once fails with an error that names the service's log, and the log, which the removal keeps, holds the program's standard error", async () => {
+  const home = await serviceHome()
+  await writeExecutables(home, { '.local/share/cmod/programs/fake-server': '#!/bin/sh\necho boom >&2\nexit 1\n' })
+
+  const { exitCode, stderr } = await cmod(home, 'program', 'tools', '--service', '--', 'fake-server')
+
+  expect(exitCode).toBe(1)
+  expect(stderr).toContain(`the ${label('tools')} service did not start fake-server within 15 seconds, so cmod removed it. ~/.local/share/cmod/services/tools/fake-server.log shows why.`)
+  expect(existsSync(unitOf(home, 'tools'))).toBe(false)
+  expect(readdirSync(servicesOf(home, 'tools'))).toEqual(['fake-server.log'])
+  expect(readFileSync(join(servicesOf(home, 'tools'), 'fake-server.log'), 'utf8')).toBe('boom\n')
+}, 60000)
+
+test.concurrent("a holder whose service's log grew past 1 MiB keeps only the last whole lines of its last 512 KiB before it starts the program, so a program that fails at every restart never fills the disk", async () => {
+  const home = await serverHome()
+  const log = join(home, '.local/share/cmod/services/tools/crash-server.log')
+  const line = `${'x'.repeat(99)}\n`
+  await writeFiles(home, { '.local/share/cmod/services/tools/crash-server.log': `${line.repeat(20_000)}last failure\n` })
+
+  expect((await cmod(home, 'program', 'tools', '--', 'crash-server')).exitCode).toBe(3)
+
+  const kept = readFileSync(log, 'utf8')
+  expect(kept.length).toBeLessThanOrEqual(512 * 1024)
+  expect(kept.startsWith(line)).toBe(true)
+  expect(kept.endsWith(`${line}last failure\n`)).toBe(true)
+}, 60000)
+
+test.concurrent("cmod program --service waits for the mod's lock before it writes or loads the service, so sessions that start the mod at once never load it beside each other or beside cmod setup", async () => {
+  const home = await serviceHome()
+  const holder = Bun.spawn(['sleep', '30'])
+  await writeFiles(join(home, '.local/share/cmod/records/tools.json.lock'), { [String(holder.pid)]: '' })
+  const started = startCmod(home, 'program', 'tools', '--service', '--', 'fake-server')
+  await started.waitForOutput('Waiting for ~/.local/share/cmod/records/tools.json.lock')
+
+  expect(existsSync(unitOf(home, 'tools'))).toBe(false)
+  expect(serviceCalls(home)).toEqual([])
+  holder.kill()
+  await holder.exited
+  expect(await started.done).toMatchObject({ exitCode: 0, stdout: 'held\n' })
+  expect(existsSync(unitOf(home, 'tools'))).toBe(true)
+  await stopService(home, 'tools')
+}, 60000)
+
+test.concurrent.skipIf(isMac)('cmod program --service whose systemd user service took the unit and then failed to start disables it, deletes its unit and its record, and fails with the error instead of running the program in the session', async () => {
+  const home = await serviceHome()
+  await writeFiles(home, { 'service-fails': '' })
+
+  const { exitCode, stderr } = await cmod(home, 'program', 'tools', '--service', '--', 'fake-server')
+
+  expect(exitCode).toBe(1)
+  expect(stderr).toContain(`Job for ${label('tools')}.service failed because start of the service was attempted too often.`)
+  expect(await isGone(join(home, '.config/systemd/user/default.target.wants', `${label('tools')}.service`))).toBe(true)
+  expect(existsSync(unitOf(home, 'tools'))).toBe(false)
+  expect(existsSync(servicesOf(home, 'tools'))).toBe(false)
+  expect(serverIds(home, 'start')).toEqual([])
+}, 60000)
+
 test.concurrent('a second cmod program --service of the same mod and program, from a session with another PATH, loads nothing again and runs no second copy', async () => {
-  const home = await serviceHome('tools')
+  const home = await serviceHome()
   expect(await cmod(home, 'program', 'tools', '--service', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
   const loaded = serviceCalls(home).length
 
@@ -310,7 +442,7 @@ test.concurrent('a second cmod program --service of the same mod and program, fr
 }, 60000)
 
 test.concurrent("a cmod program --service whose environment changed rewrites the service and loads it again once the service manager let the old one go", async () => {
-  const home = await serviceHome('tools')
+  const home = await serviceHome()
   expect(await cmodWith(home, { TOOLS_DEVICE: 'mac-1' }, 'program', 'tools', '--service', '--env', 'TOOLS_DEVICE', '--', 'fake-server')).toMatchObject({ exitCode: 0, stdout: 'held\n' })
   const loaded = serviceCalls(home).length
 
@@ -330,7 +462,7 @@ test.concurrent("a cmod program --service whose environment changed rewrites the
 }, 60000)
 
 test.concurrent('cmod setup of a new version of a mod restarts its service, so the service runs the new program', async () => {
-  const home = await serviceHome('demo')
+  const home = await serviceHome()
   const root = await createMod(home)
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
@@ -346,7 +478,7 @@ test.concurrent('cmod setup of a new version of a mod restarts its service, so t
 }, 60000)
 
 test.concurrent('cmod remove stops the service of the mod and deletes its unit and its record', async () => {
-  const home = await serviceHome('demo')
+  const home = await serviceHome()
   const root = await createMod(home)
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
@@ -368,7 +500,7 @@ test.concurrent('cmod remove stops the service of the mod and deletes its unit a
 }, 60000)
 
 test.concurrent("cmod program --remove-service, which the first session of a mod's version without the program runs after cmod setup, stops the service and deletes its unit and its record", async () => {
-  const home = await serviceHome('demo')
+  const home = await serviceHome()
   const root = await createMod(home)
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
@@ -392,7 +524,7 @@ test.concurrent("cmod program --remove-service, which the first session of a mod
 }, 60000)
 
 test.concurrent('cmod program --remove-service of a program with no service changes nothing and exits 0, so a second session that removes it too fails nothing, and the other services of the mod stay', async () => {
-  const home = await serviceHome('demo')
+  const home = await serviceHome()
   const other = { label: 'com.claudemodmanager.demo.other-server', unit: join(home, 'Library/LaunchAgents/com.claudemodmanager.demo.other-server.plist') }
   await writeFiles(home, { '.local/share/cmod/services/demo/other-server.json': `${JSON.stringify(other)}\n` })
 
@@ -403,7 +535,7 @@ test.concurrent('cmod program --remove-service of a program with no service chan
 }, 60000)
 
 test.concurrent('a mod whose new version still declares the program keeps its service loaded across cmod setup and the next session start', async () => {
-  const home = await serviceHome('demo')
+  const home = await serviceHome()
   const root = await createMod(home)
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   expect((await cmod(home, 'program', 'demo', '--service', '--', 'fake-server')).exitCode).toBe(0)
@@ -416,13 +548,13 @@ test.concurrent('a mod whose new version still declares the program keeps its se
 
   expect(serviceCalls(home).slice(loaded)).toEqual(isMac ? [`launchctl kickstart -k gui/${uid}/${label('demo')}`, `launchctl print gui/${uid}/${label('demo')}`] : [`systemctl --user restart ${label('demo')}.service`, `systemctl --user start ${label('demo')}.service`])
   expect(existsSync(unitOf(home, 'demo'))).toBe(true)
-  expect(readdirSync(servicesOf(home, 'demo'))).toEqual(['fake-server.json'])
+  expect(readdirSync(servicesOf(home, 'demo')).sort()).toEqual(isMac ? ['fake-server.json', 'fake-server.log'] : ['fake-server.json'])
   expect(serverIds(home, 'stop')).toEqual([])
   await stopService(home, 'demo')
 }, 60000)
 
 test.concurrent('cmod list shows the programs a mod runs as a service of this computer', async () => {
-  const home = await serviceHome('demo')
+  const home = await serviceHome()
   const root = await createMod(home)
   await writeFiles(home, { 'bin/claude': claudeAnswering([...cmodPluginListed, { id: 'demo@market', version: '0.1.0', scope: 'user', enabled: true, installPath: root }]) })
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
@@ -437,7 +569,7 @@ test.concurrent('cmod list shows the programs a mod runs as a service of this co
 }, 60000)
 
 test.concurrent('cmod program --service where the service manager refuses runs the copy itself, as --no-wait does, and leaves no unit or record', async () => {
-  const home = await serviceHome('tools')
+  const home = await serviceHome()
   await writeFiles(home, { 'service-refuses': '' })
 
   const first = startCmod(home, 'program', 'tools', '--service', '--', 'fake-server')

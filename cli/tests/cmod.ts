@@ -92,13 +92,32 @@ async function removeTemporary(folder: string): Promise<void> {
   await rm(folder, { recursive: true, force: true })
 }
 
+const runUnit = `const fs = require("node:fs")
+const text = fs.readFileSync(process.argv[1], "utf8")
+const xml = (word) => word.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&")
+const plistStrings = (key, end) => {
+  const start = text.indexOf("<key>" + key + "</key>")
+  return [...text.slice(start, text.indexOf(end, start)).matchAll(/<(?:key|string)>(.*)<\\/(?:key|string)>/g)].slice(1).map((match) => xml(match[1]))
+}
+const unitWords = (line) => [...line.matchAll(/"(?:[^"\\\\]|\\\\.)*"/g)].map((match) => JSON.parse(match[0].replaceAll("$$", "$").replaceAll("%%", "%")))
+const lines = text.split("\\n")
+const [argv, pairs] = text.startsWith("<?xml")
+  ? [plistStrings("ProgramArguments", "</array>"), plistStrings("EnvironmentVariables", "</dict>")]
+  : [unitWords(lines.find((line) => line.startsWith("ExecStart="))), lines.filter((line) => line.startsWith("Environment=")).flatMap(unitWords).flatMap((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)])]
+const env = Object.fromEntries(pairs.flatMap((value, index) => (index % 2 === 0 ? [[value, pairs[index + 1]]] : [])))
+const errorPath = text.match(/<key>StandardErrorPath<\\/key>\\s*<string>(.*)<\\/string>/)?.[1]
+if (errorPath !== undefined) fs.mkdirSync(require("node:path").dirname(xml(errorPath)), { recursive: true })
+const stderr = errorPath === undefined ? "inherit" : fs.openSync(xml(errorPath), "a")
+process.exit(require("node:child_process").spawnSync(argv[0], argv.slice(1), { env, stdio: ["inherit", "inherit", stderr] }).status ?? 1)`
+
 const serviceManager = `#!/bin/sh
 echo "$(basename "$0") $*" >> "$HOME/service-calls"
 if [ -e "$HOME/service-refuses" ]; then echo "$(basename "$0"): Domain does not support specified action" >&2; exit 125; fi
+units="\${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 running() { [ -e "$HOME/service-pid" ] && kill -0 "$(cat "$HOME/service-pid")" 2>/dev/null; }
 start() {
   touch "$HOME/service-loaded"
-  if [ -x "$HOME/start-service.sh" ] && ! running; then "$HOME/start-service.sh" > /dev/null 2>&1 & echo $! > "$HOME/service-pid"; fi
+  if ! running; then "${process.execPath}" -e '${runUnit}' "$1" >> "$HOME/service-log" 2>&1 & echo $! > "$HOME/service-pid"; fi
 }
 stop() {
   if running; then pkill -TERM -P "$(cat "$HOME/service-pid")"; fi
@@ -107,10 +126,15 @@ case "$(basename "$0") $*" in
   "launchctl print "*) [ -e "$HOME/service-loaded" ] ;;
   "launchctl bootstrap "*)
     if [ -e "$HOME/service-loaded" ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
-    start ;;
-  "launchctl kickstart "*|"systemctl --user start "*|"systemctl --user restart "*) start ;;
+    start "$3" ;;
+  "launchctl kickstart "*) start "$HOME/Library/LaunchAgents/\${3##*/}.plist" ;;
+  "systemctl --user start "*|"systemctl --user restart "*)
+    if [ -e "$HOME/service-fails" ]; then echo "Job for $3 failed because start of the service was attempted too often." >&2; exit 1; fi
+    start "$units/$3" ;;
+  "systemctl --user enable "*) mkdir -p "$units/default.target.wants"; ln -sf "$units/$3" "$units/default.target.wants/$3" ;;
+  "systemctl --user is-enabled "*) [ -e "$units/default.target.wants/$4" ] ;;
   "launchctl bootout "*) stop; (sleep 1; rm -f "$HOME/service-loaded") > /dev/null 2>&1 & ;;
-  "systemctl --user disable "*) stop; rm -f "$HOME/service-loaded" ;;
+  "systemctl --user disable "*) stop; rm -f "$HOME/service-loaded" "$units/default.target.wants/$4" ;;
 esac
 `
 

@@ -25,7 +25,7 @@ These Facts were observed in Claude Code 2.1.289. Under a newer `claude --versio
 
 Every fixture, home, log, and socket lives under a new `/private/tmp/<task-slug>/`. The real `~/.claude`, `~/.config`, and `~/.local` stay untouched.
 
-- `127.0.0.1:8317` is the local model proxy, so `ANTHROPIC_API_KEY` takes a placeholder.
+- `<model url>` is a model the run reaches with no real key: a local model proxy, such as one on `http://127.0.0.1:8317`, or a fake model the run serves. So `ANTHROPIC_API_KEY` takes a placeholder.
 - Once any plugin hears `classic.MessageDisplay`, which every mod does, Claude Code 2.1.317 draws a reply's text only in the first text block that carries its API `message.id`. A fake model that answers every request with one id draws its first reply and hides every reply after it, so a fake model gives each response its own id, as the API does.
 - Claude Code fetches its official plugin catalog over the network even with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
 - Each hook event a chain of mods handles logs a `hooks module <plugins> <event> settled in <ms>` line in the `--debug-file` log, and each call a mod makes logs a `$.<noun>.<method> (<mod>)` line.
@@ -34,7 +34,7 @@ Every fixture, home, log, and socket lives under a new `/private/tmp/<task-slug>
 ### Start every `claude` command and every tmux server under `env -i`, on a socket only the run uses
 tmux ignores `-e PATH`, and a tmux server hands its own environment to every session it starts, so the default tmux server leaks `XDG_CONFIG_HOME` and `NPM_TOKEN` into Claude Code. Start `claude` by its absolute path, so the real `~/.local/bin` stays off PATH and only the `cmod` the run installs answers.
 Template:
-    env -i HOME=<scratch>/home CLAUDE_CONFIG_DIR=<scratch>/home/.claude ANTHROPIC_BASE_URL=http://127.0.0.1:8317 ANTHROPIC_API_KEY=isolated-probe-placeholder CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CMOD_DIST_SERVER=file://<scratch>/releases PATH=<scratch>/home/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin TERM=xterm-256color LANG=en_US.UTF-8 tmux -S <scratch>/tmux.sock new-session -d -s <session> -x 200 -y 50 -c <project> '<absolute path of claude> --debug-file <scratch>/logs/debug-1.log'
+    env -i HOME=<scratch>/home CLAUDE_CONFIG_DIR=<scratch>/home/.claude ANTHROPIC_BASE_URL=<model url> ANTHROPIC_API_KEY=isolated-probe-placeholder CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CMOD_DIST_SERVER=file://<scratch>/releases PATH=<scratch>/home/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin TERM=xterm-256color LANG=en_US.UTF-8 tmux -S <scratch>/tmux.sock new-session -d -s <session> -x 200 -y 50 -c <project> '<absolute path of claude> --debug-file <scratch>/logs/debug-1.log'
 
 ### Install the mods from a local directory marketplace
 Run `claude plugin marketplace add <scratch>/marketplace`, then `claude plugin install <mod>@<marketplace name>`, each behind the same `env -i` prefix without tmux. Each entry carries its own `node_modules`, installed from the packed SDK through /repack-core, and no `bun.lock`. Claude Code runs `bun install` against the npm registry for an entry that has a `bun.lock`. The cmod plugin's entry is a `git archive` of this checkout without `cli/`, which is what `cmod publish` releases. Claude Code 2.1.305 loads a directory marketplace's plugin from the marketplace folder, not from the `installPath` in `installed_plugins.json`, so a fixture change goes into the marketplace folder.

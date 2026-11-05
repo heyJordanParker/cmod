@@ -7,7 +7,7 @@ test('matches dot files', () => {
 })
 
 test('matches a glob anywhere in an absolute path', () => {
-  expect(matchesGlob('/Users/jordan/app/.env', '**/.env')).toBe(true)
+  expect(matchesGlob('/Users/me/app/.env', '**/.env')).toBe(true)
 })
 
 test('does not ignore case', () => {

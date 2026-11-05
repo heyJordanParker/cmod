@@ -537,7 +537,7 @@ type Device = { id: string; name: string; os: 'darwin' | 'linux'; arch: 'arm64' 
 ```
 
 - `id` is the same on one computer for every session, mod, and reinstall, and differs between computers. cmod reads it from the operating system and stores nothing: the IOPlatformUUID on macOS, and on Linux `/etc/machine-id`, or `/var/lib/dbus/machine-id` when that holds none, as systemd and D-Bus read them, hashed for cmod the way systemd's `sd_id128_get_machine_app_specific` hashes a machine id for an app, so the id never shows the computer's own.
-- `name` is the name the computer goes by on its network: its LocalHostName on macOS, such as `Jordans-Mac-mini`, and its hostname on Linux.
+- `name` is the name the computer goes by on its network: its LocalHostName on macOS, such as `Office-Mac-mini`, and its hostname on Linux.
 - `os` and `arch` are the names cmod's builds use, such as `darwin` and `arm64`.
 - `read` reads the computer the first time the mod calls it, and answers the same device after that. It rejects on a computer other than macOS or Linux on arm64 or x64. It also rejects on a Linux computer where neither `/etc/machine-id` nor `/var/lib/dbus/machine-id` holds a machine id, as in many containers, with a sentence that names both files.
 - A mod's program that runs with no session, such as over `ssh`, reads the same device with `cmod device --json` ([commands.md](commands.md#cmod-device)).

@@ -735,14 +735,14 @@ test("a device id is the computer's machine id hashed for cmod the way systemd's
   }
   const mac = {
     run: (argv: readonly string[]) => {
-      if (argv[0] === 'uname') return { exitCode: 0, stdout: 'Darwin Jordans-Mac-mini.local x86_64\n' }
-      if (argv[0] === 'scutil') return { exitCode: 0, stdout: 'Jordans-Mac-mini\n' }
-      return { exitCode: 0, stdout: '+-o Mac14,5  <class IOPlatformExpertDevice>\n    {\n      "IOPlatformSerialNumber" = "D5F2MJKC00"\n      "IOPlatformUUID" = "E1F9C9A2-6B5E-4B9A-9D2C-0A1B2C3D4E5F"\n    }\n' }
+      if (argv[0] === 'uname') return { exitCode: 0, stdout: 'Darwin Office-Mac-mini.local x86_64\n' }
+      if (argv[0] === 'scutil') return { exitCode: 0, stdout: 'Office-Mac-mini\n' }
+      return { exitCode: 0, stdout: '+-o Mac14,5  <class IOPlatformExpertDevice>\n    {\n      "IOPlatformSerialNumber" = "A1B2C3D4E5"\n      "IOPlatformUUID" = "E1F9C9A2-6B5E-4B9A-9D2C-0A1B2C3D4E5F"\n    }\n' }
     },
   }
 
   expect((await readDeviceOn(linux))[0]).toEqual({ id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'arm64' })
-  expect((await readDeviceOn(mac))[0]).toEqual({ id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Jordans-Mac-mini', os: 'darwin', arch: 'x64' })
+  expect((await readDeviceOn(mac))[0]).toEqual({ id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Office-Mac-mini', os: 'darwin', arch: 'x64' })
 })
 
 test("a Linux computer whose /etc/machine-id is missing or empty reads D-Bus's /var/lib/dbus/machine-id as systemd does, and one with neither names both files", async () => {
