@@ -582,6 +582,35 @@ test('Hide keeps a failure hidden when it happens again, and a different failure
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'the disk is full' }])
 })
 
+test('three listeners of one mod failing with one message show one toast that counts them, and Hide keeps all three hidden', async () => {
+  const broken = () => Promise.reject(new Error('rulebook.config.ts has a syntax error'))
+  const tested = testMod(
+    defineMod({
+      name: 'rulebook',
+      setup() {
+        sessions.current.beforeSessionStart(broken)
+        sessions.current.beforePrompt(broken)
+        sessions.current.beforeToolCall(broken)
+      },
+    }),
+  )
+  const failAll = async () => {
+    await tested.raise.beforeSessionStart({ source: 'startup' })
+    await tested.raise.beforePrompt({ text: 'Fix the bug' })
+    await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'ls' } })
+    await tested.settle()
+  }
+  await failAll()
+
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'rulebook.config.ts has a syntax error' }])
+  expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('3 times')
+
+  await pressInBand(tested, 'Hide')
+  await failAll()
+
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+})
+
 test('coreVersion, which a bundled mod reports in Copy, is the version in core/package.json', () => {
   expect(coreVersion).toBe(corePackage.version)
 })

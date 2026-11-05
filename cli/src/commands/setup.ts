@@ -9,7 +9,6 @@ import { relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
-import { restartServices } from '../service.js'
 import { ifMissing, listFiles, readText, writeAtomically } from '../files.js'
 import { startProgress, type Progress } from '../progress.js'
 import { bindKeys, isLinked, modBindings, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
@@ -249,10 +248,6 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       grantedOnUpdate: [],
     })
     isRecorded = true
-    await restartServices(plugin.name).then(
-      (names) => names.forEach((name) => emit({ type: 'log', text: `Restarted the ${name} service of ${plugin.name} on ${plugin.version}` })),
-      (error: unknown) => emit({ type: 'log', text: `The services of ${plugin.name} keep running the earlier program, because restarting them failed: ${messageOf(error)}` }),
-    )
     if (state.updates !== undefined) {
       await turnOnUpdates(state.updates)
       emit({ type: 'log', text: `${plugin.name} now updates automatically from the ${state.updates} marketplace. Turn it off in /plugin, Marketplaces.` })

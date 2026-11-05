@@ -143,7 +143,15 @@ export async function run(argv: string[]): Promise<number> {
 
   let programs: string[] = []
   if (program !== undefined) {
-    programs = await buildProgram(program, declaredMachines(plugin.packageJson), progress)
+    programs = await buildProgram(program, declaredMachines(plugin.packageJson), progress, (builds) =>
+      Promise.all(
+        builds.map(async (build) => {
+          const copy = join(output, basename(build))
+          await cp(build, copy)
+          return copy
+        }),
+      ),
+    )
   }
 
   const sums = join(output, 'SHA256SUMS')

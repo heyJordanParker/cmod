@@ -2,6 +2,7 @@ import type { RenderElement } from 'claude-code'
 import { elementOf } from '../ui/elements.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { isStillInstalling } from './dependencies.js'
 import { partMethods, type DrawnPart, type PartPress } from './ui.js'
 
 export type DrawnParts = {
@@ -41,6 +42,7 @@ export function drawnParts({ claude, report, press }: { readonly claude: Claude;
           .then(
             (data) => keep((data ?? null) as DrawnPart | null),
             (error: unknown) => {
+              if (isStillInstalling(mod, error)) return keep(drawn.get(key)?.data ?? null)
               report(`draw:${mod}`, `${name} drew nothing`, error)
               keep(drawn.get(key)?.data ?? null, messageOf(error))
             },

@@ -295,6 +295,22 @@ test('a failed build shows one sentence that ends with one period', async () => 
   expect(result.stderr).toBe(`cmod link: Building hello with "${build}" exited 2: make: no rule for dist. Fix the build in ~/Developer/hello-mod/cli, then save a file there or run the command again.\n`)
 })
 
+test("a failed build reports the compiler's error that make's summary line follows, in its last five lines of output", async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer', 'hello-mod')
+  const lines = ['compiling 1', 'compiling 2', 'compiling 3', '# example.com/oneclaude', './cause.go:12:9: undefined: networkCause', 'make: *** [../.target/dist/darwin-arm64/oneclaude-v0.9.5.dylib] Error 1']
+  const build = `${lines.map((line) => `echo '${line}' >&2`).join('; ')}; exit 2`
+  await writeFiles(checkout, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),
+    'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
+  })
+
+  const result = await cmod(home, 'link', checkout)
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toBe(`cmod link: Building hello with "${build}" exited 2: ${lines.slice(1).join('\n')}. Fix the build in ~/Developer/hello-mod/cli, then save a file there or run the command again.\n`)
+})
+
 test('link installs the cmod plugin through Claude Code when claude plugin list lacks it', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'bin/claude': claudeAnswering([]), 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })

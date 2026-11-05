@@ -15,6 +15,8 @@ export type Program = { name: string; folder: string; build: string; output: str
 
 export const programSteps = 3
 
+const failedBuildLines = 5
+
 export const machine = `${process.platform}-${process.arch}`
 
 export const machines: readonly string[] = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
@@ -82,12 +84,12 @@ export async function readProgram(plugin: Plugin): Promise<Program | undefined> 
   return { name, folder, build: declared['build'], output: declared['output'] }
 }
 
-export async function buildProgram(program: Program, wanted: readonly string[], progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<string[]> {
+export async function buildProgram<Result>(program: Program, wanted: readonly string[], progress: Progress, use: (builds: string[]) => Promise<Result>, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<Result> {
   const lock = await takeLock(`${buildPath(program)}.lock`)
   try {
     const builds = await runBuild(program, wanted, progress, environment)
     await rm(`${buildPath(program)}.failed`, { force: true })
-    return builds
+    return await use(builds)
   } finally {
     await lock[Symbol.asyncDispose]()
   }
@@ -131,13 +133,16 @@ async function runBuild(program: Program, wanted: readonly string[], progress: P
   const heading = `Building ${program.name}`
   progress.step(heading)
   const startedAt = Math.floor(Date.now() / 1000) * 1000
+  const lastLines: string[] = []
   const result = await runStep(['sh', '-c', program.build], program.folder, { ...environment, CMOD_MACHINES: wanted.join(' ') }, (event) => {
-    if (event.type === 'progress') progress.update(heading, event.done, event.total, event.label)
-    else progress.log(event.text)
+    if (event.type === 'progress') return progress.update(heading, event.done, event.total, event.label)
+    progress.log(event.text)
+    if (event.text.trim() !== '') lastLines.push(event.text)
+    if (lastLines.length > failedBuildLines) lastLines.shift()
   })
   if (result.exitCode !== 0) {
     progress.fail(`Could not build ${program.name}`)
-    throw new Error(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, result.lastError)}. Fix the build in ${tilde(program.folder)}, then save a file there or run the command again.`)
+    throw new Error(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, lastLines.join('\n'))}. Fix the build in ${tilde(program.folder)}, then save a file there or run the command again.`)
   }
   const folder = join(program.folder, program.output)
   const names = machines.map((each) => `${program.name}-${each}`)
@@ -165,14 +170,21 @@ export async function installProgram(program: Program, version: string, progress
 }
 
 async function storeBuild(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<{ target: string; isChanged: boolean }> {
-  const built = (await buildProgram(program, [machine], progress, environment))[0] as string
   const target = programPath(storeFolder(process.env), program.name, version)
-  if (await hasSameBytes(built, target)) return { target, isChanged: false }
-  await mkdir(dirname(target), { recursive: true })
-  await copyFile(built, `${target}.${process.pid}.tmp`)
-  await chmod(`${target}.${process.pid}.tmp`, 0o755)
-  await rename(`${target}.${process.pid}.tmp`, target)
-  return { target, isChanged: true }
+  return buildProgram(
+    program,
+    [machine],
+    progress,
+    async ([built]) => {
+      if (await hasSameBytes(built as string, target)) return { target, isChanged: false }
+      await mkdir(dirname(target), { recursive: true })
+      await copyFile(built as string, `${target}.${process.pid}.tmp`)
+      await chmod(`${target}.${process.pid}.tmp`, 0o755)
+      await rename(`${target}.${process.pid}.tmp`, target)
+      return { target, isChanged: true }
+    },
+    environment,
+  )
 }
 
 async function hasSameBytes(path: string, other: string): Promise<boolean> {

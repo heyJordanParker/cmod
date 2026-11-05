@@ -1,5 +1,5 @@
-import { existsSync, watch } from 'node:fs'
-import { mkdir, open, readdir, rm, utimes } from 'node:fs/promises'
+import { type Stats, watch } from 'node:fs'
+import { mkdir, open, readdir, rm, stat, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { instancePath, serviceLogPath, storeFolder } from '@cmodjs/core/src/records.js'
@@ -25,8 +25,12 @@ once the holder exits. With --no-wait, another one touches the holder's file,
 prints held, and exits 0, and the session follows the instance file itself.
 The holder stops the command on SIGTERM, SIGINT, or SIGHUP, and when its parent
 process exits, and exits with the command's exit code when the command exits on
-its own. A copy an earlier holder left running gets SIGTERM, then SIGKILL after
-5 seconds, before the new holder starts its own.
+its own. Once the command's file in the store's programs folder changes, as a
+new version or a linked checkout's build replaces it, the holder stops the
+command and exits 0, and the next cmod program starts the new file. Every
+session runs one once the instance file is gone, and a service's manager runs
+one at once. A copy an earlier holder left running gets SIGTERM, then SIGKILL after 5
+seconds, before the new holder starts its own.
 
 With --service, which a session passes for a program job with isService, it
 makes the holder a service of the computer, com.claudemodmanager.<mod>.<program>:
@@ -163,15 +167,23 @@ async function hold(file: string, log: string, executable: string, args: readonl
   await rm(file, { force: true })
   await trimLog(log)
   const linked = join(programsFolder(), executable)
+  const build = await stat(linked).catch(ifMissing(undefined))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'CLAUDE_CODE_SESSION_ID'))
-  const child = spawn([existsSync(linked) ? linked : executable, ...args], { env, stdout: 'pipe', stderr: 'inherit' })
+  const child = spawn([build === undefined ? executable : linked, ...args], { env, stdout: 'pipe', stderr: 'inherit' })
+  const replaced = new AbortController()
+  const stopped = AbortSignal.any([ending, replaced.signal])
   const stopping = () => {
     child.kill('SIGTERM')
     setTimeout(() => child.kill('SIGKILL'), killMs).unref()
   }
-  ending.addEventListener('abort', stopping)
-  if (ending.aborted) stopping()
-  const touching = setInterval(() => void touchHolders(`${file}.lock`), checkMs)
+  stopped.addEventListener('abort', stopping)
+  if (stopped.aborted) stopping()
+  const ticking = setInterval(() => {
+    void touchHolders(`${file}.lock`)
+    void hasNewBuild(linked, build).then((isNew) => {
+      if (isNew) replaced.abort()
+    })
+  }, checkMs)
   try {
     const started = await startTime(child.pid)
     let shown: Promise<void> | undefined
@@ -181,15 +193,20 @@ async function hold(file: string, log: string, executable: string, args: readonl
     })
     await shown
     const code = await child.exited
-    return ending.aborted ? 0 : code
+    return stopped.aborted ? 0 : code
   } catch (error) {
     stopping()
     throw error
   } finally {
-    clearInterval(touching)
-    ending.removeEventListener('abort', stopping)
+    clearInterval(ticking)
+    stopped.removeEventListener('abort', stopping)
     await rm(file, { force: true })
   }
+}
+
+async function hasNewBuild(linked: string, started: Stats | undefined): Promise<boolean> {
+  const now = await stat(linked).catch(ifMissing(undefined))
+  return now !== undefined && (started === undefined || now.ino !== started.ino || now.mtimeMs !== started.mtimeMs)
 }
 
 async function isStartedWithin(file: string, ms: number): Promise<boolean> {

@@ -7,7 +7,7 @@ import type { StyledAt } from '../ui/styles.js'
 import { ifMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName, isNotInstalled } from './dependencies.js'
+import { cmodPluginName, isNotInstalled, isStillInstalling } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
 import { partMethods, styledAt, viewportColumns, type PartsUpdate, type WidgetDeclaration } from './ui.js'
@@ -183,7 +183,7 @@ export function serveWidgets({
       declared.set(mod, declarationsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })))
     } catch (error) {
       declared.delete(mod)
-      if (!isNotInstalled(mod, error)) claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`)
+      if (!isNotInstalled(mod, error) && !isStillInstalling(mod, error)) claude.ui.warn(`widgets:list:${mod}`, `cmod: ${mod} did not list its widgets: ${messageOf(error)}`)
     }
   }
 

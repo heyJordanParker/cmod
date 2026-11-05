@@ -1143,6 +1143,32 @@ test("the cmod plugin tells each mod of its session the color the index holds at
   ])
 })
 
+test("a mod still installing misses the session's color with no warning, and hears it when its start tells its parts", async () => {
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  const indexed = { id: 'test-session', title: 'Fix the login bug', project: '/test/project', cwd: '/test/project', model: 'test-model', startedAt: '', lastAt: '', isRunning: true, color: 'green' }
+  tested.fakes.process.spawn = (request) => printed(JSON.stringify(request.argv.includes('sessions') ? [indexed] : {}))
+  let isInstalling = true
+  const told: unknown[] = []
+  tested.fakes.cmod.call = async (call) => {
+    if (call.method !== conversationMethods.sessionColor) return null
+    if (isInstalling) throw new Error("notes is installing. Try again when it's ready.")
+    told.push({ to: call.to, ...(call.input as object) })
+    return null
+  }
+  const tellParts = () => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
+  await tested.settle()
+
+  await tellParts()
+  await tested.settle()
+  isInstalling = false
+  await tellParts()
+  await tested.settle()
+
+  expect(told).toEqual([{ to: 'notes', session: 'test-session', color: 'green' }])
+  expect(tested.shown.debug.filter((line) => line.includes("did not hear the session's color"))).toEqual([])
+})
+
 function followerChild() {
   let finish: (result: ProcessSpawnResult | undefined) => void = () => {}
   const ended = new Promise<ProcessSpawnResult | undefined>((resolve) => (finish = resolve))

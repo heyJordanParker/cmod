@@ -514,14 +514,16 @@ test('a draw that was still running when its mod changed is dropped, and the nex
   expect(answers).toHaveLength(1)
 })
 
-test('a mod a reload took out of the session loses its widgets quietly, one that answers keeps them, and one that fails to answer says so', async () => {
+test('a mod a reload took out of the session or one still installing loses its widgets quietly, one that answers keeps them, and one that fails to answer says so', async () => {
   const { fake, widgets, tell } = servedLayout(layout({}))
   tell('git', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
   tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   tell('todo', [{ id: 'open', title: 'Open', areas: [BelowPrompt] }])
+  tell('inbox', [{ id: 'waiting', title: 'Waiting', areas: [BelowPrompt] }])
   fake.fakes.cmod.call = async ({ to }) => {
     if (to === 'notes') throw new Error('notes is not installed. Install it in Plugins.')
     if (to === 'todo') throw new Error('todo: the list is not JSON')
+    if (to === 'inbox') throw new Error("inbox is installing. Try again when it's ready.")
     return { widgets: [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }], pages: [] }
   }
 

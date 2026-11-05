@@ -10,6 +10,10 @@ import { interruptProgress } from './progress.js'
 
 const lockNoticeMs = 3000
 
+const lockPollMs = 100
+
+const ownLocks = new Set<string>()
+
 let ownStartTime: Promise<string> | undefined
 
 export function storePath(...parts: string[]): string {
@@ -48,6 +52,34 @@ export function modLock(name: string): string {
 export function takeLock(path: string): Promise<AsyncDisposable>
 export function takeLock(path: string, cancel: AbortSignal): Promise<AsyncDisposable | undefined>
 export async function takeLock(path: string, cancel?: AbortSignal): Promise<AsyncDisposable | undefined> {
+  while (ownLocks.has(path)) {
+    if (cancel?.aborted) return undefined
+    await Bun.sleep(lockPollMs)
+  }
+  ownLocks.add(path)
+  let isTaken = false
+  try {
+    isTaken = await placeOnceFree(path, cancel)
+  } finally {
+    if (!isTaken) ownLocks.delete(path)
+  }
+  if (!isTaken) return undefined
+  const holder = join(path, String(process.pid))
+  return {
+    async [Symbol.asyncDispose]() {
+      try {
+        await rm(holder)
+        await rmdir(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error
+        })
+      } finally {
+        ownLocks.delete(path)
+      }
+    },
+  }
+}
+
+async function placeOnceFree(path: string, cancel: AbortSignal | undefined): Promise<boolean> {
   await mkdir(dirname(path), { recursive: true })
   const started = await (ownStartTime ??= startTime(process.pid))
   let noticeAt = Date.now() + lockNoticeMs
@@ -62,24 +94,16 @@ export async function takeLock(path: string, cancel?: AbortSignal): Promise<Asyn
       else await rm(join(path, holder), { force: true })
     }
     if (live.length === 0) continue
-    if (cancel?.aborted) return undefined
+    if (cancel?.aborted) return false
     if (Date.now() >= noticeAt) {
       noticeAt = Number.POSITIVE_INFINITY
       const resumeProgress = interruptProgress()
       process.stderr.write(`Waiting for ${tilde(path)}, which process ${live.join(', ')} holds.\n`)
       resumeProgress()
     }
-    await Bun.sleep(100)
+    await Bun.sleep(lockPollMs)
   }
-  const holder = join(path, String(process.pid))
-  return {
-    async [Symbol.asyncDispose]() {
-      await rm(holder)
-      await rmdir(path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error
-      })
-    },
-  }
+  return true
 }
 
 async function placeLock(path: string, started: string): Promise<boolean> {

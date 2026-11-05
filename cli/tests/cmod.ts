@@ -84,7 +84,19 @@ esac
 `
 
 export async function deleteTemporaryHomes(): Promise<void> {
-  for (const home of homes.splice(0)) await removeTemporary(home)
+  const made = homes.splice(0)
+  await Promise.all(made.map(stopFakeService))
+  for (const home of made) await removeTemporary(home)
+}
+
+async function stopFakeService(home: string): Promise<void> {
+  if (!existsSync(join(home, 'service-pid'))) return
+  await Bun.spawn([join(home, 'bin', 'launchctl'), 'bootout', 'tests'], { env: { ...process.env, HOME: home } }).exited
+  const deadline = Date.now() + 10_000
+  while ((await Bun.spawn(['pgrep', '-f', home], { stdout: 'ignore' }).exited) === 0) {
+    if (Date.now() > deadline) throw new Error(`The fake service in ${home} still runs 10 seconds after cmod's tests stopped it.`)
+    await Bun.sleep(100)
+  }
 }
 
 async function removeTemporary(folder: string): Promise<void> {
@@ -108,7 +120,10 @@ const env = Object.fromEntries(pairs.flatMap((value, index) => (index % 2 === 0 
 const errorPath = text.match(/<key>StandardErrorPath<\\/key>\\s*<string>(.*)<\\/string>/)?.[1]
 if (errorPath !== undefined) fs.mkdirSync(require("node:path").dirname(xml(errorPath)), { recursive: true })
 const stderr = errorPath === undefined ? "inherit" : fs.openSync(xml(errorPath), "a")
-process.exit(require("node:child_process").spawnSync(argv[0], argv.slice(1), { env, stdio: ["inherit", "inherit", stderr] }).status ?? 1)`
+while (true) {
+  require("node:child_process").spawnSync(argv[0], argv.slice(1), { env, stdio: ["inherit", "inherit", stderr] })
+  Bun.sleepSync(1000)
+}`
 
 const serviceManager = `#!/bin/sh
 echo "$(basename "$0") $*" >> "$HOME/service-calls"
@@ -120,14 +135,13 @@ start() {
   if ! running; then "${process.execPath}" -e '${runUnit}' "$1" >> "$HOME/service-log" 2>&1 & echo $! > "$HOME/service-pid"; fi
 }
 stop() {
-  if running; then pkill -TERM -P "$(cat "$HOME/service-pid")"; fi
+  if running; then pkill -TERM -P "$(cat "$HOME/service-pid")"; kill -TERM "$(cat "$HOME/service-pid")"; fi
 }
 case "$(basename "$0") $*" in
   "launchctl print "*) [ -e "$HOME/service-loaded" ] ;;
   "launchctl bootstrap "*)
     if [ -e "$HOME/service-loaded" ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi
     start "$3" ;;
-  "launchctl kickstart "*) start "$HOME/Library/LaunchAgents/\${3##*/}.plist" ;;
   "systemctl --user start "*|"systemctl --user restart "*)
     if [ -e "$HOME/service-fails" ]; then echo "Job for $3 failed because start of the service was attempted too often." >&2; exit 1; fi
     start "$units/$3" ;;

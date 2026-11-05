@@ -67,7 +67,7 @@ async function sourcesAmong(folder: string, files: readonly string[]): Promise<s
 }
 
 async function changedSources(folder: string, files: readonly string[], output: string | undefined): Promise<readonly string[] | undefined> {
-  if (files.length === 0 || files.includes('')) return undefined
+  if (files.includes('')) return undefined
   const outside = files.filter((file) => output === undefined || relativePath(output, file) === undefined)
   if (outside.length === 0) return []
   return sourcesAmong(folder, outside).catch((error: unknown) => {
@@ -89,6 +89,7 @@ export async function run(argv: string[]): Promise<number> {
   const attempts = new Map<string, number>()
   const programsDue = new Set<string>()
   const changedFiles = new Map<string, Set<string>>()
+  const settling = new Map<string, Promise<void>>()
   const failures = new Map(Object.entries(((await readJson(buildFailuresPath(storeFolder(process.env)))) ?? {}) as Record<string, string>))
   const progress = { ...startProgress(process.stderr), note: () => {} }
 
@@ -104,6 +105,7 @@ export async function run(argv: string[]): Promise<number> {
   const settle = async (folder: string) => {
     const files = [...(changedFiles.get(folder) ?? [])]
     changedFiles.delete(folder)
+    if (files.length === 0) return
     const name = await nameOf(folder)
     let attempt = attempts.get(folder) ?? 0
     try {
@@ -137,7 +139,13 @@ export async function run(argv: string[]): Promise<number> {
     if (file !== null && file.split(sep).some((part) => skipped.has(part))) return
     changedFiles.set(folder, (changedFiles.get(folder) ?? new Set()).add(file ?? ''))
     clearTimeout(timers.get(folder))
-    timers.set(folder, setTimeout(() => void settle(folder), settleMs))
+    timers.set(
+      folder,
+      setTimeout(() => {
+        const next = () => settle(folder)
+        settling.set(folder, (settling.get(folder) ?? Promise.resolve()).then(next, next))
+      }, settleMs),
+    )
   }
 
   const follow = async () => {

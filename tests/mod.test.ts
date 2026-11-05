@@ -300,9 +300,10 @@ const store = '/test/home/.local/share/cmod'
 
 const bound = { global: { installedPlugins: [], areHotkeysBound: true } }
 
-function testSettings(files: Readonly<Record<string, string>> = {}) {
+function testSettings(files: Readonly<Record<string, string>> = {}, projectRoot?: string) {
   const tested = testMod(cmodPlugin, {
     state: bound,
+    ...(projectRoot === undefined ? {} : { projectRoot }),
     files: {
       [`${store}/records/ci-watch.json`]: JSON.stringify({ name: 'ci-watch', version: '0.2.0', root: '/plugins/ci-watch', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: { 'ctrl+l': 'ci-watch--runs' } }),
       '/test/home/.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'ctrl+l': 'command:ci-watch--runs' } }] }),
@@ -366,6 +367,19 @@ test('Settings draws no permission row for a mod that declares permissions', asy
   expect(page).toContain('Options  Hotkeys')
   expect(page).not.toContain('Permissions')
   expect(page).not.toContain('api.github.com')
+})
+
+test('Settings shows no warning for a mod still installing', async () => {
+  const { tested, shown } = testSettings()
+  const answer = tested.fakes.cmod.call
+  tested.fakes.cmod.call = async (input) => (input.method === 'cmod:pendingSteps' ? Promise.reject(new Error("ci-watch is installing. Try again when it's ready.")) : answer!(input))
+  await tested.type('/mods ci-watch')
+  await tested.settle()
+
+  await shown()
+  await tested.settle()
+
+  expect(tested.shown.debug.filter((line) => line.includes('ci-watch did not answer'))).toEqual([])
 })
 
 const changelog = '# Changelog\n\n## [Unreleased]\n\n- Watches merge queues.\n\n## [0.2.0] - 2026-10-13\n\n### Added\n- CI failures on your branch.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
@@ -1317,8 +1331,8 @@ const failureOf = (mod: string, root: string, at: string, fields: Record<string,
   ...fields,
 })
 
-test('cmod:failed answers show for a mod run from its checkout and a critical failure, no show for an installed mod until Show errors from installed mods is on, and the Log lists each newest first with Copy', async () => {
-  const { tested, shown } = testSettings()
+test('cmod:failed answers show for a mod run from the checkout this session works in and a critical failure, no show for an installed mod until Show errors from installed mods is on, and the Log lists each newest first with Copy', async () => {
+  const { tested, shown } = testSettings({}, '/work/notes')
   await tested.start()
   const fail = (caller: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input, caller } as never)
 
@@ -1346,6 +1360,26 @@ test('cmod:failed answers show for a mod run from its checkout and a critical fa
   expect(copied[0]?.startsWith(`${failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z').details}\n\n`)).toBe(true)
   expect(copied[0]).toContain('· Claude Code 2.1.317')
   expect(await shown()).toContain('Copied the error.')
+})
+
+test("a linked mod's failure in a session of another project shows no toast, and still lands in the Log", async () => {
+  const { tested } = testSettings({}, '/work/inbox')
+  await tested.start()
+
+  const answer = await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z'), caller: 'notes' } as never)
+  const logged = JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as { readonly mod: string; readonly message: string }[]
+
+  expect(answer).toEqual({ value: { showsToast: false } })
+  expect(logged.filter((entry) => entry.mod === 'notes').map((entry) => entry.message)).toEqual(["notes's onPrompt listener failed"])
+})
+
+test("a linked mod's failure in a session inside the mod's checkout shows the toast", async () => {
+  const { tested } = testSettings({}, '/work/notes/src')
+  await tested.start()
+
+  const answer = await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z'), caller: 'notes' } as never)
+
+  expect(answer).toEqual({ value: { showsToast: true } })
 })
 
 test('the Log keeps the failures of every session, and skips a session file that is not a list, naming it in the debug log', async () => {
@@ -1631,8 +1665,10 @@ test('a running session starts cmod watch once a mod is linked', async () => {
   expect(started).toContain(`${cmodProgram} watch`)
 })
 
-test('a linked mod that does not build shows its error in one toast, and the toast goes once it builds', async () => {
-  const { tested } = cmodAnswering({}, {})
+const linkedMarketplace = (source: string) => ({ ...linkedFiles, '/work/.claude-plugin/marketplace.json': JSON.stringify({ name: 'work-linked', plugins: [{ name: 'demo', source, description: '' }] }) })
+
+test('a linked mod that does not build shows its error in one toast in a session inside its checkout, and the toast goes once it builds', async () => {
+  const { tested } = cmodAnswering({}, linkedMarketplace('./app'))
   const { tick } = watchedStore(tested)
   await tested.start()
   await tested.settle()
@@ -1644,6 +1680,50 @@ test('a linked mod that does not build shows its error in one toast, and the toa
   await writeStoreFile(tested, `${store}/build-failures.json`, '{}')
   await tick()
   expect(tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')).toEqual([])
+})
+
+test('a linked mod that does not build shows no toast in a session of another project, and its failure still lands in the Log', async () => {
+  const { tested } = cmodAnswering({}, linkedMarketplace('./demo'))
+  const { tick } = watchedStore(tested)
+  await tested.start()
+  await tested.settle()
+
+  await writeStoreFile(tested, `${store}/build-failures.json`, JSON.stringify({ demo: 'Bundling hooks/register.ts failed: Expected ")"' }))
+  await tick()
+
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')).toEqual([])
+  expect(await ownLog(tested)).toContain('demo does not build')
+})
+
+test("a build failure written during the session's turn shows nothing until the turn ends, and nothing at all once the next build passed before then", async () => {
+  const failing = JSON.stringify({ demo: 'Bundling hooks/register.ts failed: Could not resolve "./parser.js"' })
+  const { tested } = cmodAnswering({}, linkedMarketplace('./app'))
+  const { tick } = watchedStore(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tick()
+  const shownFailures = () => tested.shown.toasts.filter((toast) => toast.message === 'demo does not build')
+
+  await prompt(tested, 'Rename the parser')
+  await writeStoreFile(tested, `${store}/build-failures.json`, failing)
+  await tick()
+  expect(shownFailures()).toEqual([])
+
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await tick()
+  expect(shownFailures()).toEqual([{ type: 'error', message: 'demo does not build', description: 'Bundling hooks/register.ts failed: Could not resolve "./parser.js"' }])
+
+  await writeStoreFile(tested, `${store}/build-failures.json`, '{}')
+  await tick()
+  await prompt(tested, 'Move the parser')
+  await writeStoreFile(tested, `${store}/build-failures.json`, failing)
+  await tick()
+  await writeStoreFile(tested, `${store}/build-failures.json`, '{}')
+  await tick()
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await tick()
+
+  expect(shownFailures()).toEqual([])
+  expect((await ownLog(tested)).filter((message) => message === 'demo does not build')).toHaveLength(1)
 })
 
 test('the cmod plugin updates nothing when every mod has the cmod it needs, and a store change that marks no plugin change lists nothing', async () => {
@@ -2021,6 +2101,12 @@ test('the offer names each of three updates', async () => {
   const { tested } = await updated(versions('1.0.0'), versions('1.1.0'))
 
   expect(offerOf(tested)).toEqual(offering('notes updated to 1.1.0, inbox updated to 1.1.0, tasks updated to 1.1.0. Reload to use them in this session.'))
+})
+
+test('the offer names a plugin whose two copies both updated once, with the version of the copy this session loads', async () => {
+  const { tested } = await updated({ 'cmod@cmod': '5.9.0', 'cmod@Developer-linked': '5.9.0' }, { 'cmod@cmod': '5.10.0', 'cmod@Developer-linked': '5.11.0' })
+
+  expect(offerOf(tested)).toEqual(offering('cmod updated to 5.10.0. Reload to use them in this session.'))
 })
 
 test('the offer names the one plugin an update changed, and the ones turned on and off', async () => {

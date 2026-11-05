@@ -9,7 +9,7 @@ import { cmodPluginName } from './dependencies.js'
 
 export type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 
-export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown; readonly isCritical?: boolean }
+export type Failure = { readonly id: string; readonly message: string; readonly error?: unknown; readonly description?: string; readonly retry?: () => unknown; readonly isCritical?: boolean; readonly root?: string }
 
 export type LoggedFailure = {
   readonly mod: string
@@ -47,6 +47,8 @@ type Entry = {
   readonly options: ToastOptions
   readonly actions: readonly Action[]
   readonly hides?: string
+  readonly merged: Map<string, string>
+  count: number
   at: Date
   isOpen: boolean
   reporting?: Reporting | undefined
@@ -135,7 +137,8 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     if (id === undefined) sent.clear()
     else sent.delete(String(id))
     for (const entry of entries.values()) {
-      if (id !== undefined && entry.id !== id) continue
+      if (id !== undefined && entry.id !== id && !entry.merged.has(String(id))) continue
+      for (const merged of entry.merged.keys()) sent.delete(merged)
       disarm(entry)
       entries.delete(entry.id)
     }
@@ -152,7 +155,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     }
     if (previous !== undefined) disarm(previous)
     const reporting = hides !== undefined && previous?.hides === hides ? previous.reporting : undefined
-    const entry: Entry = { id, type, message, options, actions, ...(hides === undefined ? {} : { hides }), at: new Date(), isOpen: previous?.isOpen ?? false, reporting, timer: undefined }
+    const entry: Entry = { id, type, message, options, actions, ...(hides === undefined ? {} : { hides }), merged: new Map(), count: 1, at: new Date(), isOpen: previous?.isOpen ?? false, reporting, timer: undefined }
     if (type === 'error' && previous?.message !== message) claude.ui.log(`${name}: ${message}${typeof options.description === 'string' ? `: ${options.description}` : ''}`, { to: 'debug' })
     entries.set(id, entry)
     changed()
@@ -167,7 +170,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
   const hide = (entry: Entry) => {
     dismiss(entry.id)
     if (entry.hides === undefined) return
-    hidden.set(String(entry.id), entry.hides)
+    for (const [id, hides] of [[String(entry.id), entry.hides] as const, ...entry.merged]) hidden.set(id, hides)
     void claude.store.set(hiddenKey, Object.fromEntries(hidden)).catch((error: unknown) => warn('hidden:write', `${name}: could not remember the failure you hid: ${messageOf(error)}`))
   }
 
@@ -245,7 +248,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     }
   }
 
-  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry, isCritical = false }: Failure): ToastId => {
+  const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry, isCritical = false, root = claude.plugin.root }: Failure): ToastId => {
     const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
     const at = new Date()
     const repeat = `${hides}\n${description ?? ''}\n${at.toISOString().slice(0, 16)}`
@@ -256,7 +259,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const logged = async () => {
       const contact = await contactOf(claude)
       const version = await modVersion()
-      const failure: LoggedFailure = { mod: name, id, message, details: detailsOf(version, at, `${message}${description === undefined ? '' : `\n${description}`}${stack}`), at: at.toISOString(), isCritical, root: claude.plugin.root, ...(contact === undefined ? {} : { contact }), level: 'error', version, core: coreVersion }
+      const failure: LoggedFailure = { mod: name, id, message, details: detailsOf(version, at, `${message}${description === undefined ? '' : `\n${description}`}${stack}`), at: at.toISOString(), isCritical, root, ...(contact === undefined ? {} : { contact }), level: 'error', version, core: coreVersion }
       const shows = await showsToast(failure, isCritical)
       if (isCritical) return
       if (shows !== false) return show()
@@ -265,11 +268,19 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const show = () => {
       if (hidden.get(id) === hides) return
       hidden.delete(id)
-      const shown = entries.get(id)
-      if (shown?.hides === hides && shown.trying === undefined && shown.options.description === description) {
-        const previous = clockTime(shown.at)
+      const own = entries.get(id)
+      const text = description ?? message
+      const shown =
+        own === undefined
+          ? [...entries.values()].find((entry) => entry.hides !== undefined && entry.trying === undefined && (entry.options.description ?? entry.message) === text)
+          : own.hides === hides && own.trying === undefined && own.options.description === description
+            ? own
+            : undefined
+      if (shown !== undefined) {
+        if (shown !== own) shown.merged.set(id, hides)
+        shown.count += 1
         shown.at = new Date()
-        if (clockTime(shown.at) !== previous) changed()
+        changed()
         return
       }
       const actions = [...fixes, ...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
@@ -323,7 +334,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const fixed = (child: RenderElement) => Box({ flexShrink: 0, children: child })
     const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? '✕' : 'Hide', onPress: () => hide(entry) })
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? 'action' : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }))
-    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, Text({ dimColor: true, children: clockTime(entry.at) })].map(fixed) })
+    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, Text({ dimColor: true, children: entry.count > 1 ? `${clockTime(entry.at)} · ${entry.count} times` : clockTime(entry.at) })].map(fixed) })
     const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: 'Trying again:' }), typeof entry.trying === 'string' ? Text({ dimColor: true, wrap: 'truncate-end', children: entry.trying }) : entry.trying] })
     const text = details === undefined ? [message] : [message, trying ?? details]
     const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting)

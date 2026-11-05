@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { isObject, linkedMarketplacesOf, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
+import { isObject, linkedCheckoutsOf, settingPaths, updatesToTurnOn } from '@cmodjs/core/src/records.js'
 import { applyEdits, modify, parse, type FormattingOptions } from 'jsonc-parser'
 import { home, readJson, readText, tilde, writeAtomically } from './files.js'
 import { readLinks, storePath, takeLock } from './store.js'
@@ -272,11 +272,8 @@ export async function linkedEntries(folder: string): Promise<LinkedEntry[]> {
 
 export async function linkedPlugins(): Promise<LinkedPlugin[]> {
   const known = await readConfig(knownMarketplacesPath())
-  const linked: LinkedPlugin[] = []
-  for (const [name, folder] of linkedMarketplacesOf(configObject(known.text, known.path), await readLinks())) {
-    for (const entry of await linkedEntries(folder)) linked.push({ id: `${entry.name}@${name}`, folder: join(folder, entry.source) })
-  }
-  return linked
+  const checkouts = await linkedCheckoutsOf(readText, configObject(known.text, known.path), await readLinks())
+  return checkouts.map(({ name, marketplace, folder }) => ({ id: `${name}@${marketplace}`, folder }))
 }
 
 export async function linkedFolders(): Promise<string[]> {

@@ -1,6 +1,6 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
-import { buildFailuresPath, hasLinkedMods, linksPath, markedCheckout, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, markedCheckout, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
 import { heldInput } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { loadedMethod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
@@ -12,7 +12,7 @@ import { cmodError, isHeld, runCmod } from '../node_modules/@cmodjs/core/runtime
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
-import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { configRootOf, failureLog, isInside, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
 import { webUi } from './web.js'
@@ -36,6 +36,12 @@ type Versions = Readonly<Record<string, string>>
 type PluginsState = { readonly mark: string; readonly text: string }
 
 const nameOf = (id: string) => id.replace(/@[^@]*$/, '')
+
+function versionsByName(versions: Versions): ReadonlyMap<string, string> {
+  const named = new Map<string, string>()
+  for (const [id, version] of Object.entries(versions)) if (!named.has(nameOf(id))) named.set(nameOf(id), version)
+  return named
+}
 
 let loaded: Versions = {}
 
@@ -179,6 +185,7 @@ export const cmodPlugin = defineMod({
     }
     let reloading = Promise.resolve()
     let isWorking = false
+    let isBuildCheckDue = false
     const reloadWhenIdle = () => {
       reloading = reloading
         .then(async () => {
@@ -199,17 +206,11 @@ export const cmodPlugin = defineMod({
       mod.toast.dismiss(reloadToast)
     }
     const changesOf = async () => {
-      const now = await loadedVersions()
+      const [before, now] = [versionsByName(loaded), versionsByName(await loadedVersions())]
       return [
-        ...Object.entries(now)
-          .filter(([id, version]) => loaded[id] !== undefined && loaded[id] !== version)
-          .map(([id, version]) => `${nameOf(id)} updated to ${version}`),
-        ...Object.keys(now)
-          .filter((id) => loaded[id] === undefined)
-          .map((id) => `${nameOf(id)} turned on`),
-        ...Object.keys(loaded)
-          .filter((id) => now[id] === undefined)
-          .map((id) => `${nameOf(id)} turned off`),
+        ...[...now].filter(([name, version]) => before.has(name) && before.get(name) !== version).map(([name, version]) => `${name} updated to ${version}`),
+        ...[...now.keys()].filter((name) => !before.has(name)).map((name) => `${name} turned on`),
+        ...[...before.keys()].filter((name) => !now.has(name)).map((name) => `${name} turned off`),
       ]
     }
     const offerReload = async () => {
@@ -222,19 +223,14 @@ export const cmodPlugin = defineMod({
       if (isWorking) offer('Reloads when this turn ends.', false)
       reloadAfter(1)
     }
-    const isInside = async (checkout: string | undefined) => {
-      if (checkout === undefined) return false
-      const root = await claude.session.root()
-      const project = (await claude.fs.stat(root, { resolve: true }).catch(ifMissing(undefined)))?.realPath ?? root
-      return project === checkout || project.startsWith(`${checkout}/`)
-    }
     const checkChanges = async () => {
       const { mark, text } = await pluginsState()
       const isNewMark = mark !== seenMark
       seenMark = mark
       if ((await claude.session.surfaces()).length === 0) return
       if (text === loadedState) return withdrawOffer()
-      if (isNewMark && (await isInside(markedCheckout(mark)))) {
+      const checkout = markedCheckout(mark)
+      if (isNewMark && checkout !== undefined && (await isInside(mod, checkout))) {
         isReloadDue = true
         return reloadAfter(changesQuietMs)
       }
@@ -264,6 +260,7 @@ export const cmodPlugin = defineMod({
     const stopWorking = () => {
       isWorking = false
       if (isReloadDue && quietWait?.isRunning !== true) reloadAfter(reloadDelayMs)
+      if (isBuildCheckDue) void followBuildFailures()
     }
     sessions.current.onTurnEnd(stopWorking)
     router.add('turn.start', async (e, next) => {
@@ -340,12 +337,25 @@ export const cmodPlugin = defineMod({
     }
     checkPlugins({ isForced: (await claude.session.surfaces()).length > 0 })
 
+    const linksFile = linksPath(store)
+    const knownMarketplaces = configRoot === undefined ? undefined : `${configRoot}/plugins/known_marketplaces.json`
+    const checkoutOf = async (name: string): Promise<string | undefined> => {
+      if (knownMarketplaces === undefined) return undefined
+      const checkouts = await linkedCheckoutsOf((path) => fs.read(path).catch(ifMissing(undefined)), await readJson(knownMarketplaces), parseLinks(await readJson(linksFile), linksFile))
+      return checkouts.find((checkout) => checkout.name === name)?.folder
+    }
     const failuresFile = buildFailuresPath(store)
     let shownFailures: readonly string[] = []
     const showBuildFailures = async () => {
       const failures = JSON.parse(await fs.read(failuresFile).catch(ifMissing('{}'))) as Record<string, string>
       for (const name of shownFailures) if (!Object.hasOwn(failures, name)) mod.toast.dismiss(`build:${name}`)
-      for (const [name, error] of Object.entries(failures)) report({ id: `build:${name}`, message: `${name} does not build`, description: error, isCritical: true })
+      shownFailures = shownFailures.filter((name) => Object.hasOwn(failures, name))
+      isBuildCheckDue = isWorking
+      if (isWorking) return
+      for (const [name, error] of Object.entries(failures)) {
+        const root = await checkoutOf(name)
+        report({ id: `build:${name}`, message: `${name} does not build`, description: error, ...(root === undefined ? {} : { root }) })
+      }
       shownFailures = Object.keys(failures)
     }
     const followBuildFailures = () => showBuildFailures().catch((error: unknown) => report({ id: 'build-failures', message: 'Could not read which linked mods fail to build', error, isCritical: true }))
@@ -359,8 +369,6 @@ export const cmodPlugin = defineMod({
         .catch((error: unknown) => report({ id: 'watch', message: 'Stopped reloading the linked mods', error, isCritical: true }))
         .finally(() => void (isWatchRunning = false))
     }
-    const linksFile = linksPath(store)
-    const knownMarketplaces = configRoot === undefined ? undefined : `${configRoot}/plugins/known_marketplaces.json`
     let isWatching = false
     const watchIfLinked = async () => {
       if (isWatching || knownMarketplaces === undefined || (await claude.session.surfaces()).length === 0) return

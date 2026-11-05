@@ -80,6 +80,22 @@ test('publish --dry-run builds an archive without cli/ and a SHA256SUMS that lis
   expect(await Bun.file(join(root, '.claude-plugin/marketplace.json')).exists()).toBe(false)
 })
 
+test('a rebuild of the checkout after publish built its program changes neither SHA256SUMS nor the files publish uploads', async () => {
+  const home = await temporaryHome()
+  const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)
+
+  const result = await cmod(home, 'publish', root, '--dry-run')
+  await writeFiles(join(root, 'cli/dist'), Object.fromEntries(platforms.map((platform) => [`hello-${platform}`, `rebuilt by cmod watch for ${platform}\n`])))
+
+  expect(result.exitCode).toBe(0)
+  const assets = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
+  const sums = await readFile(assets.at(-1) as string, 'utf8')
+  const uploaded = []
+  for (const asset of assets.slice(0, -1)) uploaded.push(`${new Bun.CryptoHasher('sha256').update(await Bun.file(asset).arrayBuffer()).digest('hex')}  ${basename(asset)}`)
+  expect(sums).toBe(`${uploaded.join('\n')}\n`)
+  expect(await Promise.all(assets.slice(1, -1).map((asset) => readFile(asset, 'utf8')))).toEqual(platforms.map((platform) => `hello ${platform}\n`))
+})
+
 test('publish uploads the release files before it pushes the marketplace, so no update reaches a release without them', async () => {
   const home = await temporaryHome()
   const root = await committedMod(home, `mkdir -p dist && for platform in ${platforms.join(' ')}; do echo "hello $platform" > dist/hello-$platform; done`)

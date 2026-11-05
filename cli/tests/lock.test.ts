@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { readRecord } from '@cmodjs/core/src/records.js'
 import { readText } from '../src/files.js'
+import { takeLock } from '../src/store.js'
 import { cmod, createMod, deleteTemporaryHomes, goneProcessId, hashOf, isGone, lockNotice, startCmod, startCmodInTerminal, startOf, temporaryHome, waitFor, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
@@ -157,6 +158,35 @@ test.concurrent("a holder file with cmod's own process ID is not held", async ()
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(existsSync(lock)).toBe(false)
 }, 10_000)
+
+test.concurrent('a second take of a lock in the same process waits until the first releases it', async () => {
+  const lock = join(await temporaryHome(), '.local/share/cmod/builds/demo.lock')
+  const events: string[] = []
+  const first = await takeLock(lock)
+  const second = takeLock(lock).then((taken) => {
+    events.push('second took')
+    return taken
+  })
+  await Bun.sleep(300)
+
+  events.push('first released')
+  await first[Symbol.asyncDispose]()
+  await (await second)[Symbol.asyncDispose]()
+
+  expect(events).toEqual(['first released', 'second took'])
+  expect(existsSync(lock)).toBe(false)
+})
+
+test.concurrent('a take that does not wait gets nothing while its own process holds the lock', async () => {
+  const lock = join(await temporaryHome(), '.local/share/cmod/watch.lock')
+  const held = await takeLock(lock)
+
+  const again = await takeLock(lock, AbortSignal.abort())
+  await held[Symbol.asyncDispose]()
+
+  expect(again).toBeUndefined()
+  expect(existsSync(lock)).toBe(false)
+})
 
 test.concurrent('Ctrl+C while cmod remove waits for the lock prints a cancel line', async () => {
   const home = await temporaryHome()

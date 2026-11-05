@@ -55,3 +55,11 @@ export function notInstalled(name: string): string {
 export function isNotInstalled(name: string, error: unknown): boolean {
   return messageOf(error).endsWith(notInstalled(name))
 }
+
+export function stillInstalling(name: string): string {
+  return `${name} is installing. Try again when it's ready.`
+}
+
+export function isStillInstalling(name: string, error: unknown): boolean {
+  return messageOf(error).endsWith(stillInstalling(name))
+}

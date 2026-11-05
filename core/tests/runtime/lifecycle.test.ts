@@ -8,7 +8,8 @@ import { servePages } from '../../src/runtime/pages.js'
 import { drawnParts } from '../../src/runtime/parts.js'
 import { createRouter } from '../../src/runtime/router.js'
 import { partMethods, type DrawnPart, type PartsUpdate } from '../../src/runtime/ui.js'
-import { defineMod, sessions, type CwdChange, type Mod } from '../../src/mod.js'
+import { serveWidgets } from '../../src/runtime/widgets.js'
+import { BelowPrompt, defineMod, sessions, type CwdChange, type Mod } from '../../src/mod.js'
 import { option } from '../../src/options.js'
 import type { RoutedEvent } from '../../src/runtime/hooks.js'
 import { engineOf } from '../../src/runtime/engine.js'
@@ -189,8 +190,9 @@ function cmodSidebar(name: string) {
     if (loaded === undefined || call.to !== name) throw new Error(`${call.to} is not loaded.`)
     return askedByCmod(loaded, name, call.method, call.input)
   }
-  const parts = drawnParts({ claude: cmod.claude, report: () => undefined, press: (mod, input) => pages.press(mod, input) })
-  const pages = servePages({ claude: cmod.claude, router: createRouter(), report: (_id, message, error) => void refusals.push(`${message}: ${messageOf(error)}`), tellRefusedPress: (mod, error) => void refusals.push(`${mod} did not take the press: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined })
+  const report = (_id: string, message: string, error: unknown) => void refusals.push(`${message}: ${messageOf(error)}`)
+  const parts = drawnParts({ claude: cmod.claude, report, press: (mod, input) => pages.press(mod, input) })
+  const pages = servePages({ claude: cmod.claude, router: createRouter(), report, tellRefusedPress: (mod, error) => void refusals.push(`${mod} did not take the press: ${messageOf(error)}`), widgets: { update: (mod) => parts.forget(mod) }, parts, tellStylers: () => undefined })
   const shown = async (page: string) => {
     pages.element(name, page, null, 60, true)
     await cmod.settle()
@@ -259,20 +261,118 @@ test('a mod with a pending install registers nothing until done, then runs setup
   expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith('>\n✓  safe-delete  Installed')
 })
 
-test('a call to a mod still installing fails with when to retry', async () => {
+test('a call to a mod that is installing waits for the install, then answers, with no toast', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   installCmod(fake)
-  fake.fakes.process.spawn = () => controlledStream().stream
-  const lifecycle = createLifecycle(trackedMod().definition)
-  const below = { value: [{ name: 'parse', line: 1 }] }
-
+  const step = controlledStream()
+  fake.fakes.process.spawn = () => step.stream
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => ({ restore: () => ['a.ts'] }) }))
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Install it in Plugins.' })).toEqual({
-    deny: "safe-delete is installing. Try again when it's ready.",
-  })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
+  await fake.settle()
+  step.print('done safe-delete 0.2.0')
+  step.exit(0)
+
+  expect(await answer).toEqual({ value: ['a.ts'] })
+  await fake.settle()
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+})
+
+test("a call to a mod still installing at the start limit fails with when to retry, and a call to another mod passes on", async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  fake.fakes.process.spawn = () => controlledStream().stream
+  const timers: { ms: number; fire: () => void }[] = []
+  fake.fakes.clock.after = (ms, fire) => {
+    timers.push({ ms, fire })
+    return { cancel: () => undefined }
+  }
+  const lifecycle = createLifecycle(trackedMod().definition)
+  const below = { value: [{ name: 'parse', line: 1 }] }
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+
+  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
+  await fake.settle()
+  timers.find((made) => made.ms === 9_000)?.fire()
+
+  expect(await answer).toEqual({ deny: "safe-delete is installing. Try again when it's ready." })
   expect(await fire(lifecycle, 'cmod.call', { to: 'tracer', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
+})
+
+test("a mod's call to the cmod plugin while it downloads cmod waits for the download, then answers", async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const bootstrap = controlledStream()
+  fake.fakes.process.spawn = () => bootstrap.stream
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: () => ({ tasks: () => [{ id: 'a1', parent: undefined }] }) }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
+  await fake.settle()
+
+  const answer = fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'tasks', input: null, caller: 'rulebook' }, { deny: 'cmod is not installed. Install it in Plugins.' })
+  await fake.settle()
+  bootstrap.print('progress 1 1 Downloading cmod 5.10.0')
+  bootstrap.exit(0)
+
+  expect(await answer).toEqual({ value: [{ id: 'a1', parent: undefined }] })
+})
+
+test('a draw the cmod plugin asks of a mod that is installing reports nothing, and draws once the mod is active', async () => {
+  const cmod = cmodSidebar('safe-delete')
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  const step = controlledStream()
+  fake.fakes.process.spawn = () => step.stream
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: (mod) => void mod.sidebar.add({ id: 'trash', title: 'Trash', render: () => Text({ children: 'The trash is empty' }) }) }))
+  await cmod.load(lifecycle, fake, pending)
+
+  const during = textOf(await cmod.shown('trash'))
+  step.print('done safe-delete 0.2.0')
+  step.exit(0)
+  await fake.settle()
+
+  expect(during).toBe('Drawing…')
+  expect(textOf(await cmod.shown('trash'))).toBe('The trash is empty')
+  expect(cmod.refusals).toEqual([])
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+})
+
+test('a widget band render while a mod installs answers at once, and draws the mod widget once the mod is active', async () => {
+  const cmod = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
+  Object.assign(cmod.fakes.fs, fakeFiles({}))
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  installCmod(fake)
+  const step = controlledStream()
+  fake.fakes.process.spawn = () => step.stream
+  fake.fakes.clock.after = (ms, fire) => {
+    if (ms === 0) void Promise.resolve().then(fire)
+    return { cancel: () => undefined }
+  }
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: (mod) => void mod.widgets.add({ id: 'count', title: 'Trash count', areas: [BelowPrompt], render: () => Text({ children: '3 in the trash' }) }) }))
+  cmod.fakes.cmod.call = async (call) => askedByCmod(lifecycle, call.to, call.method, call.input)
+  const widgets = serveWidgets({ claude: cmod.claude, router: createRouter(), store: cmodStore, report: () => undefined, turnClosedBy: () => undefined, parts: drawnParts({ claude: cmod.claude, report: () => undefined, press: () => undefined }), markdownIn: () => undefined })
+  fake.fakes.cmod.call = async (call) => (call.method === partMethods.changed ? (widgets.update('safe-delete', call.input as PartsUpdate), { isHeld: false, stylers: [] }) : null)
+  widgets.update('safe-delete', { parts: { widgets: [{ id: 'count', title: 'Trash count', areas: [BelowPrompt] }], pages: [] } })
+  await lifecycle.start(fake.claude, given(pending))
+  await fake.settle()
+  await cmod.settle()
+  const band = async () => (await widgets.draw(BelowPrompt, elements, { surface: 'terminal', columns: 80 })).map(textOf)
+  let isAnswered = false
+
+  const during = band().finally(() => (isAnswered = true))
+  await fake.settle()
+  await cmod.settle()
+
+  expect(isAnswered).toBe(true)
+  expect(await during).toEqual([])
+  step.print('done safe-delete 0.2.0')
+  step.exit(0)
+  await fake.settle()
+  await cmod.settle()
+  await band()
+  await cmod.settle()
+  expect(await band()).toEqual(['3 in the trash'])
 })
 
 test('a call to a mod that is still starting waits for it, then answers', async () => {
@@ -685,6 +785,20 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
     { to: 'notes', method: partMethods.stylers, input: [] },
   ])
   expect(told.filter((call) => (call as { to: string }).to === 'cmod')).toEqual([])
+})
+
+test('a mod still installing misses its page list and which mods style markdown with no warning, because the parts it tells at its start hear the stylers back', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  fake.fakes.cmod.call = async ({ to }) => Promise.reject(new Error(`${to} is installing. Try again when it's ready.`))
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+  pages.update('notes', { parts: { widgets: [], pages: [] } })
+
+  pages.element('inbox', 'items', null, 60, true)
+  pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  await fake.settle()
+
+  expect(fake.shown.debug).toEqual([])
+  expect(pages.stylers()).toEqual(['diagrams'])
 })
 
 test('a press the mod refuses makes the page draw again, so its next buttons work, and the person hears of it', async () => {

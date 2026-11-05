@@ -3,7 +3,7 @@ import { isObject } from '../records.js'
 import { Text } from '../ui/elements.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName, isNotInstalled } from './dependencies.js'
+import { cmodPluginName, isNotInstalled, isStillInstalling } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
 import type { Router } from './router.js'
 import { partMethods, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
@@ -93,7 +93,7 @@ export function servePages({
         .then(
           (parts) => void declared.set(mod, pagesOf(parts)),
           (error: unknown) => {
-            if (!isNotInstalled(mod, error)) claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`)
+            if (!isNotInstalled(mod, error) && !isStillInstalling(mod, error)) claude.ui.warn(`pages:list:${mod}`, `cmod: ${mod} did not list its pages: ${messageOf(error)}`)
           },
         )
         .finally(() => asking.delete(mod))
@@ -108,7 +108,10 @@ export function servePages({
     const listed = [...stylers]
     tellStylers(listed)
     for (const told of declared.keys()) {
-      if (told !== cmodPluginName) void claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error: unknown) => claude.ui.warn(`pages:stylers:${told}`, `cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`))
+      if (told === cmodPluginName) continue
+      void claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error: unknown) => {
+        if (!isStillInstalling(told, error)) claude.ui.warn(`pages:stylers:${told}`, `cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`)
+      })
     }
   }
 

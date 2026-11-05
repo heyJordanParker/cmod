@@ -292,6 +292,28 @@ export function linkedMarketplacesOf(knownMarketplaces: unknown, links: Links): 
   })
 }
 
+export type LinkedCheckout = { readonly name: string; readonly marketplace: string; readonly folder: string }
+
+export async function linkedCheckoutsOf(read: ReadFile, knownMarketplaces: unknown, links: Links): Promise<LinkedCheckout[]> {
+  const checkouts: LinkedCheckout[] = []
+  for (const [marketplace, folder] of linkedMarketplacesOf(knownMarketplaces, links)) {
+    const path = `${folder}/.claude-plugin/marketplace.json`
+    const text = await read(path)
+    const manifest: unknown = text === undefined ? undefined : parsedJson(text, path)
+    const plugins: unknown[] = isObject(manifest) && Array.isArray(manifest['plugins']) ? manifest['plugins'] : []
+    for (const plugin of plugins) if (isObject(plugin) && typeof plugin['name'] === 'string' && typeof plugin['source'] === 'string') checkouts.push({ name: plugin['name'], marketplace, folder: `${folder}/${plugin['source'].replace(/^\.\//, '')}` })
+  }
+  return checkouts
+}
+
+function parsedJson(text: string, path: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${messageOf(error)}`)
+  }
+}
+
 export function hasLinkedMods(knownMarketplaces: unknown, links: Links): boolean {
   return linkedMarketplacesOf(knownMarketplaces, links).length > 0
 }
@@ -395,7 +417,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.11.0'
+export const coreVersion = '5.12.0'
 
 export const oldestCmodVersion = '5.10.0'
 

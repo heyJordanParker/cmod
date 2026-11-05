@@ -103,7 +103,7 @@ test("a listener under a task still hears that task's subtasks start after /clea
   expect(heard).toEqual(['Read tree.ts'])
 })
 
-test("a listener under a task added while cmod installs shows no toast, and hears that task's subtasks once cmod answers", async () => {
+test("a listener under a task whose tasks it reads while cmod installs shows nothing, and hears that task's subtasks once cmod is ready", async () => {
   const heard: string[] = []
   const tested = testMod(defineMod({ name: 'history', setup() {} }))
   await tested.start()
@@ -114,11 +114,13 @@ test("a listener under a task added while cmod installs shows no toast, and hear
   tested.fakes.cmod.call = async (call) => (isInstalling && call.method === conversationMethods.tasks ? Promise.reject(new Error("cmod is installing. Try again when it's ready.")) : answer!(call))
   task!.onTaskStart((started) => void heard.push(started.title))
   await tested.settle()
+  await tested.startTask({ title: 'Open the pane', parent })
   isInstalling = false
 
   await tested.startTask({ title: 'Read tree.ts', parent })
 
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(tested.shown.toasts.filter((toast) => toast.type !== 'success')).toEqual([])
+  expect(tested.shown.debug).toEqual([])
   expect(heard).toEqual(['Read tree.ts'])
 })
 

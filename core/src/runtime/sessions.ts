@@ -14,7 +14,7 @@ import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, 
 import { matches, sentMatcher, type Matcher, type SentMatcher } from '../utils/matcher.js'
 import { beforeAnswerKeys, foldAnswers, foldBefore, methodOf, takenAnswer, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName } from './dependencies.js'
+import { cmodPluginName, isStillInstalling } from './dependencies.js'
 import { messageOf } from '../utils/text.js'
 import { listenerOf, PassedTimeout, withinTime, type ListenOptions, type ListenTime } from './deadline.js'
 import { callFiles, type HomeFolders, type HookFields } from './hooks.js'
@@ -195,7 +195,10 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     if (tree instanceof Map) return isInScope(scope, session, change, isUnderIn(tree))
     return tree.then(
       (read) => isInScope(scope, session, change, isUnderIn(read)),
-      (error: unknown) => (report(`tasks:${session}`, 'Could not read the tasks it listens under', error), false),
+      (error: unknown) => {
+        if (!isStillInstalling(cmodPluginName, error)) report(`tasks:${session}`, 'Could not read the tasks it listens under', error)
+        return false
+      },
     )
   }
 

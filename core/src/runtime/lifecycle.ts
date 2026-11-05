@@ -11,7 +11,7 @@ import { beforeDeadline, settledAfterAbort } from './deadline.js'
 import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import type { Conversations } from './conversations.js'
-import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, loadedMethod, withBareRefusals } from './dependencies.js'
+import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, isStillInstalling, loadedMethod, stillInstalling, withBareRefusals } from './dependencies.js'
 import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
@@ -51,6 +51,8 @@ export type Plugin = {
 export type Phase = 'starting' | 'installing' | 'waiting' | 'failed' | 'ready' | 'active'
 
 const listenMethods: readonly string[] = [conversationMethods.subscribe, conversationMethods.watchBefore]
+
+const answeredAtOnce: readonly string[] = [...listenMethods, partMethods.draw]
 
 export type Lifecycle<State extends object> = {
   readonly phase: Phase
@@ -225,6 +227,17 @@ export function createLifecycle<State extends object, Declared extends Options =
   const heldListens = new Map<string, Frozen<Args<'cmod.call'>> & { readonly caller?: string }>()
   let settleStart: () => void = () => undefined
   const startSettled = new Promise<void>((resolve) => (settleStart = resolve))
+  let installSettled: Promise<void> | undefined
+  let settleInstall: () => void = () => undefined
+  const whenInstalled = () =>
+    phase === 'installing' || phase === 'waiting'
+      ? (installSettled ??= new Promise<void>((resolve) => {
+          settleInstall = () => {
+            installSettled = undefined
+            resolve()
+          }
+        }))
+      : undefined
 
   const claude = () => {
     if (runtime === undefined) throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod, options) starts it at session.start.`)
@@ -237,6 +250,7 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   const fail = (reason: string, fix: string | undefined, retry?: () => Promise<void>, error?: unknown) => {
     phase = 'failed'
+    settleInstall()
     failure ??= new Error(`${definition.name}: ${reason}${/[.!?]$/.test(reason) ? '' : '.'}${fix === undefined ? '' : ` ${fix}`}`, { cause: error })
     const again = retry === undefined ? {} : { retry: () => ((failure = undefined), stopRetrying(), retry().catch(report)) }
     toastFailure({ id: installId, message: reason, ...(fix === undefined ? {} : { description: fix }), ...(error === undefined ? {} : { error }), ...again, isCritical: true })
@@ -289,6 +303,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     await programs?.refresh()
     phase = 'ready'
     activation ??= new Promise<void>((resolve) => claude().clock.after(0, () => resolve(activate().catch(report))))
+    settleInstall()
     claude().ui.invalidate('ui.render')
   }
 
@@ -602,6 +617,8 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   const holdUntilStarted = (signal?: AbortSignal): Promise<boolean> => held(startSettled.then(whenActive), signal)
 
+  const holdUntilInstalled = (signal?: AbortSignal): Promise<boolean> => held(startSettled.then(whenInstalled).then(whenActive), signal)
+
   const holdUntilActive = (signal: AbortSignal | undefined): Promise<boolean> => {
     const activating = whenActive()
     return activation !== undefined && phase !== 'active' ? held(activating, signal) : activating.then(() => false)
@@ -629,17 +646,19 @@ export function createLifecycle<State extends object, Declared extends Options =
     const tool = (e as { readonly tool?: unknown }).tool
     const isCallToThisMod = (event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) || (event === 'tool.call' && typeof tool === 'string' && tool.startsWith(`mcp__${definition.name}__`))
     if (event === 'cmod.call' && !isCallToThisMod) return next(e)
-    const isLate = await (event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal))
+    const isListen = isCallToThisMod && event === 'cmod.call' && listenMethods.includes(asked.method)
+    const waitsForInstall = isCallToThisMod && !(event === 'cmod.call' && answeredAtOnce.includes(asked.method))
+    const isLate = await (waitsForInstall ? holdUntilInstalled(signal) : event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal))
     if (event === 'classic.SessionStart' && phase !== 'active') {
       missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
       return next(e)
     }
     if (isCallToThisMod && phase !== 'active') {
-      if (event === 'cmod.call' && listenMethods.includes(asked.method)) {
+      if (isListen) {
         heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
         return { value: null } as EventResult<N>
       }
-      return { deny: phase === 'failed' ? notSetUp() : `${definition.name} is installing. Try again when it's ready.` } as EventResult<N>
+      return { deny: phase === 'failed' ? notSetUp() : stillInstalling(definition.name) } as EventResult<N>
     }
     if (isLate && phase !== 'active') return (startingRouter ?? router).dispatchFailure(event, e, new Error(`it was still starting after ${startHoldMs / 1000} s`), next, false)
     const call = e as Frozen<Args<'cmod.call'>>
@@ -1049,7 +1068,11 @@ async function createMod<State extends object, Declared extends Options>(definit
   pages = served?.pages
   const tellColor = (to: string, told: SessionColor) => {
     if (told.session === '' || to === cmodPluginName) return
-    claude.clock.after(0, () => void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error: unknown) => claude.ui.warn('color:tell', `cmod: ${to} did not hear the session's color: ${messageOf(error)}`)))
+    claude.clock.after(0, () =>
+      void claude.cmod.call({ to, method: conversationMethods.sessionColor, input: told }).catch((error: unknown) => {
+        if (!isStillInstalling(to, error)) claude.ui.warn('color:tell', `cmod: ${to} did not hear the session's color: ${messageOf(error)}`)
+      }),
+    )
   }
   conversations?.onColor((told) => {
     client.recolor(told)

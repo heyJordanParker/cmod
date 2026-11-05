@@ -13,7 +13,6 @@ type Manager = {
   unit(label: string): string
   text(mod: string, executable: string, label: string, argv: readonly string[], environment: Readonly<Record<string, string>>, log: string): string
   start(label: string, unit: string, isChanged: boolean): Promise<void>
-  restart(label: string): Promise<void>
   remove(label: string, unit: string): Promise<void>
   hasTaken(label: string): Promise<boolean>
   status(label: string, log: string): string
@@ -49,12 +48,6 @@ export async function startService(mod: string, command: readonly string[], vari
     process.stderr.write(`cmod program: ${executable} of ${mod} runs only while a session is open, because this computer did not take it as a service: ${messageOf(error)}\n`)
     return undefined
   }
-}
-
-export async function restartServices(mod: string): Promise<string[]> {
-  const services = await recordedServices(mod)
-  for (const { label } of services) await manager.restart(label)
-  return services.map(({ name }) => name)
 }
 
 export async function removeService(mod: string, program: string, { keepsLog = false }: { keepsLog?: boolean } = {}): Promise<void> {
@@ -149,9 +142,6 @@ const launchd: Manager = {
     if (isLoaded) await bootOut(label)
     await run(['launchctl', 'bootstrap', domain(), unit])
   },
-  async restart(label) {
-    await run(['launchctl', 'kickstart', '-k', `${domain()}/${label}`])
-  },
   async remove(label, unit) {
     await bootOut(label)
     await rm(unit, { force: true })
@@ -186,9 +176,6 @@ const systemd: Manager = {
     }
     await run(['systemctl', '--user', 'daemon-reload'])
     await run(['systemctl', '--user', 'enable', `${label}.service`])
-    await run(['systemctl', '--user', 'restart', `${label}.service`])
-  },
-  async restart(label) {
     await run(['systemctl', '--user', 'restart', `${label}.service`])
   },
   async remove(label, unit) {
