@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.12.2] - 2026-11-05
+
+### Fixed
+- A linked mod no longer fails with `<mod> does not build: ENOENT ... lstat '.../builds/<id>.lock/<pid>'` when two cmod commands build it at once, such as `cmod watch` and an update. A cmod waiting for a lock could delete the holder's file in the moment the holder let go and took the lock again, so both built at once and the first failed when it let go.
+
 ## [5.12.1] - 2026-11-05
 
 ### Fixed
