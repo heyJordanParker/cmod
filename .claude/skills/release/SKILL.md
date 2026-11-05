@@ -40,3 +40,11 @@ Run `gh run watch <run id> --exit-status` on the run the push started. Then `git
 
 ### Prove the release reached people
 `gh release view v<version> --repo heyJordanParker/cmod` shows the changelog section. `git ls-remote origin refs/tags/cmod--v<version>` prints the same commit as `git ls-remote origin refs/heads/release`. `npm view @cmodjs/core@<version> version` and `npm view @cmodjs/cli@<version> version` print the version. The release lists `cmod-<version>.zip`, `SHA256SUMS`, and a `cmod-<os>-<arch>` build for `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
+
+## 5. Clear the Log
+
+`cmod log --json` lists every failure and warning any session on this computer met, newest first, with its mod, `count`, and the versions it ran on. An entry whose `versions.cmod` is older than the newest release on this computer happened before an update and needs no fix.
+
+### Fix each failure the newest cmod still meets
+A failure of `cmod` is yours: find its root cause and fix it before the next release. A failure of another mod goes to that mod's own session with the entry's text and count, through `SendMessage`, because its repository is not yours.
+Never: edit another mod's repository, or hide a failure from the Log to quiet its toast.
