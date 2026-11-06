@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { configFolders, isObject } from '@cmodjs/core/src/records.js'
 import { optionsOf, projectOptionsOf } from '@cmodjs/core/src/options.js'
@@ -42,11 +42,10 @@ export async function run(argv: string[]): Promise<number> {
   const roots = values.project?.map((folder) => resolve(folder)) ?? indexedProjects(openHistory())
   const projects: Record<string, Record<string, unknown>> = {}
   for (const root of roots) {
-    if (!existsSync(root)) continue
+    if (!existsSync(root) || !hasOptionsAbove(installed.name, realpathSync(root))) continue
     const key = await gitRootOf(root)
     if (Object.hasOwn(projects, key)) continue
-    const folder = configFolders(process.env, installed.name, key).find(({ tier }) => tier === 'project')?.folder
-    const path = folder === undefined ? undefined : join(folder, 'options.json')
+    const path = optionsPath(installed.name, key)
     if (path === undefined || !existsSync(path)) continue
     const read = projectOptionsOf(installed.name, declared, await readFile(path, 'utf8'))
     for (const reason of read.ignored) process.stderr.write(`cmod options: ignores part of ${path}: ${path} ${reason}\n`)
@@ -54,6 +53,17 @@ export async function run(argv: string[]): Promise<number> {
   }
   process.stdout.write(values.json ? `${JSON.stringify({ person, projects })}\n` : levelLines(person, projects))
   return 0
+}
+
+function optionsPath(name: string, root: string): string | undefined {
+  const folder = configFolders(process.env, name, root).find(({ tier }) => tier === 'project')?.folder
+  return folder === undefined ? undefined : join(folder, 'options.json')
+}
+
+function hasOptionsAbove(name: string, folder: string): boolean {
+  const path = optionsPath(name, folder)
+  if (path !== undefined && existsSync(path)) return true
+  return dirname(folder) !== folder && hasOptionsAbove(name, dirname(folder))
 }
 
 async function gitRootOf(folder: string): Promise<string> {

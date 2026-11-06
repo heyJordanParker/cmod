@@ -4,6 +4,20 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Added
+- `mod.log(text, { level: 'error' | 'warning' })` sends a failure the mod works around to the Log in Settings and `cmod log`. An error toasts only where a thrown failure would, in a session inside the mod's checkout, and a warning never toasts. Use it in place of `mod.toast.error` for such a failure, which reaches no Log and shows in every session.
+
+### Changed
+- A failure every session meets at once no longer toasts in every session. A shared program that stopped, cmod's check of the plugins, a teardown, and reading which linked mods fail to build now toast only where their author works, and every session keeps them in the Log.
+- A failure caused by a call another mod did not answer, because it was installing or Claude Code stopped its hook, goes to the Log as a warning and shows no toast. The mod that did not answer logs its own failure, so one overrun no longer shows as an error from every mod that called it.
+- A failure whose Log call cmod does not answer, such as while cmod installs or under heavy load, tries the Log again after 10 seconds, 1 minute, and 5 minutes, and shows its toast only if cmod still has not answered.
+
+### Fixed
+- The test kit refuses a page, pane, widget, or style whose `hover` names no `scope` and has no `Box` with a key around it, as Claude Code 2.1.318 refuses it and draws the Sidebar blank.
+- An installer step redraws when its mod's state changes while it shows, such as a sign-in that finishes or a progress line. Before, it stayed drawn as it was until the person pressed Next or Finish.
+- A mod's program uses less CPU while it runs. The cmod process that keeps it running checked its session every 5 seconds by starting `ps`, which cost 22.5 seconds of CPU over 8 hours. It now checks with no new process.
+- `cmod options <mod>` with no `--project` runs `git` only for a project that has an `options.json` for the mod. Before, it ran `git` once for every project cmod knows of, 54 on one Mac, which took up to 11 seconds of CPU per call.
+
 ## [5.12.2] - 2026-11-05
 
 ### Fixed

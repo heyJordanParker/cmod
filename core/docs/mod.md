@@ -259,12 +259,18 @@ mod.every(60_000, async () => {
 ### mod.log
 
 ```ts
-mod.log(text: string, options?: { to?: 'debug' | 'transcript' }): void
+mod.log(text: string, options?: { to?: 'debug' | 'transcript'; level?: 'warning' | 'error' }): void
 ```
 
 `log` writes `<mod>: <text>` to Claude Code's debug log, which `claude --debug` shows. It is for what helps the mod's author find a fault and the person never needs to see. Tell the person with a toast instead ([ui.md](ui.md#toasts)).
 
 With `{ to: 'transcript' }`, the line shows dim in the conversation, where the person reads it and Claude never does, such as "Formatted 3 files" after a turn.
+
+With a `level`, the line is a failure the mod works around and goes on past, and it goes to the Log in Settings and `cmod log` too, which counts each repeat with the versions it happened on. An `error` shows a toast only where cmod shows a failure the mod throws: for a mod run from its checkout, in a session working inside it ([ui.md](ui.md#toasts)). A `warning` never shows one. Throw instead when the listener or handler cannot go on.
+
+```ts
+mod.log(`The rule ${name} did not load, so rulebook skips it: ${messageOf(error)}`, { level: 'error' })
+```
 
 ### Hotkeys
 

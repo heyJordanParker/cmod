@@ -50,6 +50,17 @@ test('cmod options with no --project reads every project the conversation index 
   expect(JSON.parse(stdout)).toEqual({ person: { folders: ['~/notes'] }, projects: { [join(home, 'repo')]: { folders: ['plans'] } } })
 })
 
+test('cmod options runs git only for a project with an options.json in its folder or a folder above it', async () => {
+  const home = await anyhostHome()
+  await writeFiles(home, { 'bin/git': `#!/bin/sh\necho "$2" >> "$HOME/git.log"\nexec ${Bun.which('git')} "$@"\n`, 'plain/README.md': '' })
+
+  const { exitCode, stdout } = await cmod(home, 'options', 'anyhost', '--project', join(home, 'repo/src'), '--project', join(home, 'plain'), '--project', join(home, 'loose'), '--json')
+
+  expect(exitCode).toBe(0)
+  expect(JSON.parse(stdout).projects).toEqual({ [join(home, 'repo')]: { folders: ['plans'] }, [join(home, 'loose')]: { depth: 3 } })
+  expect(await Bun.file(join(home, 'git.log')).text()).toBe(`${join(home, 'repo/src')}\n${join(home, 'loose')}\n`)
+})
+
 test('cmod options names the installed plugins when no plugin has the name', async () => {
   const home = await anyhostHome()
 

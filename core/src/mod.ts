@@ -225,7 +225,7 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   every(ms: number, listener: () => unknown): Timer
   after(ms: number, listener: () => unknown): Timer
   use<Handle>(job: Job<Handle, State>): Handle
-  log(text: string, options?: { readonly to?: 'debug' | 'transcript' }): void
+  log(text: string, options?: { readonly to?: 'debug' | 'transcript'; readonly level?: 'warning' | 'error' }): void
   readonly panes: { add<Params = undefined>(pane: PaneInit<State, Params>): Pane<Params> }
   readonly sidebar: { add<Params = undefined>(page: PageInit<State, Params>): Page<Params> }
   readonly settings: {

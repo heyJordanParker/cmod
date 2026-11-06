@@ -111,11 +111,8 @@ export async function run(argv: string[]): Promise<number> {
     wake()
   }
   const parent = process.ppid
-  const parentStarted = await startTime(parent)
   const parentCheck = setInterval(() => {
-    void isHolding(parent, parentStarted).then((isRunning) => {
-      if (!isRunning) end()
-    })
+    if (process.ppid !== parent) end()
   }, checkMs)
   for (const signal of signals) process.on(signal, end)
   const watcher = watch(dirname(file), (_event, name) => {

@@ -66,6 +66,19 @@ export function checkKeys(tree: RenderNode, plugin: string, component: string): 
     if (seen.has(drawn)) throw new Error(`${plugin}: returned a tree ${component} refuses: ${type} "${key}" is drawn twice; each takes its own key`)
     seen.add(drawn)
   }
+  for (const { type, props } of hoversOutsideKeys(tree, false)) {
+    const key = typeof props['key'] === 'string' ? ` "${props['key']}"` : ''
+    throw new Error(`${plugin}: returned a tree ${component} refuses: ${type}${key} hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`)
+  }
+}
+
+function* hoversOutsideKeys(node: RenderNode, isInKeyedBox: boolean): Generator<Drawn> {
+  if (typeof node === 'string') return
+  const drawn = insideOf(node)
+  const isKeyed = isInKeyedBox || (drawn.type === 'Box' && typeof drawn.props['key'] === 'string')
+  const hover = drawn.props['hover']
+  if (typeof hover === 'object' && hover !== null && !('scope' in hover) && !isKeyed) yield drawn
+  for (const child of drawn.children ?? []) yield* hoversOutsideKeys(child, isKeyed)
 }
 
 function* drawnIn(node: RenderNode): Generator<Drawn> {

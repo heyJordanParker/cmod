@@ -2028,7 +2028,7 @@ test('a dependency call that never answers fails the slash command at its deadli
   expect(await tested.type('/outline src/a.ts')).toEqual({ text: '/outline failed: /outline passed the 30 s deadline of slashCommand' })
   await tested.raise.onSessionStart({ source: 'startup' })
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'mod.dependencies.tracer.signatures passed its 30 s deadline' })
-  expect(deadlines).toEqual([30000, 30000, 30000, 0, 30000])
+  expect(deadlines).toEqual([30000, 30000, 30000, 0, 30000, 10000, 30000, 60000, 30000, 300000, 30000])
 })
 
 test("a dependency's method takes the input and returns the result its contract declares", () => {

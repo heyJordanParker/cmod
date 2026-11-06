@@ -1,3 +1,4 @@
+import type { HookBudget } from 'claude-code'
 import type { Claude } from './claude.js'
 
 export type Deadline = { readonly ms: number; readonly job?: string }
@@ -11,6 +12,8 @@ export type ListenOptions = { readonly timeoutMs?: number; readonly onFailure?: 
 export type ListenTime = { readonly deadline: number; readonly signal: AbortSignal }
 
 export const listenerMs = 10_000
+
+export const hookMs = 10_000 satisfies HookBudget['ms']
 
 export class PassedTimeout extends Error {}
 

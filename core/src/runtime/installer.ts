@@ -24,6 +24,7 @@ export type Installer = {
   options(missing: readonly (readonly [string, Option])[], save: (key: string, value: string) => Promise<string | undefined>): Promise<boolean>
   step<State extends object>(mod: Mod<State>, step: Step<State>, index: number, total: number): Promise<boolean>
   close(): Promise<void>
+  changed(): void
   shown(): Promise<void>
   collect(run: () => Promise<unknown>): Promise<PartsUpdate>
 }
@@ -204,6 +205,9 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       isOpen = false
       isSeen = false
       await send({ requests: [{ close: installPage }] }).catch(log('the install page stayed open'))
+    },
+    changed() {
+      if (question !== undefined && isOpen) redraw()
     },
     shown: () => new Promise<void>((resolve) => void waitingForShow.push(resolve)),
     collect,

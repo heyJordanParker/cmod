@@ -1153,6 +1153,78 @@ test('a failure cmod answers show for, as for a linked mod, shows its toast', as
   expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The onSessionStart listener failed', description: 'the trash folder is missing' }])
 })
 
+test("mod.log with an error level sends the line to cmod's Log, which decides the toast, and with a warning level sends it to the Log alone", async () => {
+  const fake = fakeClaude({ name: 'rulebook', root })
+  Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const logged = loggingFailures(fake, { showsToast: true })
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'rulebook',
+      setup(mod) {
+        mod.log('The rule no-em-dash did not load, so rulebook skips it: bad pattern', { level: 'error' })
+        mod.log('The Read call lists no files, so rulebook checks none', { level: 'warning' })
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'rulebook', isInstalled: true }))
+  await fake.settle()
+
+  expect(logged).toHaveLength(2)
+  expect(logged).toContainEqual(expect.objectContaining({ mod: 'rulebook', message: 'rulebook: The Read call lists no files, so rulebook checks none', level: 'warning' }))
+  expect(logged).toContainEqual(expect.objectContaining({ mod: 'rulebook', message: 'The rule no-em-dash did not load, so rulebook skips it: bad pattern', level: 'error', isCritical: false }))
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The rule no-em-dash did not load, so rulebook skips it: bad pattern' }])
+})
+
+test('a listener failure whose cause is a cmod.call cmod did not answer reaches the Log as a warning and shows no toast, because cmod reports its own stopped hook', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const logged = loggingFailures(fake, { showsToast: true })
+  const refusals = ["cmod: it ran past the 10 s Claude Code gives a hook", "cmod did not answer in time, so Claude Code went on without it.", "cmod is installing. Try again when it's ready."]
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => refusals.forEach((refusal, index) => void sessions.current.onSessionStart(() => Promise.reject(new Error(refusal)), { timeoutMs: 1000 + index })) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged.map((each) => [(each as { level: string }).level, (each as { message: string }).message])).toEqual(refusals.map((refusal) => ['warning', `safe-delete: The onSessionStart listener failed: ${refusal}`]))
+})
+
+test('a failure whose Log call cmod refuses while it installs shows no toast, and reaches the Log once cmod answers', async () => {
+  const fake = fakeClaude({ name: 'safe-delete', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const logged: unknown[] = []
+  let isInstalling = true
+  fake.fakes.cmod.call = async (call) => {
+    if (call.method !== 'cmod:failed') return null
+    if (isInstalling) return calledAnswer('safe-delete', { deny: "cmod is installing. Try again when it's ready." })
+    logged.push(call.input)
+    return { showsToast: false }
+  }
+  const later: { ms: number; fire: () => void }[] = []
+  fake.fakes.clock.after = (ms, fire) => {
+    if (ms === 0) void Promise.resolve().then(fire)
+    else later.push({ ms, fire })
+    return { cancel: () => undefined }
+  }
+  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+
+  await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  await fake.settle()
+  expect([lifecycle.toasts, logged]).toEqual([[], []])
+
+  isInstalling = false
+  for (const { fire: retry } of later.splice(0).filter(({ ms }) => ms === 10_000)) retry()
+  await fake.settle()
+
+  expect(lifecycle.toasts).toEqual([])
+  expect(logged).toEqual([expect.objectContaining({ id: 'session:onSessionStart', message: 'The onSessionStart listener failed', level: 'error' })])
+})
+
 test('a mod loaded mid-session, which hears no SessionStart, runs its session-start listeners before the next prompt, once', async () => {
   const fake = fakeClaude({ name: 'safe-delete', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
@@ -1690,6 +1762,30 @@ test("a mod's own installer step opens after it starts, and Finish waits for isD
   await pressInInstaller(lifecycle, 'next', 'ci-watch')
   await fake.settle()
   expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installPage }] }])
+})
+
+test("an installer step redraws when the mod's state changes while it shows", async () => {
+  const fake = fakeClaude({ name: 'ci-watch', root })
+  let started: Mod<{ memory: { status: string } }> | undefined
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'ci-watch',
+      state: { memory: { status: 'Waiting for GitHub' } },
+      installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: (mod) => Text({ children: mod.state.memory.status }), isDone: () => false }],
+      setup(mod) {
+        started = mod
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await fake.settle()
+  if (started === undefined) throw new Error('ci-watch did not start.')
+
+  started.state.memory.status = 'Signed in as octocat'
+  await fake.settle()
+
+  expect(installRequests(fake)).toEqual([installerOpen, { redraw: true }])
+  expect(await installerText(lifecycle, 'ci-watch')).toContain('Signed in as octocat')
 })
 
 test("a step whose isDone fails stays pending, shows the failure, and Finish shows it in the installer", async () => {

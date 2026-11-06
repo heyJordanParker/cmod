@@ -451,13 +451,17 @@ Every error cmod catches for a mod, such as a listener that throws, goes to the 
 
 An error also shows as a toast when any of these holds:
 
-- it is critical: the mod's install or setup failed, its program stopped, or a button or hotkey the person pressed failed
+- it is critical: the mod's install or setup in this session failed, or a button or hotkey the person pressed failed
 - the mod runs from its checkout, linked with [`cmod link`](commands.md#cmod-link) or loaded with `--plugin-dir`, and the session works in that checkout or a folder inside it, because there the person is its author
 - `Show errors from installed mods` is on, in Settings on cmod's page under Preferences
 
+A failure every session meets at once, such as a program every session shares that stopped, is not critical, so it toasts only where its author works.
+
+A failure whose cause is a call another mod did not answer, because it was installing or Claude Code stopped its hook, goes to the Log as a warning, because the mod that did not answer logs its own failure. A failure whose Log call cmod does not answer, such as while cmod installs, waits and tries the Log again after 10 seconds, 1 minute, and 5 minutes, and shows its toast only when cmod still has not answered.
+
 A cmod older than 4.3.0 keeps no Log, so there every error shows its toast.
 
-So a listener or handler that fails throws its error and lets cmod report it. A `mod.toast.error` for the same failure reaches no Log and shows in every session, so a broken config of a mod the person runs in 30 sessions shows in all 30.
+So a listener or handler that fails throws its error and lets cmod report it. A failure the mod works around and goes on past, such as one rule of many that did not load, goes to [`mod.log`](mod.md#modlog) with a `level`. A `mod.toast.error` for either reaches no Log and shows in every session, so a broken config of a mod the person runs in 30 sessions shows in all 30.
 
 The error toast stays, with its buttons and the time on a line under the message, and `Hide` in the place of `✕`, at the right end of that line:
 

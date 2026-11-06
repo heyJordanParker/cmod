@@ -60,7 +60,7 @@ export function program(options: { readonly command: readonly string[]; readonly
         failure = undefined
         void start()
       }
-      report({ id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason, retry, isCritical: true })
+      report({ id: `program:${executable}`, message: `The ${executable} program stopped`, description: reason, retry })
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
     }
 

@@ -5,7 +5,7 @@ import { coreVersion, installFix, isObject, secretFix, type Contact, type LogLev
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { beforeDeadline } from './deadline.js'
-import { cmodPluginName } from './dependencies.js'
+import { cmodPluginName, isUnanswered } from './dependencies.js'
 
 export type ShownToast = { readonly type: ToastType; readonly message: string; readonly description?: string }
 
@@ -64,6 +64,8 @@ const linkLimit = 2048
 const hiddenKey = 'cmod:hidden-failures'
 
 const failedCallMs = 30_000
+
+const logAgainMs = [10_000, 60_000, 300_000]
 
 const defaultDuration = 4000
 const visibleToasts = 3
@@ -236,19 +238,25 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     })
   }
 
-  const showsToast = async (failure: LoggedFailure, isShown: boolean): Promise<boolean | undefined> => {
+  const showsToast = async (failure: LoggedFailure, isShown: boolean): Promise<boolean | 'unanswered' | undefined> => {
+    const call = { isSettled: false }
     try {
-      const logged = logFailure(failure)
+      const logged = logFailure(failure).finally(() => void (call.isSettled = true))
       const answer = await (isShown ? logged : beforeDeadline(claude, { ms: failedCallMs }, failedMethod, logged))
       if (isObject(answer) && typeof answer['showsToast'] === 'boolean') return answer['showsToast']
       throw new Error(`cmod answered ${answer === undefined ? 'nothing' : JSON.stringify(answer)}, not { showsToast: true or false }`)
     } catch (error) {
+      if (!call.isSettled || isUnanswered(error)) return 'unanswered'
       claude.ui.log(`${name}: cmod kept no Log of ${failure.id}, so it shows the toast: ${messageOf(error)}`, { to: 'debug' })
       return undefined
     }
   }
 
   const fail = ({ id, message, error, description = error === undefined || describe(error) === message ? undefined : describe(error), retry, isCritical = false, root = claude.plugin.root }: Failure): ToastId => {
+    if (!isCritical && isUnanswered(error)) {
+      warn(id, `${name}: ${message}: ${describe(error)}`)
+      return id
+    }
     const hides = `${version() ?? ''}\n${message}\n${error === undefined ? '' : describe(error)}`
     const at = new Date()
     const repeat = `${hides}\n${description ?? ''}\n${at.toISOString().slice(0, 16)}`
@@ -256,11 +264,14 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     sent.set(id, repeat)
     const stack = error instanceof Error && error.stack !== undefined ? `\n\n${error.stack}` : ''
     const details = async (failedAt: Date) => detailsOf(await modVersion(), failedAt, `${message}${description === undefined ? '' : `\n${description}`}${stack}`)
-    const logged = async () => {
+    const logged = async (tries = 0): Promise<void> => {
       const contact = await contactOf(claude)
       const version = await modVersion()
       const failure: LoggedFailure = { mod: name, id, message, details: detailsOf(version, at, `${message}${description === undefined ? '' : `\n${description}`}${stack}`), at: at.toISOString(), isCritical, root, ...(contact === undefined ? {} : { contact }), level: 'error', version, core: coreVersion }
       const shows = await showsToast(failure, isCritical)
+      const wait = logAgainMs[tries]
+      if (shows === 'unanswered' && wait !== undefined) return void claude.clock.after(wait, () => void logged(tries + 1))
+      if (shows === 'unanswered') claude.ui.log(`${name}: cmod did not answer ${logAgainMs.length + 1} times, so ${id} reached no Log and shows its toast`, { to: 'debug' })
       if (isCritical) return
       if (shows !== false) return show()
       claude.ui.log(`${name}: ${message}${description === undefined ? '' : `: ${description}`}`, { to: 'debug' })

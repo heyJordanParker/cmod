@@ -1,4 +1,4 @@
-import type { Args, Caught, ClassicHookInputs, EventResult, Frozen, HookBudget, PluginOptions, RenderElement, Timer } from 'claude-code'
+import type { Args, Caught, ClassicHookInputs, EventResult, Frozen, PluginOptions, RenderElement, Timer } from 'claude-code'
 import type { Step } from '../installer.js'
 
 import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
@@ -7,11 +7,11 @@ import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVer
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { beforeDeadline, settledAfterAbort } from './deadline.js'
+import { beforeDeadline, hookMs, settledAfterAbort } from './deadline.js'
 import { announcementMs, announcementOf } from './announce.js'
 import { bind } from './bound.js'
 import type { Conversations } from './conversations.js'
-import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, isStillInstalling, loadedMethod, stillInstalling, withBareRefusals } from './dependencies.js'
+import { answerCall, answeringOwnCalls, cmodPluginName, dependencyCalls, isStillInstalling, loadedMethod, overranHook, stillInstalling, withBareRefusals } from './dependencies.js'
 import type { Device } from '../session/context/turn/device.js'
 import { keepEngine } from './engine.js'
 import { classicFailure, classicHook, userSkillHook, type Hook, type HookFields, type HookListener, type RoutedEvent } from './hooks.js'
@@ -19,7 +19,7 @@ import type { PermissionRoutes } from './permission-check.js'
 import { cmodError, locatingPrograms, newestCmodVersion, readLines, runCmod, spawnCmod, type Programs } from './programs.js'
 import { createModFiles, resolvedPath, type Places } from './metadata.js'
 import { fitsOption } from '../options.js'
-import { createInstaller } from './installer.js'
+import { createInstaller, type Installer } from './installer.js'
 import { createOptions, MissingOptions } from './options.js'
 import { createRouter, unaborted, type Router, type RouterNext } from './router.js'
 import { conversationMethods, createSessionsClient, type SessionColor, type SessionsClient } from './sessions.js'
@@ -89,6 +89,7 @@ type ModRuntime = {
   readonly permissionRoutes: () => PermissionRoutes | undefined
   readonly options: PluginOptions
   readonly nextDraw: () => number
+  readonly installer: Pick<Installer, 'changed'>
   readonly serveCmodPlugin: ServeCmodPlugin | undefined
 }
 
@@ -121,8 +122,6 @@ const drawsPerMs = 1000
 const cmodWaitMs = 60_000
 
 const cmodSlowCheckMs = 10_000
-
-const hookMs = 10_000 satisfies HookBudget['ms']
 
 const startHoldMs = hookMs - 1_000
 
@@ -395,7 +394,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
     startingRouter = activeRouter
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw, serveCmodPlugin })
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw, installer, serveCmodPlugin })
       .catch(async (error: unknown) => {
         if (error instanceof MissingOptions && (await askOptions(error))) return undefined
         await installer.close()
@@ -738,7 +737,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     async caught<N extends RoutedEvent>(event: N, e: Frozen<Args<N>>, next: RouterNext<N>, { error: { kind, message }, called }: Caught): Promise<EventResult<N>> {
       const call = e as Frozen<Args<'cmod.call'>>
       const isAsk = event === 'cmod.call' && call.to === definition.name && beforeAskOf(call) !== undefined
-      const reasons: Readonly<Record<string, string>> = { timeout: `it ran past the ${hookMs / 1000} s Claude Code gives a hook`, throw: message ?? 'it threw' }
+      const reasons: Readonly<Record<string, string>> = { timeout: overranHook, throw: message ?? 'it threw' }
       const reason = reasons[kind]
       if (reason === undefined) return isAsk ? ({ value: null } as EventResult<N>) : next(e)
       const error = new Error(reason)
@@ -796,7 +795,11 @@ async function createMod<State extends object, Declared extends Options>(definit
       forkedFrom = parent
       return parent
     }))
-  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: area.changed, forkParent })
+  const stateChanged = () => {
+    area.changed()
+    runtime.installer.changed()
+  }
+  const modState = createState<State>({ name: definition.name, initial: definition.state ?? {}, session, root, claude, report, changed: stateChanged, forkParent })
   const modOptions = createOptions({ name: definition.name, declared: definition.options ?? {}, fromClaude: runtime.options, claude, report, changed: modState.changed })
   const hookOn = <H extends Hook>(hook: H, listener: HookListener<H>, failed?: (input: ClassicHookInputs[H], error: Error) => HookFields | undefined): Subscription =>
     router.add(`classic.${hook}`, classicHook(hook, listener, report), failed === undefined ? undefined : classicFailure(failed))
@@ -968,7 +971,11 @@ async function createMod<State extends object, Declared extends Options>(definit
     every: (ms, listener) => timer(ms, 'every', true, listener),
     after: (ms, listener) => timer(ms, 'after', false, listener),
     use: (job) => job({ mod, announce, reserveName }),
-    log: (text, options) => claude.ui.log(`${definition.name}: ${text}`, { to: options?.to ?? 'debug' }),
+    log: (text, options) => {
+      if (options?.level === 'error') report({ id: `log:${text}`, message: text })
+      else if (options?.level === 'warning') claude.ui.warn(`log:${text}`, `${definition.name}: ${text}`)
+      else claude.ui.log(`${definition.name}: ${text}`, { to: options?.to ?? 'debug' })
+    },
     panes: area.panes,
     sidebar: area.sidebar,
     settings: area.settings,

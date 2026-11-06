@@ -84,7 +84,7 @@ test('a first line hello fails the start, closes the program, and the notice and
   })
 })
 
-test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal with its last standard error line', async () => {
+test("a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal with its last standard error line, which reaches cmod's Log and toasts only where cmod answers show", async () => {
   const delays: number[] = []
   let starts = 0
   const { tested, ready } = preview(() => {
@@ -92,6 +92,7 @@ test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
     return written([{ stream: 'stderr', text: `listen EADDRINUSE (start ${starts})\n` }], true)
   })
   tested.fakes.clock.after = (ms, fn) => {
+    if (ms === 30_000) return { cancel: () => undefined }
     delays.push(ms)
     fn()
     return { cancel: () => undefined }
@@ -109,8 +110,8 @@ test('a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
   expect(delays.filter((ms) => ms > 0)).toEqual([1000, 2000, 4000, 8000, 16000])
   expect(starts).toBe(6)
   expect(started.state).toBe('fatal')
-  expect(logged).toEqual([expect.objectContaining({ mod: 'preview', id: 'program:preview-server', message: 'The preview-server program stopped', isCritical: true })])
-  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The preview-server program stopped', description: 'it did not start again after 5 tries: listen EADDRINUSE (start 6).' })
+  expect(logged).toEqual([expect.objectContaining({ mod: 'preview', id: 'program:preview-server', message: 'The preview-server program stopped', isCritical: false })])
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
   await answered
 })
 

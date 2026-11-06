@@ -2,6 +2,7 @@ import type { Args, CmodDependencies, EventResult, Frozen } from 'claude-code'
 import { installFix } from '../records.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { hookMs } from './deadline.js'
 import type { Router } from './router.js'
 
 export const cmodPluginName = 'cmod'
@@ -62,4 +63,19 @@ export function stillInstalling(name: string): string {
 
 export function isStillInstalling(name: string, error: unknown): boolean {
   return messageOf(error).endsWith(stillInstalling(name))
+}
+
+export function didNotAnswer(name: string): string {
+  return `${name} did not answer in time, so Claude Code went on without it.`
+}
+
+export const overranHook = `it ran past the ${hookMs / 1000} s Claude Code gives a hook`
+
+export function isUnanswered(error: unknown): boolean {
+  const refusals = [stillInstalling(''), didNotAnswer(''), `: ${overranHook}`]
+  for (let cause = error; cause !== undefined; cause = cause instanceof Error ? cause.cause : undefined) {
+    const message = messageOf(cause)
+    if (refusals.some((refusal) => message.endsWith(refusal))) return true
+  }
+  return false
 }

@@ -322,7 +322,7 @@ export const cmodPlugin = defineMod({
           off = needing(await listed())
         }
         if (reason === '') await claude.store.delete(updatedFor)
-        if (off.length > 0) report({ id: 'needs-cmod', message: `${off.map((row) => row.name).join(', ')} ${off.length === 1 ? 'is' : 'are'} off`, description: off.map((row) => row.state).join('\n'), retry: updateAgain, isCritical: true })
+        if (off.length > 0) report({ id: 'needs-cmod', message: `${off.map((row) => row.name).join(', ')} ${off.length === 1 ? 'is' : 'are'} off`, description: off.map((row) => row.state).join('\n'), retry: updateAgain })
         else mod.toast.dismiss('needs-cmod')
         mod.state.global.pluginsCheckedAt = checked
       } finally {
@@ -330,7 +330,7 @@ export const cmodPlugin = defineMod({
       }
       if (JSON.stringify(await pluginsChangedAt(pluginsFile)) !== JSON.stringify(checked)) await keepPluginsCurrent({ isForced: false })
     }
-    const checkPlugins = (asked: { readonly isForced: boolean }) => void keepPluginsCurrent(asked).catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain, isCritical: true }))
+    const checkPlugins = (asked: { readonly isForced: boolean }) => void keepPluginsCurrent(asked).catch((error: unknown) => report({ id: 'needs-cmod', message: 'Could not update cmod for the mods that need a newer one', error, retry: updateAgain }))
     const updateAgain = async () => {
       await claude.store.delete(updatedFor)
       checkPlugins({ isForced: true })
@@ -358,7 +358,7 @@ export const cmodPlugin = defineMod({
       }
       shownFailures = Object.keys(failures)
     }
-    const followBuildFailures = () => showBuildFailures().catch((error: unknown) => report({ id: 'build-failures', message: 'Could not read which linked mods fail to build', error, isCritical: true }))
+    const followBuildFailures = () => showBuildFailures().catch((error: unknown) => report({ id: 'build-failures', message: 'Could not read which linked mods fail to build', error }))
     void followBuildFailures()
     const watchLock = `${store}/watch.lock`
     let isWatchRunning = false
@@ -366,7 +366,7 @@ export const cmodPlugin = defineMod({
       if (isWatchRunning || (await isHeld(claude, watchLock, watchStaleMs))) return
       isWatchRunning = true
       void runCmod(claude, ['watch'], await claude.session.id())
-        .catch((error: unknown) => report({ id: 'watch', message: 'Stopped reloading the linked mods', error, isCritical: true }))
+        .catch((error: unknown) => report({ id: 'watch', message: 'Stopped reloading the linked mods', error }))
         .finally(() => void (isWatchRunning = false))
     }
     let isWatching = false
@@ -401,8 +401,8 @@ export const cmodPlugin = defineMod({
       const isAnswered = outcome.type === 'done' || outcome.type === 'missing' || outcome.type === 'failed'
       if (isAnswered) mod.state.global.installedPlugins = (mod.state.global.installedPlugins ?? []).filter((installed) => installed !== name)
       if (outcome.type === 'done') mod.toast.success(`${name} is uninstalled`)
-      else if (outcome.type === 'failed') report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message, isCritical: true })
-      else if (exitCode !== 0) report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, 'teardown'))}`, isCritical: true })
+      else if (outcome.type === 'failed') report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: outcome.message })
+      else if (exitCode !== 0) report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, description: `cmod teardown ${formatExit(exitCode, cmodError(stderr, 'teardown'))}` })
     }
 
     const watchRemovals = async () => {
@@ -415,7 +415,7 @@ export const cmodPlugin = defineMod({
       for (const name of removed) {
         if (triedRemovals.has(name)) continue
         triedRemovals.add(name)
-        void tearDown(name).catch((error: unknown) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error, isCritical: true }))
+        void tearDown(name).catch((error: unknown) => report({ id: `teardown:${name}`, message: `Could not uninstall ${name}`, error }))
       }
     }
 
