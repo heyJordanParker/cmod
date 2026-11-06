@@ -4,6 +4,8 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.13.0] - 2026-11-06
+
 ### Added
 - `mod.log(text, { level: 'error' | 'warning' })` sends a failure the mod works around to the Log in Settings and `cmod log`. An error toasts only where a thrown failure would, in a session inside the mod's checkout, and a warning never toasts. Use it in place of `mod.toast.error` for such a failure, which reaches no Log and shows in every session.
 
