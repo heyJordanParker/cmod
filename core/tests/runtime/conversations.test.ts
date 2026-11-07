@@ -337,7 +337,7 @@ test('the notes of one row share one 8 s wait on other sessions, and a session l
 
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
 
-  expect(waits.filter((ms) => ms > 0 && ms <= 5000)).toEqual([5000, 3000])
+  expect(waits.filter((ms) => ms > 0 && ms < 5000)).toEqual([3000])
   expect(asks()).toBe(2)
 })
 
@@ -484,10 +484,10 @@ test('a tool call that arrives while the cmod plugin still runs its setup is den
 
   const answer = lifecycle.route('tool.call', deletion, ran)
   await fake.settle()
-  timers.find((made) => made.ms === 9_000)?.fire()
+  timers.find((made) => made.ms === 5_000)?.fire()
 
   expect(lifecycle.phase).toBe('ready')
-  expect(await answer).toEqual({ deny: 'cmod: it was still starting after 9 s' })
+  expect(await answer).toEqual({ deny: 'cmod: it was still starting after 5 s' })
 })
 
 test('a mod listening on this session and on every session is asked once before a prompt', async () => {

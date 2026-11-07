@@ -40,7 +40,8 @@ its file in watch.lock every 5 seconds, and the cmod plugin of each session
 with a linked mod starts cmod watch again once that file is gone or 15 seconds
 old. Before each touch it reads the newest cmod installed in the cmod store,
 and a cmod watch older than that exits and lets go of watch.lock, so the newer
-cmod watches with its own rules. At its start it links each folder still in
+cmod watches with its own rules. It also exits once the process that started
+it ends, so a session that crashed leaves no watcher behind. At its start it links each folder still in
 CLAUDE_CODE_PLUGIN_DIRS, which a cmod before 4.1.0 linked, as cmod link does
 now, and takes it out of that list.`
 
@@ -78,6 +79,7 @@ async function changedSources(folder: string, files: readonly string[], output: 
 
 export async function run(argv: string[]): Promise<number> {
   if (argv.length > 0) throw new Error(`cmod watch takes no arguments.\n\n${help}`)
+  const parent = process.ppid
   const lock = storePath('watch.lock')
   await using held = await takeLock(lock, AbortSignal.abort())
   if (held === undefined) return 0
@@ -167,13 +169,16 @@ export async function run(argv: string[]): Promise<number> {
     }
   }
 
-  while (!(await isNewerCmodInstalled())) {
-    await follow().catch((error: unknown) => process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`))
-    const now = new Date()
-    await utimes(heartbeat, now, now)
-    await Bun.sleep(pollMs)
+  try {
+    while (process.ppid === parent && !(await isNewerCmodInstalled())) {
+      await follow().catch((error: unknown) => process.stderr.write(`cmod watch: kept the folders it watches: ${messageOf(error)}\n`))
+      const now = new Date()
+      await utimes(heartbeat, now, now)
+      await Bun.sleep(pollMs)
+    }
+    return 0
+  } finally {
+    for (const watcher of watchers.values()) watcher.close()
+    for (const timer of [...timers.values(), ...failing]) clearTimeout(timer)
   }
-  for (const watcher of watchers.values()) watcher.close()
-  for (const timer of [...timers.values(), ...failing]) clearTimeout(timer)
-  return 0
 }

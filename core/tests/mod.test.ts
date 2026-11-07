@@ -453,7 +453,7 @@ test('mod.toast.promise draws a loading toast above the prompt that turns to suc
   const abovePrompt = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 80, rows: 24 } }
   await tested.start()
 
-  expect(textOf(await tested.fire('ui.render', abovePrompt as never, prompt))).toBe('>\n⠋  indexer  Indexing files  ✕\n✓  indexer  Installed  Settings  ✕')
+  expect(trimmedRows(textOf(await tested.fire('ui.render', abovePrompt as never, prompt)))).toBe('>\n⠋  indexer           Indexing files  ✕\n✓  indexer           Installed        ✕\n                     Settings  hh:mm')
   finish(12)
   await tested.settle()
 
@@ -504,6 +504,13 @@ test('mod.toast.promise rejects only through unwrap, and shows the error toast',
 const toastBand = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } }
 
 const belowBand = { type: 'Text', children: ['>'] } as unknown as RenderElement
+
+function trimmedRows(text: string): string {
+  return text
+    .split('\n')
+    .map((row) => row.trimEnd().replace(/\d\d:\d\d$/, 'hh:mm'))
+    .join('\n')
+}
 
 async function pressInBand(tested: TestedMod<object>, label: string): Promise<void> {
   const button = findElement(await tested.fire('ui.render', toastBand as never, belowBand), 'Button', label)
@@ -567,12 +574,12 @@ test("one mod's install page is its own, so another mod never draws in it", asyn
   expect(drawn).toEqual({ value: 'keep-going draws this' })
 })
 
-test('Hide keeps a failure hidden when it happens again, and a different failure shows', async () => {
+test('closing a failure toast keeps that failure hidden when it happens again, and a different failure shows', async () => {
   let reason = 'the test runner is missing'
   const tested = testMod(defineMod({ name: 'keep-going', setup: () => void sessions.current.beforeSessionStart(() => Promise.reject(new Error(reason))) }))
   await tested.raise.beforeSessionStart({ source: 'startup' })
 
-  await pressInBand(tested, 'Hide')
+  await pressInBand(tested, 'toast:session:beforeSessionStart:close')
   await tested.raise.beforeSessionStart({ source: 'startup' })
   const afterHide = tested.shown.toasts.filter((toast) => toast.type === 'error')
   reason = 'the disk is full'
@@ -582,7 +589,7 @@ test('Hide keeps a failure hidden when it happens again, and a different failure
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'the disk is full' }])
 })
 
-test('three listeners of one mod failing with one message show one toast that counts them, and Hide keeps all three hidden', async () => {
+test('three listeners of one mod failing with one message show one toast that counts them, and closing it keeps all three hidden', async () => {
   const broken = () => Promise.reject(new Error('rulebook.config.ts has a syntax error'))
   const tested = testMod(
     defineMod({
@@ -605,7 +612,7 @@ test('three listeners of one mod failing with one message show one toast that co
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'rulebook.config.ts has a syntax error' }])
   expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('3 times')
 
-  await pressInBand(tested, 'Hide')
+  await pressInBand(tested, 'toast:session:beforeSessionStart:close')
   await failAll()
 
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
@@ -664,13 +671,13 @@ test('a press on a toast message unfolds its whole description, and a second pre
 test('the band shows the newest three toasts, and +N more shows every toast', async () => {
   const tested = testMod(defineMod({ name: 'notes', setup: (mod) => ['a', 'b', 'c', 'd'].forEach((note) => mod.toast(`Note ${note}`)) }))
   await tested.start()
-  const drawn = () => tested.fire('ui.render', toastBand as never, belowBand).then(textOf)
+  const drawn = () => tested.fire('ui.render', toastBand as never, belowBand).then((band) => trimmedRows(textOf(band)))
 
-  expect(await drawn()).toBe('>\n+2 more\n   notes  Note c  ✕\n   notes  Note d  ✕\n✓  notes  Installed  Settings  ✕')
+  expect(await drawn()).toBe('>\n+2 more\n   notes             Note c  ✕\n   notes             Note d  ✕\n✓  notes             Installed        ✕\n                     Settings  hh:mm')
 
   await pressInBand(tested, '+2 more')
 
-  expect((await drawn()).split('\n')).toHaveLength(6)
+  expect((await drawn()).split('\n')).toHaveLength(7)
 })
 
 test('a toast expires after its duration once the band draws it, and waits while Claude Code shows a survey', async () => {

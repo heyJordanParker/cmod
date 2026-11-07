@@ -441,9 +441,9 @@ type ToastOptions = {
 - Each type draws its icon: `✓` success, `ℹ` info, `⚠` warning, `✗` error, and a spinner for loading.
 - A toast stays 4 seconds once the band draws it, or `duration` ms. `Infinity` keeps it until the person closes it, and a loading toast stays until it changes.
 - A toast with the `id` of a shown toast replaces it in place, so a loading toast turns into its success or error.
-- A text `description` shows its first line dim under the message. A press on the message unfolds the whole text and stops the time. An element `description`, such as a `Progress`, draws as it is.
-- Every toast takes the band's whole width, and its `✕` sits at the right end of its last line, whatever its text. So a stack of toasts closes one after another with presses in one spot, because the band keeps its last line by the prompt and the next toast moves down into the closed one's place.
-- `action` draws a button just before the `✕`. Give every toast that asks the person to do something an `action` that does it.
+- A toast's first line holds its icon, the mod's name in a column 16 characters wide, and the message. A longer name shows whole and moves only its own toast's text. A text `description` shows its first line dim on the line under the message. A press on the message unfolds the whole text and stops the time. An element `description`, such as a `Progress`, draws as it is.
+- Every toast takes the band's whole width, and its `✕` sits at the right end of its first line, so a stack of toasts closes with presses in one spot.
+- `action` draws a button on the left, on its own line under the message, with the time after it. Give every toast that asks the person to do something an `action` that does it.
 - `✕` closes the toast. The band shows the newest 3, and `+N more` shows every toast.
 - `promise` shows `loading` while `task` runs, then `success` or `error` in the same row. `unwrap()` resolves or rejects as `task` does.
 
@@ -463,11 +463,12 @@ A cmod older than 4.3.0 keeps no Log, so there every error shows its toast.
 
 So a listener or handler that fails throws its error and lets cmod report it. A failure the mod works around and goes on past, such as one rule of many that did not load, goes to [`mod.log`](mod.md#modlog) with a `level`. A `mod.toast.error` for either reaches no Log and shows in every session, so a broken config of a mod the person runs in 30 sessions shows in all 30.
 
-The error toast stays, with its buttons and the time on a line under the message, and `Hide` in the place of `✕`, at the right end of that line:
+The error toast stays, with its buttons and the time on a line under the message. `Report`, which every error toast has, comes first, at the same column in every error toast, and the buttons only some errors have come after it:
 
-- `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped.
+- `✕` closes the toast and keeps the same failure hidden in later sessions. A new version of the mod, or a different failure, shows again.
 - `Report` replaces the toast's buttons with the ways to tell the mod's author. `Ask Claude to report it` sends this session a prompt to file the report with the person's own tools. `Report it on GitHub (opens your browser)` opens a filled-in issue on the mod's `supportUrl` or `repository` in its `plugin.json`, or `Email the author (opens your mail app)` writes to its `author.email`. `Copy the error` copies the mod's name and version, the `@cmodjs/core` version, the message, the whole cause, and the stack.
-- `Hide` closes the toast and keeps the same failure hidden in later sessions. A new version of the mod, or a different failure, shows again.
+- `Retry` runs the failed step again, where running it again can work: an install, the mod's setup, or a program that stopped.
+- `Plugins` or `Open /config` opens the place that fixes a missing mod or secret.
 
 `clipboard.write(text)`, from `mod.js`, puts `text` on the person's clipboard. It rejects with Claude Code's reason when the terminal cannot take it.
 

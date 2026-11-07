@@ -239,8 +239,8 @@ test('a mod with a pending install registers nothing until done, then runs setup
   expect(runs).toEqual([])
   expect(rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())).toEqual([
     '>',
-    '⠋  safe-delete  Installing',
-    `                ${'█'.repeat(12)}${'░'.repeat(12)}  Installing trash${' '.repeat(41)}✕`,
+    `⠋  safe-delete       Installing${' '.repeat(68)}✕`,
+    `${' '.repeat(21)}${'█'.repeat(12)}${'░'.repeat(12)}  Installing trash`,
   ])
 
   step.print('progress 4 4 Adding the zsh alias')
@@ -258,7 +258,7 @@ test('a mod with a pending install registers nothing until done, then runs setup
   await fake.settle()
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.' }])
   expect(fake.shown.logs).toEqual([])
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith('>\n✓  safe-delete  Installed')
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith('>\n✓  safe-delete       Installed')
 })
 
 test('a call to a mod that is installing waits for the install, then answers, with no toast', async () => {
@@ -296,7 +296,7 @@ test("a call to a mod still installing at the start limit fails with when to ret
 
   const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
   await fake.settle()
-  timers.find((made) => made.ms === 9_000)?.fire()
+  timers.find((made) => made.ms === 5_000)?.fire()
 
   expect(await answer).toEqual({ deny: "safe-delete is installing. Try again when it's ready." })
   expect(await fire(lifecycle, 'cmod.call', { to: 'tracer', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
@@ -632,15 +632,15 @@ test('Retry on a failure with a description shows its progress in the descriptio
   second.exit(0)
   await fake.settle()
 
-  expect(failed.slice(2)).toEqual(['                Trying again in 2 s.', `                Retry  Report  09:05${' '.repeat(60)}Hide`])
-  expect(trying.slice(2)).toEqual(['                Trying again: Installing', `                Retry  Report  09:05${' '.repeat(60)}Hide`])
+  expect(failed.slice(2)).toEqual([`${' '.repeat(21)}Trying again in 2 s.`, `${' '.repeat(21)}Report  Retry  09:05`])
+  expect(trying.slice(2)).toEqual([`${' '.repeat(21)}Trying again: Installing`, `${' '.repeat(21)}Report  Retry  09:05`])
   expect(trying[1]?.slice(1)).toBe(failed[1]?.slice(1))
 })
 
-test('every failure toast in a stack takes the band width and ends its last row with Hide at the right edge, whatever its text, mod, and buttons', () => {
+test("every failure toast in a stack keeps its ✕ at the band's right edge and its buttons at one column, whatever its text, mod, and other buttons, so a person can close the stack with presses in one spot", () => {
   const fake = fakeClaude({ name: 'failer', root })
   const failer = createToaster(fake.claude, 'failer', () => '0.1.0')
-  const nightly = createToaster(fake.claude, 'nightly-report-builder', () => '0.1.0')
+  const nightly = createToaster(fake.claude, 'nightly-reports', () => '0.1.0')
   nightly.fail({ id: 'setup', message: 'its setup function threw: could not reach the build server', retry: () => undefined, isCritical: true })
   nightly.fail({ id: 'token', message: 'The Token hotkey failed', error: new Error(`failer has no GitHub token. ${secretFix}`), isCritical: true })
   failer.fail({ id: 'quick', message: 'The Quick hotkey failed', error: new Error('disk full'), isCritical: true })
@@ -650,13 +650,23 @@ test('every failure toast in a stack takes the band width and ends its last row 
   const prompt = Text({ children: '>' })
 
   const rows = rowsOf(nightly.draw(failer.draw(prompt, elements, band, 'band'), elements, band, 'band'), 120).map((row) => row.trimEnd())
-  const hides = rows.flatMap((row, index) => (row.endsWith('Hide') ? [index] : []))
+  const buttons = rows.filter((row) => row.includes('Report'))
+  const closes = rows.filter((row) => row.endsWith('✕'))
 
-  expect(['Retry', 'Open /config', 'Plugins'].map((label) => rows.some((row) => row.includes(label)))).toEqual([true, true, true])
-  expect(hides).toHaveLength(5)
-  expect(hides.map((index) => rows[index]?.length)).toEqual([100, 100, 100, 100, 100])
-  expect(hides.map((index) => rows[index + 1]?.[0] ?? 'end')).toEqual(['✗', '✗', '✗', '✗', 'end'])
+  expect(buttons).toEqual(['Report  09:05', 'Report  09:05', 'Report  Plugins  09:05', 'Report  Retry  09:05', 'Report  Open /config  09:05'].map((row) => `${' '.repeat(21)}${row}`))
+  expect(closes.map((row) => row.length)).toEqual([100, 100, 100, 100, 100])
   expect(rows.every((row) => row.length <= 100)).toBe(true)
+})
+
+test('a mod name longer than the name column shows whole, and pushes only its own toast text to the right', () => {
+  const fake = fakeClaude({ name: 'nightly-report-builder', root })
+  const nightly = createToaster(fake.claude, 'nightly-report-builder', () => '0.1.0')
+  nightly.fail({ id: 'quick', message: 'The Quick hotkey failed', isCritical: true })
+  const band = { hasSurvey: false, isWorking: false, maxRows: 40, bodyColumns: 100 } as RenderPropsOf['AbovePrompt']
+
+  const rows = rowsOf(nightly.draw(Text({ children: '>' }), elements, band, 'band'), 100).map((row) => row.trimEnd())
+
+  expect(rows.slice(1)).toEqual([`✗  nightly-report-builder  The Quick hotkey failed${' '.repeat(49)}✕`, `${' '.repeat(27)}Report  09:05`])
 })
 
 test("an update shows no toast of the mod's own, because the cmod plugin's toast names the new version", async () => {
@@ -1090,7 +1100,7 @@ test('the same listener failure shows its toast as today when cmod refuses cmod:
 
   expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The onSessionStart listener failed', description: 'the trash folder is missing' }])
   const band = await fire(lifecycle, 'ui.render', abovePrompt, prompt)
-  expect(['Report', 'Hide'].map((label) => findElement(band, 'Button', label) !== undefined)).toEqual([true, true])
+  expect(['Report', '✕'].map((label) => findElement(band, 'Button', label) !== undefined)).toEqual([true, true])
 })
 
 test("a failure the cmod plugin reports while its own setup still runs waits for its start and reaches its own Log", async () => {
@@ -1356,17 +1366,19 @@ test('an install error longer than the band wraps its message across the band, w
 
   expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
     '>',
-    '✗  safe-delete  cmod bootstrap:',
-    '                cmod is installed',
-    '                at',
-    '                /home/me/.local/bi',
-    '                n/cmod, but PATH',
-    '                finds no cmod. Put',
-    '                /home/me/.local/bi',
-    '                n first on PATH,',
-    '                then restart',
-    '                Claude Code.',
-    '                Retry  Report  09:05  Hide',
+    '✗  safe-delete       cmod bootstrap:       ✕',
+    '                     cmod is',
+    '                     installed at',
+    '                     /home/me/.local/',
+    '                     bin/cmod, but',
+    '                     PATH finds no',
+    '                     cmod. Put',
+    '                     /home/me/.local/',
+    '                     bin first on',
+    '                     PATH, then',
+    '                     restart Claude',
+    '                     Code.',
+    '                     Report  Retry  09:05',
   ])
 })
 
@@ -1939,6 +1951,30 @@ test('the cmod plugin takes what a mod listens to while it installs, and serves 
 
   expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ totalrecall: { 'test-session': listens } })
   expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/before/test-session.json'))).toMatchObject([{ mod: 'totalrecall', target: 'test-session', events: ['ContextEnd'] }])
+})
+
+test('the cmod plugin answers what a mod listens to at once while its own setup still runs, so the caller spends none of its 10 s hook budget waiting', async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const disk = fakeFiles({})
+  Object.assign(fake.fakes.fs, disk)
+  let finishSetup: () => void = () => undefined
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: () => new Promise<void>((resolve) => (finishSetup = resolve)) }), undefined, {}, true, serveCmodPlugin)
+  const listens = [{ event: 'Prompt' }]
+  const answers: unknown[] = []
+
+  void lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
+  await fake.settle()
+  void fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
+  void fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:subscribe', input: { session: 'test-session', subscriptions: listens }, caller: 'totalrecall' }, { deny: 'cmod has no method.' }).then((answer) => void answers.push(answer))
+  await fake.settle()
+
+  expect(answers).toEqual([{ value: null }])
+
+  finishSetup()
+  await fake.settle()
+
+  expect(lifecycle.phase).toBe('active')
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ totalrecall: { 'test-session': listens } })
 })
 
 test('the cmod plugin counts as installed when the cmod program is its version or newer', async () => {
@@ -2894,7 +2930,7 @@ test('a SessionStart held past the limit passes on and replays once the mod star
   })
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {}).finally(() => (isAnswered = true))
   await fake.settle()
-  timers.find((made) => made.ms === 9_000)?.fire()
+  timers.find((made) => made.ms === 5_000)?.fire()
   await fake.settle()
 
   expect(isAnswered).toBe(true)
@@ -2927,7 +2963,7 @@ test('a SessionStart answered before the limit cancels its timer', async () => {
 
   expect(await answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'] })
   expect(sources).toEqual(['startup'])
-  expect(timers).toEqual([{ ms: 9_000, isCancelled: true }])
+  expect(timers).toEqual([{ ms: 5_000, isCancelled: true }])
 })
 
 test("a prompt that arrives while a mod that just installed still runs its setup passes on at the start limit, as a SessionStart does, so Claude Code never stops the hook for running past its budget", async () => {
@@ -2950,7 +2986,7 @@ test("a prompt that arrives while a mod that just installed still runs its setup
 
   const answer = fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {}).finally(() => (isAnswered = true))
   await fake.settle()
-  timers.find((made) => made.ms === 9_000)?.fire()
+  timers.find((made) => made.ms === 5_000)?.fire()
   await fake.settle()
 
   expect(isAnswered).toBe(true)

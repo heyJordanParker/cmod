@@ -96,9 +96,11 @@ function fieldOf(use: CallBase, name: string): unknown {
   return use.input[name]
 }
 
+export class InvalidCall extends Error {}
+
 function textField(use: CallBase, name: string): string {
   const value = fieldOf(use, name)
-  if (typeof value !== 'string') throw new Error(`The ${use.tool} call has no text field ${name}.`)
+  if (typeof value !== 'string') throw new InvalidCall(`The ${use.tool} call has no text field ${name}.`)
   return value
 }
 

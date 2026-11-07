@@ -69,6 +69,9 @@ const logAgainMs = [10_000, 60_000, 300_000]
 
 const defaultDuration = 4000
 const visibleToasts = 3
+const columnGap = 2
+
+const nameColumn = 16
 const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
 const spinnerMs = 100
 const spinFrames = 10_000 / spinnerMs
@@ -294,7 +297,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
         changed()
         return
       }
-      const actions = [...fixes, ...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), { label: 'Report', onClick: startReporting }]
+      const actions = [{ label: 'Report', onClick: startReporting }, ...(retry === undefined ? [] : [{ label: 'Retry', onClick: tryAgain }]), ...fixes]
       put('error', message, { id, ...(description === undefined ? {} : { description }), duration: Infinity }, actions, hides)
     }
     const startReporting = async () => {
@@ -343,27 +346,28 @@ export function createToaster(claude: Claude, name: string, version: () => strin
     const message = isText ? Button({ plain: true, key: `toast:${entry.id}:open`, label: entry.message, onPress: toggle(entry) }) : Text({ children: entry.message })
     const details = !isText ? description : Text({ dimColor: true, wrap: entry.isOpen ? 'wrap' : 'truncate-end', children: entry.isOpen ? description : firstLine(description) })
     const fixed = (child: RenderElement) => Box({ flexShrink: 0, children: child })
-    const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: entry.hides === undefined ? '✕' : 'Hide', onPress: () => hide(entry) })
+    const close = Button({ plain: true, dimColor: true, key: `toast:${entry.id}:close`, label: '✕', onPress: () => hide(entry) })
     const actions = entry.actions.map((action, index) => Button({ plain: true, key: `toast:${entry.id}:${index === 0 ? 'action' : `action-${index}`}`, label: action.label, onPress: press(entry, action.onClick) }))
-    const buttons = Box({ gap: 2, flexWrap: 'wrap', children: [...actions, Text({ dimColor: true, children: entry.count > 1 ? `${clockTime(entry.at)} · ${entry.count} times` : clockTime(entry.at) })].map(fixed) })
+    const time = Text({ dimColor: true, children: entry.count > 1 ? `${clockTime(entry.at)} · ${entry.count} times` : clockTime(entry.at) })
+    const buttons = actions.length === 0 ? [] : [Box({ gap: columnGap, flexWrap: 'wrap', children: [...actions, time].map(fixed) })]
     const trying = entry.trying === undefined ? undefined : Box({ gap: 1, children: [Text({ dimColor: true, children: 'Trying again:' }), typeof entry.trying === 'string' ? Text({ dimColor: true, wrap: 'truncate-end', children: entry.trying }) : entry.trying] })
-    const text = details === undefined ? [message] : [message, trying ?? details]
-    const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? [buttons] : reportChoices(entry, entry.reporting)
+    const text = details === undefined ? [] : [trying ?? details]
+    const under = trying !== undefined && details === undefined ? [trying] : entry.reporting === undefined ? buttons : reportChoices(entry, entry.reporting)
     return Box({
       width: columns,
-      gap: 2,
+      gap: columnGap,
       justifyContent: 'space-between',
       children: [
         Box({
-          gap: 2,
+          gap: columnGap,
           flexShrink: 1,
           children: [
             fixed(Text({ ...(icon.color === undefined ? {} : { color: icon.color }), children: icon.glyph })),
-            fixed(Text({ dimColor: true, children: name })),
-            Box({ flexDirection: 'column', flexShrink: 1, children: entry.hides === undefined ? text : [...text, ...under] }),
+            fixed(Text({ dimColor: true, children: name.padEnd(nameColumn) })),
+            Box({ flexDirection: 'column', flexShrink: 1, children: [message, ...text, ...under] }),
           ],
         }),
-        Box({ gap: 2, flexShrink: 0, alignSelf: 'flex-end', children: entry.hides === undefined ? [...actions, close] : [close] }),
+        fixed(close),
       ],
     })
   }

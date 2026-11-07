@@ -62,7 +62,7 @@ When a step fails, the mod does not start. An error toast above the prompt names
 - `its open panes did not load: <error>` when Claude Code cannot list the open panes.
 - `the details of its session did not load: <error>` when Claude Code cannot name the session's id, model, or start time.
 
-Each of these has `Retry`, which starts the mod again, and `Report` and `Hide` ([ui.md](ui.md#toasts)). A failed step is critical, so its toast shows for an installed mod too.
+Each of these has `Retry`, which starts the mod again, and `Report` and `✕` ([ui.md](ui.md#toasts)). A failed step is critical, so its toast shows for an installed mod too.
 
 ## Rules
 

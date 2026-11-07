@@ -7,6 +7,8 @@ import { ifMissing, listFiles, readText } from '../src/files.js'
 
 const main = join(import.meta.dir, '..', 'src', 'main.ts')
 const homes: string[] = []
+type Started = { readonly exitCode: number | null; readonly exited: Promise<number>; kill(signal: NodeJS.Signals): void }
+const started: Started[] = []
 const temporaryRoot = await realpath(tmpdir())
 
 export const cmodFromSource = `#!/bin/sh
@@ -85,8 +87,16 @@ esac
 
 export async function deleteTemporaryHomes(): Promise<void> {
   const made = homes.splice(0)
-  await Promise.all(made.map(stopFakeService))
+  await Promise.all([...started.splice(0).map(stopStarted), ...made.map(stopFakeService)])
   for (const home of made) await removeTemporary(home)
+}
+
+async function stopStarted(child: Started): Promise<void> {
+  if (child.exitCode !== null) return
+  child.kill('SIGTERM')
+  const killing = setTimeout(() => child.kill('SIGKILL'), 5000)
+  await child.exited
+  clearTimeout(killing)
 }
 
 async function stopFakeService(home: string): Promise<void> {
@@ -200,7 +210,8 @@ function shellWord(word: string): string {
   return `'${word.replaceAll("'", `'\\''`)}'`
 }
 
-function watchOutput(child: { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array>; exitCode: number | null; exited: Promise<number> }) {
+function watchOutput(child: Started & { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array> }) {
+  started.push(child)
   const output = { stdout: '', stderr: '' }
   let isDone = false
   const read = async (name: 'stdout' | 'stderr') => {

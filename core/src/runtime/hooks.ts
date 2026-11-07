@@ -3,7 +3,7 @@ import { configFolders } from '../records.js'
 import type { Claude } from './claude.js'
 import type { RoutedFailure, RoutedHook } from './router.js'
 import type { Failure } from './toaster.js'
-import { callEffects, type CallBase, type FileAccess } from '../utils/call-effects.js'
+import { callEffects, InvalidCall, type CallBase, type FileAccess } from '../utils/call-effects.js'
 import { dynamicPattern } from '../utils/parse-shell.js'
 import { isMissing } from '../utils/paths.js'
 import { messageOf } from '../utils/text.js'
@@ -97,7 +97,7 @@ export async function callFiles(name: string, claude: Claude, folders: Promise<H
     const read = await Promise.all(known(reads).map(async (path) => ((await claude.fs.stat(path).catch(unchecked(path)))?.kind === 'file' ? [path] : [])))
     return { read: read.flat(), changed: known(writes) }
   } catch (error) {
-    claude.ui.warn('call:files', `${name}: the ${use.tool} call lists no files: ${messageOf(error)}`)
+    if (!(error instanceof InvalidCall)) claude.ui.warn('call:files', `${name}: the ${use.tool} call lists no files: ${messageOf(error)}`)
     return { read: [], changed: [] }
   }
 }

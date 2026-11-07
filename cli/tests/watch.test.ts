@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { chmod, mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version } from '../package.json'
-import { cmodFromSource, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { cmodFromSource, deleteTemporaryHomes, environment, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -225,6 +225,17 @@ test.concurrent('a second cmod watch exits at once while the first one watches, 
   await until(() => statSync(lockFile(first.child.pid)).mtimeMs > firstTouch)
   expect(statSync(lockFile(first.child.pid)).mtimeMs - firstTouch).toBeGreaterThanOrEqual(4000)
   first.child.kill()
+}, 60000)
+
+test.concurrent('cmod watch exits within one touch and lets go of watch.lock when its parent process dies, so a crashed session leaves no watcher behind', async () => {
+  const home = await temporaryHome()
+  await writeFiles(home, { 'bin/cmod': cmodFromSource, '.local/share/cmod/records/.keep': '' })
+  const parent = Bun.spawn(['sh', '-c', 'cmod watch & wait'], { cwd: home, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  await until(() => existsSync(store(home, 'watch.lock')))
+
+  parent.kill('SIGKILL')
+
+  await until(() => !existsSync(store(home, 'watch.lock')))
 }, 60000)
 
 test.concurrent('a cmod watch older than the newest cmod installed exits within one touch and lets go of watch.lock, so the cmod plugin starts the newer one', async () => {

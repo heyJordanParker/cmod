@@ -123,7 +123,7 @@ The install step runs again on every new version of the mod and whenever its scr
 
 - When the first install of a mod fails or is stopped, cmod runs the uninstall step to undo it. So the uninstall step must work on a partial install.
 - When the install step of an upgrade fails or is stopped, cmod keeps the version it set up before.
-- The failure shows at once as an error toast with `Retry`, `Report`, and `Hide` ([ui.md](ui.md#toasts)).
+- The failure shows at once as an error toast with `Report`, `Retry`, and `✕` ([ui.md](ui.md#toasts)).
 - When waiting can fix the failure, cmod also retries in the background after 2, 4, 8, 16, 32, 64, and 128 seconds, then every 128 seconds, and the toast says `Trying again in <n> s.` A try that works replaces the toast with `Installed`. Waiting can fix two failures: a linked checkout whose build or install step failed, and a release download that got 404 or no answer, as when a release was published seconds ago. Any other failure waits for `Retry`. A linked checkout's failed build runs again only once a file in its program's folder changes, so a retry with no change shows the same error without building.
 - A new version of a linked checkout whose install steps did not change keeps running on its last install while cmod builds the new version in the background, and other sessions wait for that one build. A failed build shows the build's own error.
 - Before each try, cmod reads the mod's install record, so a mod another session installed starts without running its install again.

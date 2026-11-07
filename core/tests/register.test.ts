@@ -407,7 +407,7 @@ test('session.start through the engine chain reads the plugin, runs setup, and a
   const answer = await fake.dispatch('classic.PostToolBatch', $, { hook_event_name: 'PostToolBatch', session_id: 'session-1', cwd: '/work/app', tool_calls: [{ tool_name: 'Edit', tool_input: { file_path: 'a.ts', old_string: 'a', new_string: 'b' }, tool_response: {}, tool_use_id: 't' }] }, {})
 
   expect(answer).toEqual({ additionalContext: ['<demo_mod>\ndemo saw Edit\n</demo_mod>'] })
-  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo  Installed')
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo              Installed')
   expect(shown.logs).toEqual([])
 })
 
@@ -440,7 +440,7 @@ test('a mod starts while the plugins below it start, so its start can wait on on
 
   await fake.dispatch('session.start', $, {}, {})
 
-  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo  Installed')
+  expect(textOf((await fake.dispatch('ui.render', $, abovePrompt, prompt)) as RenderElement)).toStartWith('>\n✓  demo              Installed')
 })
 
 test('a pane opened during setup is drawn again once the mod is active', async () => {

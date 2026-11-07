@@ -133,7 +133,7 @@ tracer: <the message of the error the method threw>
 
 - `tracer is not installed` covers a provider whose code did not load. The caller's error toast shows a `Plugins` button, which opens Claude Code's `/plugin`.
 - `tracer is not set up` covers a provider the person declined to install and one whose install failed, and names why. The provider's own toast shows the same reason, with `Retry` or `Install`.
-- `tracer is installing` covers a provider whose install step still runs 9 seconds after the call. A provider that is installing or only starting makes the call wait for it, up to 9 seconds.
+- `tracer is installing` covers a provider whose install step still runs 5 seconds after the call. A provider that is installing or only starting makes the call wait for it, up to 5 seconds.
 - When tracer is disabled, Claude Code unloads the mod that lists it, with its own error: `Dependency "tracer" is disabled — enable it or remove the dependency`.
 - A call fails with `mod.dependencies.tracer.signatures passed its 30 s deadline` when the other mod takes longer than 30 seconds. A job bounds the whole function that makes the call by its own deadline ([jobs.md](jobs.md)), so a slow call inside `slashCommand` can fail the command first, with `/outline passed the 30 s deadline of slashCommand`.
 

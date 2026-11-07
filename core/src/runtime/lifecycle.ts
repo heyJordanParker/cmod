@@ -123,7 +123,7 @@ const cmodWaitMs = 60_000
 
 const cmodSlowCheckMs = 10_000
 
-const startHoldMs = hookMs - 1_000
+const startHoldMs = hookMs / 2
 
 const dependencyCallMs = 30_000
 
@@ -646,19 +646,18 @@ export function createLifecycle<State extends object, Declared extends Options =
     const isCallToThisMod = (event === 'cmod.call' && (e as Frozen<Args<'cmod.call'>>).to === definition.name) || (event === 'tool.call' && typeof tool === 'string' && tool.startsWith(`mcp__${definition.name}__`))
     if (event === 'cmod.call' && !isCallToThisMod) return next(e)
     const isListen = isCallToThisMod && event === 'cmod.call' && listenMethods.includes(asked.method)
+    if (isListen && phase !== 'active') {
+      heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
+      void startSettled.then(whenInstalled).then(whenActive)
+      return { value: null } as EventResult<N>
+    }
     const waitsForInstall = isCallToThisMod && !(event === 'cmod.call' && answeredAtOnce.includes(asked.method))
     const isLate = await (waitsForInstall ? holdUntilInstalled(signal) : event === 'classic.SessionStart' || event === 'session.append' || isCallToThisMod ? holdUntilStarted(signal) : holdUntilActive(signal))
     if (event === 'classic.SessionStart' && phase !== 'active') {
       missedSessionStart = e as Frozen<Args<'classic.SessionStart'>>
       return next(e)
     }
-    if (isCallToThisMod && phase !== 'active') {
-      if (isListen) {
-        heldListens.set(`${asked.caller}\n${asked.method}\n${String((asked.input as { readonly session?: unknown }).session)}`, asked)
-        return { value: null } as EventResult<N>
-      }
-      return { deny: phase === 'failed' ? notSetUp() : stillInstalling(definition.name) } as EventResult<N>
-    }
+    if (isCallToThisMod && phase !== 'active') return { deny: phase === 'failed' ? notSetUp() : stillInstalling(definition.name) } as EventResult<N>
     if (isLate && phase !== 'active') return (startingRouter ?? router).dispatchFailure(event, e, new Error(`it was still starting after ${startHoldMs / 1000} s`), next, false)
     const call = e as Frozen<Args<'cmod.call'>>
     if (event === 'cmod.call' && call.to === definition.name && mod !== undefined) {

@@ -134,6 +134,18 @@ test('a Bash read of a path cmod cannot check keeps the other files and logs tha
   expect(tested.shown.debug).toContain("file-watcher: the Bash call reads /work/secret.md, which could not be checked: EACCES: permission denied, stat '/work/secret.md'")
 })
 
+test('a Read whose input names no file_path, which Claude Code refuses, lists no files and logs no warning, because it reads nothing', async () => {
+  const { tested, seen } = fileWatcher()
+
+  await ran(tested, 'Read', { path: '/work/notes.md' }, true)
+
+  expect(seen).toEqual([
+    { event: 'ToolCall', files: { read: [], changed: [] } },
+    { event: 'ToolResult', files: { read: [], changed: [] } },
+  ])
+  expect(tested.shown.debug.filter((line) => line.includes('lists no files'))).toEqual([])
+})
+
 test('a Bash read of a path that is not there lists nothing in files.read', async () => {
   const { tested, seen } = fileWatcher()
 
