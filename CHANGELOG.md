@@ -4,6 +4,17 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.13.1] - 2026-11-07
+
+### Changed
+- Every toast keeps `✕` at the right end of its first line, so a stack of toasts closes with presses in one spot, and draws its other buttons on the left, on a line under its message, with the time after them. The mod's name sits in a column 16 characters wide, so the messages and buttons of every toast line up, and a longer name shows whole. An error toast's buttons start with `Report`, then `Retry` and the fix buttons. `Hide` is now `✕`, and still keeps the same failure hidden in later sessions.
+
+### Fixed
+- A new session no longer shows `Hears nothing from session …` and `Changes nothing in session …` from every mod. cmod held each mod's subscription at a session start until its own setup finished, up to 9 seconds, and under load the subscription ran past Claude Code's 10-second hook budget. cmod now takes each subscription at once and serves it when it is set up.
+- A new session on a loaded computer no longer shows `Claude Code stopped its SessionStart hook` or `stopped its cmod.call hook`. A hook that waits for a mod to start waits at most 5 seconds, half of Claude Code's 10-second budget, where it waited 9 and left the hook 1 second for its own work.
+- `cmod watch` exits once the session that started it ends, so a Claude Code that crashed or was killed leaves no watcher running until the next cmod update.
+- A tool call whose input Claude Code refuses, such as a Read with no `file_path`, lists no files and no longer logs `the Read call lists no files` as a warning.
+
 ## [5.13.0] - 2026-11-06
 
 ### Added
