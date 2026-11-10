@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.13.2] - 2026-11-10
+
+### Fixed
+- `cmod publish` deletes the folder it builds the release in once the release is out, where every publish left one in the system's temporary folder. `--dry-run` keeps it, so the files it lists stay there to read.
+
 ## [5.13.1] - 2026-11-07
 
 ### Changed
