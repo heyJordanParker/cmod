@@ -139,7 +139,7 @@ It needs, and refuses to start without:
 - a `cmod` dependency in `.claude-plugin/plugin.json` of `>=` the oldest cmod the `@cmodjs/core` the mod bundles runs on, which `cmod check` writes
 - for a real publish, a working tree with no uncommitted changes, no `v<version>` or `<name>--v<version>` tag yet, a `git push` to `origin` that succeeds, and the `gh` command, which creates the GitHub release
 
-`--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the working tree, uncommitted changes included. It prints the folder that holds the release, so you can read what the directory will read.
+`--dry-run` builds everything into a temporary folder, and pushes nothing. It writes `marketplace.json` there too, so the working tree stays as it was. It allows uncommitted changes and an existing tag, and builds from the working tree, uncommitted changes included. It prints the folder that holds the release, so you can read what the directory will read. A real publish deletes that folder once the release is out.
 
 ## Install mods
 

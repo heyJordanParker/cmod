@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, readFile, readdir, symlink, unlink } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, posix } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -193,6 +193,7 @@ export async function run(argv: string[]): Promise<number> {
   await git('push', 'origin', 'HEAD')
   const defaultBranch = (await runCommand(['gh', 'repo', 'view', repository, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'])).trim()
   if (defaultBranch === releaseBranch) await runCommand(['gh', 'repo', 'edit', repository, '--default-branch', (await answer('branch', '--show-current')).trim()])
+  await rm(output, { recursive: true, force: true })
   progress.succeed(`Released ${tag}: https://github.com/${repository}/releases/tag/${tag}`)
   process.stdout.write(`\nTo list ${plugin.name} in Anthropic's plugin directory, open https://claude.ai/directory/manage, select Submit new, and paste this as the Repository:\n  ${directoryLink}\n`)
   return 0

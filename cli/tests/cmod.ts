@@ -165,6 +165,7 @@ esac
 export async function temporaryHome(): Promise<string> {
   const home = await mkdtemp(join(temporaryRoot, 'cmod-test-'))
   homes.push(home)
+  await mkdir(join(home, 'tmp'))
   await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed), 'bin/launchctl': serviceManager, 'bin/systemctl': serviceManager })
   return home
 }
@@ -235,6 +236,7 @@ export function environment(home: string): Record<string, string | undefined> {
   return {
     ...process.env,
     HOME: home,
+    TMPDIR: join(home, 'tmp'),
     XDG_DATA_HOME: '',
     XDG_CONFIG_HOME: '',
     CLAUDE_CONFIG_DIR: '',
