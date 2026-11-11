@@ -14,7 +14,7 @@ import { linkedFolders } from '../settings.js'
 import { isNewerCmodInstalled, markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
 import { bundledHooks } from './publish.js'
 
-export const summary = 'Reload the sessions inside a linked mod once it builds after a change.'
+export const summary = 'Build each linked mod after a change, so every session offers Reload.'
 
 export const help = `Usage: cmod watch
 
@@ -26,12 +26,12 @@ build reads, a file in cli/ or one its JavaScript or TypeScript entry imports,
 it also builds the program cli/ declares, as cmod link does, into cmod's
 programs folder, then stops the program's running copy, so the next one starts
 the new build. A build that writes the same program leaves the file and its running
-copy as they are. Once both build, each session
-whose project is that folder or inside it reloads its mods once, and every
-other session offers Reload. A change only to files git ignores, such as the
+copy as they are. Once both build, every session
+offers Reload, and a session started with claude --plugin-dir <folder> reloads
+it by itself between turns. A change only to files git ignores, such as the
 .claude-plugin/types/ Claude Code writes each time it loads the mod, to the
 program's output folder, or to a file gone by then that git does not track,
-such as a build's temporary file, reloads nothing. A build that still fails
+such as a build's temporary file, offers nothing. A build that still fails
 after 10 seconds without a change shows its error in every session, and the
 last program that built keeps running. At its start it builds again each mod an earlier cmod watch
 left failing, so a failure an older cmod wrote goes once the mod builds. One cmod
@@ -134,7 +134,7 @@ export async function run(argv: string[]): Promise<number> {
       return
     }
     if (failures.delete(name)) await writeFailures()
-    await markPluginsChanged(folder)
+    await markPluginsChanged()
   }
 
   const changed = (folder: string, file: string | null) => {

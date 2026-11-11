@@ -540,7 +540,7 @@ export function serveConversations({
 
   const recordAppend: RoutedHook<'session.append'> = async (e, next) => {
     const kept = await next(e)
-    if (kept.deny !== undefined || session === '') return kept
+    if (kept.deny !== undefined || session === '' || e.door === 'queue') return kept
     const cwd = e.message.type === 'assistant' ? await claude.session.cwd() : ''
     void take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd), e.agentId).catch((error: unknown) => report('append', 'Missed a message', error))
     return kept

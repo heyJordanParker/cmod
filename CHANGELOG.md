@@ -4,6 +4,15 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.13.3] - 2026-11-11
+
+### Changed
+- A session working inside a checkout you linked with `cmod link` no longer reloads by itself when a change there builds. It shows the `Plugins changed` toast with a Reload button, as every other session does. To have your edits reload without pressing anything, start the session with `claude --plugin-dir <checkout>`: Claude Code then reloads the checkout itself between turns, in that session only.
+
+### Fixed
+- A message you type while Claude works no longer ends the turn for cmod. cmod read Claude Code's queued copy of the message as a new prompt, so a mod heard the turn end and a new one start while the turn still ran, and a waiting reload was queued mid-turn as `Prompt from the cmod plugin /reload-plugins`. The message now counts once, when it enters the conversation.
+- A mod's `before` listener for notes, notices, and replies is asked once about a queued message, when it enters the conversation, where it was asked once more while the message waited in the queue.
+
 ## [5.13.2] - 2026-11-10
 
 ### Fixed

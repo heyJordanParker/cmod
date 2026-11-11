@@ -184,6 +184,7 @@ export function installBefore({ claude, router, hooks }: { readonly claude: Clau
       return refusal === undefined ? undefined : { text: null }
     }),
     router.add('session.append', async (e, next) => {
+      if (e.door === 'queue') return next(e)
       const wanted = new Set((await Promise.all(appended.map(async (event) => ((await wants(event)) ? [event] : [])))).flat())
       if (wanted.size === 0) return next(e)
       const row = rowOfAppend({ uuid: e.uuid, door: e.door, origin: e.origin, message: e.message }, now(), '')

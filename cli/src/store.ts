@@ -20,10 +20,10 @@ export function storePath(...parts: string[]): string {
   return join(storeFolder(process.env), ...parts)
 }
 
-export async function markPluginsChanged(checkout?: string): Promise<void> {
+export async function markPluginsChanged(): Promise<void> {
   const store = storeFolder(process.env)
   if (!existsSync(store)) return
-  await writeAtomically(pluginsChangedPath(store), pluginsChangedMark(Date.now(), process.pid, checkout))
+  await writeAtomically(pluginsChangedPath(store), pluginsChangedMark(Date.now(), process.pid))
   await markStoreChanged()
 }
 

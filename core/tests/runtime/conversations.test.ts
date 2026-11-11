@@ -220,6 +220,53 @@ test("a turn ends at Stop with Claude's answer, stays open while a mod refuses t
   ])
 })
 
+test('a message typed during a turn neither ends that turn nor starts one until Claude Code adds it to the conversation', async () => {
+  const changes: { readonly type: string; readonly turn?: { readonly prompt?: { readonly text?: string }; readonly reason?: string } }[] = []
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  tested.fakes.cmod.call = async (input) => {
+    const { change } = (input.input ?? {}) as { readonly change?: (typeof changes)[number] }
+    if (input.method === conversationMethods.changed && change !== undefined) changes.push(change)
+    return undefined
+  }
+  const append = (uuid: string, door: string, text: string) => {
+    const appended = { uuid, door, origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
+    return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+  }
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnStart' }, { event: 'turnEnd' }] }, caller: 'watcher' } as never)
+  await append('p1', 'prompt', 'Rename the tree pane')
+  await append('q1', 'queue', 'Then deploy it')
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)
+  await append('p2', 'prompt', 'Then deploy it')
+  await tested.settle()
+
+  expect(changes.map((change) => [change.type, change.turn?.prompt?.text, change.turn?.reason])).toEqual([
+    ['turnStart', 'Rename the tree pane', undefined],
+    ['turnEnd', 'Rename the tree pane', 'answer'],
+    ['turnStart', 'Then deploy it', undefined],
+  ])
+})
+
+test('a mod is asked about a queued note once, when it enters the conversation', async () => {
+  const asked: unknown[] = []
+  const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
+  tested.fakes.cmod.call = async (input) => {
+    if (input.method === conversationMethods.before) asked.push((input.input as { readonly change?: unknown }).change)
+    return undefined
+  }
+  const note = '<pinger_mod>\nTests pass.\n</pinger_mod>'
+  const append = (uuid: string, door: string) => {
+    const appended = { uuid, door, origin: { kind: 'engine' }, message: { type: 'user', content: [{ type: 'text', text: note }] } }
+    return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
+  }
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'note' }] }, caller: 'guard' } as never)
+  await append('q1', 'queue')
+  await append('n1', 'note')
+
+  expect(asked).toMatchObject([{ type: 'message', message: { type: 'note', text: 'Tests pass.' } }])
+})
+
 test('a turn the person cut off with Esc during its Stop ends at the next prompt with no reason, as its transcript does, and its Stop waits on no mod', async () => {
   const ended: unknown[] = []
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))

@@ -1,6 +1,6 @@
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
-import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, markedCheckout, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
+import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, parseEvent, parseLinks, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
 import { heldInput } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { loadedMethod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
@@ -12,7 +12,7 @@ import { cmodError, isHeld, runCmod } from '../node_modules/@cmodjs/core/runtime
 import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
-import { configRootOf, failureLog, isInside, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
 import { webUi } from './web.js'
@@ -32,8 +32,6 @@ const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, 
 type InstalledCopy = { readonly version: string; readonly installPath: string; readonly projectPath?: string }
 
 type Versions = Readonly<Record<string, string>>
-
-type PluginsState = { readonly mark: string; readonly text: string }
 
 const nameOf = (id: string) => id.replace(/@[^@]*$/, '')
 
@@ -59,8 +57,6 @@ export const isLoaded = async (name: string): Promise<boolean> => {
 const newestMessages = 8
 
 const reloadDelayMs = 500
-
-const changesQuietMs = 2000
 
 const watchCheckMs = 10_000
 
@@ -141,10 +137,8 @@ export const cmodPlugin = defineMod({
     const changed = pluginsChangedPath(store)
     const configRoot = await configRootOf(mod)
     const pluginsFile = configRoot === undefined ? undefined : `${configRoot}/plugins/installed_plugins.json`
-    const pluginsState = async (): Promise<PluginsState> => {
-      const mark = await fs.read(changed).catch(ifMissing(''))
-      return { mark, text: JSON.stringify([mark, pluginsFile === undefined ? '' : await fs.read(pluginsFile).catch(ifMissing('')), (await settings.user.read())['enabledPlugins'] ?? null]) }
-    }
+    const pluginsState = async () =>
+      JSON.stringify([await fs.read(changed).catch(ifMissing('')), pluginsFile === undefined ? '' : await fs.read(pluginsFile).catch(ifMissing('')), (await settings.user.read())['enabledPlugins'] ?? null])
     const hidingReloadKey = async () => sessionKeyOf(mod.name, 'hidingReload', await claude.session.id())
     const forgetOldReloadKeys = async () => {
       for (const key of await claude.store.keys()) if (oldReloadKey.test(key)) await claude.store.delete(key)
@@ -174,14 +168,12 @@ export const cmodPlugin = defineMod({
     const keepLoaded = () => readLoaded().catch((error: unknown) => report({ id: 'loaded', message: 'Could not read which plugins this session loaded', error }))
     void keepLoaded().finally(finishRead)
 
-    const started = await pluginsState()
-    let loadedState = started.text
-    let seenMark = started.mark
+    let loadedState = await pluginsState()
     let isReloadDue = false
-    let quietWait: Timer | undefined
+    let reloadWait: Timer | undefined
     const reloadAfter = (ms: number) => {
-      quietWait?.stop()
-      quietWait = mod.after(ms, reloadWhenIdle)
+      reloadWait?.stop()
+      reloadWait = mod.after(ms, reloadWhenIdle)
     }
     let reloading = Promise.resolve()
     let isWorking = false
@@ -224,21 +216,13 @@ export const cmodPlugin = defineMod({
       reloadAfter(1)
     }
     const checkChanges = async () => {
-      const { mark, text } = await pluginsState()
-      const isNewMark = mark !== seenMark
-      seenMark = mark
+      const state = await pluginsState()
       if ((await claude.session.surfaces()).length === 0) return
-      if (text === loadedState) return withdrawOffer()
-      const checkout = markedCheckout(mark)
-      if (isNewMark && checkout !== undefined && (await isInside(mod, checkout))) {
-        isReloadDue = true
-        return reloadAfter(changesQuietMs)
-      }
+      if (state === loadedState) return withdrawOffer()
       if (!isReloadDue) await offerReload()
     }
-    const reloaded = (state: PluginsState) => {
-      loadedState = state.text
-      seenMark = state.mark
+    const reloaded = (state: string) => {
+      loadedState = state
       loading = keepLoaded()
     }
     const reload = async () => {
@@ -259,7 +243,7 @@ export const cmodPlugin = defineMod({
     }
     const stopWorking = () => {
       isWorking = false
-      if (isReloadDue && quietWait?.isRunning !== true) reloadAfter(reloadDelayMs)
+      if (isReloadDue && reloadWait?.isRunning !== true) reloadAfter(reloadDelayMs)
       if (isBuildCheckDue) void followBuildFailures()
     }
     sessions.current.onTurnEnd(stopWorking)

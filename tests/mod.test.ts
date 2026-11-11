@@ -1946,10 +1946,10 @@ test('Reload pressed while Claude works says the session reloads when the turn e
   expect(offerOf(tested)).toBeUndefined()
 })
 
-test('a linked checkout that builds reloads by itself only the session whose project is inside it, and offers Reload in every other session', async () => {
+test('a linked checkout that builds offers Reload in the session working inside it too, and reloads no session by itself, even for the mark an older cmod watch writes with the checkout', async () => {
   const { tested, reloads, tick } = await idleSession()
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n/work/notes\n')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
   await tick()
   expect(reloads).toEqual([])
@@ -1958,8 +1958,8 @@ test('a linked checkout that builds reloads by itself only the session whose pro
   await writeStoreFile(tested, `${store}/plugins-changed`, '2 100\n/test/plugins\n')
   await tick()
   await tick()
-  expect(reloads).toEqual(['reload-plugins'])
-  expect(offerOf(tested)).toBeUndefined()
+  expect(reloads).toEqual([])
+  expect(offerOf(tested)).toEqual(changedOffer)
 })
 
 test("a person's own /reload-plugins takes the offer away, because the session then runs what is installed", async () => {
@@ -1989,48 +1989,17 @@ test('a plugin turned off and on again takes the offer away, because the session
   expect(offerOf(tested)).toBeUndefined()
 })
 
-test('a linked checkout change during a turn the person stops with Esc reloads the session inside it after the next turn, because Claude Code holds plugin input until the person sends some', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  tested.fakes.session.messages = async () => []
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+test('Reload pressed during a turn the person stops with Esc reloads after the next turn, shows no error, and logs nothing, because Claude Code holds plugin input until the person sends some', async () => {
+  const { tested, reloads, tick } = await idleSession()
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
   await tick()
   await prompt(tested, 'Rename the parser')
+  await pressInBand(tested, 'Reload')
+  await tick()
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n/test/plugins/cmod\n')
-  await tick()
-  await tick()
   await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
   await tick()
   expect(reloads).toEqual([])
-
-  await prompt(tested, 'Go on')
-  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
-  await tick()
-  expect(reloads).toEqual(['reload-plugins'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
-  expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
-})
-
-test('a linked reload refused because the person pressed Esc while it waited to run shows no toast, logs nothing, and reloads at the next idle point', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const reloads: string[] = []
-  tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
-  tested.fakes.session.messages = async () => []
-  const { tick } = watchedStore(tested)
-  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await tick()
-  await prompt(tested, 'Rename the parser')
-  await claudeCodeOf(tested).fire('turn.complete', { answer: '', durationMs: 900, isAborted: true, reason: 'aborted', turnId: 'turn-Rename the parser' } as never)
-
-  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n/test/plugins/cmod\n')
-  await tick()
-  await tick()
-  expect(reloads).toEqual([])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
-  expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
 
   await prompt(tested, 'Go on')
   await tick()
@@ -2039,6 +2008,26 @@ test('a linked reload refused because the person pressed Esc while it waited to 
   await tick()
   expect(reloads).toEqual(['reload-plugins'])
   expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([])
+  expect(await tested.fakes.fs.exists?.(`${store}/data/cmod/log/test-session.json`)).toBe(false)
+})
+
+test('a message typed during a turn leaves a Reload pressed in that turn waiting for the turn to end', async () => {
+  const { tested, reloads, tick } = await idleSession()
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
+  await prompt(tested, 'Rename the parser')
+  await pressInBand(tested, 'Reload')
+  await tick()
+
+  const queued = { uuid: 'queued-1', door: 'queue', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Then deploy it' }] } }
+  await claudeCodeOf(tested).fire('session.append', queued as never, queued as never)
+  await tick()
+  expect(reloads).toEqual([])
+  expect(offerOf(tested)).toEqual(offering('Reloads when this turn ends.'))
+
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await tick()
+  expect(reloads).toEqual(['reload-plugins'])
 })
 
 const installedJson = (versions: Readonly<Record<string, string>>) => JSON.stringify({ version: 2, plugins: Object.fromEntries(Object.entries(versions).map(([id, version]) => [id, [{ scope: 'user', installPath: `/test/home/.claude/plugins/cache/${id}`, version }]])) })

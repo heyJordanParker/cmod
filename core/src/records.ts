@@ -236,12 +236,8 @@ export function pluginsChangedPath(store: string): string {
   return `${store}/plugins-changed`
 }
 
-export function pluginsChangedMark(at: number, pid: number, checkout?: string): string {
-  return `${at} ${pid}\n${checkout === undefined ? '' : `${checkout}\n`}`
-}
-
-export function markedCheckout(mark: string): string | undefined {
-  return mark.split('\n')[1] || undefined
+export function pluginsChangedMark(at: number, pid: number): string {
+  return `${at} ${pid}\n`
 }
 
 export function storeChangedPath(store: string): string {
@@ -417,7 +413,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.13.2'
+export const coreVersion = '5.13.3'
 
 export const oldestCmodVersion = '5.10.0'
 

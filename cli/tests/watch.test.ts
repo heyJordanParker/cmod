@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { chmod, mkdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version } from '../package.json'
@@ -9,7 +9,7 @@ afterAll(deleteTemporaryHomes)
 
 const store = (home: string, file: string) => join(home, '.local/share/cmod', file)
 
-test.concurrent('cmod watch marks plugins-changed with the checkout once a linked mod builds after it stops changing, and names a build still failing 10 seconds after the last change', async () => {
+test.concurrent('cmod watch marks plugins-changed once a linked mod builds after it stops changing, and names a build still failing 10 seconds after the last change', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')
   await writeFiles(root, {
@@ -35,9 +35,7 @@ test.concurrent('cmod watch marks plugins-changed with the checkout once a linke
   await writeFiles(root, { 'hooks/register.js': 'export function register() {}\n' })
   await until(() => existsSync(store(home, 'plugins-changed')))
   expect(existsSync(store(home, 'build-failures.json'))).toBe(false)
-  const [mark, checkout] = (await readFile(store(home, 'plugins-changed'), 'utf8')).split('\n')
-  expect(mark).toMatch(/^\d+ \d+$/)
-  expect(checkout).toBe(realpathSync(root))
+  expect(await readFile(store(home, 'plugins-changed'), 'utf8')).toMatch(/^\d+ \d+\n$/)
   watching.child.kill()
 }, 60000)
 
