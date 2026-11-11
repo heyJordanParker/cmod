@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-11-11
+
+### Changed
+- The mod author docs show each example as a mod named `my-mod`, the name `cmod new` uses, and write a value that stands for anything as a placeholder, such as `<mod>` or `<option>`. The help of `cmod hotkey`, `cmod option`, and `cmod secret` names `my-mod` too.
+
 ## [6.0.0] - 2026-11-11
 
 ### Added
