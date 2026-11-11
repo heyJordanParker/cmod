@@ -1,4 +1,3 @@
-import type { RenderElement } from 'claude-code'
 import { Dashboard, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
@@ -43,7 +42,7 @@ const tabColumns = (each: TabView) => [...tabText(each)].length + 2 + (each.onCl
 export const sidebarSession: SidebarState['session'] = { pages: [], shown: dashboardTab }
 
 export type SettingsView = {
-  draw(columns: number, isFocused: boolean): RenderElement
+  draw(columns: number, isFocused: boolean): JSX.Element
   show(mod: string, section?: SettingsTab | 'widgets' | `page:${string}`, params?: unknown): Promise<void>
   shownPage(): Pick<OpenPage, 'mod' | 'page'> | undefined
   closePage(mod: string, page: string): boolean
@@ -95,7 +94,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     show(keyOf(next))
   }
 
-  const tab = ({ key, label, hotkey, isShown, onClose }: TabView): RenderElement => {
+  const tab = ({ key, label, hotkey, isShown, onClose }: TabView): JSX.Element => {
     const closes = onClose === undefined ? [] : [Button({ plain: true, key: `close:${key}`, onPress: onClose, children: Text({ ...(isShown ? { color: shownColor, backgroundColor: 'inverseText' } : { color: barColor, backgroundColor: 'inactive' }), children: closeGlyph }) })]
     return Box({
       flexShrink: 0,
@@ -106,7 +105,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
     })
   }
 
-  const edge = (glyph: string, left: readonly TabView[], right: TabView, columns: number): RenderElement => {
+  const edge = (glyph: string, left: readonly TabView[], right: TabView, columns: number): JSX.Element => {
     const widths = left.map(tabColumns)
     const rightColumns = tabColumns(right)
     const leftColumns = widths.reduce((sum, width) => sum + width, 0)
@@ -133,7 +132,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       ],
     })
 
-  const bodyOf = (tab: string, columns: number, isFocused: boolean): RenderElement => {
+  const bodyOf = (tab: string, columns: number, isFocused: boolean): JSX.Element => {
     if (tab === settingsTab) return view.draw(columns, isFocused)
     const page = mod.state.session.pages.find((each) => keyOf(each) === tab)
     if (page === undefined) {

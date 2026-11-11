@@ -177,7 +177,7 @@ export const promptsWidget: WidgetInit<MyModState> = {
 `src/components/prompt-count.tsx` is what the page and the widget draw:
 
 ```tsx
-export function PromptCount({ count }: { readonly count: number }): RenderElement {
+export function PromptCount({ count }: { readonly count: number }): JSX.Element {
   return <Text>{`Prompts this session: ${count}`}</Text>
 }
 ```

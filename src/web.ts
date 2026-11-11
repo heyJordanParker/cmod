@@ -4,7 +4,7 @@ import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { toolInputOf } from '../node_modules/@cmodjs/core/runtime/tool-calls.js'
 import type { ClosedPage, SessionAbout, SessionEvents, SessionPost, SessionWait, TurnOutcome, WebAction, WebDrawing, WebView } from '../node_modules/@cmodjs/core/runtime/web.js'
-import { elementData, Link, Text, type Handler } from '../node_modules/@cmodjs/core/ui/elements.js'
+import { Button, elementData, Text, type Handler } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { formatExit, messageOf } from '../node_modules/@cmodjs/core/utils/text.js'
 import { refreshPreferences, writePreference, type SettingsState } from './settings.js'
 import type { sidebar, SidebarState } from './sidebar.js'
@@ -253,8 +253,9 @@ export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State
       await serve()?.ready()
       const { exitCode, stdout, stderr } = await claude.process.run(['cmod', 'web'])
       const home = stdout.trim().split('\n')[0] ?? ''
-      if (exitCode === 0) mod.toast.success('The browser app is open', { description: Link({ href: home, label: home }) })
-      else if (home !== '') mod.toast.info('Open this address in your browser', { description: Link({ href: home, label: home }), duration: Number.POSITIVE_INFINITY })
+      const address = Button({ plain: true, key: 'web:address', href: home, label: home })
+      if (exitCode === 0) mod.toast.success('The browser app is open', { description: address })
+      else if (home !== '') mod.toast.info('Open this address in your browser', { description: address, duration: Number.POSITIVE_INFINITY })
       else report({ id: 'web:open', message: 'Could not open the browser app', description: `cmod web ${formatExit(exitCode, cmodError(stderr, 'web'))}`, isCritical: true })
     } catch (error) {
       report({ id: 'web:open', message: 'Could not open the browser app', error, isCritical: true })
