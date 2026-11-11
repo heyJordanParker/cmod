@@ -141,7 +141,9 @@ async function browsed() {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files: { [`${store}/preferences.json`]: preferences } })
   tested.fakes.process.spawn = ({ argv }) => (argv.includes('serve') ? running(address.replace('http://', '')) : running('[]'))
   tested.fakes.http.fetch = async (url, init): Promise<HttpResponse> => {
-    const answer = await fetch(url, { method: init?.method ?? 'GET', headers: init?.headers ?? {}, ...(init?.body === undefined ? {} : { body: init.body }) })
+    const body = init?.body
+    if (typeof body === 'object') throw new Error('cmod web serve takes text bodies only.')
+    const answer = await fetch(url, { method: init?.method ?? 'GET', headers: init?.headers ?? {}, ...(body === undefined ? {} : { body }) })
     return { status: answer.status, ok: answer.ok, headers: {}, text: await answer.text() }
   }
   tested.fakes.cmod.call = async (input) => (input.to === 'counter' ? calledAnswer('cmod', await counted.fire('cmod.call', { to: 'counter', method: input.method, input: input.input, caller: 'cmod' } as never)) : null)
