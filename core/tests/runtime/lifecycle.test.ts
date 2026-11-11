@@ -758,16 +758,16 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
 
 test("a press waits for the mod it pressed, never for a slower mod an earlier press is still waiting on, because Claude Code's clock runs through that wait", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
-  let answerInbox: (value: unknown) => void = () => undefined
-  fake.fakes.cmod.call = async (call) => (call.to === 'inbox' ? new Promise((resolve) => (answerInbox = resolve)) : null)
+  let answerSlow: (value: unknown) => void = () => undefined
+  fake.fakes.cmod.call = async (call) => (call.to === 'demo' ? new Promise((resolve) => (answerSlow = resolve)) : null)
   const router = createRouter()
   const pages = servePages({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   const pressIn = (mod: string) => router.dispatch('ui.press', { requestId: 'sidebar', key: 'k' } as never, async () => (pages.press(mod, { handler: 1 } as never), { element: null } as never))
-  const first = pressIn('inbox')
+  const first = pressIn('demo')
   let isSecondDone = false
 
   await pressIn('other').then(() => (isSecondDone = true))
-  answerInbox(null)
+  answerSlow(null)
   await first
 
   expect(isSecondDone).toBe(true)
@@ -782,16 +782,16 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
   pages.update('other', { parts: { widgets: [], pages: [] } })
   pages.update('cmod', { parts: { widgets: [], pages: [] } })
 
-  pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
-  pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
-  pages.update('diagrams', { parts: { widgets: [], pages: [] } })
+  pages.update('third', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.update('third', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.update('third', { parts: { widgets: [], pages: [] } })
   pages.update('other', { parts: { widgets: [], pages: [] } })
 
   expect(pages.stylers()).toEqual([])
-  expect(ownStylers).toEqual([['diagrams'], ['diagrams'], []])
+  expect(ownStylers).toEqual([['third'], ['third'], []])
   expect(told.filter((call) => (call as { to: string }).to === 'other')).toEqual([
-    { to: 'other', method: partMethods.stylers, input: ['diagrams'] },
-    { to: 'other', method: partMethods.stylers, input: ['diagrams'] },
+    { to: 'other', method: partMethods.stylers, input: ['third'] },
+    { to: 'other', method: partMethods.stylers, input: ['third'] },
     { to: 'other', method: partMethods.stylers, input: [] },
   ])
   expect(told.filter((call) => (call as { to: string }).to === 'cmod')).toEqual([])
@@ -803,12 +803,12 @@ test('a mod still installing misses its page list and which mods style markdown 
   const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   pages.update('other', { parts: { widgets: [], pages: [] } })
 
-  pages.element('inbox', 'items', null, 60, true)
-  pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.element('demo', 'items', null, 60, true)
+  pages.update('third', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
   await fake.settle()
 
   expect(fake.shown.debug).toEqual([])
-  expect(pages.stylers()).toEqual(['diagrams'])
+  expect(pages.stylers()).toEqual(['third'])
 })
 
 test('a press the mod refuses makes the page draw again, so its next buttons work, and the person hears of it', async () => {
@@ -1233,6 +1233,25 @@ test('a failure whose Log call cmod refuses while it installs shows no toast, an
 
   expect(lifecycle.toasts).toEqual([])
   expect(logged).toEqual([expect.objectContaining({ id: 'session:onSessionStart', message: 'The onSessionStart listener failed', level: 'error' })])
+})
+
+test('the parts a mod tells cmod while cmod installs reach no Log, because the cmod plugin asks every mod for its parts once it starts', async () => {
+  const fake = fakeClaude({ name: 'demo', root })
+  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
+  const told: unknown[] = []
+  const logged: unknown[] = []
+  fake.fakes.cmod.call = async (call) => {
+    if (call.method === 'cmod:failed') return (logged.push(call.input), { showsToast: false })
+    if (call.method === partMethods.changed) return (told.push(call.input), calledAnswer('demo', { deny: "cmod is installing. Try again when it's ready." }))
+    return null
+  }
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.widgets.add({ id: 'count', title: 'Count', areas: [BelowPrompt], render: () => Text({ children: '1' }) }) }))
+
+  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
+  await fake.settle()
+
+  expect(told).toEqual([expect.objectContaining({ isStart: true })])
+  expect([logged, fake.shown.debug.filter((line) => line.includes('did not hear about its pages and widgets'))]).toEqual([[], []])
 })
 
 test('a mod loaded mid-session, which hears no SessionStart, runs its session-start listeners before the next prompt, once', async () => {

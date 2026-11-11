@@ -81,7 +81,7 @@ test('a prompt narrower than its indent still draws its BelowPrompt widgets, at 
 })
 
 test('a TurnEnd widget draws under the turn that ended, and reads that turn', async () => {
-  const tested = testMod(withWidgets('turns', { id: 'prompt', title: 'Prompt', areas: [TurnEnd], render: (_mod, context) => <Text>{context.area === TurnEnd ? `answered: ${context.turn.prompt.text}` : ''}</Text> }))
+  const tested = testMod(withWidgets('demo',{ id: 'prompt', title: 'Prompt', areas: [TurnEnd], render: (_mod, context) => <Text>{context.area === TurnEnd ? `answered: ${context.turn.prompt.text}` : ''}</Text> }))
 
   await tested.add({ type: Prompt, text: 'fix the build' })
   await tested.endTurn()
@@ -159,11 +159,11 @@ test('a widget that throws is reported and draws nothing, and the widgets beside
 test('a widget that draws a Client is reported and draws nothing, and a Raster draws as data the cmod plugin draws', async () => {
   const tested = testMod(
     withWidgets(
-      'board',
+      'demo',
       { id: 'live', title: 'Live board', areas: [BelowPrompt], render: () => Client({ key: 'board', module: './board.tsx' }) },
       { id: 'cells', title: 'Cells', areas: [BelowPrompt], render: () => Raster({ key: 'cells', columns: 2, rows: 1, cells: '' }) },
     ),
-    { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['board/live', 'board/cells'], right: [] }] }) } },
+    { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/live', 'demo/cells'], right: [] }] }) } },
   )
 
   await tested.lines(BelowPrompt)
@@ -266,7 +266,7 @@ test('a layout change marks store-changed, which every other session polls, and 
   const stamp = storeChangedPath('/test/home/.local/share/cmod')
   const { fake, widgets, tell } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
-  tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
+  tell('other',[{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   await fake.settle()
   expect(await fake.claude.fs.exists(stamp)).toBe(false)
 
@@ -303,20 +303,20 @@ test("a mod that lists an area that is not one still lets the other mods' new wi
 test('two sessions place new widgets without writing, so a layout change in one is never lost to the start of another', async () => {
   const { fake, widgets, tell, saved } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
-  tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
+  tell('other',[{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   await fake.settle()
 
   expect(await saved()).toEqual(layoutOf(JSON.parse(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))))
   await widgets.change((current) => toggled(current, 'demo/branch'))
 
-  expect(await saved()).toEqual({ ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['demo/branch', 'notes/count'], right: [] }] }, hidden: ['demo/branch'] })
+  expect(await saved()).toEqual({ ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['demo/branch', 'other/count'], right: [] }] }, hidden: ['demo/branch'] })
 })
 
 test('a change to the layout keeps the areas and fields a newer cmod in another session saved', async () => {
-  const newer = { areas: { belowPrompt: [{ left: ['demo/branch'], right: [], center: ['demo/dirty'] }], sidebarTop: [{ left: ['notes/count'], right: [] }] }, hidden: [] as string[], order: ['demo'] }
+  const newer = { areas: { belowPrompt: [{ left: ['demo/branch'], right: [], center: ['demo/dirty'] }], sidebarTop: [{ left: ['other/count'], right: [] }] }, hidden: [] as string[], order: ['demo'] }
   const { fake, widgets, tell } = servedLayout(JSON.stringify(newer))
   await fake.settle()
-  tell('notes', [{ id: 'count', title: 'Count', areas: ['abovePrompt'] }])
+  tell('other',[{ id: 'count', title: 'Count', areas: ['abovePrompt'] }])
   tell('demo', [{ id: 'dirty', title: 'Dirty', areas: ['belowPrompt'] }])
 
   await widgets.change((current) => toggled(current, 'demo/branch'))
@@ -517,20 +517,20 @@ test('a draw that was still running when its mod changed is dropped, and the nex
 test('a mod a reload took out of the session or one still installing loses its widgets quietly, one that answers keeps them, and one that fails to answer says so', async () => {
   const { fake, widgets, tell } = servedLayout(layout({}))
   tell('demo', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
-  tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
-  tell('todo', [{ id: 'open', title: 'Open', areas: [BelowPrompt] }])
-  tell('inbox', [{ id: 'waiting', title: 'Waiting', areas: [BelowPrompt] }])
+  tell('other', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
+  tell('third', [{ id: 'open', title: 'Open', areas: [BelowPrompt] }])
+  tell('fourth', [{ id: 'waiting', title: 'Waiting', areas: [BelowPrompt] }])
   fake.fakes.cmod.call = async ({ to }) => {
-    if (to === 'notes') throw new Error('notes is not installed. Install it in Plugins.')
-    if (to === 'todo') throw new Error('todo: the list is not JSON')
-    if (to === 'inbox') throw new Error("inbox is installing. Try again when it's ready.")
+    if (to === 'other') throw new Error('other is not installed. Install it in Plugins.')
+    if (to === 'third') throw new Error('third: the list is not JSON')
+    if (to === 'fourth') throw new Error("fourth is installing. Try again when it's ready.")
     return { widgets: [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }], pages: [] }
   }
 
   await widgets.recheck()
 
   expect(widgets.widgets().filter((widget) => widget.mod !== 'claude').map((widget) => widget.key)).toEqual(['demo/branch'])
-  expect(fake.shown.debug).toEqual(['cmod: todo did not list its widgets: todo: the list is not JSON'])
+  expect(fake.shown.debug).toEqual(['cmod: third did not list its widgets: third: the list is not JSON'])
 })
 
 test('the dashboard stops asking for a redraw when a widget placed there has no running mod', async () => {
@@ -564,8 +564,8 @@ test('moving a widget left and right walks it across its row, and down gives it 
   expect(moved(start, dirty, 'right').areas.belowPrompt).toEqual([{ left: ['demo/branch'], right: ['demo/dirty', 'demo/ahead'] }])
   expect(moved(start, dirty, 'down').areas.belowPrompt).toEqual([{ left: ['demo/branch'], right: ['demo/ahead'] }, { left: ['demo/dirty'], right: [] }])
   expect(moved(start, dirty, 'up')).toBe(start)
-  const newer = layoutOf({ areas: { belowPrompt: [{ left: ['demo/branch'], right: [] }, { left: ['demo/dirty'], right: [], center: ['notes/count'] }] } })
-  expect(moved(newer, dirty, 'up').areas.belowPrompt).toEqual([{ left: ['demo/branch', 'demo/dirty'], right: [] }, { left: [], right: [], center: ['notes/count'] }] as never)
+  const newer = layoutOf({ areas: { belowPrompt: [{ left: ['demo/branch'], right: [] }, { left: ['demo/dirty'], right: [], center: ['other/count'] }] } })
+  expect(moved(newer, dirty, 'up').areas.belowPrompt).toEqual([{ left: ['demo/branch', 'demo/dirty'], right: [] }, { left: [], right: [], center: ['other/count'] }] as never)
   expect(toggled(toggled(start, 'demo/dirty'), 'demo/dirty').hidden).toEqual([])
 })
 

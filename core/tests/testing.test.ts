@@ -347,7 +347,7 @@ test('shown.page.focusedKey() names the autoFocus element each time the page tak
   const tested = testMod(
     defineMod({
       name: 'demo',
-      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
         const page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerField(true) })
         mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
@@ -517,10 +517,10 @@ test('a widget that draws one key on two Markdown elements fails as Claude Code 
 
 test('a page whose Button hover has no keyed Box around it fails as Claude Code 2.1.318 refuses the Sidebar, and one inside a keyed Box or naming a scope draws', async () => {
   const pageOf = (children: readonly ReturnType<typeof Box>[]) =>
-    testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'inbox', title: 'Inbox', render: () => Box({ flexDirection: 'column', children }) }).open() }))
+    testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'items', title: 'Items', render: () => Box({ flexDirection: 'column', children }) }).open() }))
   const archive = (hover: object) => Button({ key: 'archive', label: 'Archive', hover, onPress: () => undefined })
 
-  await expect(pageOf([Box({ children: [archive({ color: 'error' })] })]).shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Button "demo/inbox:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group')
+  await expect(pageOf([Box({ children: [archive({ color: 'error' })] })]).shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Button "demo/items:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group')
   expect(await pageOf([Box({ key: 'row', children: [archive({ color: 'error' })] }), archive({ color: 'error', scope: 'rows' })]).shown.page.lines()).toEqual(['[ Archive ]', '[ Archive ]'])
 })
 

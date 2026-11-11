@@ -1413,7 +1413,7 @@ test("page.focus moves the keyboard to the page's field once, so the page shown 
   const tested = testMod(
     defineMod({
       name: 'demo',
-      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
         const page: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => page.focus(key)) })
         mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
@@ -1459,7 +1459,7 @@ test('page.focus on a key the page does not draw rejects with the key, and sends
   const tested = testMod(
     defineMod({
       name: 'demo',
-      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
         const added: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => added.focus(key)) })
         page = added
@@ -1868,90 +1868,90 @@ test('a pane size that is not a whole number above 0 throws in panes.add', async
   await expect(tested.start()).rejects.toThrow('sized: the pane "x" has columns 0. Use a whole number above 0, or leave it out.')
 })
 
-type DiagramsState = { session: { shown: number } }
+type StepsState = { session: { shown: number } }
 
-const diagramWidths = [60, 120, 120, undefined, 0.5]
+const stepWidths = [60, 120, 120, undefined, 0.5]
 
-const diagramsPane: PaneInit<DiagramsState> = {
-  id: 'diagrams',
-  title: 'Diagrams',
-  columns: (state) => diagramWidths[state.session.shown],
+const stepsPane: PaneInit<StepsState> = {
+  id: 'steps',
+  title: 'Steps',
+  columns: (state) => stepWidths[state.session.shown],
   render: (mod) =>
-    Box({ flexDirection: 'column', children: [Text({ children: `Diagram ${mod.state.session.shown + 1}` }), Button({ label: 'Next', onPress: () => (mod.state.session.shown += 1) })] }),
+    Box({ flexDirection: 'column', children: [Text({ children: `Step ${mod.state.session.shown + 1}` }), Button({ label: 'Next', onPress: () => (mod.state.session.shown += 1) })] }),
 }
 
-const diagrams = defineMod({
+const steps = defineMod({
   name: 'demo',
   state: { session: { shown: 0 } },
   setup(mod) {
-    const pane = mod.panes.add(diagramsPane)
-    mod.use(slashCommand({ name: 'diagrams', description: 'Show or hide the diagrams', reply: () => pane.toggle() }))
+    const pane = mod.panes.add(stepsPane)
+    mod.use(slashCommand({ name: 'steps', description: 'Show or hide the steps', reply: () => pane.toggle() }))
   },
 })
 
 test('a pane sized from state opens at the size its state gives', async () => {
-  const tested = testMod(diagrams, { state: { session: { shown: 1 } } })
+  const tested = testMod(steps, { state: { session: { shown: 1 } } })
 
-  await tested.type('/diagrams')
+  await tested.type('/steps')
 
-  expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 120 }])
-  expect(await tested.shown.pane.lines()).toEqual(['Diagram 2', '[ Next ]'])
+  expect(paneOpens(tested)).toEqual([{ id: 'steps', title: 'Steps', columns: 120 }])
+  expect(await tested.shown.pane.lines()).toEqual(['Step 2', '[ Next ]'])
 })
 
 test('an open pane resizes when the state changes its size', async () => {
-  const tested = testMod(diagrams)
-  await tested.type('/diagrams')
+  const tested = testMod(steps)
+  await tested.type('/steps')
 
   await tested.shown.pane.press('Next')
 
   expect(paneOpens(tested)).toEqual([
-    { id: 'diagrams', title: 'Diagrams', columns: 60 },
-    { id: 'diagrams', title: 'Diagrams', columns: 120 },
+    { id: 'steps', title: 'Steps', columns: 60 },
+    { id: 'steps', title: 'Steps', columns: 120 },
   ])
 })
 
 test('a state change that keeps the size does not reopen the pane', async () => {
-  const tested = testMod(diagrams, { state: { session: { shown: 1 } } })
-  await tested.type('/diagrams')
+  const tested = testMod(steps, { state: { session: { shown: 1 } } })
+  await tested.type('/steps')
 
   await tested.shown.pane.press('Next')
 
-  expect(await tested.shown.pane.lines()).toEqual(['Diagram 3', '[ Next ]'])
-  expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 120 }])
+  expect(await tested.shown.pane.lines()).toEqual(['Step 3', '[ Next ]'])
+  expect(paneOpens(tested)).toEqual([{ id: 'steps', title: 'Steps', columns: 120 }])
 })
 
 test('a closed pane does not open when its state changes', async () => {
-  const tested = testMod(diagrams)
-  await tested.type('/diagrams')
-  await tested.type('/diagrams')
+  const tested = testMod(steps)
+  await tested.type('/steps')
+  await tested.type('/steps')
 
   tested.state.session.shown = 1
   await tested.settle()
 
-  expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams', columns: 60 }])
+  expect(paneOpens(tested)).toEqual([{ id: 'steps', title: 'Steps', columns: 60 }])
   expect(tested.shown.openPanes).toEqual(new Set())
 })
 
 test("a size of undefined from the state asks for Claude Code's default size", async () => {
-  const tested = testMod(diagrams, { state: { session: { shown: 2 } } })
-  await tested.type('/diagrams')
+  const tested = testMod(steps, { state: { session: { shown: 2 } } })
+  await tested.type('/steps')
 
   await tested.shown.pane.press('Next')
 
   expect(paneOpens(tested)).toStrictEqual([
-    { id: 'diagrams', title: 'Diagrams', columns: 120 },
-    { id: 'diagrams', title: 'Diagrams' },
+    { id: 'steps', title: 'Steps', columns: 120 },
+    { id: 'steps', title: 'Steps' },
   ])
 })
 
 test('a size from the state that is not a whole number above 0 keeps the pane at its size and logs the pane', async () => {
-  const tested = testMod(diagrams, { state: { session: { shown: 3 } } })
-  await tested.type('/diagrams')
+  const tested = testMod(steps, { state: { session: { shown: 3 } } })
+  await tested.type('/steps')
 
   await tested.shown.pane.press('Next')
 
-  expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams' }])
-  expect(tested.shown.debug).toEqual(['demo: the Diagrams pane kept its size: the pane "diagrams" gets columns 0.5 from its state. Return a whole number above 0, or undefined for Claude Code\'s default.'])
+  expect(paneOpens(tested)).toEqual([{ id: 'steps', title: 'Steps' }])
+  expect(tested.shown.debug).toEqual(['demo: the Steps pane kept its size: the pane "steps" gets columns 0.5 from its state. Return a whole number above 0, or undefined for Claude Code\'s default.'])
 })
 
 type HistoryState = { project: { count: number; stepsBack: number } }
@@ -1959,7 +1959,7 @@ type HistoryState = { project: { count: number; stepsBack: number } }
 const historyPane: PaneInit<HistoryState> = {
   id: 'history',
   title: 'History',
-  columns: (state) => diagramWidths[state.project.count - 1 - state.project.stepsBack],
+  columns: (state) => stepWidths[state.project.count - 1 - state.project.stepsBack],
   render: (mod) =>
     Button({
       label: 'Draw',
@@ -2158,7 +2158,7 @@ test("a page whose render throws draws its error in place, so no button of its l
         void mod.sidebar
           .add({
             id: 'items',
-            title: 'Inbox',
+            title: 'Items',
             render: () => {
               if (isBroken) throw new Error('item 3 has no title')
               return Button({ key: 'approve', label: 'Approve', onPress: () => undefined })
@@ -2173,9 +2173,9 @@ test("a page whose render throws draws its error in place, so no button of its l
   isBroken = true
 
   expect(drawn).toEqual(['[ Approve ]'])
-  expect([await tested.shown.page.lines(), await tested.shown.page.lines()]).toEqual([['The Inbox page could not draw: item 3 has no title'], ['The Inbox page could not draw: item 3 has no title']])
+  expect([await tested.shown.page.lines(), await tested.shown.page.lines()]).toEqual([['The Items page could not draw: item 3 has no title'], ['The Items page could not draw: item 3 has no title']])
   await expect(tested.shown.page.press('Approve')).rejects.toThrow('The page "items" of demo draws no Button with the key or label "Approve".')
-  expect(tested.shown.toasts.filter((toast) => toast.message === 'The Inbox page could not draw')).toEqual([{ type: 'error', message: 'The Inbox page could not draw', description: 'item 3 has no title' }])
+  expect(tested.shown.toasts.filter((toast) => toast.message === 'The Items page could not draw')).toEqual([{ type: 'error', message: 'The Items page could not draw', description: 'item 3 has no title' }])
 })
 
 test('a page a slash command opens reaches the cmod plugin as the person asking, so the Sidebar opens at any width', async () => {
@@ -2269,11 +2269,11 @@ test("a hotkey whose listener drops page.open's promise asks the cmod plugin as 
   const tested = testMod(
     defineMod({
       name: 'demo',
-      hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
+      hotkeys: { toggle: { title: 'Show or hide the page', default: 'ctrl+i' } },
       setup(mod) {
-        const inbox = mod.sidebar.add({ id: 'demo', title: 'Inbox', render: () => Text({ children: 'no items' }) })
-        page = inbox
-        mod.hotkeys.toggle.onPress(() => void inbox.open({ focus: true }))
+        const added = mod.sidebar.add({ id: 'demo', title: 'Items', render: () => Text({ children: 'no items' }) })
+        page = added
+        mod.hotkeys.toggle.onPress(() => void added.open({ focus: true }))
       },
     }),
   )
@@ -2291,12 +2291,12 @@ test("a slash command whose reply drops settings.open's promise opens Settings i
       name: 'demo',
       setup(mod) {
         mod.settings.add({ id: 'branches', title: 'Branches', render: () => Text({ children: 'main' }) })
-        mod.use(slashCommand({ name: 'ci-settings', description: 'Show the settings', reply: () => void mod.settings.open() }))
+        mod.use(slashCommand({ name: 'branches', description: 'Show the settings', reply: () => void mod.settings.open() }))
       },
     }),
   )
 
-  expect(await tested.type('/ci-settings')).toEqual({})
+  expect(await tested.type('/branches')).toEqual({})
 
   expect(askedRequests(tested.calls)).toEqual([{ requests: [{ settings: true }], isAsked: true }])
   expect(tested.shown.page.id).toBe('branches')
@@ -2320,12 +2320,12 @@ test("a hotkey's combo is the one keybindings.json binds to it, which a person m
 })
 
 test('a hotkey without a default registers its command and has no combo, and once the person binds one its press runs the listeners', async () => {
-  const inbox = (keybindings: Readonly<Record<string, string>>) => {
+  const withBindings = (keybindings: Readonly<Record<string, string>>) => {
     const seen: { combo?: string | undefined; presses: number } = { presses: 0 }
     const tested = testMod(
       defineMod({
         name: 'demo',
-        hotkeys: { next: { title: 'Open the next inbox item' } },
+        hotkeys: { next: { title: 'Open the next item' } },
         setup(mod) {
           seen.combo = mod.hotkeys.next.combo
           mod.hotkeys.next.onPress(() => void (seen.presses += 1))
@@ -2335,8 +2335,8 @@ test('a hotkey without a default registers its command and has no combo, and onc
     )
     return { tested, seen }
   }
-  const unbound = inbox({})
-  const bound = inbox({ 'ctrl+n': 'command:demo--next' })
+  const unbound = withBindings({})
+  const bound = withBindings({ 'ctrl+n': 'command:demo--next' })
 
   await unbound.tested.start()
   await bound.tested.hotkey('next')

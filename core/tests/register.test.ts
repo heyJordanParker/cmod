@@ -278,7 +278,7 @@ test('a hook Claude Code stopped shows its failure, and the event goes on as if 
   expect(shown).not.toContain('Stop hook')
 })
 
-const releasedPress = { plugin: 'cmod', element: 'inbox/items:open', component: 'Pane', requestId: 'sidebar', surface: 'terminal' }
+const releasedPress = { plugin: 'cmod', element: 'demo/items:open', component: 'Pane', requestId: 'sidebar', surface: 'terminal' }
 
 const released = new Error('ui.press/ui.input/ui.select: no handler is held under handle 5483')
 

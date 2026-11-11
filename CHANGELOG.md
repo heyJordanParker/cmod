@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.0.2] - 2026-11-11
+
+### Fixed
+- A mod that starts while cmod installs no longer writes `the cmod plugin did not hear about its pages and widgets: cmod is installing` to the Log. The cmod plugin asks every mod for its pages and widgets once it starts, so nothing was lost.
+
 ## [6.0.1] - 2026-11-11
 
 ### Changed

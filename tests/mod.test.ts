@@ -608,7 +608,7 @@ test("a Sidebar page whose mod fails to draw it shows the mod's error in place o
   }
   await tested.start()
   const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
-  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
+  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Items', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'items' }] })
   await tested.settle()
   await tested.shown.pane.lines()
@@ -639,7 +639,7 @@ test('a press on a Sidebar button from an older drawing tells the person nothing
   }
   await tested.start()
   const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
-  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
+  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Items', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'items' }] })
   await tested.settle()
   await tested.shown.pane.lines()
@@ -700,7 +700,7 @@ test('a Sidebar page keeps its last drawing, and so its place, when its mod fail
   }
   await tested.start()
   const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
-  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
+  await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Items', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'items' }] })
   await tested.settle()
   await tested.shown.pane.lines()

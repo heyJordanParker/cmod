@@ -12,9 +12,9 @@ const linesSince400: readonly (readonly [RunnerEvent, string])[] = [
     'needs-consent abc123\t./setup/install.sh\t./setup/uninstall.sh\tshift+tab to Switch mode\tnetwork:api.github.com\tmodel',
   ],
   [{ type: 'needs-consent', sha256: 'abc123', install: '', uninstall: '', hotkeys: '', permissions: [] }, 'needs-consent abc123\t\t\t'],
-  [{ type: 'done', name: 'safe-delete', version: '0.2.0' }, 'done safe-delete 0.2.0'],
-  [{ type: 'missing', name: 'safe-delete' }, 'missing safe-delete'],
-  [{ type: 'failed', code: 2, message: 'The install step of safe-delete exited 2: no Homebrew.' }, 'failed 2\tThe install step of safe-delete exited 2: no Homebrew.'],
+  [{ type: 'done', name: 'demo', version: '0.2.0' }, 'done demo 0.2.0'],
+  [{ type: 'missing', name: 'demo' }, 'missing demo'],
+  [{ type: 'failed', code: 2, message: 'The install step of demo exited 2: no Homebrew.' }, 'failed 2\tThe install step of demo exited 2: no Homebrew.'],
   [{ type: 'retries', when: 'later' }, 'retries later'],
 ]
 
