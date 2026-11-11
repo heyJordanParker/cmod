@@ -65,7 +65,7 @@ const signIn: Step = {
   isDone: () => isSignedIn(),
 }
 
-export const ciWatch = defineMod({ name: 'ci-watch', installer: [signIn], setup(mod) { … } })
+export const myMod = defineMod({ name: 'my-mod', installer: [signIn], setup(mod) { … } })
 ```
 
 ```ts
@@ -88,7 +88,7 @@ type Step<State> = {
 A plugin cannot bind a key in Claude Code: Claude Code reads key bindings only from the person's `keybindings.json`. So cmod writes each hotkey there as the setup's last step. A hotkey runs a hidden command of the mod, `<mod>--<hotkey>`, which the mod hears as `onPress` ([mod.md](mod.md#hotkeys)):
 
 ```json
-{ "bindings": [{ "context": "Chat", "bindings": { "shift+tab": "command:modes--cycle" } }] }
+{ "bindings": [{ "context": "Chat", "bindings": { "shift+tab": "command:my-mod--toggle" } }] }
 ```
 
 - cmod writes each combo into the `Chat` bindings of `~/.claude/keybindings.json`, or of `$CLAUDE_CONFIG_DIR/keybindings.json` when that variable is set. When the file is a symbolic link, cmod writes the file it points to. Claude Code reads the change at once, with no restart.

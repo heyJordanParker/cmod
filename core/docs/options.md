@@ -10,8 +10,8 @@ An option is a value a person sets for a mod and the mod reads, such as a token,
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { option } from '../node_modules/@cmodjs/core/options.js'
 
-export const ciWatch = defineMod({
-  name: 'ci-watch',
+export const myMod = defineMod({
+  name: 'my-mod',
   options: {
     githubToken: option.secret({ title: 'GitHub token', description: 'Reads your CI runs' }),
     every: option.number({ title: 'Check every', description: 'Minutes between checks', default: 10, min: 1 }),
@@ -89,7 +89,7 @@ Claude Code reads a plugin's options from `userConfig` in `.claude-plugin/plugin
 `testMod(mod, { options: { githubToken: 'ghp_test' } })` starts the tested mod with those values, as Claude Code passes them. Each option left out gets its default. A test that leaves out an option with no default fails with `<mod> needs <title>, which a person sets in /config. Give it to the tested mod: testMod(mod, { options: { <key>: … } }).` `fakes.config.list` answers the `/config` rows, so a test can lock a value as managed settings do ([testing.md](testing.md)).
 
 ```ts
-const tested = testMod(ciWatch, { options: { githubToken: 'ghp_test', branch: 'develop' } })
+const tested = testMod(myMod, { options: { githubToken: 'ghp_test', branch: 'develop' } })
 await tested.start()
 expect(tested.shown.toasts).toContainEqual({ type: 'default', message: 'Watching develop every 10 minutes' })
 ```

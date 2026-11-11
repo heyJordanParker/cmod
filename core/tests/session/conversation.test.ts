@@ -93,8 +93,8 @@ test('each origin names its sender', () => {
   const senderOf = (row: Row) => conversation.add(row).flatMap((change) => (change.type === Message && 'from' in change.message ? [change.message.from] : []))
 
   expect(senderOf(typed('from the keyboard', { kind: 'human' }))).toEqual([{ type: Person }])
-  expect(senderOf(typed('from a mod', { kind: 'plugin', name: 'modes' }))).toEqual([{ type: 'mod', name: 'modes' }])
-  expect(senderOf(typed('from a mod as the person', { kind: 'plugin', name: 'modes', asUser: true }))).toEqual([{ type: 'mod', name: 'modes', as: Person }])
+  expect(senderOf(typed('from a mod', { kind: 'plugin', name: 'other' }))).toEqual([{ type: 'mod', name: 'other' }])
+  expect(senderOf(typed('from a mod as the person', { kind: 'plugin', name: 'other', asUser: true }))).toEqual([{ type: 'mod', name: 'other', as: Person }])
   expect(senderOf(typed('on a schedule', { kind: 'scheduled-trigger' }))).toEqual([{ type: Schedule }])
   expect(senderOf(typed('from Slack', { kind: 'channel', server: 'slack' }))).toEqual([{ type: Channel, name: 'slack' }])
   expect(senderOf(typed('from another session', { kind: 'peer' }))).toEqual([{ type: 'session' }])
@@ -106,7 +106,7 @@ test('a meta row is a Note, a skill row a Skill, a nested CLAUDE.md an Instructi
   conversation.add(typed('Start'))
   const messageOf = (row: Row) => conversation.add(row).flatMap((change) => (change.type === Message ? [change.message] : []))[0]
 
-  expect(messageOf(line({ type: 'user', isMeta: true, origin: { kind: 'plugin', name: 'ci-watch' }, message: { role: 'user', content: 'CI failed on main.' } }))).toMatchObject({ type: Note, text: 'CI failed on main.', from: { type: 'mod', name: 'ci-watch' } })
+  expect(messageOf(line({ type: 'user', isMeta: true, origin: { kind: 'plugin', name: 'demo' }, message: { role: 'user', content: 'CI failed on main.' } }))).toMatchObject({ type: Note, text: 'CI failed on main.', from: { type: 'mod', name: 'demo' } })
   expect(messageOf(line({ type: 'user', isMeta: true, message: { role: 'user', content: 'Base directory for this skill: /skills/review\n\nReview the diff.' } }))).toMatchObject({ type: Skill, name: 'review' })
   expect(messageOf(line({ type: 'attachment', attachment: { type: 'nested_memory', path: '/work/src/CLAUDE.md', content: 'Use tabs.' } }))).toMatchObject({ type: InstructionFile, path: '/work/src/CLAUDE.md', text: 'Use tabs.', isRule: false })
   expect(messageOf(line({ type: 'system', subtype: 'informational', content: 'Model switched to haiku.' }))).toMatchObject({ type: Notice, text: 'Model switched to haiku.' })
@@ -214,15 +214,15 @@ test("a rewritten task notification keeps the envelope that ends the task, with 
 test("each mod's note in a hook's row is a Note from that mod, and another plugin's untagged context is none", () => {
   const conversation = createConversation(emptyConversation('s1'))
   conversation.add(typed('Read the docs'))
-  const row = line({ type: 'attachment', attachment: { type: 'hook_additional_context', hookName: 'PostToolUse', content: ['<tracer_mod>\nsrc/CLAUDE.md is held.\n</tracer_mod>\n\n<modes_mod>\nRead only.\n</modes_mod>', 'from another plugin'] } })
+  const row = line({ type: 'attachment', attachment: { type: 'hook_additional_context', hookName: 'PostToolUse', content: ['<demo_mod>\nsrc/CLAUDE.md is held.\n</demo_mod>\n\n<other_mod>\nRead only.\n</other_mod>', 'from another plugin'] } })
 
   const notes = conversation.add(row)
 
   expect(notes.map((change) => change.type === Message && change.message)).toMatchObject([
-    { type: Note, text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'tracer' } },
-    { type: Note, text: 'Read only.', from: { type: 'mod', name: 'modes' } },
+    { type: Note, text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'demo' } },
+    { type: Note, text: 'Read only.', from: { type: 'mod', name: 'other' } },
   ])
-  expect(withTexts(row, new Map([[1, 'Read and write.']]))).toEqual(['<tracer_mod>\nsrc/CLAUDE.md is held.\n</tracer_mod>\n\n<modes_mod>\nRead and write.\n</modes_mod>', 'from another plugin'])
+  expect(withTexts(row, new Map([[1, 'Read and write.']]))).toEqual(['<demo_mod>\nsrc/CLAUDE.md is held.\n</demo_mod>\n\n<other_mod>\nRead and write.\n</other_mod>', 'from another plugin'])
 })
 
 test("a hook's row as the running session appends it gives the same Notes, and a note cleared to '' leaves no tag", () => {
@@ -242,9 +242,9 @@ test("a compaction's note is a Note from its mod, though the compaction wrote it
   const conversation = createConversation(emptyConversation('s1'))
   conversation.add(typed('Go on'))
 
-  const noted = conversation.add(line({ type: 'user', isCompactSummary: true, message: { role: 'user', content: '<tracer_mod>\nDocs held: none.\n</tracer_mod>' } }))
+  const noted = conversation.add(line({ type: 'user', isCompactSummary: true, message: { role: 'user', content: '<demo_mod>\nDocs held: none.\n</demo_mod>' } }))
 
-  expect(noted.map((change) => change.type === Message && change.message)).toMatchObject([{ type: Note, text: 'Docs held: none.', from: { type: 'mod', name: 'tracer' } }])
+  expect(noted.map((change) => change.type === Message && change.message)).toMatchObject([{ type: Note, text: 'Docs held: none.', from: { type: 'mod', name: 'demo' } }])
 })
 
 test('clearing every text block of a reply clears each one, not only the first', () => {
@@ -291,22 +291,22 @@ test('a conversation restarted from its saved state keeps its open turn, goal, a
 })
 
 test("a task's device note leaves the session's device alone, so the main turns after it keep the device of the main transcript, and the task's turns the device it started on", () => {
-  const laptop: Device = { id: 'a'.repeat(32), name: 'laptop', os: 'darwin', arch: 'arm64' }
-  const devbox: Device = { id: 'b'.repeat(32), name: 'devbox', os: 'linux', arch: 'x64' }
+  const mac: Device = { id: 'a'.repeat(32), name: 'mac', os: 'darwin', arch: 'arm64' }
+  const linux: Device = { id: 'b'.repeat(32), name: 'linux', os: 'linux', arch: 'x64' }
   const noted = (device: Device) => line({ type: 'attachment', attachment: { type: 'hook_additional_context', hookName: 'SessionStart', content: [`<cmod_mod>\n${deviceNote(device, '2026-10-13T10:00:00.000Z')}\n</cmod_mod>`] } })
   const deviceOfTurn = (changes: readonly SessionChange[]) => changes.flatMap((change) => (change.type === TurnStart ? [change.turn.device?.name] : []))
   const conversation = createConversation(emptyConversation('s1'))
-  conversation.add(noted(laptop))
+  conversation.add(noted(mac))
   conversation.add(typed('Plan it'))
   conversation.add(said({ type: 'tool_use', id: 'toolu_1', name: 'Agent', input: { prompt: 'explore' } }))
   conversation.startTask({ id: 'agent-1', title: 'Explore', agentType: 'explorer', openedBy: 'toolu_1', openedAt: '2026-10-13T10:00:03.000Z' })
-  conversation.add(noted(devbox))
+  conversation.add(noted(linux))
   const built = conversation.add(typed('Build it'))
 
   const explored = conversation.add(typed('explore'), 'agent-1')
-  conversation.add(noted(laptop), 'agent-1')
+  conversation.add(noted(mac), 'agent-1')
   const shipped = conversation.add(typed('Ship it'))
 
-  expect([...deviceOfTurn(built), ...deviceOfTurn(explored), ...deviceOfTurn(shipped)]).toEqual(['devbox', 'laptop', 'devbox'])
-  expect(conversation.state.device).toEqual(devbox)
+  expect([...deviceOfTurn(built), ...deviceOfTurn(explored), ...deviceOfTurn(shipped)]).toEqual(['linux', 'mac', 'linux'])
+  expect(conversation.state.device).toEqual(linux)
 })

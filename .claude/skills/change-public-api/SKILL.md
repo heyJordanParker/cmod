@@ -1,19 +1,19 @@
 ---
 name: change-public-api
-description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, README.md, and the sample mods keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `options.ts`, `testing.ts`, `register.ts`, `shell.ts`, `path.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, README.md, or a sample mod, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
+description: Change what a mod author writes against, so the `@cmodjs/core` library, the `cmod new` template, `core/docs/`, and README.md keep one word per idea and one way per job, and Claude Code still loads the result. TRIGGER when adding, renaming, or removing an export of `core/src/mod.ts`, `options.ts`, `testing.ts`, `register.ts`, `shell.ts`, `path.ts`, `ui/`, or `jobs/`, when editing `cli/src/commands/new.ts`, `core/docs/`, or README.md, and when moving code between `core/src/` folders. DO NOT TRIGGER for consent, a mod's install and uninstall steps, `cmod try`, teardown, or permission rules; use /guard-user-machine.
 ---
 
 # Change Public API
 
-A mod author learns Claude Mod Manager (cmod) from the template, `core/docs/`, the README, and the samples, then writes against `@cmodjs/core`. All five say each idea with one word and do each job one way, so they change together.
+A mod author learns Claude Mod Manager (cmod) from the template, `core/docs/`, and the README, then writes against `@cmodjs/core`. All four say each idea with one word and do each job one way, so they change together.
 
 - The Public API is `core/src/mod.ts`, `core/src/options.ts`, `core/src/testing.ts`, `core/src/register.ts`, `core/src/shell.ts`, `core/src/path.ts`, `core/src/ui/`, and `core/src/jobs/`, and the types and constants `mod.ts` re-exports from `core/src/session/` and `core/src/ui/`. Every other file under `core/src/` is internal. `shell.ts` and `path.ts` only re-export, so core's own code imports `utils/parse-shell.ts` and `vendor.ts` instead.
 - `cli/src/commands/new.ts` holds the template `cmod new` writes. `cli/tests/new.test.ts` keeps the README's "Make a mod in 30 seconds" code equal to it.
 
 ## 1. Find every place the idea appears
 
-Search `core/src/`, the template, `core/docs/`, README.md, and both samples for the word and for every other word that names the same idea.
-Example: `trace grep -i "panel" core/src core/docs cli README.md ../file-tree ../architecture-diagrams`.
+Search `core/src/`, the template, `core/docs/`, and README.md for the word and for every other word that names the same idea.
+Example: `trace grep -i "panel" core/src core/docs cli README.md`.
 
 ### Give one idea one word everywhere
 Rename every straggler in the same change. A second word for one idea, or one word for two ideas, makes the author guess which is meant.

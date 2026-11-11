@@ -40,13 +40,13 @@ test('the consent hash of the same steps and scripts stays what @cmodjs/core 4.0
 })
 
 test('a mod answers every method the cmod plugin of @cmodjs/core 4.0.0, 4.1.0, and 4.1.1 calls on it', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   const methods = ['cmod:changed', 'cmod:before', 'cmod:parts', 'cmod:draw', 'cmod:press', 'cmod:shown', 'cmod:pendingSteps', 'cmod:finishSteps', 'cmod:markdownStylers', 'cmod:sessionColor']
 
   const refusal = async (method: string) => {
     const answer = await claudeCodeOf(tested)
-      .fire('cmod.call', { to: 'notes', method, input: {}, caller: 'cmod' } as never)
+      .fire('cmod.call', { to: 'demo', method, input: {}, caller: 'cmod' } as never)
       .catch((error: unknown) => ({ deny: String(error) }))
     return (answer as { deny?: string }).deny ?? ''
   }

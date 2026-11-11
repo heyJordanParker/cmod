@@ -25,15 +25,15 @@ import { fakeFiles } from '../../src/testing/fake-files.js'
 import { Button, drawWith, elementOf, Text } from '../../src/ui/elements.js'
 import { messageOf } from '../../src/utils/text.js'
 
-const root = '/plugins/safe-delete'
+const root = '/plugins/demo'
 
 beforeEach(() => void setSystemTime(new Date(2026, 9, 23, 9, 5)))
-const pending: Plugin = { name: 'safe-delete', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false, steps: {} }
+const pending: Plugin = { name: 'demo', root, version: '0.2.0', store: '/home/.local/share/cmod', isInstalled: false, shouldRecord: false, steps: {} }
 
 const given = (plugin: Plugin) => async () => plugin
 
 
-const manifestOnly = { [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }' }
+const manifestOnly = { [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }' }
 
 const entriesIn = (files: Record<string, string>) => async (folder = ''): Promise<FsEntry[]> => {
   const prefix = `${folder.replaceAll('/./', '/')}/`
@@ -111,12 +111,12 @@ function fire<N extends RoutedEvent>(lifecycle: Pick<Lifecycle<object>, 'route'>
 function trackedMod() {
   const runs: string[] = []
   const definition = defineMod({
-    name: 'safe-delete',
+    name: 'demo',
     setup(mod) {
       runs.push('setup')
       sessions.current.beforeToolBatch(() => {
         runs.push('PostToolBatch')
-        return { note: 'safe-delete saw it' }
+        return { note: 'demo saw it' }
       })
       void mod.panes.add({ id: 'trash', title: 'Trash', render: () => Text({ children: 'empty' }) })
     },
@@ -139,7 +139,7 @@ function askedByCmod(lifecycle: Pick<Lifecycle<object>, 'route'>, name: string, 
   return fire(lifecycle, 'cmod.call', { to: name, method, input, caller: 'cmod' }, { deny: `${name} has no method ${method}.` }).then((answer) => calledAnswer('cmod', answer))
 }
 
-async function installerDrawing(lifecycle: Pick<Lifecycle<object>, 'route'>, name = 'safe-delete', columns = 60): Promise<{ readonly drawing: RenderElement; readonly pressed: () => Promise<unknown> }> {
+async function installerDrawing(lifecycle: Pick<Lifecycle<object>, 'route'>, name = 'demo', columns = 60): Promise<{ readonly drawing: RenderElement; readonly pressed: () => Promise<unknown> }> {
   const drawn = (await askedByCmod(lifecycle, name, partMethods.draw, { page: installPage, params: null, columns, isFocused: true })) as DrawnPart
   let pending: Promise<unknown> = Promise.resolve()
   const drawing = drawWith(elements, () => elementOf(drawn.tree, '', (handler, args) => void (pending = askedByCmod(lifecycle, name, partMethods.press, { draw: drawn.draw, handler, args })))) as RenderElement
@@ -217,7 +217,7 @@ function cmodSidebar(name: string) {
 }
 
 test('a mod with a pending install registers nothing until done, then runs setup from a timer of its own, so no hook it lands in cuts its calls short', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const step = controlledStream()
   const spawned: ProcessSpawnRequest[] = []
   installCmod(fake)
@@ -239,12 +239,12 @@ test('a mod with a pending install registers nothing until done, then runs setup
   expect(runs).toEqual([])
   expect(rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())).toEqual([
     '>',
-    `⠋  safe-delete       Installing${' '.repeat(68)}✕`,
+    `⠋  demo              Installing${' '.repeat(68)}✕`,
     `${' '.repeat(21)}${'█'.repeat(12)}${'░'.repeat(12)}  Installing trash`,
   ])
 
   step.print('progress 4 4 Adding the zsh alias')
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
 
@@ -254,25 +254,25 @@ test('a mod with a pending install registers nothing until done, then runs setup
   const answer = await fire(lifecycle, 'classic.PostToolBatch', toolBatch, {})
 
   expect(runs).toEqual(['setup', 'PostToolBatch'])
-  expect(answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw it\n</safe-delete_mod>'] })
+  expect(answer).toEqual({ additionalContext: ['<demo_mod>\ndemo saw it\n</demo_mod>'] })
   await fake.settle()
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.' }])
   expect(fake.shown.logs).toEqual([])
-  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith('>\n✓  safe-delete       Installed')
+  expect(textOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt))).toStartWith('>\n✓  demo              Installed')
 })
 
 test('a call to a mod that is installing waits for the install, then answers, with no toast', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const step = controlledStream()
   fake.fakes.process.spawn = () => step.stream
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => ({ restore: () => ['a.ts'] }) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => ({ restore: () => ['a.ts'] }) }))
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'demo', method: 'restore', input: null }, { deny: 'demo is not installed. Install it in Plugins.' })
   await fake.settle()
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
 
   expect(await answer).toEqual({ value: ['a.ts'] })
@@ -281,7 +281,7 @@ test('a call to a mod that is installing waits for the install, then answers, wi
 })
 
 test("a call to a mod still installing at the start limit fails with when to retry, and a call to another mod passes on", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   fake.fakes.process.spawn = () => controlledStream().stream
   const timers: { ms: number; fire: () => void }[] = []
@@ -294,12 +294,12 @@ test("a call to a mod still installing at the start limit fails with when to ret
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'demo', method: 'restore', input: { path: 'a.ts' } }, { deny: 'demo is not installed. Install it in Plugins.' })
   await fake.settle()
   timers.find((made) => made.ms === 5_000)?.fire()
 
-  expect(await answer).toEqual({ deny: "safe-delete is installing. Try again when it's ready." })
-  expect(await fire(lifecycle, 'cmod.call', { to: 'tracer', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
+  expect(await answer).toEqual({ deny: "demo is installing. Try again when it's ready." })
+  expect(await fire(lifecycle, 'cmod.call', { to: 'other', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
 })
 
 test("a mod's call to the cmod plugin while it downloads cmod waits for the download, then answers", async () => {
@@ -310,7 +310,7 @@ test("a mod's call to the cmod plugin while it downloads cmod waits for the down
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
   await fake.settle()
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'tasks', input: null, caller: 'rulebook' }, { deny: 'cmod is not installed. Install it in Plugins.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'tasks', input: null, caller: 'demo' }, { deny: 'cmod is not installed. Install it in Plugins.' })
   await fake.settle()
   bootstrap.print('progress 1 1 Downloading cmod 5.10.0')
   bootstrap.exit(0)
@@ -319,16 +319,16 @@ test("a mod's call to the cmod plugin while it downloads cmod waits for the down
 })
 
 test('a draw the cmod plugin asks of a mod that is installing reports nothing, and draws once the mod is active', async () => {
-  const cmod = cmodSidebar('safe-delete')
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const cmod = cmodSidebar('demo')
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const step = controlledStream()
   fake.fakes.process.spawn = () => step.stream
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: (mod) => void mod.sidebar.add({ id: 'trash', title: 'Trash', render: () => Text({ children: 'The trash is empty' }) }) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'trash', title: 'Trash', render: () => Text({ children: 'The trash is empty' }) }) }))
   await cmod.load(lifecycle, fake, pending)
 
   const during = textOf(await cmod.shown('trash'))
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
 
@@ -341,7 +341,7 @@ test('a draw the cmod plugin asks of a mod that is installing reports nothing, a
 test('a widget band render while a mod installs answers at once, and draws the mod widget once the mod is active', async () => {
   const cmod = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   Object.assign(cmod.fakes.fs, fakeFiles({}))
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const step = controlledStream()
   fake.fakes.process.spawn = () => step.stream
@@ -349,11 +349,11 @@ test('a widget band render while a mod installs answers at once, and draws the m
     if (ms === 0) void Promise.resolve().then(fire)
     return { cancel: () => undefined }
   }
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: (mod) => void mod.widgets.add({ id: 'count', title: 'Trash count', areas: [BelowPrompt], render: () => Text({ children: '3 in the trash' }) }) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.widgets.add({ id: 'count', title: 'Trash count', areas: [BelowPrompt], render: () => Text({ children: '3 in the trash' }) }) }))
   cmod.fakes.cmod.call = async (call) => askedByCmod(lifecycle, call.to, call.method, call.input)
   const widgets = serveWidgets({ claude: cmod.claude, router: createRouter(), store: cmodStore, report: () => undefined, turnClosedBy: () => undefined, parts: drawnParts({ claude: cmod.claude, report: () => undefined, press: () => undefined }), markdownIn: () => undefined })
-  fake.fakes.cmod.call = async (call) => (call.method === partMethods.changed ? (widgets.update('safe-delete', call.input as PartsUpdate), { isHeld: false, stylers: [] }) : null)
-  widgets.update('safe-delete', { parts: { widgets: [{ id: 'count', title: 'Trash count', areas: [BelowPrompt] }], pages: [] } })
+  fake.fakes.cmod.call = async (call) => (call.method === partMethods.changed ? (widgets.update('demo', call.input as PartsUpdate), { isHeld: false, stylers: [] }) : null)
+  widgets.update('demo', { parts: { widgets: [{ id: 'count', title: 'Trash count', areas: [BelowPrompt] }], pages: [] } })
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
   await cmod.settle()
@@ -366,7 +366,7 @@ test('a widget band render while a mod installs answers at once, and draws the m
 
   expect(isAnswered).toBe(true)
   expect(await during).toEqual([])
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
   await cmod.settle()
@@ -376,13 +376,13 @@ test('a widget band render while a mod installs answers at once, and draws the m
 })
 
 test('a call to a mod that is still starting waits for it, then answers', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => ({ restore: () => ['a.ts'] }) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => ({ restore: () => ['a.ts'] }) }))
   const plugins: ((plugin: Plugin) => void)[] = []
   const starting = lifecycle.start(fake.claude, () => new Promise<Plugin>((resolve) => void plugins.push(resolve)))
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'demo', method: 'restore', input: null }, { deny: 'demo is not installed. Install it in Plugins.' })
   await fake.settle()
   plugins.shift()?.({ ...pending, isInstalled: true })
   await starting
@@ -391,30 +391,30 @@ test('a call to a mod that is still starting waits for it, then answers', async 
 })
 
 test("Claude's call to a mod's own tool that comes before the mod's session.start, as right after a reload, waits for the start, then answers", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup(mod) {
-        engineOf(mod).router.add('tool.call', (e, next) => (e.tool === 'mcp__safe-delete__restore' ? { result: 'restored' } : next(e)))
+        engineOf(mod).router.add('tool.call', (e, next) => (e.tool === 'mcp__demo__restore' ? { result: 'restored' } : next(e)))
       },
     }),
   )
-  const unanswered = async () => ({ result: 'safe-delete registered the tool restore but no tool.call hook answered this call' }) as never
+  const unanswered = async () => ({ result: 'demo registered the tool restore but no tool.call hook answered this call' }) as never
 
-  const answer = lifecycle.route('tool.call', { tool: 'mcp__safe-delete__restore', tool_use_id: 't1' } as never, unanswered)
+  const answer = lifecycle.route('tool.call', { tool: 'mcp__demo__restore', tool_use_id: 't1' } as never, unanswered)
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
 
   expect(await answer).toEqual({ result: 'restored' } as never)
 })
 
 test("a transcript row that comes before the mod's session.start, as during the cmod plugin's own restart, waits for the start, then reaches the mod's route", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup(mod) {
         engineOf(mod).router.add('session.append', (e, next) => next({ ...e, message: { ...e.message, content: [{ type: 'text', text: 'rewritten' }] } }))
       },
@@ -429,34 +429,34 @@ test("a transcript row that comes before the mod's session.start, as during the 
 })
 
 test("a call that comes before the mod's session.start waits for the start, then answers", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => ({ restore: () => ['a.ts'] }) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => ({ restore: () => ['a.ts'] }) }))
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: null }, { deny: 'safe-delete is not installed. Install it in Plugins.' })
+  const answer = fire(lifecycle, 'cmod.call', { to: 'demo', method: 'restore', input: null }, { deny: 'demo is not installed. Install it in Plugins.' })
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
 
   expect(await answer).toEqual({ value: ['a.ts'] })
 })
 
 test('a call to a mod whose install failed fails with the reason the install failed', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
-  fake.fakes.process.spawn = () => finished(['failed 1\tThe install step of safe-delete exited 1: brew: command not found.'], 1)
+  fake.fakes.process.spawn = () => finished(['failed 1\tThe install step of demo exited 1: brew: command not found.'], 1)
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(await fire(lifecycle, 'cmod.call', { to: 'safe-delete', method: 'restore', input: { path: 'a.ts' } }, { value: [] })).toEqual({
-    deny: 'safe-delete is not set up: The install step of safe-delete exited 1: brew: command not found.',
+  expect(await fire(lifecycle, 'cmod.call', { to: 'demo', method: 'restore', input: { path: 'a.ts' } }, { value: [] })).toEqual({
+    deny: 'demo is not set up: The install step of demo exited 1: brew: command not found.',
   })
 })
 
 function askingForToken() {
-  const fake = fakeClaude({ name: 'ci-watch', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'ci-watch', options: { githubToken: option.secret({ title: 'GitHub token', description: 'Reads your CI runs' }) }, setup() {} }))
-  return { fake, lifecycle, start: () => void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true })) }
+  const fake = fakeClaude({ name: 'other', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'other', options: { githubToken: option.secret({ title: 'GitHub token', description: 'Reads your CI runs' }) }, setup() {} }))
+  return { fake, lifecycle, start: () => void lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true })) }
 }
 
 test('while the installer waits for the answer, its toast stays still, so no redraw takes a press away', async () => {
@@ -485,18 +485,18 @@ test("a question Claude Code holds back in a narrow terminal opens from its toas
   await fake.settle()
 
   expect(installRequests(fake)).toEqual([installerOpen, { ...installerOpen, isAsked: true }])
-  await pressInInstaller(lifecycle, 'not-now', 'ci-watch')
+  await pressInInstaller(lifecycle, 'not-now', 'other')
   await fake.settle()
   expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Answer')).toBeUndefined()
 })
 
 test('a mod with install steps runs cmod setup once, asks nothing, and starts when it is done', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const spawned: ProcessSpawnRequest[] = []
   installCmod(fake)
   fake.fakes.process.spawn = (request) => {
     spawned.push(request)
-    return finished(['done safe-delete 0.2.0'], 0)
+    return finished(['done demo 0.2.0'], 0)
   }
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -511,14 +511,14 @@ test('a mod with install steps runs cmod setup once, asks nothing, and starts wh
 })
 
 test('each hotkey of a mod is a command that runs at once', async () => {
-  const fake = fakeClaude({ name: 'modes', root })
-  const definition = defineMod({ name: 'modes', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined })
+  const fake = fakeClaude({ name: 'demo', root })
+  const definition = defineMod({ name: 'demo', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined })
 
   const lifecycle = createLifecycle(definition)
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true, steps: { hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } } } }))
   await fake.settle()
 
-  expect(fake.shown.commands).toEqual(['modes--cycle'])
+  expect(fake.shown.commands).toEqual(['demo--cycle'])
 })
 
 test("the cmod plugin hides every mod's hotkey command from the slash command list, and no other command, whose provider Claude Code names with its marketplace", async () => {
@@ -528,11 +528,11 @@ test("the cmod plugin hides every mod's hotkey command from the slash command li
   await fake.settle()
   const described = (command: string, plugin: string) => fire(lifecycle, 'command.describe', { command, provider: { plugin, tier: 'user' } }, { description: 'Switch mode', isHidden: false })
 
-  expect(await described('modes--cycle', 'modes@market')).toEqual({ description: 'Switch mode', isHidden: true })
+  expect(await described('demo--cycle', 'demo@market')).toEqual({ description: 'Switch mode', isHidden: true })
   expect(await described('cmod--sidebar', 'cmod@cmod')).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await described('modes--cycle', 'modes')).toEqual({ description: 'Switch mode', isHidden: true })
-  expect(await described('review', 'modes@market')).toEqual({ description: 'Switch mode', isHidden: false })
-  expect(await described('notes--cycle', 'modes@market')).toEqual({ description: 'Switch mode', isHidden: false })
+  expect(await described('demo--cycle', 'demo')).toEqual({ description: 'Switch mode', isHidden: true })
+  expect(await described('review', 'demo@market')).toEqual({ description: 'Switch mode', isHidden: false })
+  expect(await described('notes--cycle', 'demo@market')).toEqual({ description: 'Switch mode', isHidden: false })
 })
 
 test('the cmod plugin asks Claude Code to list the commands again once it can hide hotkey commands, because Claude Code keeps the list it made before the plugin started', async () => {
@@ -545,9 +545,9 @@ test('the cmod plugin asks Claude Code to list the commands again once it can hi
 })
 
 test('a failed install draws the sentence cmod setup wrote and its fix, and setup never runs', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
-  fake.fakes.process.spawn = () => finished(['progress 1 4 Checking Homebrew', 'failed 1\tThe install step of safe-delete exited 1: brew: command not found.'], 1)
+  fake.fakes.process.spawn = () => finished(['progress 1 4 Checking Homebrew', 'failed 1\tThe install step of demo exited 1: brew: command not found.'], 1)
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
 
@@ -557,14 +557,14 @@ test('a failed install draws the sentence cmod setup wrote and its fix, and setu
 
   expect(runs).toEqual([])
   expect(lifecycle.toasts).toEqual([
-    { type: 'error', message: 'The install step of safe-delete exited 1: brew: command not found.' },
+    { type: 'error', message: 'The install step of demo exited 1: brew: command not found.' },
   ])
 })
 
 test('Retry on a failed install runs cmod setup again, and a done setup activates the mod', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
-  const outcomes = [['failed 1\tdisk full'], ['done safe-delete 0.2.0']]
+  const outcomes = [['failed 1\tdisk full'], ['done demo 0.2.0']]
   fake.fakes.process.spawn = () => finished(outcomes.shift() ?? [], 0)
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -583,7 +583,7 @@ test('Retry on a failed install runs cmod setup again, and a done setup activate
 })
 
 test('Retry keeps the failure toast in place, with its progress where its buttons were, until the try ends', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const second = controlledStream()
   const streams = [finished(['failed 1\tdisk full'], 1), second.stream]
@@ -612,7 +612,7 @@ test('Retry keeps the failure toast in place, with its progress where its button
 })
 
 test('Retry on a failure with a description shows its progress in the description, and keeps its buttons', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   fake.fakes.clock.after = () => ({ cancel: () => undefined })
   const second = controlledStream()
@@ -645,7 +645,7 @@ test("every failure toast in a stack keeps its ✕ at the band's right edge and 
   nightly.fail({ id: 'token', message: 'The Token hotkey failed', error: new Error(`failer has no GitHub token. ${secretFix}`), isCritical: true })
   failer.fail({ id: 'quick', message: 'The Quick hotkey failed', error: new Error('disk full'), isCritical: true })
   failer.fail({ id: 'long', message: `The Long hotkey failed, because ${'the index is locked by another process '.repeat(4)}`, isCritical: true })
-  failer.fail({ id: 'plugins', message: 'The Dependency hotkey failed', error: new Error(`failer needs the file-tree mod. ${installFix}`), isCritical: true })
+  failer.fail({ id: 'plugins', message: 'The Dependency hotkey failed', error: new Error(`failer needs the other mod. ${installFix}`), isCritical: true })
   const band = { hasSurvey: false, isWorking: false, maxRows: 40, bodyColumns: 100 } as RenderPropsOf['AbovePrompt']
   const prompt = Text({ children: '>' })
 
@@ -659,18 +659,18 @@ test("every failure toast in a stack keeps its ✕ at the band's right edge and 
 })
 
 test('a mod name longer than the name column shows whole, and pushes only its own toast text to the right', () => {
-  const fake = fakeClaude({ name: 'nightly-report-builder', root })
-  const nightly = createToaster(fake.claude, 'nightly-report-builder', () => '0.1.0')
+  const fake = fakeClaude({ name: 'a-mod-with-a-long-name', root })
+  const nightly = createToaster(fake.claude, 'a-mod-with-a-long-name', () => '0.1.0')
   nightly.fail({ id: 'quick', message: 'The Quick hotkey failed', isCritical: true })
   const band = { hasSurvey: false, isWorking: false, maxRows: 40, bodyColumns: 100 } as RenderPropsOf['AbovePrompt']
 
   const rows = rowsOf(nightly.draw(Text({ children: '>' }), elements, band, 'band'), 100).map((row) => row.trimEnd())
 
-  expect(rows.slice(1)).toEqual([`✗  nightly-report-builder  The Quick hotkey failed${' '.repeat(49)}✕`, `${' '.repeat(27)}Report  09:05`])
+  expect(rows.slice(1)).toEqual([`✗  a-mod-with-a-long-name  The Quick hotkey failed${' '.repeat(49)}✕`, `${' '.repeat(27)}Report  09:05`])
 })
 
 test("an update shows no toast of the mod's own, because the cmod plugin's toast names the new version", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.fakes.cmod.call = async () => null
   fake.store.set('cmod:announced', { version: '0.1.0', added: [] })
   const lifecycle = createLifecycle(trackedMod().definition)
@@ -681,18 +681,18 @@ test("an update shows no toast of the mod's own, because the cmod plugin's toast
 })
 
 const commandFrom = (isHeld: boolean) => async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   fake.fakes.cmod.call = async () => ({ isHeld })
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'ci-watch',
+      name: 'other',
       setup(mod) {
         const page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
         mod.use(slashCommand({ name: 'runs', description: 'Show the runs', reply: () => page.open() }))
       },
     }),
   )
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
   const passedOn: string[] = []
   const answer = await lifecycle.route('command.run', { command: 'runs', args: '', origin: { kind: 'composer' } } as never, async (e) => (passedOn.push((e as Args<'command.run'>).command), { text: 'Claude Code ran it' }))
@@ -714,7 +714,7 @@ test('a command whose page request the cmod plugin held answers without passing 
 })
 
 test("a press whose handler drops page.open's promise ends only once the cmod plugin heard the page request, so a cmod plugin earlier in the chain opens the page in the person's frame", async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   const heard: unknown[] = []
   let answer: () => void = () => undefined
   fake.fakes.cmod.call = async (call) => {
@@ -724,12 +724,12 @@ test("a press whose handler drops page.open's promise ends only once the cmod pl
     return new Promise((resolve) => (answer = () => resolve({ isHeld: true })))
   }
   let page: ReturnType<Mod['sidebar']['add']> | undefined
-  const lifecycle = createLifecycle(defineMod({ name: 'ci-watch', setup: (mod) => void (page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })) }))
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  const lifecycle = createLifecycle(defineMod({ name: 'other', setup: (mod) => void (page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })) }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
   let isPressed = false
 
-  const pressed = lifecycle.route('ui.press', { plugin: 'ci-watch', element: 'runs', component: 'Pane', requestId: 'runs', surface: 'terminal' } as never, async (e) => (void page?.open(), { element: e.element })).then(() => (isPressed = true))
+  const pressed = lifecycle.route('ui.press', { plugin: 'other', element: 'runs', component: 'Pane', requestId: 'runs', surface: 'terminal' } as never, async (e) => (void page?.open(), { element: e.element })).then(() => (isPressed = true))
   await fake.settle()
 
   expect(heard).toEqual([{ requests: [{ open: 'runs' }], isAsked: true }])
@@ -746,12 +746,12 @@ test('the cmod plugin opens a page a mod before it in the chain asked for, and e
   const pages = servePages({ claude: fake.claude, router, report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   pages.apply(async (mod, requests) => void opened.push({ mod, requests }))
 
-  const isHeld = pages.update('ci-watch', { requests: [{ open: 'runs' }], isAsked: true })
+  const isHeld = pages.update('other', { requests: [{ open: 'runs' }], isAsked: true })
   const passedOn: string[] = []
   const answer = await router.dispatch('command.run', { command: 'runs', args: '', origin: { kind: 'composer' } } as never, async (e) => (passedOn.push((e as Args<'command.run'>).command), { text: 'Claude Code ran it' }))
 
   expect(isHeld).toBe(false)
-  expect(opened).toEqual([{ mod: 'ci-watch', requests: [{ open: 'runs' }] }])
+  expect(opened).toEqual([{ mod: 'other', requests: [{ open: 'runs' }] }])
   expect(passedOn).toEqual([])
   expect(answer).toEqual({})
 })
@@ -766,7 +766,7 @@ test("a press waits for the mod it pressed, never for a slower mod an earlier pr
   const first = pressIn('inbox')
   let isSecondDone = false
 
-  await pressIn('notes').then(() => (isSecondDone = true))
+  await pressIn('other').then(() => (isSecondDone = true))
   answerInbox(null)
   await first
 
@@ -779,20 +779,20 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
   fake.fakes.cmod.call = async (call) => (told.push({ to: call.to, method: call.method, input: call.input }), null)
   const ownStylers: unknown[] = []
   const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: (stylers) => void ownStylers.push(stylers) })
-  pages.update('notes', { parts: { widgets: [], pages: [] } })
+  pages.update('other', { parts: { widgets: [], pages: [] } })
   pages.update('cmod', { parts: { widgets: [], pages: [] } })
 
   pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
   pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
   pages.update('diagrams', { parts: { widgets: [], pages: [] } })
-  pages.update('notes', { parts: { widgets: [], pages: [] } })
+  pages.update('other', { parts: { widgets: [], pages: [] } })
 
   expect(pages.stylers()).toEqual([])
   expect(ownStylers).toEqual([['diagrams'], ['diagrams'], []])
-  expect(told.filter((call) => (call as { to: string }).to === 'notes')).toEqual([
-    { to: 'notes', method: partMethods.stylers, input: ['diagrams'] },
-    { to: 'notes', method: partMethods.stylers, input: ['diagrams'] },
-    { to: 'notes', method: partMethods.stylers, input: [] },
+  expect(told.filter((call) => (call as { to: string }).to === 'other')).toEqual([
+    { to: 'other', method: partMethods.stylers, input: ['diagrams'] },
+    { to: 'other', method: partMethods.stylers, input: ['diagrams'] },
+    { to: 'other', method: partMethods.stylers, input: [] },
   ])
   expect(told.filter((call) => (call as { to: string }).to === 'cmod')).toEqual([])
 })
@@ -801,7 +801,7 @@ test('a mod still installing misses its page list and which mods style markdown 
   const fake = fakeClaude({ name: 'cmod', root })
   fake.fakes.cmod.call = async ({ to }) => Promise.reject(new Error(`${to} is installing. Try again when it's ready.`))
   const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
-  pages.update('notes', { parts: { widgets: [], pages: [] } })
+  pages.update('other', { parts: { widgets: [], pages: [] } })
 
   pages.element('inbox', 'items', null, 60, true)
   pages.update('diagrams', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
@@ -816,25 +816,25 @@ test('a press the mod refuses makes the page draw again, so its next buttons wor
   const asked: string[] = []
   fake.fakes.cmod.call = async (call) => {
     asked.push(call.method)
-    if (call.method === partMethods.press) throw new Error('ci-watch: that button drew before the last redraw. Press the one it shows now.')
+    if (call.method === partMethods.press) throw new Error('other: that button drew before the last redraw. Press the one it shows now.')
     return call.method === partMethods.draw ? { draw: asked.length, tree: { $cmodElement: 'Button', props: { key: 'go', label: 'Go', onPress: { $cmodHandler: 0 } } } } : null
   }
   const told: string[] = []
   const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
   const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: (mod, error) => void told.push(`${mod}: ${messageOf(error)}`), widgets: { update: () => undefined }, parts, tellStylers: () => undefined })
   const draw = async () => {
-    pages.element('ci-watch', 'runs', { run: 7 }, 80, false)
+    pages.element('other', 'runs', { run: 7 }, 80, false)
     await fake.settle()
-    return pages.element('ci-watch', 'runs', { run: 7 }, 80, false)
+    return pages.element('other', 'runs', { run: 7 }, 80, false)
   }
 
   await draw()
-  pages.press('ci-watch', { draw: 2, handler: 0, args: [] })
+  pages.press('other', { draw: 2, handler: 0, args: [] })
   await fake.settle()
   await draw()
 
   expect(asked.filter((method) => method === partMethods.draw || method === partMethods.press)).toEqual([partMethods.draw, partMethods.press, partMethods.draw])
-  expect(told).toEqual(['ci-watch: ci-watch: that button drew before the last redraw. Press the one it shows now.'])
+  expect(told).toEqual(['other: other: that button drew before the last redraw. Press the one it shows now.'])
 })
 
 test('a page keeps its drawing while its mod draws it for a focused pane or a new width, so Claude Code never clamps the scrolled window to a one-line placeholder', async () => {
@@ -846,7 +846,7 @@ test('a page keeps its drawing while its mod draws it for a focused pane or a ne
   }
   const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
   const shown = async (columns: number, isFocused: boolean, params: unknown = { run: 7 }) => {
-    const drawn = drawWith(elements, () => pages.element('ci-watch', 'runs', params, columns, isFocused))
+    const drawn = drawWith(elements, () => pages.element('other', 'runs', params, columns, isFocused))
     await fake.settle()
     return drawn === undefined ? 'Drawing Runs…' : textOf(drawn)
   }
@@ -865,7 +865,7 @@ test('a page keeps its drawing while its mod draws it for a focused pane or a ne
 
 test('a press on a button from an older drawing tells the person nothing ran, a press the mod refuses for another reason shows its failure at once, and either draws the page again', async () => {
   const fake = fakeClaude({ name: 'cmod', root })
-  const refusals: Readonly<Record<string, string>> = { 'ci-watch': 'ci-watch: that button drew before the last redraw. Press the one it shows now.', deploys: 'deploys: the deploy key is missing' }
+  const refusals: Readonly<Record<string, string>> = { 'other': 'other: that button drew before the last redraw. Press the one it shows now.', deploys: 'deploys: the deploy key is missing' }
   const drawn: string[] = []
   fake.fakes.cmod.call = async (call) => {
     if (call.method === partMethods.draw) drawn.push(call.to)
@@ -897,21 +897,21 @@ test('a press on a button from an older drawing tells the person nothing ran, a 
     await fake.settle()
   }
 
-  await pressAndDraw('ci-watch')
+  await pressAndDraw('other')
   await pressAndDraw('deploys')
 
-  expect(drawn).toEqual(['ci-watch', 'ci-watch', 'deploys', 'deploys'])
+  expect(drawn).toEqual(['other', 'other', 'deploys', 'deploys'])
   expect(lifecycle.toasts.filter((toast) => toast.type !== 'success')).toEqual([
-    { type: 'warning', message: 'The ci-watch button was from an older drawing, so nothing ran', description: 'Press the button it shows now.' },
+    { type: 'warning', message: 'The other button was from an older drawing, so nothing ran', description: 'Press the button it shows now.' },
     { type: 'error', message: 'deploys did not take the press', description: 'deploys: the deploy key is missing' },
   ])
 })
 
 test('after a mod restarts with its install question open, Not now on the shown install tab answers on the first press', async () => {
-  const cmod = cmodSidebar('ci-watch')
-  const fake = fakeClaude({ name: 'ci-watch', root })
-  const signingIn = () => createLifecycle(defineMod({ name: 'ci-watch', installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => false }], setup() {} }))
-  const installed = { ...pending, name: 'ci-watch', isInstalled: true }
+  const cmod = cmodSidebar('other')
+  const fake = fakeClaude({ name: 'other', root })
+  const signingIn = () => createLifecycle(defineMod({ name: 'other', installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => false }], setup() {} }))
+  const installed = { ...pending, name: 'other', isInstalled: true }
   await cmod.load(signingIn(), fake, installed)
   await cmod.shown(installPage)
   const restarted = signingIn()
@@ -925,10 +925,10 @@ test('after a mod restarts with its install question open, Not now on the shown 
 })
 
 test("after a mod restarts, a press on its Sidebar page runs the restarted module's handler", async () => {
-  const cmod = cmodSidebar('safe-delete')
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const cmod = cmodSidebar('demo')
+  const fake = fakeClaude({ name: 'demo', root })
   const ranIn: string[] = []
-  const withRuns = (module: string) => defineMod({ name: 'safe-delete', setup: (mod) => void mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Button({ key: 'rerun', label: 'Run again', onPress: () => void ranIn.push(module) }) }) })
+  const withRuns = (module: string) => defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Button({ key: 'rerun', label: 'Run again', onPress: () => void ranIn.push(module) }) }) })
   const installed = { ...pending, isInstalled: true }
   await cmod.load(createLifecycle(withRuns('first')), fake, installed)
   await cmod.shown('runs')
@@ -941,11 +941,11 @@ test("after a mod restarts, a press on its Sidebar page runs the restarted modul
 })
 
 test("a Sidebar page whose render throws after a state change shows its error, never the last drawing's buttons", async () => {
-  const cmod = cmodSidebar('safe-delete')
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const cmod = cmodSidebar('demo')
+  const fake = fakeClaude({ name: 'demo', root })
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       state: { session: { item: 'deploy.log' } },
       setup: (mod) =>
         void mod.sidebar.add({
@@ -972,16 +972,16 @@ test("a Sidebar page whose render throws after a state change shows its error, n
 })
 
 test("a restarted module refuses a press on a draw number an earlier module of the mod drew, instead of running another drawing's button", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const ranIn: string[] = []
   const withPages = (module: string) =>
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup(mod) {
         for (const id of ['runs', 'logs']) void mod.sidebar.add({ id, title: id, render: () => Button({ key: id, label: id, onPress: () => void ranIn.push(`${module} ${id}`) }) })
       },
     })
-  const draw = async (lifecycle: Lifecycle<object>, page: string) => (await askedByCmod(lifecycle, 'safe-delete', partMethods.draw, { page, params: null, columns: 60, isFocused: true })) as DrawnPart
+  const draw = async (lifecycle: Lifecycle<object>, page: string) => (await askedByCmod(lifecycle, 'demo', partMethods.draw, { page, params: null, columns: 60, isFocused: true })) as DrawnPart
   const installed = given({ ...pending, isInstalled: true })
   const first = createLifecycle(withPages('first'))
   await first.start(fake.claude, installed)
@@ -991,26 +991,26 @@ test("a restarted module refuses a press on a draw number an earlier module of t
   await restarted.start(fake.claude, installed)
   await draw(restarted, 'logs')
 
-  const pressed = askedByCmod(restarted, 'safe-delete', partMethods.press, { draw: stale.draw, handler: 0, args: [] })
+  const pressed = askedByCmod(restarted, 'demo', partMethods.press, { draw: stale.draw, handler: 0, args: [] })
 
-  await expect(pressed).rejects.toThrow('safe-delete: that button drew before the last redraw. Press the one it shows now.')
+  await expect(pressed).rejects.toThrow('demo: that button drew before the last redraw. Press the one it shows now.')
   expect(ranIn).toEqual([])
 })
 
 test('a page opened in setup reaches the cmod plugin with the first list of parts, which says the mod just started', async () => {
-  const fake = fakeClaude({ name: 'welcome', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const told: unknown[] = []
   fake.fakes.cmod.call = async (call) => void told.push(call)
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'welcome',
+      name: 'demo',
       async setup(mod) {
         await mod.sidebar.add({ id: 'hello', title: 'Hello', render: () => Text({ children: 'Hi' }) }).open()
       },
     }),
   )
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'welcome', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo', isInstalled: true }))
   await fake.settle()
 
   expect(told).toEqual([{ to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'hello', title: 'Hello', place: 'sidebar' }] }, requests: [{ open: 'hello' }], isStart: true } }])
@@ -1027,10 +1027,10 @@ function loggingFailures(fake: ReturnType<typeof fakeClaude>, answer: unknown): 
 }
 
 test('a listener failure in an installed mod that is not linked goes to the Log, and shows no toast when cmod answers no toast', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const logged = loggingFailures(fake, { showsToast: false })
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
@@ -1040,10 +1040,10 @@ test('a listener failure in an installed mod that is not linked goes to the Log,
   expect(lifecycle.toasts).toEqual([])
   expect(logged).toEqual([
     {
-      mod: 'safe-delete',
+      mod: 'demo',
       id: 'session:onSessionStart',
       message: 'The onSessionStart listener failed',
-      details: expect.stringMatching(/^safe-delete unknown \(.*\), @cmodjs\/core \d+\.\d+\.\d+, at \d{4}-\d\d-\d\dT[\d:.]+Z\nThe onSessionStart listener failed\nthe trash folder is missing\n\nError: the trash folder is missing/),
+      details: expect.stringMatching(/^demo unknown \(.*\), @cmodjs\/core \d+\.\d+\.\d+, at \d{4}-\d\d-\d\dT[\d:.]+Z\nThe onSessionStart listener failed\nthe trash folder is missing\n\nError: the trash folder is missing/),
       at: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/),
       isCritical: false,
       root,
@@ -1052,46 +1052,46 @@ test('a listener failure in an installed mod that is not linked goes to the Log,
       core: expect.stringMatching(/^\d+\.\d+\.\d+$/),
     },
   ])
-  expect(fake.shown.debug).toContain('safe-delete: The onSessionStart listener failed: the trash folder is missing')
+  expect(fake.shown.debug).toContain('demo: The onSessionStart listener failed: the trash folder is missing')
 })
 
 test("a session start forgets every value an ended session kept under its session key, once the ended session's transcript is gone, and keeps the live ones", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles({ ...manifestOnly, '/transcripts/live.jsonl': '' }))
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
-  fake.store.set('safe-delete.$transcripts.ended', '/transcripts/ended.jsonl')
-  fake.store.set(sessionKeyOf('safe-delete', 'count', 'ended'), 3)
-  fake.store.set(sessionKeyOf('safe-delete', 'hidingReload', 'ended'), true)
-  fake.store.set('safe-delete.$transcripts.live', '/transcripts/live.jsonl')
-  fake.store.set(sessionKeyOf('safe-delete', 'count', 'live'), 5)
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', state: { session: { count: 0 } }, setup: () => undefined }))
+  fake.store.set('demo.$transcripts.ended', '/transcripts/ended.jsonl')
+  fake.store.set(sessionKeyOf('demo', 'count', 'ended'), 3)
+  fake.store.set(sessionKeyOf('demo', 'hidingReload', 'ended'), true)
+  fake.store.set('demo.$transcripts.live', '/transcripts/live.jsonl')
+  fake.store.set(sessionKeyOf('demo', 'count', 'live'), 5)
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', state: { session: { count: 0 } }, setup: () => undefined }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
 
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   await fake.settle()
 
-  expect([...fake.store.keys()].filter((key) => key.startsWith('safe-delete.')).toSorted()).toEqual(['safe-delete.$transcripts.live', 'safe-delete.$transcripts.test-session', sessionKeyOf('safe-delete', 'count', 'live')])
+  expect([...fake.store.keys()].filter((key) => key.startsWith('demo.')).toSorted()).toEqual(['demo.$transcripts.live', 'demo.$transcripts.test-session', sessionKeyOf('demo', 'count', 'live')])
 })
 
 test("a warning cmod writes for a mod reaches the cmod plugin's Log as a warning with the mod's versions, and never shows a toast", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const logged = loggingFailures(fake, { showsToast: true })
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: (mod) => engineOf(mod).claude.ui.warn('pages:list:notes', 'cmod: notes did not list its pages') }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => engineOf(mod).claude.ui.warn('pages:list:notes', 'cmod: notes did not list its pages') }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
   expect(lifecycle.toasts).toEqual([])
-  expect(logged).toEqual([expect.objectContaining({ mod: 'safe-delete', id: 'pages:list:notes', message: 'cmod: notes did not list its pages', level: 'warning', version: '0.2.0', core: expect.stringMatching(/^\d+\.\d+\.\d+$/), isCritical: false })])
+  expect(logged).toEqual([expect.objectContaining({ mod: 'demo', id: 'pages:list:notes', message: 'cmod: notes did not list its pages', level: 'warning', version: '0.2.0', core: expect.stringMatching(/^\d+\.\d+\.\d+$/), isCritical: false })])
   expect(fake.shown.debug).toContain('cmod: notes did not list its pages')
 })
 
 test('the same listener failure shows its toast as today when cmod refuses cmod:failed as a method it lacks', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
-  fake.fakes.cmod.call = async (call) => calledAnswer('safe-delete', { deny: `cmod has no method ${call.method}.` })
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  fake.fakes.cmod.call = async (call) => calledAnswer('demo', { deny: `cmod has no method ${call.method}.` })
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
@@ -1134,10 +1134,10 @@ test("a failure the cmod plugin reports while its own setup still runs waits for
 
 test('an answer to cmod:failed that is not an object with a true or false showsToast shows the toast', async () => {
   for (const answer of [null, {}, { showsToast: 'no' }]) {
-    const fake = fakeClaude({ name: 'safe-delete', root })
+    const fake = fakeClaude({ name: 'demo', root })
     fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
     loggingFailures(fake, answer)
-    const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+    const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
     await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
     await fake.settle()
 
@@ -1149,10 +1149,10 @@ test('an answer to cmod:failed that is not an object with a true or false showsT
 })
 
 test('a failure cmod answers show for, as for a linked mod, shows its toast', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const logged = loggingFailures(fake, { showsToast: true })
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
@@ -1164,34 +1164,34 @@ test('a failure cmod answers show for, as for a linked mod, shows its toast', as
 })
 
 test("mod.log with an error level sends the line to cmod's Log, which decides the toast, and with a warning level sends it to the Log alone", async () => {
-  const fake = fakeClaude({ name: 'rulebook', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const logged = loggingFailures(fake, { showsToast: true })
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'rulebook',
+      name: 'demo',
       setup(mod) {
-        mod.log('The rule no-em-dash did not load, so rulebook skips it: bad pattern', { level: 'error' })
-        mod.log('The Read call lists no files, so rulebook checks none', { level: 'warning' })
+        mod.log('The rule no-tabs did not load, so demo skips it: bad pattern', { level: 'error' })
+        mod.log('The Read call lists no files, so demo checks none', { level: 'warning' })
       },
     }),
   )
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'rulebook', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo', isInstalled: true }))
   await fake.settle()
 
   expect(logged).toHaveLength(2)
-  expect(logged).toContainEqual(expect.objectContaining({ mod: 'rulebook', message: 'rulebook: The Read call lists no files, so rulebook checks none', level: 'warning' }))
-  expect(logged).toContainEqual(expect.objectContaining({ mod: 'rulebook', message: 'The rule no-em-dash did not load, so rulebook skips it: bad pattern', level: 'error', isCritical: false }))
-  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The rule no-em-dash did not load, so rulebook skips it: bad pattern' }])
+  expect(logged).toContainEqual(expect.objectContaining({ mod: 'demo', message: 'demo: The Read call lists no files, so demo checks none', level: 'warning' }))
+  expect(logged).toContainEqual(expect.objectContaining({ mod: 'demo', message: 'The rule no-tabs did not load, so demo skips it: bad pattern', level: 'error', isCritical: false }))
+  expect(lifecycle.toasts).toEqual([{ type: 'error', message: 'The rule no-tabs did not load, so demo skips it: bad pattern' }])
 })
 
 test('a listener failure whose cause is a cmod.call cmod did not answer reaches the Log as a warning and shows no toast, because cmod reports its own stopped hook', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const logged = loggingFailures(fake, { showsToast: true })
   const refusals = ["cmod: it ran past the 10 s Claude Code gives a hook", "cmod did not answer in time, so Claude Code went on without it.", "cmod is installing. Try again when it's ready."]
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => refusals.forEach((refusal, index) => void sessions.current.onSessionStart(() => Promise.reject(new Error(refusal)), { timeoutMs: 1000 + index })) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => refusals.forEach((refusal, index) => void sessions.current.onSessionStart(() => Promise.reject(new Error(refusal)), { timeoutMs: 1000 + index })) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
@@ -1199,17 +1199,17 @@ test('a listener failure whose cause is a cmod.call cmod did not answer reaches 
   await fake.settle()
 
   expect(lifecycle.toasts).toEqual([])
-  expect(logged.map((each) => [(each as { level: string }).level, (each as { message: string }).message])).toEqual(refusals.map((refusal) => ['warning', `safe-delete: The onSessionStart listener failed: ${refusal}`]))
+  expect(logged.map((each) => [(each as { level: string }).level, (each as { message: string }).message])).toEqual(refusals.map((refusal) => ['warning', `demo: The onSessionStart listener failed: ${refusal}`]))
 })
 
 test('a failure whose Log call cmod refuses while it installs shows no toast, and reaches the Log once cmod answers', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const logged: unknown[] = []
   let isInstalling = true
   fake.fakes.cmod.call = async (call) => {
     if (call.method !== 'cmod:failed') return null
-    if (isInstalling) return calledAnswer('safe-delete', { deny: "cmod is installing. Try again when it's ready." })
+    if (isInstalling) return calledAnswer('demo', { deny: "cmod is installing. Try again when it's ready." })
     logged.push(call.input)
     return { showsToast: false }
   }
@@ -1219,7 +1219,7 @@ test('a failure whose Log call cmod refuses while it installs shows no toast, an
     else later.push({ ms, fire })
     return { cancel: () => undefined }
   }
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => Promise.reject(new Error('the trash folder is missing'))) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
@@ -1236,10 +1236,10 @@ test('a failure whose Log call cmod refuses while it installs shows no toast, an
 })
 
 test('a mod loaded mid-session, which hears no SessionStart, runs its session-start listeners before the next prompt, once', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
   const starts: string[] = []
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => void sessions.current.onSessionStart((start) => void starts.push(start.source)) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart((start) => void starts.push(start.source)) }))
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
   await fake.settle()
 
@@ -1250,10 +1250,10 @@ test('a mod loaded mid-session, which hears no SessionStart, runs its session-st
   expect(starts).toEqual(['resume'])
 })
 
-const recordFile = '/home/.local/share/cmod/records/safe-delete.json'
+const recordFile = '/home/.local/share/cmod/records/demo.json'
 
 function stoppedSession(firstOutcome: string, code: number) {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const disk = fakeFiles({})
   fake.fakes.fs.stat = disk.stat
   fake.fakes.fs.read = disk.read
@@ -1306,16 +1306,16 @@ test('a mod whose install failed starts with no prompt once another cmod writes 
 })
 
 test('a mod whose first start failed after its install starts again once cmod install rewrites its record', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const disk = fakeFiles({})
   fake.fakes.fs.stat = disk.stat
   fake.fakes.fs.read = disk.read
   installCmod(fake)
-  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  fake.fakes.process.spawn = () => finished(['done demo 0.2.0'], 0)
   let setups = 0
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup() {
         setups += 1
         if (setups === 1) throw new Error('the first setup fails')
@@ -1354,7 +1354,7 @@ test('a stopped mod whose record is unchanged stays stopped across prompts and s
 })
 
 test('an install error longer than the band wraps its message across the band, with its buttons on a line under it', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const error = 'cmod bootstrap: cmod is installed at /home/me/.local/bin/cmod, but PATH finds no cmod. Put /home/me/.local/bin first on PATH, then restart Claude Code.'
   fake.fakes.process.spawn = () => finished([`failed 1\t${error}`], 1)
@@ -1366,7 +1366,7 @@ test('an install error longer than the band wraps its message across the band, w
 
   expect(rowsOf(await fire(lifecycle, 'ui.render', narrowBand, prompt), 40).map((row) => row.trimEnd())).toEqual([
     '>',
-    '✗  safe-delete       cmod bootstrap:       ✕',
+    '✗  demo              cmod bootstrap:       ✕',
     '                     cmod is',
     '                     installed at',
     '                     /home/me/.local/',
@@ -1383,7 +1383,7 @@ test('an install error longer than the band wraps its message across the band, w
 })
 
 function retryingFake(setups: readonly (readonly string[])[]) {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const setupsRun: string[][] = []
   fake.fakes.process.spawn = (request) => {
@@ -1408,10 +1408,10 @@ function retryingFake(setups: readonly (readonly string[])[]) {
   return { fake, setupsRun, timers, fire }
 }
 
-const notYet = 'failed 1\tThe v0.2.0 release of safe-delete has no SHA256SUMS yet. Its author attaches it with cmod publish.'
+const notYet = 'failed 1\tThe v0.2.0 release of demo has no SHA256SUMS yet. Its author attaches it with cmod publish.'
 
 test('a release download that is not there yet shows the failure at once, retries in the background, and clears the failure when it works', async () => {
-  const { fake, setupsRun, fire } = retryingFake([[notYet, 'retries later'], [notYet, 'retries later'], ['done safe-delete 0.2.0']])
+  const { fake, setupsRun, fire } = retryingFake([[notYet, 'retries later'], [notYet, 'retries later'], ['done demo 0.2.0']])
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
@@ -1421,8 +1421,8 @@ test('a release download that is not there yet shows the failure at once, retrie
   const second = lifecycle.toasts
   await fire(4000)
 
-  expect(first).toEqual(failed('The v0.2.0 release of safe-delete has no SHA256SUMS yet. Its author attaches it with cmod publish.', 'Trying again in 2 s.'))
-  expect(second).toEqual(failed('The v0.2.0 release of safe-delete has no SHA256SUMS yet. Its author attaches it with cmod publish.', 'Trying again in 4 s.'))
+  expect(first).toEqual(failed('The v0.2.0 release of demo has no SHA256SUMS yet. Its author attaches it with cmod publish.', 'Trying again in 2 s.'))
+  expect(second).toEqual(failed('The v0.2.0 release of demo has no SHA256SUMS yet. Its author attaches it with cmod publish.', 'Trying again in 4 s.'))
   expect(setupsRun).toHaveLength(3)
   expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual([])
 })
@@ -1439,21 +1439,21 @@ test('the background retry waits 2 s up to 128 s, then every 128 s', async () =>
 })
 
 test('a failure that waiting cannot fix, such as a failed install step of a release, waits for Retry', async () => {
-  const { fake, timers } = retryingFake([['failed 1\tThe install step of safe-delete exited 1.']])
+  const { fake, timers } = retryingFake([['failed 1\tThe install step of demo exited 1.']])
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed('The install step of safe-delete exited 1.'))
+  expect(lifecycle.toasts).toEqual(failed('The install step of demo exited 1.'))
   expect(timers).toEqual([])
 })
 
 test('a checkout whose steps did not change keeps running while its new version builds, and a failed build shows its own error', async () => {
   const fake = await raisedCheckout(root)
   installCmod(fake)
-  const broken = 'Building trace with "cargo xtask dist" exited 101: error[E0425]: cannot find value `x`. Fix the build in ~/Developer/trace/cli, then save a file there or run the command again.'
-  const outcomes = [[`failed 1\t${broken}`, 'retries changed'], ['done safe-delete 0.3.0']]
+  const broken = 'Building other with "cargo build --release" exited 101: error[E0425]: cannot find value `x`. Fix the build in ~/Developer/other/cli, then save a file there or run the command again.'
+  const outcomes = [[`failed 1\t${broken}`, 'retries changed'], ['done demo 0.3.0']]
   fake.fakes.process.spawn = () => {
     const lines = outcomes.shift() ?? []
     return finished(lines, lines[0]?.startsWith('done') === true ? 0 : 1)
@@ -1475,11 +1475,11 @@ test('a checkout whose steps did not change keeps running while its new version 
 })
 
 test('a waiting mod continues its install once the cmod program appears, with no further event', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
     spawned.push(request)
-    return finished(['done safe-delete 0.2.0'], 0)
+    return finished(['done demo 0.2.0'], 0)
   }
   const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
   fake.claude.clock.every = (ms, fire) => {
@@ -1509,7 +1509,7 @@ test('a waiting mod continues its install once the cmod program appears, with no
 })
 
 test('a mod whose cmod stays older than the library it bundles for a minute updates cmod, and sets up once cmod updates', async () => {
-  const fake = fakeClaude({ name: 'modes', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake, '3.1.0')
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
@@ -1524,9 +1524,9 @@ test('a mod whose cmod stays older than the library it bundles for a minute upda
   }
   fake.fakes.clock.every = timer
   fake.fakes.clock.after = timer
-  const lifecycle = createLifecycle(defineMod({ name: 'modes', setup() {} }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup() {} }))
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'modes' }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo' }))
   await fake.settle()
   timers.find((made) => made.ms === 1000)?.fire()
   await fake.settle()
@@ -1534,7 +1534,7 @@ test('a mod whose cmod stays older than the library it bundles for a minute upda
   await fake.settle()
 
   expect(spawned).toEqual([{ argv: [cmodProgram, 'update', 'cmod'] }])
-  expect(lifecycle.toasts).toEqual([{ type: 'loading', message: 'Installing', description: `modes needs cmod ${oldestCmodVersion} or later, and this computer has cmod 3.1.0, so cmod is updating itself.` }])
+  expect(lifecycle.toasts).toEqual([{ type: 'loading', message: 'Installing', description: `demo needs cmod ${oldestCmodVersion} or later, and this computer has cmod 3.1.0, so cmod is updating itself.` }])
 
   installCmod(fake)
   timers.find((made) => made.ms === 10_000)?.fire()
@@ -1544,7 +1544,7 @@ test('a mod whose cmod stays older than the library it bundles for a minute upda
 })
 
 test('a mod runs one update for an older cmod, and when the update leaves it older, the next wait shows why with Retry instead of updating again', async () => {
-  const fake = fakeClaude({ name: 'modes', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake, '3.1.0')
   const spawned: string[] = []
   fake.fakes.process.spawn = (request) => (spawned.push(request.argv.slice(1).join(' ')), finished([], 0))
@@ -1552,8 +1552,8 @@ test('a mod runs one update for an older cmod, and when the update leaves it old
   fake.fakes.clock.after = (ms, fire) => (timers.push({ ms, fire }), { cancel: () => {} })
   fake.fakes.clock.every = fake.fakes.clock.after
   const wait = async () => {
-    const lifecycle = createLifecycle(defineMod({ name: 'modes', setup() {} }))
-    await lifecycle.start(fake.claude, given({ ...pending, name: 'modes' }))
+    const lifecycle = createLifecycle(defineMod({ name: 'demo', setup() {} }))
+    await lifecycle.start(fake.claude, given({ ...pending, name: 'demo' }))
     await fake.settle()
     timers.splice(0).find((made) => made.ms === 60_000)?.fire()
     await fake.settle()
@@ -1564,7 +1564,7 @@ test('a mod runs one update for an older cmod, and when the update leaves it old
   const reloaded = await wait()
 
   expect(spawned).toEqual(['update cmod'])
-  expect(reloaded.toasts).toEqual(failed(`modes needs cmod ${oldestCmodVersion} or later, and the newest cmod is 3.1.0.`))
+  expect(reloaded.toasts).toEqual(failed(`demo needs cmod ${oldestCmodVersion} or later, and the newest cmod is 3.1.0.`))
 
   const retry = findElement(await fire(reloaded, 'ui.render', abovePrompt, prompt), 'Button', 'Retry')
   if (retry === undefined) throw new Error('The failure draws no Retry button.')
@@ -1577,7 +1577,7 @@ test('a mod runs one update for an older cmod, and when the update leaves it old
 })
 
 test('a failed update of an older cmod shows its error with Retry', async () => {
-  const fake = fakeClaude({ name: 'modes', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake, '3.1.0')
   fake.fakes.process.spawn = () => {
     const step = controlledStream()
@@ -1588,22 +1588,22 @@ test('a failed update of an older cmod shows its error with Retry', async () => 
   const timers: { ms: number; fire: () => void }[] = []
   fake.fakes.clock.after = (ms, fire) => (timers.push({ ms, fire }), { cancel: () => {} })
   fake.fakes.clock.every = fake.fakes.clock.after
-  const lifecycle = createLifecycle(defineMod({ name: 'modes', setup() {} }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup() {} }))
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'modes' }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo' }))
   await fake.settle()
   timers.find((made) => made.ms === 60_000)?.fire()
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed(`modes needs cmod ${oldestCmodVersion} or later, and updating cmod 3.1.0 exited 1: cmod update: claude plugin update cmod@cmod failed: Requires "cmod@cmod" ^3.0.0`))
+  expect(lifecycle.toasts).toEqual(failed(`demo needs cmod ${oldestCmodVersion} or later, and updating cmod 3.1.0 exited 1: cmod update: claude plugin update cmod@cmod failed: Requires "cmod@cmod" ^3.0.0`))
 })
 
 test('a mod keeps waiting for cmod past 60 seconds and starts once cmod is ready', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
     spawned.push(request)
-    return finished(['done safe-delete 0.2.0'], 0)
+    return finished(['done demo 0.2.0'], 0)
   }
   const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
   const timer = (ms: number, fire: () => void) => {
@@ -1681,25 +1681,25 @@ test('a mod whose state fails to load says its state did not load', async () => 
 })
 
 test('a missing secret option asks in the installer to set it in /config, with a button that opens it, and Not now fails with a Retry that asks again', async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   const ran: string[] = []
   fake.fakes.command.run = async ({ command }) => (ran.push(command), {})
   const token = option.secret({ title: 'GitHub token', description: 'Reads your CI runs' })
-  const lifecycle = createLifecycle(defineMod({ name: 'ci-watch', options: { githubToken: token }, setup() {} }))
+  const lifecycle = createLifecycle(defineMod({ name: 'other', options: { githubToken: token }, setup() {} }))
 
-  void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  void lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
 
-  expect(await installerText(lifecycle, 'ci-watch')).toContain('Set it in /config, where Claude Code keeps it in your keychain')
-  await pressInInstaller(lifecycle, 'secret:githubToken', 'ci-watch')
+  expect(await installerText(lifecycle, 'other')).toContain('Set it in /config, where Claude Code keeps it in your keychain')
+  await pressInInstaller(lifecycle, 'secret:githubToken', 'other')
   expect(ran).toEqual(['config'])
-  await pressInInstaller(lifecycle, 'not-now', 'ci-watch')
+  await pressInInstaller(lifecycle, 'not-now', 'other')
   await fake.settle()
   expect(lifecycle.toasts).toEqual(failed('it needs GitHub token', 'Retry asks for it.'))
 })
 
 test('a missing text option saved in the installer through cmod option starts the mod on Next', async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   const saved: (readonly string[])[] = []
   const rows: { key: string; value: string }[] = []
   fake.fakes.process.run = async (argv) => {
@@ -1707,34 +1707,34 @@ test('a missing text option saved in the installer through cmod option starts th
     if (argv[1] === 'option') rows.push({ key: `${argv[2]}.${argv[3]}`, value: argv[4] ?? '' })
     return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
-  fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false }) as never)
+  fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'other', tier: 'user' }, isLocked: false }) as never)
   let branch: unknown
-  const lifecycle = createLifecycle(defineMod({ name: 'ci-watch', options: { branch: option.text({ title: 'Branch', description: '' }) }, setup: (mod) => void (branch = mod.options.branch) }))
+  const lifecycle = createLifecycle(defineMod({ name: 'other', options: { branch: option.text({ title: 'Branch', description: '' }) }, setup: (mod) => void (branch = mod.options.branch) }))
 
-  void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  void lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
-  await submitInInstaller(lifecycle, 'option:branch', 'main', 'ci-watch')
+  await submitInInstaller(lifecycle, 'option:branch', 'main', 'other')
   await fake.settle()
-  expect(await installerText(lifecycle, 'ci-watch')).toContain('✓ saved')
-  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  expect(await installerText(lifecycle, 'other')).toContain('✓ saved')
+  await pressInInstaller(lifecycle, 'next', 'other')
   await fake.settle()
 
-  expect(saved).toContainEqual([cmodProgram, 'option', 'ci-watch', 'branch', 'main'])
+  expect(saved).toContainEqual([cmodProgram, 'option', 'other', 'branch', 'main'])
   expect(lifecycle.phase).toBe('active')
   expect(branch).toBe('main')
 })
 
 test('a mod whose setup fails after the person saved its settings closes its install page', async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   const rows: { key: string; value: string }[] = []
   fake.fakes.process.run = async (argv) => {
     if (argv[1] === 'option') rows.push({ key: `${argv[2]}.${argv[3]}`, value: argv[4] ?? '' })
     return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
-  fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false }) as never)
+  fake.fakes.config.list = async () => rows.map((row) => ({ ...row, label: row.key, kind: 'text', provider: { plugin: 'other', tier: 'user' }, isLocked: false }) as never)
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'ci-watch',
+      name: 'other',
       options: { branch: option.text({ title: 'Branch', description: '' }) },
       setup: () => {
         throw new Error('the GitHub API is down')
@@ -1742,11 +1742,11 @@ test('a mod whose setup fails after the person saved its settings closes its ins
     }),
   )
 
-  void lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  void lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
-  await submitInInstaller(lifecycle, 'option:branch', 'main', 'ci-watch')
+  await submitInInstaller(lifecycle, 'option:branch', 'main', 'other')
   await fake.settle()
-  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  await pressInInstaller(lifecycle, 'next', 'other')
   await fake.settle()
 
   expect(lifecycle.phase).toBe('failed')
@@ -1754,34 +1754,34 @@ test('a mod whose setup fails after the person saved its settings closes its ins
 })
 
 test("a mod's own installer step opens after it starts, and Finish waits for isDone", async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   let isSignedIn = false
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'ci-watch',
+      name: 'other',
       installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => isSignedIn }],
       setup() {},
     }),
   )
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
 
-  expect(await installerText(lifecycle, 'ci-watch')).toContain('Sign in to GitHub  (1 of 1)')
-  await pressInInstaller(lifecycle, 'next', 'ci-watch')
-  expect(await installerText(lifecycle, 'ci-watch')).toContain('Finish Sign in to GitHub first.')
+  expect(await installerText(lifecycle, 'other')).toContain('Sign in to GitHub  (1 of 1)')
+  await pressInInstaller(lifecycle, 'next', 'other')
+  expect(await installerText(lifecycle, 'other')).toContain('Finish Sign in to GitHub first.')
   isSignedIn = true
-  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  await pressInInstaller(lifecycle, 'next', 'other')
   await fake.settle()
   expect(installRequests(fake)).toEqual([installerOpen, { requests: [{ close: installPage }] }])
 })
 
 test("an installer step redraws when the mod's state changes while it shows", async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   let started: Mod<{ memory: { status: string } }> | undefined
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'ci-watch',
+      name: 'other',
       state: { memory: { status: 'Waiting for GitHub' } },
       installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: (mod) => Text({ children: mod.state.memory.status }), isDone: () => false }],
       setup(mod) {
@@ -1789,82 +1789,82 @@ test("an installer step redraws when the mod's state changes while it shows", as
       },
     }),
   )
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
-  if (started === undefined) throw new Error('ci-watch did not start.')
+  if (started === undefined) throw new Error('other did not start.')
 
   started.state.memory.status = 'Signed in as octocat'
   await fake.settle()
 
   expect(installRequests(fake)).toEqual([installerOpen, { redraw: true }])
-  expect(await installerText(lifecycle, 'ci-watch')).toContain('Signed in as octocat')
+  expect(await installerText(lifecycle, 'other')).toContain('Signed in as octocat')
 })
 
 test("a step whose isDone fails stays pending, shows the failure, and Finish shows it in the installer", async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'ci-watch',
+      name: 'other',
       installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => { throw new Error('gh is not installed') } }],
       setup() {},
     }),
   )
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
 
   expect(lifecycle.toasts).toContainEqual({ type: 'error', message: "The Sign in to GitHub step's isDone failed", description: 'gh is not installed' })
-  await pressInInstaller(lifecycle, 'next', 'ci-watch')
-  expect(await installerText(lifecycle, 'ci-watch')).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
+  await pressInInstaller(lifecycle, 'next', 'other')
+  expect(await installerText(lifecycle, 'other')).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
 })
 
 test('a step left on Not now keeps a Finish button and is listed to /mods, and finishing opens the installer on it again without waiting for the person', async () => {
-  const fake = fakeClaude({ name: 'ci-watch', root })
+  const fake = fakeClaude({ name: 'other', root })
   let isSignedIn = false
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'ci-watch',
+      name: 'other',
       installer: [{ id: 'sign-in', title: 'Sign in to GitHub', render: () => Text({ children: 'Press s to sign in.' }), isDone: () => isSignedIn }],
       setup() {},
     }),
   )
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'ci-watch', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   await fake.settle()
-  await pressInInstaller(lifecycle, 'not-now', 'ci-watch')
+  await pressInInstaller(lifecycle, 'not-now', 'other')
   await fake.settle()
 
   expect(lifecycle.toasts).toContainEqual({ type: 'warning', message: 'Needs one more step', description: 'Starting with Sign in to GitHub.' })
   expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Finish')).toBeDefined()
-  expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: ['Sign in to GitHub'] })
+  expect(await fire(lifecycle, 'cmod.call', { to: 'other', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: ['Sign in to GitHub'] })
 
-  expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:finishSteps', input: null }, { deny: '' })).toEqual({ value: installerOpen })
-  expect(await installerText(lifecycle, 'ci-watch')).toContain('Sign in to GitHub  (1 of 1)')
+  expect(await fire(lifecycle, 'cmod.call', { to: 'other', method: 'cmod:finishSteps', input: null }, { deny: '' })).toEqual({ value: installerOpen })
+  expect(await installerText(lifecycle, 'other')).toContain('Sign in to GitHub  (1 of 1)')
   isSignedIn = true
-  await pressInInstaller(lifecycle, 'next', 'ci-watch')
+  await pressInInstaller(lifecycle, 'next', 'other')
   await fake.settle()
-  expect(await fire(lifecycle, 'cmod.call', { to: 'ci-watch', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: [] })
+  expect(await fire(lifecycle, 'cmod.call', { to: 'other', method: 'cmod:pendingSteps', input: null }, { deny: '' })).toEqual({ value: [] })
 })
 
 test('a mod that hears permissions without registerPermissionCheck does not start, and names the line to add', async () => {
-  const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.onPermissionCheck(() => undefined) }), () => undefined)
+  const fake = fakeClaude({ name: 'demo', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.onPermissionCheck(() => undefined) }), () => undefined)
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo', isInstalled: true }))
 
   expect(lifecycle.toasts).toEqual(
-    failed("its setup function threw: guard: onPermissionCheck hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod."),
+    failed("its setup function threw: demo: onPermissionCheck hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod."),
   )
 })
 
 test('the permissions job without registerPermissionCheck throws where it is used, in setup or after it', async () => {
   const forcePush = permissions({ deny: [{ command: 'git push --force', reason: 'Never force-push.' }] })
-  const advice = "guard: the permissions job hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod."
-  const inSetup = createLifecycle(defineMod({ name: 'guard', setup: (mod) => mod.use(forcePush) }), () => undefined)
+  const advice = "demo: the permissions job hears Claude Code's permission check, so hooks/register.ts must call registerPermissionCheck(addHook) after registerMod."
+  const inSetup = createLifecycle(defineMod({ name: 'demo', setup: (mod) => mod.use(forcePush) }), () => undefined)
   let started: Mod | undefined
-  const later = createLifecycle(defineMod({ name: 'guard', setup: (mod) => void (started = mod) }), () => undefined)
+  const later = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void (started = mod) }), () => undefined)
 
-  await inSetup.start(fakeClaude({ name: 'guard', root }).claude, given({ ...pending, name: 'guard', isInstalled: true }))
-  await later.start(fakeClaude({ name: 'guard', root }).claude, given({ ...pending, name: 'guard', isInstalled: true }))
+  await inSetup.start(fakeClaude({ name: 'demo', root }).claude, given({ ...pending, name: 'demo', isInstalled: true }))
+  await later.start(fakeClaude({ name: 'demo', root }).claude, given({ ...pending, name: 'demo', isInstalled: true }))
 
   expect(inSetup.toasts).toEqual(failed(`its setup function threw: ${advice}`))
   expect(later.phase).toBe('active')
@@ -1878,19 +1878,19 @@ test('the permissions job without registerPermissionCheck throws where it is use
 })
 
 test('a mod that decides permissions starts once registerPermissionCheck registered the permission events', async () => {
-  const fake = fakeClaude({ name: 'guard', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'guard', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => permissionRoutes)
+  const fake = fakeClaude({ name: 'demo', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.beforePermissionRequest(() => undefined) }), () => permissionRoutes)
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'guard', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo', isInstalled: true }))
 
   expect(lifecycle.phase).toBe('active')
 })
 
 test('a mod that refuses tool calls starts without registerPermissionCheck', async () => {
-  const fake = fakeClaude({ name: 'docs', root })
-  const lifecycle = createLifecycle(defineMod({ name: 'docs', setup: () => void sessions.current.beforeToolCall(() => undefined) }), () => undefined)
+  const fake = fakeClaude({ name: 'demo', root })
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => void sessions.current.beforeToolCall(() => undefined) }), () => undefined)
 
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'docs', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'demo', isInstalled: true }))
 
   expect(lifecycle.phase).toBe('active')
 })
@@ -1944,13 +1944,13 @@ test('the cmod plugin takes what a mod listens to while it installs, and serves 
   await fake.settle()
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   const refused = { deny: 'cmod has no method.' }
-  expect(await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:subscribe', input: { session: 'test-session', subscriptions: listens }, caller: 'totalrecall' }, refused)).toEqual({ value: null })
-  expect(await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:watchBefore', input: { session: 'test-session', subscriptions: watches }, caller: 'totalrecall' }, refused)).toEqual({ value: null })
+  expect(await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:subscribe', input: { session: 'test-session', subscriptions: listens }, caller: 'demo' }, refused)).toEqual({ value: null })
+  expect(await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:watchBefore', input: { session: 'test-session', subscriptions: watches }, caller: 'demo' }, refused)).toEqual({ value: null })
   bootstrap.exit(0)
   await fake.settle()
 
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ totalrecall: { 'test-session': listens } })
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/before/test-session.json'))).toMatchObject([{ mod: 'totalrecall', target: 'test-session', events: ['ContextEnd'] }])
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ demo: { 'test-session': listens } })
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/before/test-session.json'))).toMatchObject([{ mod: 'demo', target: 'test-session', events: ['ContextEnd'] }])
 })
 
 test('the cmod plugin answers what a mod listens to at once while its own setup still runs, so the caller spends none of its 10 s hook budget waiting', async () => {
@@ -1965,7 +1965,7 @@ test('the cmod plugin answers what a mod listens to at once while its own setup 
   void lifecycle.start(fake.claude, given({ ...pending, name: 'cmod', isInstalled: true }))
   await fake.settle()
   void fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
-  void fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:subscribe', input: { session: 'test-session', subscriptions: listens }, caller: 'totalrecall' }, { deny: 'cmod has no method.' }).then((answer) => void answers.push(answer))
+  void fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'cmod:subscribe', input: { session: 'test-session', subscriptions: listens }, caller: 'demo' }, { deny: 'cmod has no method.' }).then((answer) => void answers.push(answer))
   await fake.settle()
 
   expect(answers).toEqual([{ value: null }])
@@ -1974,7 +1974,7 @@ test('the cmod plugin answers what a mod listens to at once while its own setup 
   await fake.settle()
 
   expect(lifecycle.phase).toBe('active')
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ totalrecall: { 'test-session': listens } })
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ demo: { 'test-session': listens } })
 })
 
 test('the cmod plugin counts as installed when the cmod program is its version or newer', async () => {
@@ -2017,14 +2017,14 @@ test("readSteps names the fix for each 4.x permission it cannot read", () => {
 
 test('readPlugin reads the install step, the version, and whether the record matches the scripts', async () => {
   const files: Record<string, string> = {
-    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }',
     [`${root}/package.json`]: '{ "cmod": { "install": "./setup/install.sh" } }',
     [`${root}/setup/install.sh`]: 'echo "progress 1 1 Done"\n',
   }
   const fileAt = (path: string) => files[path.replaceAll('/./', '/')]
   const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => fileAt(`${root}/${path}`), list: async (folder) => (await entriesIn(files)(`${root}/${folder}`)).map((entry) => entry.name) })
-  files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({
-    name: 'safe-delete',
+  files['/test/home/.local/share/cmod/records/demo.json'] = JSON.stringify({
+    name: 'demo',
     version: '0.2.0',
     root,
     installedAt: '2026-10-05T00:00:00.000Z',
@@ -2032,7 +2032,7 @@ test('readPlugin reads the install step, the version, and whether the record mat
     uninstall: null,
     program: null,
   })
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(files))
 
   expect(await readPlugin(fake.claude)).toEqual({ ...pending, isInstalled: true, store: '/test/home/.local/share/cmod', steps: { install: './setup/install.sh' } })
@@ -2046,26 +2046,26 @@ test('a new version in the folder its record names keeps the install when its st
 
   expect(await readPlugin(fake.claude)).toMatchObject({ isInstalled: true, shouldRecord: true })
 
-  const moved = await raisedCheckout('/test/plugins/cache/safe-delete/0.1.0')
+  const moved = await raisedCheckout('/test/plugins/cache/demo/0.1.0')
   expect(await readPlugin(moved.claude)).toMatchObject({ isInstalled: false, shouldRecord: false })
 })
 
 async function raisedCheckout(recordedRoot: string) {
   const files: Record<string, string> = {
-    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.3.0" }',
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.3.0" }',
     [`${root}/package.json`]: '{ "cmod": { "install": "./setup/install.sh" } }',
     [`${root}/setup/install.sh`]: 'brew install trash\n',
   }
   const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => files[`${root}/${path.replace(/^\.\//, '')}`], list: async () => ['install.sh'] })
-  files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({ name: 'safe-delete', version: '0.2.0', root: recordedRoot, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: 'trace', keys: {} })
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  files['/test/home/.local/share/cmod/records/demo.json'] = JSON.stringify({ name: 'demo', version: '0.2.0', root: recordedRoot, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: 'trace', keys: {} })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(files))
   return fake
 }
 
 test("the SDK lists files in a script's subfolders", async () => {
   const files: Record<string, string> = {
-    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }',
     [`${root}/package.json`]: '{ "cmod": { "install": "./setup/install.sh" } }',
     [`${root}/setup/install.sh`]: '. ./setup/lib/brew.sh\n',
     [`${root}/setup/lib/brew.sh`]: 'brew install trash\n',
@@ -2076,8 +2076,8 @@ test("the SDK lists files in a script's subfolders", async () => {
     return Object.keys(files).flatMap((path) => (path.startsWith(prefix) ? [path.slice(prefix.length)] : [])).sort()
   }
   const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => fileAt(`${root}/${path}`), list: async (folder) => below(folder) })
-  files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  files['/test/home/.local/share/cmod/records/demo.json'] = JSON.stringify({ name: 'demo', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(files))
 
   expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
@@ -2089,15 +2089,15 @@ test("the SDK lists files in a script's subfolders", async () => {
 
 test('the SDK lists a symbolic link in a step folder', async () => {
   const files: Record<string, string> = {
-    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }',
     [`${root}/package.json`]: '{ "cmod": { "install": "./setup/install.sh" } }',
     [`${root}/setup/install.sh`]: '. ./setup/brew.sh\n',
     '/shared/brew.sh': 'brew install trash\n',
   }
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(files, { [`${root}/setup/brew.sh`]: '/shared/brew.sh' }))
   const sha = await scriptsSha256({ install: './setup/install.sh' }, { read: async (path) => fake.claude.fs.read(`${root}/${path}`), list: async () => ['brew.sh', 'install.sh'] })
-  await fake.claude.fs.write('/test/home/.local/share/cmod/records/safe-delete.json', JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null }))
+  await fake.claude.fs.write('/test/home/.local/share/cmod/records/demo.json', JSON.stringify({ name: 'demo', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null }))
 
   expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
 
@@ -2108,16 +2108,16 @@ test('the SDK lists a symbolic link in a step folder', async () => {
 
 test('a mod with a program and no install step runs setup and then turns on', async () => {
   const files: Record<string, string> = {
-    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
-    [`${root}/package.json`]: '{ "cmod": { "program": "safe-delete" } }',
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }',
+    [`${root}/package.json`]: '{ "cmod": { "program": "demo" } }',
   }
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(files))
   installCmod(fake)
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
     spawned.push(request)
-    return finished(['progress 0 3 Downloading safe-delete 0.2.0', 'progress 3 3 safe-delete 0.2.0 is installed', 'done safe-delete 0.2.0'], 0)
+    return finished(['progress 0 3 Downloading demo 0.2.0', 'progress 3 3 demo 0.2.0 is installed', 'done demo 0.2.0'], 0)
   }
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -2134,7 +2134,7 @@ test('a mod with a program and no install step runs setup and then turns on', as
 })
 
 test('a mod with no steps activates at once and writes its record in the background', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   installCmod(fake)
   const step = controlledStream()
@@ -2153,7 +2153,7 @@ test('a mod with no steps activates at once and writes its record in the backgro
   expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.' }])
 
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', { ...postToolUse, hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, {})
@@ -2165,12 +2165,12 @@ test('a mod with no steps activates at once and writes its record in the backgro
 })
 
 test('a mod with no steps writes its record silently, and retries on the next prompt while cmod is missing', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   const spawned: ProcessSpawnRequest[] = []
   fake.fakes.process.spawn = (request) => {
     spawned.push(request)
-    return finished(['done safe-delete 0.2.0'], 0)
+    return finished(['done demo 0.2.0'], 0)
   }
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -2192,11 +2192,11 @@ test('a mod with no steps writes its record silently, and retries on the next pr
 })
 
 test('the Installed toast names the combo of each hotkey with a default, and leaves out a hotkey without one', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const hotkeys = { cycle: { title: 'Switch mode', default: 'shift+tab' }, next: { title: 'Open the next item' } }
   Object.assign(fake.fakes.fs, fakeFiles({ ...manifestOnly, [`${root}/package.json`]: JSON.stringify({ cmod: { hotkeys } }) }))
   installCmod(fake)
-  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  fake.fakes.process.spawn = () => finished(['done demo 0.2.0'], 0)
   const lifecycle = createLifecycle(trackedMod().definition)
 
   await lifecycle.start(fake.claude, readPlugin)
@@ -2207,13 +2207,13 @@ test('the Installed toast names the combo of each hotkey with a default, and lea
 
 test('a folder named in an install command does not stop the mod from starting', async () => {
   const files: Record<string, string> = {
-    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }',
+    [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }',
     [`${root}/package.json`]: '{ "cmod": { "install": "sh ./setup/install.sh setup" } }',
     [`${root}/setup/install.sh`]: 'echo "progress 1 1 Done"\n',
   }
   const sha = await scriptsSha256({ install: 'sh ./setup/install.sh setup' }, { read: async (path) => files[`${root}/${path}`.replaceAll('/./', '/')], list: async (folder) => (await entriesIn(files)(`${root}/${folder}`)).map((entry) => entry.name) })
-  files['/test/home/.local/share/cmod/records/safe-delete.json'] = JSON.stringify({ name: 'safe-delete', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  files['/test/home/.local/share/cmod/records/demo.json'] = JSON.stringify({ name: 'demo', version: '0.2.0', root, installedAt: '2026-10-05T00:00:00.000Z', scriptsSha256: sha, uninstall: null, program: null })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(files))
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -2224,7 +2224,7 @@ test('a folder named in an install command does not stop the mod from starting',
 })
 
 test('a plugin.json that is not JSON shows its path as a failure', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": ' }))
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -2236,8 +2236,8 @@ test('a plugin.json that is not JSON shows its path as a failure', async () => {
 })
 
 test('a plugin.json the mod cannot read fails the start with the read error', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
-  const denied = `safe-delete: $.fs.stat(${root}/.claude-plugin/plugin.json) failed: EACCES`
+  const fake = fakeClaude({ name: 'demo', root })
+  const denied = `demo: $.fs.stat(${root}/.claude-plugin/plugin.json) failed: EACCES`
   fake.fakes.fs.stat = async () => Promise.reject(new Error(denied))
   const { runs, definition } = trackedMod()
   const lifecycle = createLifecycle(definition)
@@ -2250,16 +2250,16 @@ test('a plugin.json the mod cannot read fails the start with the read error', as
 })
 
 test.each(['ENOENT', 'ENOTDIR'])('a path Claude Code fails to stat with %s reads as a missing file', async (errno) => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const files = fakeFiles(manifestOnly)
   Object.assign(fake.fakes.fs, files)
-  fake.fakes.fs.stat = async (path, options) => files.stat(path, options).catch((error: unknown) => Promise.reject(new Error(`safe-delete: $.fs.stat(${path}) failed: ${errno}`, { cause: error })))
+  fake.fakes.fs.stat = async (path, options) => files.stat(path, options).catch((error: unknown) => Promise.reject(new Error(`demo: $.fs.stat(${path}) failed: ${errno}`, { cause: error })))
 
   expect(await readPlugin(fake.claude)).toEqual({ ...pending, store: '/test/home/.local/share/cmod', isInstalled: true, shouldRecord: true })
 })
 
 test('a mod checks for the cmod program on disk and starts no process until cmod is installed', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const runs: (readonly string[])[] = []
   fake.fakes.process.run = async (argv) => (runs.push(argv), Promise.reject(new Error('no process runs while cmod is missing')))
   const { definition } = trackedMod()
@@ -2274,7 +2274,7 @@ test('a mod checks for the cmod program on disk and starts no process until cmod
 
 test('an install page the cmod plugin refuses to open shows as a failure, not as Not now', async () => {
   const { fake, lifecycle, start } = askingForToken()
-  fake.fakes.cmod.call = async () => Promise.reject(new Error('ci-watch: $.cmod.call: cmod is not installed. Install it in Plugins.'))
+  fake.fakes.cmod.call = async () => Promise.reject(new Error('other: $.cmod.call: cmod is not installed. Install it in Plugins.'))
 
   start()
   await fake.settle()
@@ -2285,7 +2285,7 @@ test('an install page the cmod plugin refuses to open shows as a failure, not as
 
 test('the install page is a tab of the Sidebar: closing the tab is Not now, and hiding the Sidebar keeps the question waiting', async () => {
   const { fake, lifecycle, start } = askingForToken()
-  const tell = (open: readonly string[], shown: string | null) => askedByCmod(lifecycle, 'ci-watch', partMethods.shown, { open: open.map((id) => ({ id, params: null })), shown, isFocused: shown !== null })
+  const tell = (open: readonly string[], shown: string | null) => askedByCmod(lifecycle, 'other', partMethods.shown, { open: open.map((id) => ({ id, params: null })), shown, isFocused: shown !== null })
 
   start()
   await fake.settle()
@@ -2303,7 +2303,7 @@ test('the install page is a tab of the Sidebar: closing the tab is Not now, and 
 })
 
 test('a whitespace-only chunk of standard error keeps the last error line', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   const step = controlledStream()
   fake.fakes.process.spawn = () => step.stream
@@ -2320,7 +2320,7 @@ test('a whitespace-only chunk of standard error keeps the last error line', asyn
 })
 
 test('an empty stderr from cmod setup leaves no bare colon in the session', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   fake.fakes.process.spawn = () => finished([], 1)
   const lifecycle = createLifecycle(trackedMod().definition)
@@ -2329,7 +2329,7 @@ test('an empty stderr from cmod setup leaves no bare colon in the session', asyn
   await fake.settle()
 
   expect(lifecycle.toasts).toEqual(failed('cmod setup exited 1'))
-  expect((lifecycle.failure as Error).message).toBe('safe-delete: cmod setup exited 1.')
+  expect((lifecycle.failure as Error).message).toBe('demo: cmod setup exited 1.')
 })
 
 test('an empty stderr from the cmod bootstrap leaves no bare colon', async () => {
@@ -2344,7 +2344,7 @@ test('an empty stderr from the cmod bootstrap leaves no bare colon', async () =>
 })
 
 test('a reason ending in ? keeps one mark', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
   fake.fakes.process.spawn = () => finished(['failed 1\tIs Homebrew installed?'], 1)
   const lifecycle = createLifecycle(trackedMod().definition)
@@ -2352,22 +2352,22 @@ test('a reason ending in ? keeps one mark', async () => {
   await lifecycle.start(fake.claude, given(pending))
   await fake.settle()
 
-  expect((lifecycle.failure as Error).message).toBe('safe-delete: Is Homebrew installed?')
+  expect((lifecycle.failure as Error).message).toBe('demo: Is Homebrew installed?')
 })
 
 type NotesState = { memory: { isTyping: boolean }; session: { draft: string }; global: { notes: string[] } }
 
 function notesIn(projectRoot: string) {
-  const fake = fakeClaude({ name: 'notes', root })
+  const fake = fakeClaude({ name: 'other', root })
   fake.claude.session.root = async () => projectRoot
   const definition = defineMod({
-    name: 'notes',
+    name: 'other',
     state: { memory: { isTyping: false }, session: { draft: '' }, global: { notes: [] as string[] } },
     setup() {},
   })
   const session = async () => {
     const lifecycle = createLifecycle(definition)
-    await lifecycle.start(fake.claude, given({ ...pending, name: 'notes', isInstalled: true }))
+    await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
     return lifecycle.mod as Mod<NotesState>
   }
   const moveTo = (nextRoot: string) => {
@@ -2413,7 +2413,7 @@ test('a conversation forked into a new Claude Code process starts with the sessi
   const parent = await notes.session()
   parent.state.session.draft = 'call mum'
   await notes.settle()
-  notes.fakes.cmod.call = async (input) => calledAnswer('notes', input.to === 'cmod' && input.method === 'forkParent' ? { value: 'parent' } : { deny: `no ${input.method}` })
+  notes.fakes.cmod.call = async (input) => calledAnswer('other', input.to === 'cmod' && input.method === 'forkParent' ? { value: 'parent' } : { deny: `no ${input.method}` })
 
   notes.startConversation('fork')
   const fork = await notes.session()
@@ -2448,14 +2448,14 @@ test('a memory value starts from its default after a code reload, and a session 
 })
 
 test('a memory value change redraws the pane', async () => {
-  const fake = fakeClaude({ name: 'file-tree', root })
+  const fake = fakeClaude({ name: 'other', root })
   const redraws: string[] = []
   fake.claude.ui.invalidate = (event) => {
     redraws.push(event)
   }
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'file-tree',
+      name: 'other',
       state: { memory: { changed: [] as string[] } },
       setup(mod) {
         mod.panes.add({ id: 'files', title: 'Files', render: (drawn) => Text({ children: drawn.state.memory.changed.join(',') }) })
@@ -2463,7 +2463,7 @@ test('a memory value change redraws the pane', async () => {
     }),
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   redraws.length = 0
 
   ;(lifecycle.mod as Mod<{ memory: { changed: string[] } }>).state.memory.changed = ['README.md']
@@ -2473,7 +2473,7 @@ test('a memory value change redraws the pane', async () => {
 })
 
 test("after the project root changes, the mod reads that project's saved value and redraws", async () => {
-  const fake = fakeClaude({ name: 'file-tree', root })
+  const fake = fakeClaude({ name: 'other', root })
   let projectRoot = '/work/a'
   fake.claude.session.root = async () => projectRoot
   const redraws: string[] = []
@@ -2482,7 +2482,7 @@ test("after the project root changes, the mod reads that project's saved value a
   }
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'file-tree',
+      name: 'other',
       state: { project: { expanded: [] as string[] } },
       setup(mod) {
         mod.panes.add({ id: 'files', title: 'Files', render: (drawn) => Text({ children: drawn.state.project.expanded.join(',') }) })
@@ -2490,7 +2490,7 @@ test("after the project root changes, the mod reads that project's saved value a
     }),
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   ;(lifecycle.mod as Mod<{ project: { expanded: string[] } }>).state.project.expanded = ['src']
   projectRoot = '/work/b'
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
@@ -2504,7 +2504,7 @@ test("after the project root changes, the mod reads that project's saved value a
 })
 
 function folderPane() {
-  const fake = fakeClaude({ name: 'file-tree', root })
+  const fake = fakeClaude({ name: 'other', root })
   const session = { root: '/work/a', cwd: '/work/a' }
   fake.claude.session.root = async () => session.root
   fake.claude.session.cwd = async () => session.cwd
@@ -2517,7 +2517,7 @@ function folderPane() {
   const moves: CwdChange[] = []
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'file-tree',
+      name: 'other',
       state: { project: { expanded: [] as string[] } },
       setup(mod) {
         mod.panes.add({ id: 'files', title: 'Files', render: () => Text({ children: `${sessions.current.project} ${sessions.current.cwd}` }) })
@@ -2527,7 +2527,7 @@ function folderPane() {
   )
   const filesPane = { surface: 'terminal', component: 'Pane', requestId: 'files', props: { title: 'Files', isFocused: false, bodyColumns: 80, placement: 'dock' } }
   const start = async () => {
-    await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+    await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
     await fake.settle()
   }
   const drawn = async () => textOf(await fire(lifecycle, 'ui.render', filesPane, prompt))
@@ -2765,14 +2765,14 @@ test('a /cd the user cancels moves nothing', async () => {
 })
 
 test('two projects setting one project value keep both', async () => {
-  const definition = defineMod({ name: 'file-tree', state: { project: { expanded: [] as string[] } }, setup() {} })
-  const first = fakeClaude({ name: 'file-tree', root })
+  const definition = defineMod({ name: 'other', state: { project: { expanded: [] as string[] } }, setup() {} })
+  const first = fakeClaude({ name: 'other', root })
   const sessionIn = async (projectRoot: string) => {
-    const fake = fakeClaude({ name: 'file-tree', root })
+    const fake = fakeClaude({ name: 'other', root })
     Object.assign(fake.claude.store, first.claude.store)
     fake.claude.session.root = async () => projectRoot
     const lifecycle = createLifecycle(definition)
-    await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+    await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
     return lifecycle.mod as Mod<{ project: { expanded: string[] } }>
   }
   const [inA, inB] = await Promise.all([sessionIn('/work/a'), sessionIn('/work/b')])
@@ -2786,14 +2786,14 @@ test('two projects setting one project value keep both', async () => {
 })
 
 test("a project whose saved state fails to load leaves the mod in the project it was in, and the next prompt loads it", async () => {
-  const fake = fakeClaude({ name: 'file-tree', root })
+  const fake = fakeClaude({ name: 'other', root })
   let projectRoot = '/work/a'
   fake.claude.session.root = async () => projectRoot
   const storeGet = fake.claude.store.get
   let isStoreLocked = false
   fake.claude.store.get = async (key) => (isStoreLocked ? Promise.reject(new Error('the store file is locked')) : storeGet(key))
-  const lifecycle = createLifecycle(defineMod({ name: 'file-tree', state: { project: { expanded: [] as string[] } }, setup() {} }))
-  await lifecycle.start(fake.claude, given({ ...pending, name: 'file-tree', isInstalled: true }))
+  const lifecycle = createLifecycle(defineMod({ name: 'other', state: { project: { expanded: [] as string[] } }, setup() {} }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'other', isInstalled: true }))
   const mod = lifecycle.mod as Mod<{ project: { expanded: string[] } }>
   mod.state.project.expanded = ['src']
   await fake.settle()
@@ -2815,11 +2815,11 @@ test("a project whose saved state fails to load leaves the mod in the project it
 function sessionStartMod() {
   const sources: string[] = []
   const definition = defineMod({
-    name: 'safe-delete',
+    name: 'demo',
     setup() {
       sessions.current.beforeSessionStart((start) => {
         sources.push(start.source)
-        return { note: `safe-delete saw ${start.source}` }
+        return { note: `demo saw ${start.source}` }
       })
     },
   })
@@ -2831,7 +2831,7 @@ const sessionStart = (source: 'startup' | 'resume') => ({ session_id: 'test-sess
 const appendedNotes = (fake: ReturnType<typeof fakeClaude>) => fake.calls.filter((call) => call.call === 'session.append').map((call) => (call.args[0] as { message: { content: { text: string }[] } }).message.content[0]?.text)
 
 test("an installed mod's SessionStart context reaches Claude Code on a fresh start", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
 
@@ -2840,13 +2840,13 @@ test("an installed mod's SessionStart context reaches Claude Code on a fresh sta
   await starting
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
-  expect(await answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw resume\n</safe-delete_mod>'] })
+  expect(await answer).toEqual({ additionalContext: ['<demo_mod>\ndemo saw resume\n</demo_mod>'] })
   expect(sources).toEqual(['resume'])
   expect(fake.shown.debug).toEqual([])
 })
 
 test('a mod that starts after SessionStart passed runs its SessionStart hooks once, and adds its note to the session', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const step = controlledStream()
   installCmod(fake)
   fake.fakes.process.spawn = () => step.stream
@@ -2855,7 +2855,7 @@ test('a mod that starts after SessionStart passed runs its SessionStart hooks on
   await lifecycle.start(fake.claude, given(pending))
 
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
@@ -2863,12 +2863,12 @@ test('a mod that starts after SessionStart passed runs its SessionStart hooks on
   await fake.settle()
 
   expect(sources).toEqual(['startup'])
-  expect(appendedNotes(fake)).toEqual(['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'])
+  expect(appendedNotes(fake)).toEqual(['<demo_mod>\ndemo saw startup\n</demo_mod>'])
   expect(fake.shown.debug.filter((line) => line.includes('SessionStart'))).toEqual([])
 })
 
 test('a mod that started before SessionStart runs its SessionStart hooks once', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
   await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
@@ -2880,9 +2880,9 @@ test('a mod that started before SessionStart runs its SessionStart hooks once', 
 })
 
 test('a mod whose install finished before SessionStart runs its SessionStart hooks once, when SessionStart starts it', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   installCmod(fake)
-  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  fake.fakes.process.spawn = () => finished(['done demo 0.2.0'], 0)
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
   await lifecycle.start(fake.claude, given(pending))
@@ -2895,7 +2895,7 @@ test('a mod whose install finished before SessionStart runs its SessionStart hoo
 })
 
 test('a SessionStart before session.start, as claude -p sends it, passes on at once and replays once the mod starts', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const { sources, definition } = sessionStartMod()
   const lifecycle = createLifecycle(definition)
 
@@ -2906,12 +2906,12 @@ test('a SessionStart before session.start, as claude -p sends it, passes on at o
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(appendedNotes(fake)).toEqual(['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'])
+  expect(appendedNotes(fake)).toEqual(['<demo_mod>\ndemo saw startup\n</demo_mod>'])
   expect(fake.shown.debug).toEqual([])
 })
 
 test('a SessionStart held past the limit passes on and replays once the mod starts', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const timers: { ms: number; fire: () => void; isCancelled: boolean }[] = []
   fake.fakes.clock.after = (ms, fire) => {
     const made = { ms, fire, isCancelled: false }
@@ -2942,12 +2942,12 @@ test('a SessionStart held past the limit passes on and replays once the mod star
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
 
   expect(sources).toEqual(['startup'])
-  expect(appendedNotes(fake)).toEqual(['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'])
+  expect(appendedNotes(fake)).toEqual(['<demo_mod>\ndemo saw startup\n</demo_mod>'])
   expect(fake.shown.debug).toEqual([])
 })
 
 test('a SessionStart answered before the limit cancels its timer', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const timers: { ms: number; isCancelled: boolean }[] = []
   fake.fakes.clock.after = (ms) => {
     const made = { ms, isCancelled: false }
@@ -2961,16 +2961,16 @@ test('a SessionStart answered before the limit cancels its timer', async () => {
   const answer = fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
   await starting
 
-  expect(await answer).toEqual({ additionalContext: ['<safe-delete_mod>\nsafe-delete saw startup\n</safe-delete_mod>'] })
+  expect(await answer).toEqual({ additionalContext: ['<demo_mod>\ndemo saw startup\n</demo_mod>'] })
   expect(sources).toEqual(['startup'])
   expect(timers).toEqual([{ ms: 5_000, isCancelled: true }])
 })
 
 test("a prompt that arrives while a mod that just installed still runs its setup passes on at the start limit, as a SessionStart does, so Claude Code never stops the hook for running past its budget", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
-  Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "safe-delete", "version": "0.2.0" }', [`${root}/package.json`]: '{ "cmod": { "program": "safe-delete" } }' }))
+  const fake = fakeClaude({ name: 'demo', root })
+  Object.assign(fake.fakes.fs, fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "demo", "version": "0.2.0" }', [`${root}/package.json`]: '{ "cmod": { "program": "demo" } }' }))
   installCmod(fake)
-  fake.fakes.process.spawn = () => finished(['done safe-delete 0.2.0'], 0)
+  fake.fakes.process.spawn = () => finished(['done demo 0.2.0'], 0)
   const timers: { ms: number; fire: () => void }[] = []
   fake.fakes.clock.after = (ms, fire) => {
     if (ms === 0) void Promise.resolve().then(fire)
@@ -2979,7 +2979,7 @@ test("a prompt that arrives while a mod that just installed still runs its setup
   }
   let finishSetup: () => void = () => undefined
   const slowSetup = new Promise<void>((resolve) => (finishSetup = resolve))
-  const lifecycle = createLifecycle(defineMod({ name: 'safe-delete', setup: () => slowSetup }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: () => slowSetup }))
   await lifecycle.start(fake.claude, readPlugin)
   await fake.settle()
   let isAnswered = false
@@ -2995,10 +2995,10 @@ test("a prompt that arrives while a mod that just installed still runs its setup
 })
 
 test("a hook Claude Code aborts settles a second later even while its route still waits, so Claude Code never counts the mod as a runaway and restarts every mod's hooks", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup(mod) {
         engineOf(mod).router.add('classic.UserPromptSubmit', () => new Promise<never>(() => undefined))
       },
@@ -3008,19 +3008,19 @@ test("a hook Claude Code aborts settles a second later even while its route stil
   const aborted = new AbortController()
 
   const answer = lifecycle.route('classic.UserPromptSubmit', promptSubmit as Frozen<Args<'classic.UserPromptSubmit'>>, async () => ({}), aborted.signal)
-  aborted.abort(new Error('safe-delete: ran past its 10s budget'))
+  aborted.abort(new Error('demo: ran past its 10s budget'))
 
-  await expect(answer).rejects.toThrow('safe-delete: ran past its 10s budget')
+  await expect(answer).rejects.toThrow('demo: ran past its 10s budget')
 })
 
 test('a late SessionStart replay that throws leaves the mod active', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const step = controlledStream()
   installCmod(fake)
   fake.fakes.process.spawn = () => step.stream
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup: () =>
         void sessions.current.beforeSessionStart(async () => {
           throw new Error('no session file')
@@ -3030,7 +3030,7 @@ test('a late SessionStart replay that throws leaves the mod active', async () =>
   await lifecycle.start(fake.claude, given(pending))
 
   await fire(lifecycle, 'classic.SessionStart', sessionStart('startup'), {})
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
@@ -3041,14 +3041,14 @@ test('a late SessionStart replay that throws leaves the mod active', async () =>
 })
 
 test('a mod that finishes installing hears the start of the session it installed in once, then the /clear after it', async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   const step = controlledStream()
   installCmod(fake)
   fake.fakes.process.spawn = () => step.stream
   const seen: string[] = []
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart((start) => void seen.push(`${start.source} ${start.session}`))
       },
@@ -3057,7 +3057,7 @@ test('a mod that finishes installing hears the start of the session it installed
   await lifecycle.start(fake.claude, given(pending))
 
   await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'first' }, {})
-  step.print('done safe-delete 0.2.0')
+  step.print('done demo 0.2.0')
   step.exit(0)
   await fake.settle()
   await fire(lifecycle, 'classic.SessionStart', { ...sessionStart('startup'), session_id: 'second', source: 'clear' }, {})
@@ -3069,7 +3069,7 @@ test("engineOf(mod).onRedraw hears each redraw the mod asks of Claude Code's ren
   const heard: number[] = []
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'other',
       state: { session: { count: 0 } },
       setup(mod) {
         mod.panes.add({ id: 'list', title: 'List', render: (current) => Text({ children: `${current.state.session.count}` }) })
@@ -3098,13 +3098,13 @@ test("engineOf(mod).onRedraw hears each redraw the mod asks of Claude Code's ren
 })
 
 test("a listener on the engine's onRedraw hears each state change that redraws the mod's pane, and nothing once removed", async () => {
-  const fake = fakeClaude({ name: 'safe-delete', root })
+  const fake = fakeClaude({ name: 'demo', root })
   Object.assign(fake.fakes.fs, fakeFiles(manifestOnly))
   let heard = 0
   let started: Mod<{ session: { count: number } }> | undefined
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'safe-delete',
+      name: 'demo',
       state: { session: { count: 0 } },
       setup(mod) {
         mod.panes.add({ id: 'trash', title: 'Trash', render: (current) => Text({ children: `${current.state.session.count}` }) })

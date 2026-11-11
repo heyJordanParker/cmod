@@ -13,10 +13,10 @@ import { Box, Button, Image, Input, Markdown, Select, Text } from '../src/ui/ele
 import { Heading, List } from '../src/ui/markdown.js'
 
 const tickets = defineMod({
-  name: 'tickets',
+  name: 'demo',
   state: { project: { isFrozen: false, opened: [] as readonly string[] } },
   setup(mod) {
-    mod.use(permissions({ deny: [{ tool: 'mcp__tickets__open_ticket', when: (_call, mod) => mod.state.project.isFrozen, reason: 'Tickets are frozen until the release ships.' }] }))
+    mod.use(permissions({ deny: [{ tool: 'mcp__demo__open_ticket', when: (_call, mod) => mod.state.project.isFrozen, reason: 'Tickets are frozen until the release ships.' }] }))
     mod.use(
       tool({
         name: 'open_ticket',
@@ -32,16 +32,16 @@ const tickets = defineMod({
 })
 
 test("a mod's own test reads each turn's device, as the cmod plugin's note names it in a live session at each start, resume, and compaction", async () => {
-  const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' } as const
+  const linux = { id: 'dc896649b2c644849a1caf192c072c77', name: 'linux', os: 'linux', arch: 'x64' } as const
   const where = defineMod({
-    name: 'where',
+    name: 'demo',
     setup: () => ({ ranOn: async () => (await sessions.current.turn())?.device ?? null }),
   })
   const tested = testMod(where)
 
   await tested.add({ type: Prompt, text: 'Plan it' })
   const first = await tested.api['ranOn']?.()
-  tested.fakes.device.read = async () => devbox
+  tested.fakes.device.read = async () => linux
   await tested.startSession({ source: 'resume' })
   await tested.add({ type: Prompt, text: 'Build it' })
   const resumed = await tested.api['ranOn']?.()
@@ -51,13 +51,13 @@ test("a mod's own test reads each turn's device, as the cmod plugin's note names
   const compacted = await tested.api['ranOn']?.()
 
   expect(first).toEqual({ id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' })
-  expect(resumed).toEqual(devbox)
+  expect(resumed).toEqual(linux)
   expect(compacted).toEqual(first)
 })
 
 test("a test that starts its session with startup sees one device note, as a live startup has, and a computer with no machine id sees none", async () => {
   const notes = defineMod({
-    name: 'notes',
+    name: 'demo',
     setup: () => ({ notes: async () => (await sessions.current.messages()).filter((message) => message.type === Note).length }),
   })
   const once = testMod(notes)
@@ -84,14 +84,14 @@ test("callTool returns the tool's result", async () => {
 
   expect(await tested.callTool('open_ticket', { title: 'Crash on save' })).toEqual({ result: 'Opened "Crash on save"' })
   expect(tested.state.project.opened).toEqual(['Crash on save'])
-  await expect(tested.callTool('close_ticket', { title: 'Crash on save' })).rejects.toThrow("tickets has no tool close_ticket. Add it in setup with mod.use(tool({ name: 'close_ticket', … })).")
+  await expect(tested.callTool('close_ticket', { title: 'Crash on save' })).rejects.toThrow("demo has no tool close_ticket. Add it in setup with mod.use(tool({ name: 'close_ticket', … })).")
 })
 
 test('fire fills the tool_use_id Claude Code gives each tool call', async () => {
   const seen: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'reads',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolResult((result) => void seen.push(result.callId))
       },
@@ -108,7 +108,7 @@ test('a Read of a file the test gave contents to lists it in files.read', async 
   const seen: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'reads',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolResult((result) => void seen.push(result.files))
       },
@@ -131,7 +131,7 @@ test("startSession starts a new session that has its own session values, and a r
   const sources: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'counter',
+      name: 'demo',
       state: { session: { prompts: 0 } },
       setup(mod) {
         sessions.current.onPrompt(() => void (mod.state.session.prompts += 1))
@@ -155,7 +155,7 @@ test("after /resume to another session, sessions.current.id and the page name th
   const heardAtStart: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'inbox',
+      name: 'demo',
       setup(mod) {
         sessions.current.onSessionStart(() => void heardAtStart.push(sessions.current.id))
         void mod.sidebar.add({ id: 'scope', title: 'Scope', render: () => Text({ children: `This session: ${sessions.current.id}` }) }).open()
@@ -175,7 +175,7 @@ test("during a /resume's SessionStart, the session id the engine answers is the 
   const answered: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'relay',
+      name: 'demo',
       setup(mod) {
         sessions.current.beforeSessionStart(async () => void answered.push(await engineOf(mod).claude.session.id()))
       },
@@ -188,25 +188,25 @@ test("during a /resume's SessionStart, the session id the engine answers is the 
   expect(answered).toEqual(['resumed-session'])
 })
 
-test("mods.isLoaded answers true for a mod the test fakes and false for any other, so a mod that calls tracer only when it runs tests both cases", async () => {
+test("mods.isLoaded answers true for a mod the test fakes and false for any other, so a mod that calls provider only when it runs tests both cases", async () => {
   const outline = defineMod({
-    name: 'outline',
+    name: 'consumer',
     setup: (mod) => ({
-      outline: async () => ((await mods.isLoaded('tracer')) ? (await mod.dependencies.tracer.signatures({ path: '/work/a.ts' })).map(({ name }) => name) : 'tracer is not here'),
+      outline: async () => ((await mods.isLoaded('provider')) ? (await mod.dependencies.provider.signatures({ path: '/work/a.ts' })).map(({ name }) => name) : 'provider is not here'),
     }),
   })
 
   const alone = testMod(outline)
-  const withTracer = testMod(outline, { dependencies: { tracer: { signatures: async () => [{ name: 'greet', line: 1 }] } } })
+  const withProvider = testMod(outline, { dependencies: { provider: { signatures: async () => [{ name: 'greet', line: 1 }] } } })
 
-  expect(await alone.api['outline']?.()).toBe('tracer is not here')
-  expect(await withTracer.api['outline']?.()).toEqual(['greet'])
+  expect(await alone.api['outline']?.()).toBe('provider is not here')
+  expect(await withProvider.api['outline']?.()).toEqual(['greet'])
 })
 
 test('type runs a slash command and returns its reply', async () => {
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup(mod) {
         mod.use(slashCommand({ name: 'tree', description: 'Show the tree', reply: ({ positionals }) => ({ text: `Showing ${positionals.join(' and ')}`, note: 'The user opened the tree.' }) }))
       },
@@ -214,53 +214,53 @@ test('type runs a slash command and returns its reply', async () => {
   )
 
   expect(await tested.type('/tree src docs')).toEqual({ text: 'Showing src and docs', note: 'The user opened the tree.' })
-  await expect(tested.type('/trees')).rejects.toThrow("file-tree has no slash command /trees. Add it in setup with mod.use(slashCommand({ name: 'trees', … })).")
+  await expect(tested.type('/trees')).rejects.toThrow("demo has no slash command /trees. Add it in setup with mod.use(slashCommand({ name: 'trees', … })).")
 })
 
 test("testMod dependencies fakes another mod's api", async () => {
   const outline = defineMod({
-    name: 'outline',
+    name: 'consumer',
     setup(mod) {
       mod.use(
         slashCommand({
           name: 'outline',
           description: 'List the functions a file exports',
-          reply: async ({ args }, mod) => (await mod.dependencies.tracer.signatures({ path: args })).map(({ name, line }) => `${name}:${line}`).join(' '),
+          reply: async ({ args }, mod) => (await mod.dependencies.provider.signatures({ path: args })).map(({ name, line }) => `${name}:${line}`).join(' '),
         }),
       )
     },
   })
-  const tested = testMod(outline, { dependencies: { tracer: { signatures: async ({ path }) => [{ name: path === 'src/a.ts' ? 'parse' : 'other', line: 1 }] } } })
+  const tested = testMod(outline, { dependencies: { provider: { signatures: async ({ path }) => [{ name: path === 'src/a.ts' ? 'parse' : 'other', line: 1 }] } } })
 
   expect(await tested.type('/outline src/a.ts')).toEqual({ text: 'parse:1' })
-  expect(tested.calls).toContainEqual({ call: 'cmod.call', args: [{ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } }] })
+  expect(tested.calls).toContainEqual({ call: 'cmod.call', args: [{ to: 'provider', method: 'signatures', input: { path: 'src/a.ts' } }] })
 })
 
 test('testMod answers a call to a mod it does not fake with where to add it', async () => {
   const outline = defineMod({
-    name: 'outline',
+    name: 'consumer',
     setup(mod) {
-      mod.use(slashCommand({ name: 'outline', description: 'List the functions a file exports', reply: async ({ args }, mod) => (await mod.dependencies.tracer.signatures({ path: args })).length.toString() }))
+      mod.use(slashCommand({ name: 'outline', description: 'List the functions a file exports', reply: async ({ args }, mod) => (await mod.dependencies.provider.signatures({ path: args })).length.toString() }))
     },
   })
 
-  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Install it in Plugins.' })
+  expect(await testMod(outline).type('/outline src/a.ts')).toEqual({ text: '/outline failed: provider is not installed. Install it in Plugins.' })
 })
 
-const project = '/work/dent'
+const project = '/work/app'
 const files = {
   [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${project}/.git/worktrees/design/commondir`]: '../..\n',
   [`${project}/worktrees/design/.git`]: `gitdir: ${project}/.git/worktrees/design\n`,
-  [`${project}/worktrees/design/Domain.md`]: '# Domain\n',
+  [`${project}/worktrees/design/CHANGELOG.md`]: '# Changelog\n',
 }
 
-function domainGuard(options: TestOptions<Record<never, never>>) {
+function changelogGuard(options: TestOptions<Record<never, never>>) {
   return testMod(
     defineMod({
-      name: 'dent',
+      name: 'demo',
       setup(mod) {
-        mod.use(permissions({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] }))
+        mod.use(permissions({ deny: [{ write: 'CHANGELOG.md', reason: 'Edit CHANGELOG.md with the maintainer.' }] }))
       },
     }),
     { ...options, files },
@@ -268,11 +268,11 @@ function domainGuard(options: TestOptions<Record<never, never>>) {
 }
 
 test('testMod scope project makes the mod a project plugin, and projectRoot alone does not', async () => {
-  const editInWorktree = { tool: 'Edit', input: { file_path: `${project}/worktrees/design/Domain.md`, old_string: '#', new_string: '##' }, tool_use_id: 'toolu_1' }
+  const editInWorktree = { tool: 'Edit', input: { file_path: `${project}/worktrees/design/CHANGELOG.md`, old_string: '#', new_string: '##' }, tool_use_id: 'toolu_1' }
   const allowed = { decision: 'allow' } as const
 
-  expect(await claudeCodeOf(domainGuard({ projectRoot: project, scope: 'project' })).fire('tool.check', editInWorktree, allowed)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
-  expect(await claudeCodeOf(domainGuard({ projectRoot: project })).fire('tool.check', editInWorktree, allowed)).toEqual(allowed)
+  expect(await claudeCodeOf(changelogGuard({ projectRoot: project, scope: 'project' })).fire('tool.check', editInWorktree, allowed)).toEqual({ decision: 'deny', reason: 'Edit CHANGELOG.md with the maintainer.' })
+  expect(await claudeCodeOf(changelogGuard({ projectRoot: project })).fire('tool.check', editInWorktree, allowed)).toEqual(allowed)
 })
 
 type NotesState = { global: { notes: readonly string[] } }
@@ -299,7 +299,7 @@ const notesPane: PaneInit<NotesState> = {
 }
 
 const notes = defineMod({
-  name: 'notes',
+  name: 'demo',
   state: { global: { notes: ['Buy milk', 'Call the plumber about the sink'] } },
   setup(mod) {
     const pane = mod.panes.add(notesPane)
@@ -318,7 +318,7 @@ test('shown.pane reads the pane the person sees as rows of text', async () => {
 test("shown.pane shows an Image's alt text", async () => {
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         void mod.panes.add({ id: 'diagram', title: 'Diagram', render: () => Box({ flexDirection: 'column', children: [Text({ children: 'Login flow' }), Image({ source: { png: '' }, columns: 40, rows: 10, alt: 'A login flow diagram' })] }) }).open()
       },
@@ -331,7 +331,7 @@ test("shown.pane shows an Image's alt text", async () => {
 test("shown.pane draws with the scroll and view Claude Code passes, the main conversation's at the top", async () => {
   const tested = testMod(
     defineMod({
-      name: 'scroller',
+      name: 'demo',
       setup(mod) {
         void mod.panes.add({ id: 'rows', title: 'Rows', render: (_mod, { scroll, view }) => Text({ children: `${scroll.offset} of ${scroll.bodyRows} rows, ${view.agentId ?? 'main'}` }) }).open()
       },
@@ -346,7 +346,7 @@ const answerField = (autoFocus: boolean) => Box({ flexDirection: 'column', child
 test('shown.page.focusedKey() names the autoFocus element each time the page takes the keyboard, as Claude Code moves the ring there on each show', async () => {
   const tested = testMod(
     defineMod({
-      name: 'inbox',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
       setup(mod) {
         const page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerField(true) })
@@ -366,7 +366,7 @@ test('shown.pane.focusedKey() names no element while the pane does not hold the 
   let focused: unknown
   const tested = testMod(
     defineMod({
-      name: 'ask',
+      name: 'demo',
       async setup(mod) {
         const pane = mod.panes.add({ id: 'question', title: 'Question', render: () => answerField(true) })
         await pane.open()
@@ -380,7 +380,7 @@ test('shown.pane.focusedKey() names no element while the pane does not hold the 
   await tested.start()
 
   expect(await tested.shown.pane.focusedKey()).toBeUndefined()
-  expect(focused).toBe('ask: Claude Code did not focus "answer" in the Question pane: the pane "question" does not hold the keyboard')
+  expect(focused).toBe('demo: Claude Code did not focus "answer" in the Question pane: the pane "question" does not hold the keyboard')
 })
 
 type SearchState = { session: { query: string; draft: string; agent: string; opened: string[]; copiedFrom: string } }
@@ -402,7 +402,7 @@ const searchPane: PaneInit<SearchState> = {
 }
 
 const search = defineMod({
-  name: 'history',
+  name: 'demo',
   state: { session: { query: '', draft: '', agent: 'all', opened: [] as string[], copiedFrom: '' } },
   setup(mod) {
     void mod.panes.add(searchPane).open()
@@ -425,14 +425,14 @@ test('a test types into an Input, picks a Select option, and presses a link, the
 test('input, select, and a link press refuse an element the pane does not draw', async () => {
   const tested = testMod(search)
 
-  await expect(tested.shown.pane.input('filter', 'x')).rejects.toThrow('The pane "history" of history draws no Input with the key "filter".')
-  await expect(tested.shown.pane.select('agent', 'tester')).rejects.toThrow('The Select "agent" in the pane "history" of history has no option "tester". Its options are "all", "explorer".')
-  await expect(tested.shown.pane.press('log', 'https://example.com')).rejects.toThrow('The pane "history" of history draws no Markdown with the key "log".')
+  await expect(tested.shown.pane.input('filter', 'x')).rejects.toThrow('The pane "history" of demo draws no Input with the key "filter".')
+  await expect(tested.shown.pane.select('agent', 'tester')).rejects.toThrow('The Select "agent" in the pane "history" of demo has no option "tester". Its options are "all", "explorer".')
+  await expect(tested.shown.pane.press('log', 'https://example.com')).rejects.toThrow('The pane "history" of demo draws no Markdown with the key "log".')
 })
 
 test('shown.pane refuses when no pane shows', async () => {
   const tested = testMod(notes)
-  const refusal = 'No pane of notes shows. Open one with pane.open(), from a slash command, a hotkey, or setup.'
+  const refusal = 'No pane of demo shows. Open one with pane.open(), from a slash command, a hotkey, or setup.'
 
   await expect(tested.shown.pane.lines()).rejects.toThrow(refusal)
   await expect(tested.shown.pane.press('Clear')).rejects.toThrow(refusal)
@@ -443,7 +443,7 @@ test("a person's close draws the pane once more before Claude Code removes it, a
   const drawnWhileShown: boolean[] = []
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         void mod.panes.add({ id: 'diagram', title: 'Diagram', render: () => (drawnWhileShown.push(tested.shown.openPanes.has('diagram')), Text({ children: 'Login flow' })) }).open()
       },
@@ -460,7 +460,7 @@ test("a person's close draws the pane once more before Claude Code removes it, a
 test('tested.lines draws a style with Default', async () => {
   const tested = testMod(
     defineMod({
-      name: 'durations',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: TurnEnd, render: (_mod, { durationMs, Default }) => Box({ flexDirection: 'column', children: [Default({ durationMs: durationMs * 2 }), Text({ dimColor: true, children: 'from durations' })] }) })
       },
@@ -471,7 +471,7 @@ test('tested.lines draws a style with Default', async () => {
 })
 
 const counter = defineMod({
-  name: 'counter',
+  name: 'demo',
   state: { session: { count: 0 } },
   setup(mod) {
     mod.widgets.add({
@@ -495,7 +495,7 @@ test('tested.lines draws a widget in its area, and tested.press presses its butt
 })
 
 const ideas = defineMod({
-  name: 'ideas',
+  name: 'demo',
   setup(mod) {
     const render = () => Box({ flexDirection: 'column', children: [Markdown({ key: 'item-text:0', text: 'Ship it' }), Markdown({ key: 'item-text:0', text: 'Rest' })] })
     mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
@@ -506,28 +506,28 @@ const ideas = defineMod({
 test('a page that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses the Sidebar', async () => {
   const tested = testMod(ideas)
 
-  await expect(tested.shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Markdown "ideas/all:item-text:0" is drawn twice; each takes its own key')
+  await expect(tested.shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Markdown "demo/all:item-text:0" is drawn twice; each takes its own key')
 })
 
 test('a widget that draws one key on two Markdown elements fails as Claude Code 2.1.312 refuses its row', async () => {
   const tested = testMod(ideas)
 
-  await expect(tested.lines(BelowPrompt)).rejects.toThrow('cmod: returned a tree PromptHint refuses: Markdown "ideas/next:item-text:0" is drawn twice; each takes its own key')
+  await expect(tested.lines(BelowPrompt)).rejects.toThrow('cmod: returned a tree PromptHint refuses: Markdown "demo/next:item-text:0" is drawn twice; each takes its own key')
 })
 
 test('a page whose Button hover has no keyed Box around it fails as Claude Code 2.1.318 refuses the Sidebar, and one inside a keyed Box or naming a scope draws', async () => {
   const pageOf = (children: readonly ReturnType<typeof Box>[]) =>
-    testMod(defineMod({ name: 'inbox', setup: (mod) => void mod.sidebar.add({ id: 'inbox', title: 'Inbox', render: () => Box({ flexDirection: 'column', children }) }).open() }))
+    testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'inbox', title: 'Inbox', render: () => Box({ flexDirection: 'column', children }) }).open() }))
   const archive = (hover: object) => Button({ key: 'archive', label: 'Archive', hover, onPress: () => undefined })
 
-  await expect(pageOf([Box({ children: [archive({ color: 'error' })] })]).shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Button "inbox/inbox:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group')
+  await expect(pageOf([Box({ children: [archive({ color: 'error' })] })]).shown.page.lines()).rejects.toThrow('cmod: returned a tree Pane refuses: Button "demo/inbox:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group')
   expect(await pageOf([Box({ key: 'row', children: [archive({ color: 'error' })] }), archive({ color: 'error', scope: 'rows' })]).shown.page.lines()).toEqual(['[ Archive ]', '[ Archive ]'])
 })
 
 test('a page draws Markdown elements of different keys, and a Box and a Markdown of one key, as Claude Code 2.1.312 does', async () => {
   const tested = testMod(
     defineMod({
-      name: 'ideas',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: List, render: (_mod, { source }) => Markdown({ key: 'item-text:0', text: source.slice(2) }) })
         void mod.sidebar
@@ -542,15 +542,15 @@ test('a page draws Markdown elements of different keys, and a Box and a Markdown
 
 test("a press on a page's Button takes the mod's key and gets the key the cmod plugin draws", async () => {
   const pressed: string[] = []
-  const tested = testMod(defineMod({ name: 'ideas', setup: (mod) => void mod.sidebar.add({ id: 'all', title: 'Ideas', render: () => Button({ key: 'ship', label: 'Ship', onPress: (e) => void pressed.push(e.element) }) }).open() }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add({ id: 'all', title: 'Ideas', render: () => Button({ key: 'ship', label: 'Ship', onPress: (e) => void pressed.push(e.element) }) }).open() }))
 
   await tested.shown.page.press('ship')
 
-  expect(pressed).toEqual(['ideas/all:ship'])
+  expect(pressed).toEqual(['demo/all:ship'])
 })
 
 const journal = defineMod({
-  name: 'journal',
+  name: 'demo',
   setup(mod) {
     mod.use(
       slashCommand({
@@ -611,7 +611,7 @@ test('fs.list in testMod lists the files given', async () => {
 })
 
 const headings = defineMod({
-  name: 'headings',
+  name: 'demo',
   setup(mod) {
     mod.styles.add({ kind: Heading, render: (_mod, { text }) => Text({ bold: true, children: text.toUpperCase() }) })
   },
@@ -643,7 +643,7 @@ test('a mod.every run that never ends writes one warning to the Log once it outl
   let finish = () => {}
   let runs = 0
   const status = defineMod({
-    name: 'status',
+    name: 'demo',
     setup(mod) {
       mod.every(30_000, () => {
         runs += 1
@@ -672,7 +672,7 @@ test('a mod.every run that never ends writes one warning to the Log once it outl
   expect(stalls()).toEqual([])
   await tick(90_000)
   await tick(120_000)
-  expect(stalls()).toEqual(['status: one run of its every 30000 ms timer has gone on for 90 s, so the timer skipped every tick since. Give what the listener awaits a deadline.'])
+  expect(stalls()).toEqual(['demo: one run of its every 30000 ms timer has gone on for 90 s, so the timer skipped every tick since. Give what the listener awaits a deadline.'])
 
   finish()
   await tested.settle()
@@ -683,7 +683,7 @@ test('a mod.every run that never ends writes one warning to the Log once it outl
 test('clock.every in testMod fires only when the test ticks it', async () => {
   let branch = 'main'
   const branchLine = defineMod({
-    name: 'branch-line',
+    name: 'demo',
     state: { memory: { branch: 'main' } },
     setup(mod) {
       mod.every(1, () => void (mod.state.memory.branch = branch))
@@ -717,13 +717,13 @@ async function showGitLetters(mod: Mod): Promise<void> {
   mod.toast(`${root}: ${status.stdout.trim()}`)
 }
 
-const gitAnswer = (argv: readonly string[]): ProcessRunResult => ({ exitCode: 0, stdout: argv[1] === 'rev-parse' ? '/work/shop\n' : ' M README.md\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+const gitAnswer = (argv: readonly string[]): ProcessRunResult => ({ exitCode: 0, stdout: argv[1] === 'rev-parse' ? '/work/app\n' : ' M README.md\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
 test("settle runs a handler's unawaited work that chains two macrotasks", async () => {
   let clock: Claude['clock'] | undefined
   const tested = testMod(
     defineMod({
-      name: 'git-letters',
+      name: 'demo',
       setup(mod) {
         clock = engineOf(mod).claude.clock
         sessions.current.onTurnEnd(() => void showGitLetters(mod))
@@ -736,12 +736,12 @@ test("settle runs a handler's unawaited work that chains two macrotasks", async 
   await tested.endTurn()
   await tested.settle()
 
-  expect(tested.shown.toasts).toContainEqual({ type: 'default', message: '/work/shop: M README.md' })
+  expect(tested.shown.toasts).toContainEqual({ type: 'default', message: '/work/app: M README.md' })
 })
 
 test('settle returns while a fake is held open by the test', async () => {
   const answers: (() => void)[] = []
-  const tested = testMod(defineMod({ name: 'git-letters', setup: (mod) => sessions.current.onTurnEnd(() => void showGitLetters(mod)) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => sessions.current.onTurnEnd(() => void showGitLetters(mod)) }))
   tested.fakes.process.run = (argv) => new Promise((resolve) => answers.push(() => resolve(gitAnswer(argv))))
 
   await tested.add({ type: Prompt, text: 'Commit it' })
@@ -749,14 +749,14 @@ test('settle returns while a fake is held open by the test', async () => {
   await tested.settle()
 
   expect(answers).toHaveLength(1)
-  expect(tested.shown.toasts).not.toContainEqual({ type: 'default', message: '/work/shop: M README.md' })
+  expect(tested.shown.toasts).not.toContainEqual({ type: 'default', message: '/work/app: M README.md' })
 })
 
 function folderWatchIn(projectRoot: string) {
   const seen: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'folder-watch',
+      name: 'demo',
       setup() {
         sessions.current.onCwdChange((change) => void seen.push({ old: change.previous, new: change.cwd, cwd: sessions.current.cwd, projectRoot: sessions.current.project }))
       },
@@ -767,11 +767,11 @@ function folderWatchIn(projectRoot: string) {
 }
 
 test('moveTo with only a new cwd fires CwdChanged with the session cwd already moved', async () => {
-  const { tested, seen } = folderWatchIn('/work/shop')
+  const { tested, seen } = folderWatchIn('/work/app')
 
-  await tested.moveTo('/work/shop', '/work/shop/src')
+  await tested.moveTo('/work/app', '/work/app/src')
 
-  expect(seen).toEqual([{ old: '/work/shop', new: '/work/shop/src', cwd: '/work/shop/src', projectRoot: '/work/shop' }])
+  expect(seen).toEqual([{ old: '/work/app', new: '/work/app/src', cwd: '/work/app/src', projectRoot: '/work/app' }])
 })
 
 test('moveTo another project and a folder in it fires CwdChanged for the /cd, then for the Bash cd', async () => {
@@ -800,7 +800,7 @@ test("after /cd while Claude Code still reports the old cwd, the mod's cwd is th
 
 test('after moveTo another project, Claude Code reports the new root at once and the old cwd until the next prompt', async () => {
   let session: Claude['session'] | undefined
-  const tested = testMod(defineMod({ name: 'session-reader', setup: (mod) => void (session = engineOf(mod).claude.session) }), { projectRoot: '/work/a' })
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void (session = engineOf(mod).claude.session) }), { projectRoot: '/work/a' })
   const reported = async () => [await session?.root(), await session?.cwd()]
 
   await tested.moveTo('/work/b')
@@ -821,7 +821,7 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
   }
   const tested = testMod(
     defineMod({
-      name: 'branch',
+      name: 'demo',
       setup(mod) {
         mod.use(slashCommand({ name: 'branch', description: 'Name the branch', reply: async () => (await process.run(['git', 'branch', '--show-current'])).stdout.trim() }))
       },
@@ -834,8 +834,8 @@ test('a test helper names the Fakes and TestCall types that @cmodjs/core/testing
 })
 
 test("fire('cmod.call') answers a method of the mod's api with { value }, as dependencies.md shows", async () => {
-  const tracer = defineMod({
-    name: 'tracer',
+  const provider = defineMod({
+    name: 'provider',
     setup: () => ({
       signatures: async ({ path }: { path: string }) =>
         (await fs.read(path)).split('\n').flatMap((text, index) => {
@@ -844,15 +844,15 @@ test("fire('cmod.call') answers a method of the mod's api with { value }, as dep
         }),
     }),
   })
-  const tested = testMod(tracer, { files: { '/work/a.ts': 'export function greet() {}\n' } })
+  const tested = testMod(provider, { files: { '/work/a.ts': 'export function greet() {}\n' } })
 
-  expect(await tested.fire('cmod.call', { to: 'tracer', method: 'signatures', input: { path: '/work/a.ts' } })).toEqual({ value: [{ name: 'greet', line: 1 }] })
+  expect(await tested.fire('cmod.call', { to: 'provider', method: 'signatures', input: { path: '/work/a.ts' } })).toEqual({ value: [{ name: 'greet', line: 1 }] })
 })
 
 test('raise.beforeToolCall asks every beforeToolCall listener with the call and returns the merged answer', async () => {
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolCall({ name: 'Bash' }, (call) => (String(call.input['command']).startsWith('rm ') ? { refuse: 'Move it to the trash instead.' } : undefined))
       },
@@ -868,7 +868,7 @@ test('raise.beforePrompt gives the listener a Prompt placed in the open turn, an
   const seen: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'release',
+      name: 'demo',
       setup() {
         sessions.current.beforePrompt({ text: /\brelease\b/i }, (prompt) => {
           seen.push({ type: prompt.type, text: prompt.text, from: prompt.from.type })
@@ -885,17 +885,17 @@ test('raise.beforePrompt gives the listener a Prompt placed in the open turn, an
 
 test("raise.onSessionStart runs the mod's listeners with the session and cwd filled in", async () => {
   const seen: unknown[] = []
-  const tested = testMod(defineMod({ name: 'greeter', setup: () => void sessions.current.onSessionStart((start) => void seen.push(start)) }), { projectRoot: '/work/shop' })
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart((start) => void seen.push(start)) }), { projectRoot: '/work/app' })
 
   await tested.raise.onSessionStart({ source: 'startup' })
 
-  expect(seen).toEqual([{ session: 'test-session', cwd: '/work/shop', source: 'startup' }])
+  expect(seen).toEqual([{ session: 'test-session', cwd: '/work/app', source: 'startup' }])
 })
 
 test('raise.beforeSessionStart returns the note every listener gives, the last title, and a refusal over both', async () => {
   const tested = testMod(
     defineMod({
-      name: 'briefing',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart({ source: 'startup' }, () => ({ note: 'The build is red.', title: 'Fix the build' }))
         sessions.current.beforeSessionStart(() => ({ title: 'Morning' }))
@@ -908,21 +908,21 @@ test('raise.beforeSessionStart returns the note every listener gives, the last t
 })
 
 test('raise.beforeTurnEnd asks about the open turn, and says how to open one when none is open', async () => {
-  const tested = testMod(defineMod({ name: 'reviewer', setup: () => void sessions.current.beforeTurnEnd((turn) => (turn.prompt.text === 'Ship it' ? { refuse: 'Run the tests first.' } : undefined)) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.beforeTurnEnd((turn) => (turn.prompt.text === 'Ship it' ? { refuse: 'Run the tests first.' } : undefined)) }))
 
-  await expect(tested.raise.beforeTurnEnd()).rejects.toThrow("reviewer has no turn open to end. Open one with tested.add({ type: Prompt, text: '…' }).")
+  await expect(tested.raise.beforeTurnEnd()).rejects.toThrow("demo has no turn open to end. Open one with tested.add({ type: Prompt, text: '…' }).")
   await tested.add({ type: Prompt, text: 'Ship it' })
   expect(await tested.raise.beforeTurnEnd()).toEqual({ refuse: 'Run the tests first.' })
 })
 
 test("raise.beforeContextEnd asks about the session's compaction, or a task's with { task }", async () => {
   const ending: { readonly number: number; readonly task?: string }[] = []
-  const tested = testMod(defineMod({ name: 'keeper', setup: () => void sessions.current.goal.beforeContextEnd(({ number, task }) => void ending.push(task === undefined ? { number } : { number, task })) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.goal.beforeContextEnd(({ number, task }) => void ending.push(task === undefined ? { number } : { number, task })) }))
   const task = await tested.startTask({ title: 'Read the logs' })
   await tested.compact()
 
   await tested.raise.beforeContextEnd()
   await tested.raise.beforeContextEnd({ task })
-  await expect(tested.raise.beforeContextEnd({ task: 'task-missing' })).rejects.toThrow('keeper has no task task-missing. Start it with tested.startTask.')
+  await expect(tested.raise.beforeContextEnd({ task: 'task-missing' })).rejects.toThrow('demo has no task task-missing. Start it with tested.startTask.')
   expect(ending).toEqual([{ number: 2 }, { number: 1, task }])
 })

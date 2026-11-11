@@ -8,7 +8,7 @@ test('/tree a b reaches reply with the args and their words, and the string repl
   const seen: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup(mod) {
         mod.use(
           slashCommand({
@@ -55,7 +55,7 @@ test("a command that replies nothing and a hotkey answer Claude Code themselves,
 test("reply gets the mod's own typed state, so a command counts its runs without capturing the mod from setup", async () => {
   const tested = testMod(
     defineMod({
-      name: 'counter',
+      name: 'demo',
       state: { session: { count: 0 } },
       setup(mod) {
         mod.use(slashCommand({ name: 'count', description: 'Count the runs', reply: (_input, mod) => `${(mod.state.session.count += 1)} runs` }))
@@ -71,7 +71,7 @@ test("reply gets the mod's own typed state, so a command counts its runs without
 test('a second slashCommand with the same name throws in setup and names the command', async () => {
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup(mod) {
         mod.use(slashCommand({ name: 'tree', description: 'Show the tree', reply: () => undefined }))
         mod.use(slashCommand({ name: 'tree', description: 'Hide the tree', reply: () => undefined }))
@@ -79,13 +79,13 @@ test('a second slashCommand with the same name throws in setup and names the com
     }),
   )
 
-  await expect(tested.start()).rejects.toThrow('file-tree: the slash command /tree is already added. Give each slashCommand its own name.')
+  await expect(tested.start()).rejects.toThrow('demo: the slash command /tree is already added. Give each slashCommand its own name.')
 })
 
 test('a command of another plugin passes on, and a reply that throws shows /<name> failed with the message', async () => {
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup(mod) {
         mod.use(
           slashCommand({
@@ -109,7 +109,7 @@ test('a reply that passes the 30 s deadline shows /<name> failed with the deadli
   const deadlines: number[] = []
   const tested = testMod(
     defineMod({
-      name: 'weather',
+      name: 'demo',
       setup(mod) {
         mod.use(
           slashCommand({

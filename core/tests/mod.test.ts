@@ -14,16 +14,16 @@ import { claudeCodeOf } from '../src/testing/claude-code.js'
 import { calledAnswer, fakeClaude, type TestCall } from '../src/testing/fake-claude.js'
 import { findElement, textOf } from '../src/testing/fake-elements.js'
 import { Box, Button, Input, Text } from '../src/ui/elements.js'
-import type { TracerSignature } from './tracer.js'
+import type { Signature } from './provider.js'
 
 const touchTracker = defineMod({
-  name: 'touch-tracker',
+  name: 'demo',
   state: { session: { hasSetUp: false, touched: [] as string[] } },
   setup(mod) {
     mod.state.session.hasSetUp = true
     sessions.current.beforeToolResult((result) => {
       mod.state.session.touched = [...mod.state.session.touched, result.name]
-      return { note: `touch-tracker saw ${result.name}` }
+      return { note: `demo saw ${result.name}` }
     })
   },
 })
@@ -35,7 +35,7 @@ test("an installed mod's setup runs during session.start and its beforeToolResul
 
   const answer = await claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/work/a.ts' }, tool_response: {} })
 
-  expect(answer).toEqual({ additionalContext: ['<touch-tracker_mod>\ntouch-tracker saw Read\n</touch-tracker_mod>'] })
+  expect(answer).toEqual({ additionalContext: ['<demo_mod>\ndemo saw Read\n</demo_mod>'] })
   expect(tested.state.session.touched).toEqual(['Read'])
 })
 
@@ -45,7 +45,7 @@ test('mod.every runs its hook on each tick, skips a tick while the last run is s
   const runs: number[] = []
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       setup(mod) {
         mod.every(30_000, async () => {
           runs.push(runs.length + 1)
@@ -75,18 +75,18 @@ test('mod.every runs its hook on each tick, skips a tick while the last run is s
 })
 
 test('mod.every refuses a time that is not a whole number of milliseconds', async () => {
-  const lifecycle = createLifecycle(defineMod({ name: 'ticker', setup: (mod) => void mod.every(0.5, () => undefined) }))
-  const fake = fakeClaude({ name: 'ticker', root: '/test/plugins/ticker' })
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.every(0.5, () => undefined) }))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
 
-  await lifecycle.start(fake.claude, async () => ({ name: 'ticker', root: '/test/plugins/ticker', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
 
-  expect(String(lifecycle.failure)).toContain('ticker: mod.every is 0.5. Give a whole number of milliseconds above 0 and at most 2147483647.')
+  expect(String(lifecycle.failure)).toContain('demo: mod.every is 0.5. Give a whole number of milliseconds above 0 and at most 2147483647.')
 })
 
 test('sessions.current.send adds a Note Claude reads, and a Prompt asks Claude for a turn', async () => {
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       setup() {
         sessions.current.onSessionStart(async () => {
           await sessions.current.send({ type: Note, text: 'CI failed on main.' })
@@ -100,14 +100,14 @@ test('sessions.current.send adds a Note Claude reads, and a Prompt asks Claude f
 
   expect(tested.shown.notes).toEqual(['CI failed on main.'])
   expect(tested.shown.prompts).toEqual(['Find the cause of the CI failure and fix it.'])
-  expect(tested.calls.find(({ call }) => call === 'session.append')?.args).toEqual([{ message: { type: 'user', content: [{ type: 'text', text: '<ci-watch_mod>\nCI failed on main.\n</ci-watch_mod>' }] } }])
+  expect(tested.calls.find(({ call }) => call === 'session.append')?.args).toEqual([{ message: { type: 'user', content: [{ type: 'text', text: '<demo_mod>\nCI failed on main.\n</demo_mod>' }] } }])
 })
 
 test('sessions.current.send rejects with the reason when a plugin refuses the Note', async () => {
   let failure = ''
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       setup: () => void sessions.current.onSessionStart(() => sessions.current.send({ type: Note, text: 'CI failed.' }).catch((error: Error) => void (failure = error.message))),
     }),
   )
@@ -115,14 +115,14 @@ test('sessions.current.send rejects with the reason when a plugin refuses the No
 
   await tested.raise.onSessionStart({ source: 'startup' })
 
-  expect(failure).toBe('ci-watch: Claude Code refused the note: Notes are off in this organization.')
+  expect(failure).toBe('demo: Claude Code refused the note: Notes are off in this organization.')
 })
 
 test("model.complete passes the request and options to Claude Code's model call", async () => {
   let verdict: unknown
   const tested = testMod(
     defineMod({
-      name: 'babysitter',
+      name: 'demo',
       setup: () => void sessions.current.onTurnEnd(async () => void (verdict = await model.complete({ model: 'haiku', prompt: 'Is this reply a waste of time?', timeoutMs: 8000 }))),
     }),
   )
@@ -136,7 +136,7 @@ test("model.complete passes the request and options to Claude Code's model call"
 })
 
 test('a before listener past its timeoutMs answers as if it were absent and shows the timeout', async () => {
-  const tested = testMod(defineMod({ name: 'babysitter', setup: () => void sessions.current.beforeSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.beforeSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }))
 
   expect(await tested.raise.beforeSessionStart({ source: 'startup' })).toBeUndefined()
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeSessionStart listener failed', description: 'beforeSessionStart passed its 0.02 s timeout' })
@@ -145,7 +145,7 @@ test('a before listener past its timeoutMs answers as if it were absent and show
 test('two beforeToolBatch notes both reach Claude, joined in the order the listeners were added', async () => {
   const tested = testMod(
     defineMod({
-      name: 'reviewer',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolBatch(() => ({ note: 'Check the tests.' }))
         sessions.current.beforeToolBatch(() => ({ note: 'Check the docs.' }))
@@ -159,7 +159,7 @@ test('two beforeToolBatch notes both reach Claude, joined in the order the liste
 test("an answer a process before method does not take refuses beforePermissionRequest and a gate with onFailure: 'refuse'", async () => {
   const tested = testMod(
     defineMod({
-      name: 'gate',
+      name: 'demo',
       setup() {
         sessions.current.beforePermissionRequest(() => ({ deny: 'Not here.' }) as never)
         sessions.current.beforeModelChange(() => ({ deny: 'Not here.' }) as never, { onFailure: 'refuse' })
@@ -167,14 +167,14 @@ test("an answer a process before method does not take refuses beforePermissionRe
     }),
   )
 
-  expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toEqual({ refuse: 'gate: it answered deny, which beforePermissionRequest does not take. It takes { allow }, { input }, { updates }, { refuse }, { interrupt }.' })
-  expect(await tested.raise.beforeModelChange({ model: 'haiku' } as never)).toEqual({ refuse: 'gate: it answered deny, which beforeModelChange does not take. It takes { ask }, { refuse }, { note }.' })
+  expect(await tested.raise.beforePermissionRequest({ name: 'Bash', input: { command: 'ls' }, suggestions: [] })).toEqual({ refuse: 'demo: it answered deny, which beforePermissionRequest does not take. It takes { allow }, { input }, { updates }, { refuse }, { interrupt }.' })
+  expect(await tested.raise.beforeModelChange({ model: 'haiku' } as never)).toEqual({ refuse: 'demo: it answered deny, which beforeModelChange does not take. It takes { ask }, { refuse }, { note }.' })
 })
 
 test("a process before method's result never stops a later listener: a later refusal still refuses, and the last result wins", async () => {
   const runner = testMod(
     defineMod({
-      name: 'runner',
+      name: 'demo',
       setup() {
         commands.beforeRun(() => ({ result: 'from A' }))
         commands.beforeRun(() => ({ refuse: 'B refuses' }))
@@ -183,7 +183,7 @@ test("a process before method's result never stops a later listener: a later ref
   )
   const trees = testMod(
     defineMod({
-      name: 'trees',
+      name: 'other',
       setup() {
         sessions.current.beforeWorktreeCreate(() => ({ result: '/a' }))
         sessions.current.beforeWorktreeCreate(() => ({ result: '/b' }))
@@ -198,7 +198,7 @@ test("a process before method's result never stops a later listener: a later ref
 test('a before listener that answers something other than an object fails, and beforePermissionRequest refuses, while false is no answer', async () => {
   const tested = testMod(
     defineMod({
-      name: 'gate',
+      name: 'demo',
       setup() {
         sessions.current.beforePermissionRequest(() => false as never)
         sessions.current.beforePermissionRequest(() => 'deny' as never)
@@ -216,7 +216,7 @@ test('a before listener that answers something other than an object fails, and b
 test('a session before listener answering false, as cond && { refuse } does, is no answer', async () => {
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolCall((call) => (call.name === 'Bash' && { refuse: 'No Bash here.' }) as never)
       },
@@ -233,7 +233,7 @@ test('a session before listener answering false, as cond && { refuse } does, is 
 test("onFailure: 'refuse' on a method that cannot refuse lets the moment through and shows the listener's own error", async () => {
   const tested = testMod(
     defineMod({
-      name: 'policy',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart(() => {
           throw new Error('the policy file is missing')
@@ -248,7 +248,7 @@ test("onFailure: 'refuse' on a method that cannot refuse lets the moment through
 })
 
 test('an on listener past its timeoutMs stops quietly', async () => {
-  const tested = testMod(defineMod({ name: 'watcher', setup: () => void sessions.current.onSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.onSessionStart(() => new Promise(() => undefined), { timeoutMs: 20 }) }))
 
   await tested.raise.onSessionStart({ source: 'startup' })
 
@@ -258,7 +258,7 @@ test('an on listener past its timeoutMs stops quietly', async () => {
 test("a before listener with onFailure: 'refuse' refuses when it throws or passes its timeoutMs", async () => {
   const tested = testMod(
     defineMod({
-      name: 'gate',
+      name: 'demo',
       setup() {
         sessions.current.beforeTodoCreate(() => new Promise(() => undefined), { timeoutMs: 20, onFailure: 'refuse' })
         sessions.current.beforeToolCall(
@@ -271,8 +271,8 @@ test("a before listener with onFailure: 'refuse' refuses when it throws or passe
     }),
   )
 
-  expect(await tested.raise.beforeTodoCreate({ id: '1', subject: 'Ship it' })).toEqual({ refuse: 'gate: beforeTodoCreate passed its 0.02 s timeout' })
-  expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'ls' } })).toEqual({ refuse: 'gate: the policy file is missing' })
+  expect(await tested.raise.beforeTodoCreate({ id: '1', subject: 'Ship it' })).toEqual({ refuse: 'demo: beforeTodoCreate passed its 0.02 s timeout' })
+  expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'ls' } })).toEqual({ refuse: 'demo: the policy file is missing' })
 })
 
 test('a listener gets its deadline and a signal that aborts when its timeoutMs passes', async () => {
@@ -305,7 +305,7 @@ test('a timeoutMs past 600000 ms or below 1 throws where the listener registers'
 test('mod.toast with an id updates that toast in place', async () => {
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup(mod) {
         mod.toast.loading('Saving notes', { id: 'save' })
         mod.toast.success('Saved 3 notes', { id: 'save', description: 'notes.md\nand 2 more' })
@@ -332,7 +332,7 @@ test('a beforePermissionRequest listener that throws refuses the request', async
   const ran: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         sessions.current.beforePermissionRequest(() => {
           throw new Error('the policy file is missing')
@@ -344,7 +344,7 @@ test('a beforePermissionRequest listener that throws refuses the request', async
 
   const answer = await claudeCodeOf(tested).fire('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'rm build' } }, { decision: { behavior: 'allow' } })
 
-  expect(answer).toEqual({ decision: { behavior: 'deny', message: 'guard: the policy file is missing' } })
+  expect(answer).toEqual({ decision: { behavior: 'deny', message: 'demo: the policy file is missing' } })
   expect(ran).toEqual([])
 })
 
@@ -365,9 +365,9 @@ test('a beforePermissionRequest answer without allow or refuse leaves the dialog
 })
 
 test('beforeElicitation refuses an MCP server question', async () => {
-  const tested = testMod(defineMod({ name: 'quiet', setup: () => void sessions.current.beforeElicitation({ server: 'tracker' }, () => ({ refuse: 'Not during a deploy.' })) }))
+  const tested = testMod(defineMod({ name: 'quiet', setup: () => void sessions.current.beforeElicitation({ server: 'server' }, () => ({ refuse: 'Not during a deploy.' })) }))
 
-  const answer = await claudeCodeOf(tested).fire('Elicitation', { mcp_server_name: 'tracker', message: 'Sign in?', mode: 'form' } as never, {})
+  const answer = await claudeCodeOf(tested).fire('Elicitation', { mcp_server_name: 'server', message: 'Sign in?', mode: 'form' } as never, {})
 
   expect(answer).toMatchObject({ block: 'Not during a deploy.' })
 })
@@ -375,7 +375,7 @@ test('beforeElicitation refuses an MCP server question', async () => {
 test('two beforeToolBatch notes both reach Claude', async () => {
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolBatch(() => ({ note: 'first' }))
         sessions.current.beforeToolBatch(() => ({ note: 'second' }))
@@ -389,7 +389,7 @@ test('two beforeToolBatch notes both reach Claude', async () => {
 test('a before listener that throws is shown, and the listeners after it still answer', async () => {
   const tested = testMod(
     defineMod({
-      name: 'briefing',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart(() => {
           throw new Error('the notes file is missing')
@@ -401,7 +401,7 @@ test('a before listener that throws is shown, and the listeners after it still a
 
   const answer = await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' }, { additionalContext: ['from settings'] })
 
-  expect(answer).toEqual({ additionalContext: ['from settings', '<briefing_mod>\nThe build is red.\n</briefing_mod>'] })
+  expect(answer).toEqual({ additionalContext: ['from settings', '<demo_mod>\nThe build is red.\n</demo_mod>'] })
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The beforeSessionStart listener failed', description: 'the notes file is missing' })
 })
 
@@ -418,7 +418,7 @@ const counterPane: PaneInit<CounterState> = {
 }
 
 const counter = defineMod({
-  name: 'counter',
+  name: 'demo',
   state: { session: { count: 0 } },
   setup(mod) {
     void mod.panes.add(counterPane).open()
@@ -440,7 +440,7 @@ test('mod.toast.promise draws a loading toast above the prompt that turns to suc
   let finish: (count: number) => void = () => undefined
   let unwrapped: Promise<number> | undefined
   const indexer = defineMod({
-    name: 'indexer',
+    name: 'demo',
     setup(mod) {
       const task = new Promise<number>((resolve) => {
         finish = resolve
@@ -453,7 +453,7 @@ test('mod.toast.promise draws a loading toast above the prompt that turns to suc
   const abovePrompt = { surface: 'terminal' as const, component: 'AbovePrompt' as const, requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 80, rows: 24 } }
   await tested.start()
 
-  expect(trimmedRows(textOf(await tested.fire('ui.render', abovePrompt as never, prompt)))).toBe('>\n⠋  indexer           Indexing files  ✕\n✓  indexer           Installed        ✕\n                     Settings  hh:mm')
+  expect(trimmedRows(textOf(await tested.fire('ui.render', abovePrompt as never, prompt)))).toBe('>\n⠋  demo              Indexing files  ✕\n✓  demo              Installed        ✕\n                     Settings  hh:mm')
   finish(12)
   await tested.settle()
 
@@ -465,7 +465,7 @@ test('mod.toast.promise draws a loading toast above the prompt that turns to suc
 })
 
 test('a loading toast that stays spins for 10 seconds, then draws a still glyph and stops redrawing', async () => {
-  const tested = testMod(defineMod({ name: 'indexer', setup: (mod) => void mod.toast.loading('Waiting for cmod', { id: 'wait' }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.toast.loading('Waiting for cmod', { id: 'wait' }) }))
   const frames: (() => void)[] = []
   let cancelled = 0
   const every = tested.fakes.clock.every
@@ -486,7 +486,7 @@ test('mod.toast.promise rejects only through unwrap, and shows the error toast',
   let unwrapped: Promise<unknown> | undefined
   const tested = testMod(
     defineMod({
-      name: 'indexer',
+      name: 'demo',
       setup(mod) {
         mod.toast.promise(Promise.reject(new Error('disk full')), { loading: 'Indexing files', success: 'Indexed', error: (error) => `Indexing failed: ${messageOf(error)}` })
         unwrapped = mod.toast.promise(() => Promise.reject(new Error('disk full')), { loading: 'Indexing again', success: 'Indexed', error: 'Indexing failed again' }).unwrap()
@@ -555,13 +555,13 @@ test("Report opens its choices in the toast with the keys on Ask Claude, which a
 })
 
 test('an install page a reload left in the Sidebar says the mod needs nothing, and closes its tab', async () => {
-  const tested = testMod(defineMod({ name: 'inbox', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
 
-  const drawn = await tested.fire('cmod.call', { to: 'inbox', method: 'cmod:draw', input: { page: installPage, params: null, columns: 60, isFocused: false }, caller: 'cmod' } as never)
+  const drawn = await tested.fire('cmod.call', { to: 'demo', method: 'cmod:draw', input: { page: installPage, params: null, columns: 60, isFocused: false }, caller: 'cmod' } as never)
   await tested.settle()
 
-  expect(drawn).toEqual({ value: { draw: expect.any(Number), tree: { $cmodElement: 'Text', props: { dimColor: true, children: 'inbox needs nothing from you now.' } } } })
+  expect(drawn).toEqual({ value: { draw: expect.any(Number), tree: { $cmodElement: 'Text', props: { dimColor: true, children: 'demo needs nothing from you now.' } } } })
   expect(tested.calls.filter(({ call }) => call === 'cmod.call').map(({ args }) => (args[0] as { input: unknown }).input)).toContainEqual({ requests: [{ close: installPage }] })
 })
 
@@ -590,10 +590,10 @@ test('closing a failure toast keeps that failure hidden when it happens again, a
 })
 
 test('three listeners of one mod failing with one message show one toast that counts them, and closing it keeps all three hidden', async () => {
-  const broken = () => Promise.reject(new Error('rulebook.config.ts has a syntax error'))
+  const broken = () => Promise.reject(new Error('config.ts has a syntax error'))
   const tested = testMod(
     defineMod({
-      name: 'rulebook',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart(broken)
         sessions.current.beforePrompt(broken)
@@ -609,7 +609,7 @@ test('three listeners of one mod failing with one message show one toast that co
   }
   await failAll()
 
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'rulebook.config.ts has a syntax error' }])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'config.ts has a syntax error' }])
   expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).toContain('3 times')
 
   await pressInBand(tested, 'toast:session:beforeSessionStart:close')
@@ -649,7 +649,7 @@ test('a Copy Claude Code refuses names the reason under the Report choices', asy
 })
 
 test("clipboard.write rejects with Claude Code's reason", async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: () => undefined }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => undefined }))
   await tested.start()
   tested.fakes.ui.copy = async () => ({ isCopied: false, reason: 'no-surface' })
 
@@ -657,7 +657,7 @@ test("clipboard.write rejects with Claude Code's reason", async () => {
 })
 
 test('a press on a toast message unfolds its whole description, and a second press folds it', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.toast.info('Saved 3 notes', { description: 'notes.md\ntodo.md\nideas.md' }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.toast.info('Saved 3 notes', { description: 'notes.md\ntodo.md\nideas.md' }) }))
   await tested.start()
   expect(textOf(await tested.fire('ui.render', toastBand as never, belowBand))).not.toContain('ideas.md')
 
@@ -669,11 +669,11 @@ test('a press on a toast message unfolds its whole description, and a second pre
 })
 
 test('the band shows the newest three toasts, and +N more shows every toast', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => ['a', 'b', 'c', 'd'].forEach((note) => mod.toast(`Note ${note}`)) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => ['a', 'b', 'c', 'd'].forEach((note) => mod.toast(`Note ${note}`)) }))
   await tested.start()
   const drawn = () => tested.fire('ui.render', toastBand as never, belowBand).then((band) => trimmedRows(textOf(band)))
 
-  expect(await drawn()).toBe('>\n+2 more\n   notes             Note c  ✕\n   notes             Note d  ✕\n✓  notes             Installed        ✕\n                     Settings  hh:mm')
+  expect(await drawn()).toBe('>\n+2 more\n   demo              Note c  ✕\n   demo              Note d  ✕\n✓  demo              Installed        ✕\n                     Settings  hh:mm')
 
   await pressInBand(tested, '+2 more')
 
@@ -682,7 +682,7 @@ test('the band shows the newest three toasts, and +N more shows every toast', as
 
 test('a toast expires after its duration once the band draws it, and waits while Claude Code shows a survey', async () => {
   const timers: { ms: number; fire: () => void }[] = []
-  const tested = testMod(defineMod({ name: 'notes', setup: (mod) => void mod.toast('Saved', { duration: 2000 }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.toast('Saved', { duration: 2000 }) }))
   tested.fakes.clock.after = (ms, fire) => {
     timers.push({ ms, fire })
     return { cancel: () => undefined }
@@ -703,7 +703,7 @@ test('a toast expires after its duration once the band draws it, and waits while
 test('an action that throws shows a failure toast instead of losing the error', async () => {
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup: (mod) =>
         void mod.toast('Saved', {
           action: {
@@ -740,7 +740,7 @@ test('a job added with mod.use answers tool.check, reaches Claude Code calls, an
   let handle: { readonly denied: string[] } | undefined
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup(mod) {
         handle = mod.use(noForcePush)
       },
@@ -758,7 +758,7 @@ test('a job added with mod.use answers tool.check, reaches Claude Code calls, an
 })
 
 test("the Installed toast names the rules a mod adds", async () => {
-  const tested = testMod(defineMod({ name: 'house-style', setup() {} }), { files: { '/test/plugins/house-style/rules/tests.md': 'Write a test before each fix.\n', '/test/plugins/house-style/rules/sql.md': 'Quote every identifier.\n' } })
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }), { files: { '/test/plugins/demo/rules/tests.md': 'Write a test before each fix.\n', '/test/plugins/demo/rules/sql.md': 'Quote every identifier.\n' } })
 
   await tested.start()
 
@@ -769,7 +769,7 @@ test("the current session's project and cwd are set before setup runs", async ()
   const seen: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup() {
         seen.push(sessions.current.project, sessions.current.cwd)
       },
@@ -782,7 +782,7 @@ test("the current session's project and cwd are set before setup runs", async ()
   expect(seen).toEqual(['/work/app', '/work/app/src'])
 })
 
-const fileTree = defineMod({ name: 'file-tree', state: { project: { expanded: [] as string[] } }, setup() {} })
+const fileTree = defineMod({ name: 'demo', state: { project: { expanded: [] as string[] } }, setup() {} })
 
 
 test('a project value saved in one project is not seen in another', async () => {
@@ -803,7 +803,7 @@ test('a project value saved in one project is not seen in another', async () => 
 test("a tool's mod reads the project the session moved to", async () => {
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup(mod) {
         mod.use(tool({ name: 'where', description: 'Name the project folder', inputSchema: { type: 'object', properties: {} }, execute: () => `${sessions.current.project} ${sessions.current.cwd}` }))
       },
@@ -820,7 +820,7 @@ test("a tool's mod reads the project the session moved to", async () => {
 test('an onCwdChange listener that refreshes runs once after /cd, before the next prompt', async () => {
   const tested = testMod(
     defineMod({
-      name: 'file-tree',
+      name: 'demo',
       setup() {
         sessions.current.onCwdChange(() => void process.run(['git', 'status', '--porcelain'], { cwd: sessions.current.project }))
       },
@@ -857,7 +857,7 @@ test('a project value keeps only the 20 projects used most recently', async () =
   expect(tested.state.project.expanded).toEqual(['src-1'])
 })
 
-const notes = defineMod({ name: 'notes', state: { session: { draft: '' } }, setup() {} })
+const notes = defineMod({ name: 'demo', state: { session: { draft: '' } }, setup() {} })
 
 test('a session value comes back on resume', async () => {
   const tested = testMod(notes)
@@ -920,7 +920,7 @@ test('a session value is deleted once Claude Code deletes the session transcript
   expect(tested.state.session.draft).toBe('')
 })
 
-const gitChanges = defineMod({ name: 'file-tree', state: { memory: { changed: [] as string[] }, session: { touched: [] as string[] } }, setup() {} })
+const gitChanges = defineMod({ name: 'demo', state: { memory: { changed: [] as string[] }, session: { touched: [] as string[] } }, setup() {} })
 
 test('a memory value resets on /clear', async () => {
   const tested = testMod(gitChanges)
@@ -964,7 +964,7 @@ test('a memory value stays through a compaction', async () => {
 })
 
 const commits = defineMod({
-  name: 'commits',
+  name: 'demo',
   state: { session: { greeting: 'hello' }, project: { policy: 'ask' }, global: { retries: 3 } },
   setup() {},
 })
@@ -984,11 +984,11 @@ test('a project value the mod saved comes back in that project, and another proj
 })
 
 test('pushing into a state array throws and names assignment', async () => {
-  const tested = testMod(defineMod({ name: 'notes', state: { session: { notes: ['buy milk'] } }, setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', state: { session: { notes: ['buy milk'] } }, setup() {} }))
   await tested.start()
 
   expect(() => tested.state.session.notes.push('call mum')).toThrow(
-    'notes: mod.state.session.notes cannot change in place. Assign it a new value, such as mod.state.session.notes = [...mod.state.session.notes, item], so the mod redraws and keeps it.',
+    'demo: mod.state.session.notes cannot change in place. Assign it a new value, such as mod.state.session.notes = [...mod.state.session.notes, item], so the mod redraws and keeps it.',
   )
 
   tested.state.session.notes = [...tested.state.session.notes, 'call mum']
@@ -1017,7 +1017,7 @@ test('fs.exists and fs.stat answer for files and folders', async () => {
   let answers: unknown
   const tested = testMod(
     defineMod({
-      name: 'finder',
+      name: 'demo',
       async setup() {
         answers = {
           file: await fs.exists('/work/app/src/cart.ts'),
@@ -1039,7 +1039,7 @@ test('fs reads a path under $HOME or $CLAUDE_CONFIG_DIR like one under ~', async
   let read: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'rules',
+      name: 'demo',
       async setup() {
         read = [await fs.read('$CLAUDE_CONFIG_DIR/CLAUDE.md'), await fs.read('$HOME/notes.md')]
       },
@@ -1056,7 +1056,7 @@ test('commands.beforeRun refuses a built-in command, and commands.onRun hears ea
   const ran: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'keeper',
+      name: 'demo',
       setup(mod) {
         mod.use(slashCommand({ name: 'keep', description: 'Keep the context', reply: () => 'Kept.' }))
         commands.onRun((run) => void ran.push({ name: run.name, args: run.args, from: run.from }))
@@ -1080,7 +1080,7 @@ test('commands.beforeRun refuses a built-in command, and commands.onRun hears ea
 test("commands.beforeRun rewrites a command's args and adds a note beside its output", async () => {
   const tested = testMod(
     defineMod({
-      name: 'reviewer',
+      name: 'demo',
       setup() {
         commands.beforeRun({ name: 'review' }, (run) => ({ args: `${run.args} --strict`, note: 'Review against DESIGN.md.' }))
       },
@@ -1090,14 +1090,14 @@ test("commands.beforeRun rewrites a command's args and adds a note beside its ou
 
   const answer = await claudeCodeOf(tested).fire('command.run', { command: 'review', args: '12', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } }, { text: 'Reviewing' })
 
-  expect(answer).toEqual({ text: 'Reviewing', context: ['<reviewer_mod>\nReview against DESIGN.md.\n</reviewer_mod>'] })
+  expect(answer).toEqual({ text: 'Reviewing', context: ['<demo_mod>\nReview against DESIGN.md.\n</demo_mod>'] })
   expect(await tested.raise.beforeRun({ name: 'review', args: '7', from: { type: Person } })).toEqual({ args: '7 --strict', note: 'Review against DESIGN.md.' })
 })
 
 test('commands.beforeRun refuses one command and changes the arguments of another', async () => {
   const tested = testMod(
     defineMod({
-      name: 'keeper',
+      name: 'demo',
       setup() {
         commands.beforeRun({ name: 'compact' }, () => ({ refuse: 'No.' }))
         commands.beforeRun({ name: 'model' }, () => ({ args: 'haiku' }))
@@ -1118,7 +1118,7 @@ test('commands.list lists every command, and commands.run runs one and answers i
   let output: unknown
   const tested = testMod(
     defineMod({
-      name: 'runner',
+      name: 'demo',
       async setup() {
         listed = await commands.list()
         output = await commands.run('compact', 'keep the plan')
@@ -1138,7 +1138,7 @@ test('config.list lists every /config row, naming the plugin that owns a row', a
   let listed: unknown
   const tested = testMod(
     defineMod({
-      name: 'panel',
+      name: 'demo',
       async setup() {
         listed = await config.list()
       },
@@ -1146,19 +1146,19 @@ test('config.list lists every /config row, naming the plugin that owns a row', a
   )
   tested.fakes.config.list = async () => [
     { key: 'theme', label: 'Theme', kind: 'choice', value: 'dark', options: ['dark', 'light'], provider: { plugin: 'engine', tier: 'core' }, isLocked: false },
-    { key: 'tracer.depth', label: 'Depth', description: 'How deep to trace', kind: 'number', value: 3, provider: { plugin: 'tracer', tier: 'user' }, isLocked: true },
+    { key: 'provider.depth', label: 'Depth', description: 'How deep to trace', kind: 'number', value: 3, provider: { plugin: 'provider', tier: 'user' }, isLocked: true },
   ] as never
 
   await tested.start()
 
   expect(listed).toEqual([
     { key: 'theme', label: 'Theme', kind: 'choice', value: 'dark', options: ['dark', 'light'], isLocked: false },
-    { key: 'tracer.depth', label: 'Depth', description: 'How deep to trace', kind: 'number', value: 3, isLocked: true, plugin: 'tracer' },
+    { key: 'provider.depth', label: 'Depth', description: 'How deep to trace', kind: 'number', value: 3, isLocked: true, plugin: 'provider' },
   ])
 })
 
 test('beforeReplyDisplay changes what the person sees of a reply', async () => {
-  const tested = testMod(defineMod({ name: 'display', setup: () => void sessions.current.beforeReplyDisplay({ isLast: true }, () => ({ text: 'Shortened.' })) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.beforeReplyDisplay({ isLast: true }, () => ({ text: 'Shortened.' })) }))
 
   expect(await claudeCodeOf(tested).fire('MessageDisplay', { message_id: 'm1', index: 0, final: true, delta: 'A long reply.' } as never)).toEqual({ displayContent: 'Shortened.' } as never)
   expect(await claudeCodeOf(tested).fire('MessageDisplay', { message_id: 'm1', index: 0, final: false, delta: 'A long reply.' } as never)).toEqual({} as never)
@@ -1168,11 +1168,11 @@ const older: FakeSession = {
   id: 'older',
   title: 'Switch to build mode',
   lastAt: '2026-10-10T09:00:00.000Z',
-  messages: [{ type: Prompt, text: 'Switch to build mode, then rename the pane', from: { type: 'mod', name: 'modes' } }],
+  messages: [{ type: Prompt, text: 'Switch to build mode, then rename the pane', from: { type: 'mod', name: 'other' } }],
 }
 
 test('sessions.current.messages reads this conversation, and each message names its turn', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   const [prompt] = await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.add({ type: ToolCall, name: 'Read', input: { file_path: '/work/tree.ts' }, callId: 'toolu_1' })
@@ -1196,7 +1196,7 @@ test('sessions.current.on hears each new message of its type, and remove stops i
   let listening: Subscription | undefined
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       setup() {
         listening = sessions.current.onReply((reply) => void heard.push(reply.text))
       },
@@ -1213,7 +1213,7 @@ test('sessions.current.on hears each new message of its type, and remove stops i
 })
 
 test('a compact starts a new context, and a task keeps its own messages', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const task = await tested.startTask({ title: 'Find the pane', agentType: 'explorer' })
@@ -1230,7 +1230,7 @@ test('a compact starts a new context, and a task keeps its own messages', async 
 })
 
 test('sessions.search finds messages of the project newest first, and sessions.list lists its sessions', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }), { sessions: [older] })
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }), { sessions: [older] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
 
@@ -1248,7 +1248,7 @@ test('sessions.search finds messages of the project newest first, and sessions.l
 test("a send to another running session reaches cmod, and a Prompt to the current one asks Claude for a turn", async () => {
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'other',
       async setup() {
         const other = (await sessions.list()).find((session) => session.id === 'older')
         await other?.send({ type: Prompt, text: 'Switch to build mode.', as: Person })
@@ -1268,7 +1268,7 @@ test('a send to an ended session is refused with its id', async () => {
   let failure = ''
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'other',
       async setup() {
         const other = (await sessions.list()).find((session) => session.id === 'older')
         await other?.send({ type: Prompt, text: 'Switch to build mode.' }).catch((error: Error) => void (failure = error.message))
@@ -1287,7 +1287,7 @@ test('a mod that declares nothing in package.json "cmod" fetches any host, runs 
   const ran: (readonly string[])[] = []
   const tested = testMod(
     defineMod({
-      name: 'open',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart(() => ({ note: 'The build is red.' }))
         sessions.current.onSessionStart(async () => {
@@ -1305,7 +1305,7 @@ test('a mod that declares nothing in package.json "cmod" fetches any host, runs 
   const answer = await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tested.settle()
 
-  expect(answer).toEqual({ additionalContext: ['<open_mod>\nThe build is red.\n</open_mod>'] })
+  expect(answer).toEqual({ additionalContext: ['<demo_mod>\nThe build is red.\n</demo_mod>'] })
   expect(fetched).toEqual(['https://api.github.com/repos/owner/repo', 'http://localhost/containers/json'])
   expect(ran).toEqual([['/usr/bin/make', 'all']])
   expect((await sessions.list()).map((session) => session.id)).toEqual(['test-session', 'older'])
@@ -1335,7 +1335,7 @@ test('sessions.current.startTask starts a task and returns it', async () => {
 test('pane.scrollTo asks Claude Code to bring a row of the pane into view', async () => {
   const tested = testMod(
     defineMod({
-      name: 'log',
+      name: 'demo',
       async setup(mod) {
         const pane: Pane = mod.panes.add({ id: 'log', title: 'Log', render: () => Button({ label: 'Latest', onPress: () => pane.scrollTo('end') }) })
         await pane.open()
@@ -1354,7 +1354,7 @@ test('a Button with an href opens the page in the browser of the computer the te
   const ran: (readonly string[])[] = []
   const tested = testMod(
     defineMod({
-      name: 'docs',
+      name: 'demo',
       async setup(mod) {
         await mod.panes.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
       },
@@ -1373,7 +1373,7 @@ test('a Button with an href copies the link where the computer has no browser to
   const ran: (readonly string[])[] = []
   const tested = testMod(
     defineMod({
-      name: 'docs',
+      name: 'demo',
       async setup(mod) {
         await mod.panes.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
       },
@@ -1393,7 +1393,7 @@ test('a Button with an href on a Sidebar page opens the page through cmod, which
   const ran: (readonly string[])[] = []
   const tested = testMod(
     defineMod({
-      name: 'docs',
+      name: 'demo',
       async setup(mod) {
         await mod.sidebar.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
       },
@@ -1412,7 +1412,7 @@ const answerBox = (focus: (key: string) => Promise<void>) => Box({ flexDirection
 test("page.focus moves the keyboard to the page's field once, so the page shown again after the person hid it keeps its own keys", async () => {
   const tested = testMod(
     defineMod({
-      name: 'inbox',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
       setup(mod) {
         const page: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => page.focus(key)) })
@@ -1434,7 +1434,7 @@ test("page.focus moves the keyboard to the page's field once, so the page shown 
 test("pane.focus moves the keyboard to the pane's field once, so the pane opened again after the person closed it keeps its own keys", async () => {
   const tested = testMod(
     defineMod({
-      name: 'ask',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the question', default: 'ctrl+q' } },
       setup(mod) {
         const pane: Pane = mod.panes.add({ id: 'question', title: 'Question', render: () => answerBox((key) => pane.focus(key)) })
@@ -1458,7 +1458,7 @@ test('page.focus on a key the page does not draw rejects with the key, and sends
   let page: Page | undefined
   const tested = testMod(
     defineMod({
-      name: 'inbox',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
       setup(mod) {
         const added: Page = mod.sidebar.add({ id: 'question', title: 'Question', render: () => answerBox((key) => added.focus(key)) })
@@ -1471,7 +1471,7 @@ test('page.focus on a key the page does not draw rejects with the key, and sends
   await tested.shown.page.lines()
   const sent = tested.calls.length
 
-  await expect(page?.focus('comment') ?? Promise.resolve()).rejects.toThrow('inbox: the Question page draws no Button, Input, or Select with the key "comment".')
+  await expect(page?.focus('comment') ?? Promise.resolve()).rejects.toThrow('demo: the Question page draws no Button, Input, or Select with the key "comment".')
   expect(tested.calls.slice(sent).filter((call) => call.call === 'cmod.call')).toEqual([])
 })
 
@@ -1479,7 +1479,7 @@ test("pane.focus rejects with the key and Claude Code's reason when the pane dra
   let pane: Pane | undefined
   const tested = testMod(
     defineMod({
-      name: 'ask',
+      name: 'demo',
       async setup(mod) {
         pane = mod.panes.add({ id: 'question', title: 'Question', render: () => answerBox(() => Promise.resolve()) })
         await pane.open({ focus: true })
@@ -1488,16 +1488,16 @@ test("pane.focus rejects with the key and Claude Code's reason when the pane dra
   )
   await tested.start()
 
-  await expect(pane?.focus('comment') ?? Promise.resolve()).rejects.toThrow('ask: Claude Code did not focus "comment" in the Question pane: the pane "question" draws no Button, Input, or Select with the key "comment"')
+  await expect(pane?.focus('comment') ?? Promise.resolve()).rejects.toThrow('demo: Claude Code did not focus "comment" in the Question pane: the pane "question" draws no Button, Input, or Select with the key "comment"')
 })
 
 test("a mod's call to its own name is answered by its own methods, since Claude Code shows a call only to the plugins above the caller", async () => {
   let found: unknown
   const tested = testMod(
     defineMod({
-      name: 'tracer',
+      name: 'provider',
       setup(mod) {
-        mod.after(1, () => void mod.dependencies.tracer.signatures({ path: 'src/a.ts' }).then((signatures) => (found = signatures)))
+        mod.after(1, () => void mod.dependencies.provider.signatures({ path: 'src/a.ts' }).then((signatures) => (found = signatures)))
         return { signatures: (input: { readonly path: string }) => (input.path === 'src/a.ts' ? [{ name: 'count', line: 3 }] : []) }
       },
     }),
@@ -1537,7 +1537,7 @@ test('fs.onChange hears each file that changes, appears, or goes under a folder,
   const ticks: (() => void)[] = []
   const tested = testMod(
     defineMod({
-      name: 'reloader',
+      name: 'demo',
       setup(mod) {
         mod.after(1, () => void fs.onChange({ path: '/work/app/history' }, (change) => void changes.push(change)))
       },
@@ -1567,7 +1567,7 @@ test('fs.onChange hears each file that changes, appears, or goes under a folder,
 test('fs.onChange checks a missing path every fourth poll, and still hears it appear', async () => {
   const changes: unknown[] = []
   const ticks: (() => void)[] = []
-  const tested = testMod(defineMod({ name: 'reloader', setup: () => void fs.onChange({ path: ['/work/app/later.json', '/work/app/here.json'] }, (change) => void changes.push(change)) }), { files: { '/work/app/here.json': '{}' } })
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void fs.onChange({ path: ['/work/app/later.json', '/work/app/here.json'] }, (change) => void changes.push(change)) }), { files: { '/work/app/here.json': '{}' } })
   tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
   const stats: string[] = []
   const stat = tested.fakes.fs.stat
@@ -1601,7 +1601,7 @@ test('an fs.onChange listener that throws shows an error toast, and the next cha
   const ticks: (() => void)[] = []
   const tested = testMod(
     defineMod({
-      name: 'reloader',
+      name: 'demo',
       setup: () =>
         void fs.onChange({ path: '/work/app/history' }, ({ path }) => {
           heard.push(path)
@@ -1625,7 +1625,7 @@ test('an fs.onChange listener that throws shows an error toast, and the next cha
 
 test('fs.onChange over more than 2000 files stops with an error toast that names its paths', async () => {
   const files = Object.fromEntries(Array.from({ length: 2001 }, (_, index) => [`/work/app/cache/${index}.json`, '{}']))
-  const tested = testMod(defineMod({ name: 'reloader', setup: () => void fs.onChange({ path: '/work/app/cache' }, () => undefined) }), { files })
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void fs.onChange({ path: '/work/app/cache' }, () => undefined) }), { files })
   const cancelled: number[] = []
   tested.fakes.clock.every = () => ({ cancel: () => void cancelled.push(1) })
 
@@ -1645,7 +1645,7 @@ test('a clock.after with no fake answer fires on a real timer', async () => {
   let fired: Promise<void> | undefined
   const tested = testMod(
     defineMod({
-      name: 'timer',
+      name: 'demo',
       setup(mod) {
         fired = new Promise<void>((resolve) => engineOf(mod).claude.clock.after(1, resolve))
       },
@@ -1662,7 +1662,7 @@ test('mod.dataFolder is the cmod store folder of the plugin, the one a step gets
   let folder: string | undefined
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         folder = mod.dataFolder
       },
@@ -1671,12 +1671,12 @@ test('mod.dataFolder is the cmod store folder of the plugin, the one a step gets
 
   await tested.start()
 
-  expect(folder).toBe('/test/home/.local/share/cmod/data/diagrams')
+  expect(folder).toBe('/test/home/.local/share/cmod/data/demo')
 })
 
 test('a mod stores, gets, and deletes its secrets, gets undefined once one is deleted, and the test kit records no value', async () => {
   let secrets: Mod['secrets'] | undefined
-  const tested = testMod(defineMod({ name: 'anyhost', setup: (mod) => void (secrets = mod.secrets) }), { secrets: { refresh: 'seeded-refresh' } })
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void (secrets = mod.secrets) }), { secrets: { refresh: 'seeded-refresh' } })
   await tested.start()
 
   await secrets?.store('token', 'ghp_s3cret')
@@ -1685,15 +1685,15 @@ test('a mod stores, gets, and deletes its secrets, gets undefined once one is de
 
   expect([stored, await secrets?.get('token'), await secrets?.get('refresh')]).toEqual(['ghp_s3cret', undefined, 'seeded-refresh'])
   expect(JSON.stringify(tested.calls)).not.toContain('ghp_s3cret')
-  await expect(secrets?.store('token', '')).rejects.toThrow('anyhost: mod.secrets.store: cmod secret store read no value from stdin. cmod secret delete anyhost token deletes the secret.')
+  await expect(secrets?.store('token', '')).rejects.toThrow('demo: mod.secrets.store: cmod secret store read no value from stdin. cmod secret delete demo token deletes the secret.')
 })
 
 test('mod.secrets runs the cmod program with its own mod name, hands it the value on stdin, and the value is in no argument', async () => {
-  const lifecycle = createLifecycle(defineMod({ name: 'anyhost', setup() {} }))
-  const fake = fakeClaude({ name: 'anyhost', root: '/test/plugins/anyhost' })
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup() {} }))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
   const ran: { argv: readonly string[]; stdin: string | undefined }[] = []
   fake.fakes.process.run = async (argv, init) => (ran.push({ argv, stdin: init?.stdin }), { exitCode: 0, stdout: argv[2] === 'get' ? 'ghp_s3cret' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
-  await lifecycle.start(fake.claude, async () => ({ name: 'anyhost', root: '/test/plugins/anyhost', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
 
   await lifecycle.mod?.secrets.store('token', 'ghp_s3cret')
   const got = await lifecycle.mod?.secrets.get('token')
@@ -1702,9 +1702,9 @@ test('mod.secrets runs the cmod program with its own mod name, hands it the valu
   const cmod = '/test/home/.local/share/cmod/programs/cmod'
   expect(got).toBe('ghp_s3cret')
   expect(ran).toEqual([
-    { argv: [cmod, 'secret', 'store', 'anyhost', 'token'], stdin: 'ghp_s3cret' },
-    { argv: [cmod, 'secret', 'get', 'anyhost', 'token'], stdin: undefined },
-    { argv: [cmod, 'secret', 'delete', 'anyhost', 'token'], stdin: undefined },
+    { argv: [cmod, 'secret', 'store', 'demo', 'token'], stdin: 'ghp_s3cret' },
+    { argv: [cmod, 'secret', 'get', 'demo', 'token'], stdin: undefined },
+    { argv: [cmod, 'secret', 'delete', 'demo', 'token'], stdin: undefined },
   ])
   expect(ran.flatMap((run) => run.argv).join(' ')).not.toContain('ghp_s3cret')
 })
@@ -1725,7 +1725,7 @@ test('a pane opens at its defined size, and render gets the Pane props', async (
   let handle: Pane | undefined
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         handle = mod.panes.add(drawingPane)
       },
@@ -1743,7 +1743,7 @@ test('a pane Claude Code holds back is not open, so the first toggle opens it in
   let handle: { readonly isOpen: boolean; toggle(): Promise<void> } | undefined
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         handle = mod.panes.add(drawingPane)
       },
@@ -1769,7 +1769,7 @@ test('a pane says whether it is the one shown and whether it has the keyboard', 
   let second: Pane | undefined
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         first = mod.panes.add(drawingPane)
         second = mod.panes.add({ ...drawingPane, id: 'legend', title: 'Legend' })
@@ -1795,7 +1795,7 @@ test('the first toggle of a pane setup opened and Claude Code holds back opens i
   let handle: Pane | undefined
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       async setup(mod) {
         handle = mod.panes.add(drawingPane)
         await handle.open()
@@ -1816,7 +1816,7 @@ test('a pane Claude Code shows later counts as open, so toggle closes it', async
   let handle: Pane | undefined
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         handle = mod.panes.add(drawingPane)
       },
@@ -1842,7 +1842,7 @@ test('a pane the person closes stays closed though Claude Code draws it during t
   const seenByOnClose: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'demo',
       setup(mod) {
         handle = mod.panes.add({ ...drawingPane, onClose: () => void seenByOnClose.push([handle?.isOpen, handle?.isShown]) })
       },
@@ -1881,7 +1881,7 @@ const diagramsPane: PaneInit<DiagramsState> = {
 }
 
 const diagrams = defineMod({
-  name: 'diagrams',
+  name: 'demo',
   state: { session: { shown: 0 } },
   setup(mod) {
     const pane = mod.panes.add(diagramsPane)
@@ -1951,7 +1951,7 @@ test('a size from the state that is not a whole number above 0 keeps the pane at
   await tested.shown.pane.press('Next')
 
   expect(paneOpens(tested)).toEqual([{ id: 'diagrams', title: 'Diagrams' }])
-  expect(tested.shown.debug).toEqual(['diagrams: the Diagrams pane kept its size: the pane "diagrams" gets columns 0.5 from its state. Return a whole number above 0, or undefined for Claude Code\'s default.'])
+  expect(tested.shown.debug).toEqual(['demo: the Diagrams pane kept its size: the pane "diagrams" gets columns 0.5 from its state. Return a whole number above 0, or undefined for Claude Code\'s default.'])
 })
 
 type HistoryState = { project: { count: number; stepsBack: number } }
@@ -1973,7 +1973,7 @@ const historyPane: PaneInit<HistoryState> = {
 test('one action that sets two state keys resizes the pane once, to the final size', async () => {
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       state: { project: { count: 3, stepsBack: 2 } },
       setup(mod) {
         const pane = mod.panes.add(historyPane)
@@ -1991,8 +1991,8 @@ test('one action that sets two state keys resizes the pane once, to the final si
   ])
 })
 
-const tracer = defineMod({
-  name: 'tracer',
+const providerMod = defineMod({
+  name: 'provider',
   setup: () => ({
     signatures: async ({ path }: { path: string }) =>
       (await fs.read(path)).split('\n').flatMap((text, index) => {
@@ -2002,15 +2002,15 @@ const tracer = defineMod({
   }),
 })
 
-const outline = defineMod({
-  name: 'outline',
+const consumerMod = defineMod({
+  name: 'consumer',
   setup(mod) {
     mod.use(
       slashCommand({
         name: 'outline',
         description: 'List the functions a file exports',
         reply: async ({ args }, mod) => {
-          const signatures: TracerSignature[] = await mod.dependencies.tracer.signatures({ path: args })
+          const signatures: Signature[] = await mod.dependencies.provider.signatures({ path: args })
           return signatures.map(({ name, line }) => `${name}:${line}`).join(' ')
         },
       }),
@@ -2019,13 +2019,13 @@ const outline = defineMod({
 })
 
 function relayTo(provider: Pick<TestedMod<object>, 'fire'>): Claude['cmod']['call'] {
-  return async (call) => calledAnswer('outline', await claudeCodeOf(provider).fire('cmod.call', call, { deny: `${call.to} is not installed. Install it in Plugins.` }))
+  return async (call) => calledAnswer('consumer', await claudeCodeOf(provider).fire('cmod.call', call, { deny: `${call.to} is not installed. Install it in Plugins.` }))
 }
 
 test("a mod calls another mod's api and gets its result", async () => {
-  const provider = testMod(tracer)
+  const provider = testMod(providerMod)
   provider.fakes.fs.read = async () => 'export function parse(text: string) {}\nconst cache = new Map()\nexport function render() {}\n'
-  const consumer = testMod(outline)
+  const consumer = testMod(consumerMod)
   consumer.fakes.cmod.call = relayTo(provider)
 
   expect(await consumer.type('/outline src/a.ts')).toEqual({ text: 'parse:1 render:3' })
@@ -2033,41 +2033,41 @@ test("a mod calls another mod's api and gets its result", async () => {
 })
 
 test('a call to a mod that is not installed fails with the install command', async () => {
-  const consumer = testMod(outline)
-  consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'file-tree', setup() {} })))
+  const consumer = testMod(consumerMod)
+  consumer.fakes.cmod.call = relayTo(testMod(defineMod({ name: 'demo', setup() {} })))
 
-  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: tracer is not installed. Install it in Plugins.' })
+  expect(await consumer.type('/outline src/a.ts')).toEqual({ text: '/outline failed: provider is not installed. Install it in Plugins.' })
 })
 
 test("a listener whose call is refused shows the refusal once, without Claude Code's prefix", async () => {
-  const consumer = testMod(defineMod({ name: 'outline', setup: (mod) => void sessions.current.onSessionStart(async () => void (await mod.dependencies.tracer.signatures({ path: 'src/a.ts' }))) }))
+  const consumer = testMod(defineMod({ name: 'consumer', setup: (mod) => void sessions.current.onSessionStart(async () => void (await mod.dependencies.provider.signatures({ path: 'src/a.ts' }))) }))
 
   await consumer.raise.onSessionStart({ source: 'startup' })
 
-  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'tracer is not installed. Install it in Plugins.' })
+  expect(consumer.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'provider is not installed. Install it in Plugins.' })
 })
 
 test('an unknown method fails naming it', async () => {
-  const provider = testMod(tracer)
-  const below = { deny: 'tracer is not installed. Install it in Plugins.' }
+  const provider = testMod(providerMod)
+  const below = { deny: 'provider is not installed. Install it in Plugins.' }
 
-  expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'tracer', method: 'callers', input: { name: 'parse' } }, below)).toEqual({ deny: 'tracer has no method callers.' })
-  expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'tracer', method: 'constructor', input: {} }, below)).toEqual({ deny: 'tracer has no method constructor.' })
+  expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'provider', method: 'callers', input: { name: 'parse' } }, below)).toEqual({ deny: 'provider has no method callers.' })
+  expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'provider', method: 'constructor', input: {} }, below)).toEqual({ deny: 'provider has no method constructor.' })
 })
 
 test("a provider method that throws reaches the caller with the provider's name", async () => {
-  const provider = testMod(tracer)
+  const provider = testMod(providerMod)
   provider.fakes.fs.read = async (path) => {
     throw new Error(`ENOENT: no such file ${path}`)
   }
-  const consumer = testMod(outline)
+  const consumer = testMod(consumerMod)
   consumer.fakes.cmod.call = relayTo(provider)
 
-  expect(await consumer.type('/outline src/gone.ts')).toEqual({ text: '/outline failed: tracer: ENOENT: no such file src/gone.ts' })
+  expect(await consumer.type('/outline src/gone.ts')).toEqual({ text: '/outline failed: provider: ENOENT: no such file src/gone.ts' })
 })
 
 test('a mod passes on a call addressed to another mod', async () => {
-  const provider = testMod(tracer)
+  const provider = testMod(providerMod)
   const below = { value: [{ name: 'main', line: 1 }] }
 
   expect(await claudeCodeOf(provider).fire('cmod.call', { to: 'symbols', method: 'signatures', input: { path: 'src/a.ts' } }, below)).toBe(below)
@@ -2077,10 +2077,10 @@ test('a dependency call that never answers fails the slash command at its deadli
   const deadlines: number[] = []
   const tested = testMod(
     defineMod({
-      name: 'outline',
+      name: 'consumer',
       setup(mod) {
-        mod.use(slashCommand({ name: 'outline', description: 'List the functions a file exports', reply: async ({ args }, mod) => (await mod.dependencies.tracer.signatures({ path: args })).length.toString() }))
-        sessions.current.onSessionStart(async () => void (await mod.dependencies.tracer.signatures({ path: 'src/a.ts' })), { timeoutMs: 60_000 })
+        mod.use(slashCommand({ name: 'outline', description: 'List the functions a file exports', reply: async ({ args }, mod) => (await mod.dependencies.provider.signatures({ path: args })).length.toString() }))
+        sessions.current.onSessionStart(async () => void (await mod.dependencies.provider.signatures({ path: 'src/a.ts' })), { timeoutMs: 60_000 })
       },
     }),
   )
@@ -2093,35 +2093,35 @@ test('a dependency call that never answers fails the slash command at its deadli
 
   expect(await tested.type('/outline src/a.ts')).toEqual({ text: '/outline failed: /outline passed the 30 s deadline of slashCommand' })
   await tested.raise.onSessionStart({ source: 'startup' })
-  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'mod.dependencies.tracer.signatures passed its 30 s deadline' })
+  expect(tested.shown.toasts).toContainEqual({ type: 'error', message: 'The onSessionStart listener failed', description: 'mod.dependencies.provider.signatures passed its 30 s deadline' })
   expect(deadlines).toEqual([30000, 30000, 30000, 0, 30000, 10000, 30000, 60000, 30000, 300000, 30000])
 })
 
 test("a dependency's method takes the input and returns the result its contract declares", () => {
-  type Signatures = Mod['dependencies']['tracer']['signatures']
+  type Signatures = Mod['dependencies']['provider']['signatures']
 
   expectTypeOf<Parameters<Signatures>>().toEqualTypeOf<[input: { path: string }]>()
-  expectTypeOf<Awaited<ReturnType<Signatures>>>().toEqualTypeOf<TracerSignature[]>()
+  expectTypeOf<Awaited<ReturnType<Signatures>>>().toEqualTypeOf<Signature[]>()
 })
 
 test('a provider whose api method returns the wrong type fails tsc', () => {
   const wrong = defineMod({
-    name: 'tracer',
+    name: 'provider',
     // @ts-expect-error
     setup: () => ({ signatures: async ({ path }: { path: string }) => `${path}:1` }),
   })
 
-  expect(wrong.name).toBe('tracer')
+  expect(wrong.name).toBe('provider')
 })
 
 test('a setup that returns something other than methods does not start', async () => {
-  const tested = testMod(defineMod({ name: 'notes', setup: () => ({ count: 3 }) as never }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => ({ count: 3 }) as never }))
 
-  await expect(tested.start()).rejects.toThrow('notes: setup returns its API, an object of methods other mods call, or nothing. It returned an object with values that are not methods.')
+  await expect(tested.start()).rejects.toThrow('demo: setup returns its API, an object of methods other mods call, or nothing. It returned an object with values that are not methods.')
 })
 
 test('tested.api calls the methods setup returns, as another mod would', async () => {
-  const tested = testMod(tracer)
+  const tested = testMod(providerMod)
   tested.fakes.fs.read = async () => 'export function parse(text: string) {}\n'
 
   expect(await tested.api['signatures']?.({ path: 'src/a.ts' })).toEqual([{ name: 'parse', line: 1 }])
@@ -2132,7 +2132,7 @@ test('a slash command opens a Sidebar page with its params, and the page knows i
   let page: Page<{ readonly run: number }> | undefined
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       setup(mod) {
         page = mod.sidebar.add<{ readonly run: number }>({ id: 'run', title: 'Run', render: (_mod, { params }) => Text({ children: `run ${params.run}` }) })
         mod.use(slashCommand({ name: 'run', description: 'Show a run', reply: ({ args }) => page?.open({ params: { run: Number(args) }, focus: true }) }))
@@ -2153,7 +2153,7 @@ test("a page whose render throws draws its error in place, so no button of its l
   let isBroken = false
   const tested = testMod(
     defineMod({
-      name: 'inbox',
+      name: 'demo',
       setup(mod) {
         void mod.sidebar
           .add({
@@ -2174,7 +2174,7 @@ test("a page whose render throws draws its error in place, so no button of its l
 
   expect(drawn).toEqual(['[ Approve ]'])
   expect([await tested.shown.page.lines(), await tested.shown.page.lines()]).toEqual([['The Inbox page could not draw: item 3 has no title'], ['The Inbox page could not draw: item 3 has no title']])
-  await expect(tested.shown.page.press('Approve')).rejects.toThrow('The page "items" of inbox draws no Button with the key or label "Approve".')
+  await expect(tested.shown.page.press('Approve')).rejects.toThrow('The page "items" of demo draws no Button with the key or label "Approve".')
   expect(tested.shown.toasts.filter((toast) => toast.message === 'The Inbox page could not draw')).toEqual([{ type: 'error', message: 'The Inbox page could not draw', description: 'item 3 has no title' }])
 })
 
@@ -2182,7 +2182,7 @@ test('a page a slash command opens reaches the cmod plugin as the person asking,
   const sent: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       setup(mod) {
         const page = mod.sidebar.add({ id: 'runs', title: 'Runs', render: () => Text({ children: 'last run passed' }) })
         mod.use(slashCommand({ name: 'runs', description: 'Show the runs', reply: () => page.open() }))
@@ -2202,7 +2202,7 @@ test("settings.open shows the mod's first Settings page, and a press there runs 
   let settings: Mod['settings'] | undefined
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       state: { global: { branch: 'main' } },
       setup(mod) {
         settings = mod.settings
@@ -2224,7 +2224,7 @@ test("a mod's hotkey runs its listeners, and a listener removed no longer runs",
   const pressed: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'tree',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the tree', default: 'ctrl+t' } },
       setup(mod) {
         const first = mod.hotkeys.toggle.onPress(() => void pressed.push('first'))
@@ -2240,13 +2240,13 @@ test("a mod's hotkey runs its listeners, and a listener removed no longer runs",
   await tested.hotkey('toggle')
 
   expect(pressed).toEqual(['first', 'second', 'second'])
-  expect(tested.shown.commands).toContain('tree--toggle')
+  expect(tested.shown.commands).toContain('demo--toggle')
 })
 
 test('a hotkey whose listener throws is critical, so its toast shows even when cmod answers no toast', async () => {
   const tested = testMod(
     defineMod({
-      name: 'tree',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the tree', default: 'ctrl+t' } },
       setup: (mod) => void mod.hotkeys.toggle.onPress(() => Promise.reject(new Error('the tree pane is gone'))),
     }),
@@ -2268,10 +2268,10 @@ test("a hotkey whose listener drops page.open's promise asks the cmod plugin as 
   let page: Page | undefined
   const tested = testMod(
     defineMod({
-      name: 'inbox',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the inbox', default: 'ctrl+i' } },
       setup(mod) {
-        const inbox = mod.sidebar.add({ id: 'inbox', title: 'Inbox', render: () => Text({ children: 'no items' }) })
+        const inbox = mod.sidebar.add({ id: 'demo', title: 'Inbox', render: () => Text({ children: 'no items' }) })
         page = inbox
         mod.hotkeys.toggle.onPress(() => void inbox.open({ focus: true }))
       },
@@ -2280,15 +2280,15 @@ test("a hotkey whose listener drops page.open's promise asks the cmod plugin as 
 
   await tested.hotkey('toggle')
 
-  expect(askedRequests(tested.calls)).toEqual([{ requests: [{ open: 'inbox', focus: true }], isAsked: true }])
-  expect(tested.shown.page.id).toBe('inbox')
+  expect(askedRequests(tested.calls)).toEqual([{ requests: [{ open: 'demo', focus: true }], isAsked: true }])
+  expect(tested.shown.page.id).toBe('demo')
   expect([page?.isShown, page?.isFocused]).toEqual([true, true])
 })
 
 test("a slash command whose reply drops settings.open's promise opens Settings in the person's frame", async () => {
   const tested = testMod(
     defineMod({
-      name: 'ci-watch',
+      name: 'demo',
       setup(mod) {
         mod.settings.add({ id: 'branches', title: 'Branches', render: () => Text({ children: 'main' }) })
         mod.use(slashCommand({ name: 'ci-settings', description: 'Show the settings', reply: () => void mod.settings.open() }))
@@ -2304,10 +2304,10 @@ test("a slash command whose reply drops settings.open's promise opens Settings i
 
 test("a hotkey's combo is the one keybindings.json binds to it, which a person may have changed, and undefined while none does", async () => {
   let combos: unknown[] = []
-  const keybindings = { bindings: [{ context: 'Chat', bindings: { 'ctrl+e': 'command:tree--toggle', 'ctrl+k': 'command:other--toggle' } }] }
+  const keybindings = { bindings: [{ context: 'Chat', bindings: { 'ctrl+e': 'command:demo--toggle', 'ctrl+k': 'command:other--toggle' } }] }
   const tested = testMod(
     defineMod({
-      name: 'tree',
+      name: 'demo',
       hotkeys: { toggle: { title: 'Show or hide the tree', default: 'ctrl+t' }, reveal: { title: 'Reveal the file', default: 'ctrl+r' } },
       setup: (mod) => void (combos = [mod.hotkeys.toggle.combo, mod.hotkeys.reveal.combo]),
     }),
@@ -2324,7 +2324,7 @@ test('a hotkey without a default registers its command and has no combo, and onc
     const seen: { combo?: string | undefined; presses: number } = { presses: 0 }
     const tested = testMod(
       defineMod({
-        name: 'inbox',
+        name: 'demo',
         hotkeys: { next: { title: 'Open the next inbox item' } },
         setup(mod) {
           seen.combo = mod.hotkeys.next.combo
@@ -2336,26 +2336,26 @@ test('a hotkey without a default registers its command and has no combo, and onc
     return { tested, seen }
   }
   const unbound = inbox({})
-  const bound = inbox({ 'ctrl+n': 'command:inbox--next' })
+  const bound = inbox({ 'ctrl+n': 'command:demo--next' })
 
   await unbound.tested.start()
   await bound.tested.hotkey('next')
 
-  expect(unbound.tested.shown.commands).toContain('inbox--next')
+  expect(unbound.tested.shown.commands).toContain('demo--next')
   expect(unbound.seen).toEqual({ combo: undefined, presses: 0 })
   expect(bound.seen).toEqual({ combo: 'ctrl+n', presses: 1 })
 })
 
 test('a hotkey default that is not a combo throws in defineMod', () => {
-  expect(() => defineMod({ name: 'tree', hotkeys: { toggle: { title: 'Toggle', default: 't' as never } }, setup: () => undefined })).toThrow('tree: hotkeys.toggle defaults to "t", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".')
-  expect(() => defineMod({ name: 'tree', hotkeys: { a: { title: 'A', default: 'ctrl+t' }, b: { title: 'B', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('tree: hotkeys.b defaults to ctrl+t, which hotkeys.a has too. Give each hotkey its own combo.')
-  expect(() => defineMod({ name: 'tree', hotkeys: { a: { title: 'A' }, b: { title: 'B', default: 'ctrl+t' }, c: { title: 'C', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('tree: hotkeys.c defaults to ctrl+t, which hotkeys.b has too. Give each hotkey its own combo.')
+  expect(() => defineMod({ name: 'demo', hotkeys: { toggle: { title: 'Toggle', default: 't' as never } }, setup: () => undefined })).toThrow('demo: hotkeys.toggle defaults to "t", which is not a combo. Give one or two of ctrl, alt, shift, meta in that order, then a key, such as "ctrl+q" or "ctrl+shift+k".')
+  expect(() => defineMod({ name: 'demo', hotkeys: { a: { title: 'A', default: 'ctrl+t' }, b: { title: 'B', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('demo: hotkeys.b defaults to ctrl+t, which hotkeys.a has too. Give each hotkey its own combo.')
+  expect(() => defineMod({ name: 'demo', hotkeys: { a: { title: 'A' }, b: { title: 'B', default: 'ctrl+t' }, c: { title: 'C', default: 'ctrl+t' } }, setup: () => undefined })).toThrow('demo: hotkeys.c defaults to ctrl+t, which hotkeys.b has too. Give each hotkey its own combo.')
 })
 
 test('a removed timer stops, and says it stopped', async () => {
   let timer: Timer | undefined
   let fired = 0
-  const tested = testMod(defineMod({ name: 'tick', setup: (mod) => void (timer = mod.every(1000, () => void (fired += 1))) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void (timer = mod.every(1000, () => void (fired += 1))) }))
   await tested.start()
 
   expect(timer?.isRunning).toBe(true)

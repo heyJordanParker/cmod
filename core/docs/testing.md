@@ -9,10 +9,10 @@ testMod<State, Options>(definition: ModDefinition<State, string, Options>, optio
 ```ts
 import { expect, test } from 'bun:test'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { todo } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 test('/todo adds the item to the project list', async () => {
-  const tested = testMod(todo)
+  const tested = testMod(myMod)
 
   expect(await tested.type('/todo buy milk')).toEqual({ text: 'Added: buy milk', note: 'The to-do list is now: buy milk' })
   expect(tested.state.project.items).toEqual(['buy milk'])
@@ -98,11 +98,11 @@ Starts the mod: loads its state, runs `setup`, and adds its listeners, pages, pa
 - `raise.beforeTurnEnd({ answer?, failure? })` asks about the open turn ending. It rejects when no turn is open: add a `Prompt` first.
 - `raise.beforeContextEnd()` asks about a compaction of the open context, and resolves with the mod's answer, such as `{ summary }`. `{ task }` asks about the compaction of a task's context, a task `tested.startTask` started.
 - `raise.beforeSessionStart({ source: 'compact' })` asks about the main agent's compaction. `{ source: 'compact', task }` asks about a subagent's, which only `sessions.current.goal.beforeSessionStart` hears.
-- A `note` that `raise` returns is the mod's own text. What Claude Code receives, as `claudeCodeOf(tested).fire` shows it, holds the note inside the mod's tag, such as `<guard_mod>…</guard_mod>`.
+- A `note` that `raise` returns is the mod's own text. What Claude Code receives, as `claudeCodeOf(tested).fire` shows it, holds the note inside the mod's tag, such as `<my-mod_mod>…</my-mod_mod>`.
 
 ```ts
 test('a force push is refused', async () => {
-  const tested = testMod(guard)
+  const tested = testMod(myMod)
   await tested.add({ type: Prompt, text: 'Push it' })
 
   expect(await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'git push --force' } })).toEqual({ refuse: 'Force pushes rewrite shared history.' })
@@ -133,10 +133,10 @@ expect(await tested.fire('cmod.call', { to: 'safe-delete', method: 'restore', in
 ```ts
 import { expect, test } from 'bun:test'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { guard } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 test('a force push is denied with the reason', async () => {
-  const tested = testMod(guard)
+  const tested = testMod(myMod)
 
   const answer = await tested.fire('tool.check', { tool: 'Bash', input: { command: 'git push --force' }, tool_use_id: 'toolu_1' }, { decision: 'allow' })
 
@@ -151,8 +151,8 @@ A mod that adds a note to the prompts about a release answers `beforePrompt`, an
 ```ts
 import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-export const release = defineMod({
-  name: 'release',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup() {
     sessions.current.beforePrompt({ text: /\brelease\b/i }, () => ({ note: 'Run bun run release, then push the tag.' }))
   },
@@ -162,10 +162,10 @@ export const release = defineMod({
 ```ts
 import { expect, test } from 'bun:test'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { release } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 test('a prompt about a release gets the release steps, and another prompt gets nothing', async () => {
-  const tested = testMod(release)
+  const tested = testMod(myMod)
 
   expect(await tested.raise.beforePrompt({ text: 'Cut a release' })).toEqual({ note: 'Run bun run release, then push the tag.' })
   expect(await tested.raise.beforePrompt({ text: 'Fix the bug' })).toBeUndefined()
@@ -194,10 +194,10 @@ The `sessions` option gives the earlier conversations, each a `FakeSession`: an 
 import { expect, test } from 'bun:test'
 import { Prompt, Reply } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { recall } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 test('/recall finds the earlier session about the deploy', async () => {
-  const tested = testMod(recall, { sessions: [{ id: 'older', title: 'Fix the deploy', messages: [{ type: Prompt, text: 'Why did the deploy fail?' }] }] })
+  const tested = testMod(myMod, { sessions: [{ id: 'older', title: 'Fix the deploy', messages: [{ type: Prompt, text: 'Why did the deploy fail?' }] }] })
   await tested.add({ type: Prompt, text: 'Recall the deploy' })
   await tested.add({ type: Reply, text: 'Looking.' })
   await tested.endTurn()
@@ -212,10 +212,10 @@ A `before` listener on the current session answers what `raise` asks, such as `t
 
 ### lines
 
-- `shown.page.lines()` draws the page the mod shows in the Sidebar now, and `shown.pane.lines()` the pane it shows now, and each returns its rows of text. Each rejects when the mod shows none, such as `No pane of notes shows. Open one with pane.open(), from a slash command, a hotkey, or setup.` A page gets `params`, `isFocused`, and `columns`, 80 unless `lines({ columns })` gives another. A pane gets `params`, `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, which is the `columns` that `lines({ columns })` gives, else the pane's own `columns`, else 80, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`. `shown.page.id` and `shown.pane.id` name what shows, and `params` holds its params.
+- `shown.page.lines()` draws the page the mod shows in the Sidebar now, and `shown.pane.lines()` the pane it shows now, and each returns its rows of text. Each rejects when the mod shows none, such as `No pane of my-mod shows. Open one with pane.open(), from a slash command, a hotkey, or setup.` A page gets `params`, `isFocused`, and `columns`, 80 unless `lines({ columns })` gives another. A pane gets `params`, `title`, `isFocused`, true once an `open` or `toggle` with `{ focus: true }` opened it, `bodyColumns`, which is the `columns` that `lines({ columns })` gives, else the pane's own `columns`, else 80, `placement: 'dock'`, `scroll: { offset: 0, bodyRows: 24 }`, and `view: {}`. `shown.page.id` and `shown.pane.id` name what shows, and `params` holds its params.
 - A `Markdown` element in the mod's pages, panes, and widgets draws through the mod's own markdown styles, as it does in a session. Other mods' styles are not drawn.
 - A key in a page or widget draws as the cmod plugin gives it to Claude Code: `<mod>/<page>:<key>` in a page, `<mod>/<widget>:<key>` in a widget, and `<mod>/markdown:<scope>:<block>:<key>` in what a markdown style draws, where `<scope>` is the drawn key of the `Markdown` element that holds the block, or its place among the `Markdown` elements without a key, and `<block>` is the block's number in that element's markdown, each from `0`. In the mod's own pane, a style's key draws as `<scope>:<block>:<key>`, and in a reply as `<block>:<key>`. `press`, `input`, and `select` take the key the mod wrote, and a key two blocks share reaches the first.
-- Claude Code refuses a whole tree in which two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements have one key, anywhere in it, and a refused Sidebar draws blank for the session. So drawing a page, a pane, a widget area, or a style that does it rejects with Claude Code's own text, such as `cmod: returned a tree Pane refuses: Markdown "notes/all:item-text:0" is drawn twice; each takes its own key`. Elements of different types, such as a `Box` and a `Markdown`, may share a key. Claude Code also refuses a `Box`, `Text`, or `Button` whose `hover` names no `scope` and has no `Box` with a key around it, the `Box` itself included, so drawing one rejects with `cmod: returned a tree Pane refuses: Button "notes/all:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`.
+- Claude Code refuses a whole tree in which two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements have one key, anywhere in it, and a refused Sidebar draws blank for the session. So drawing a page, a pane, a widget area, or a style that does it rejects with Claude Code's own text, such as `cmod: returned a tree Pane refuses: Markdown "my-mod/all:item-text:0" is drawn twice; each takes its own key`. Elements of different types, such as a `Box` and a `Markdown`, may share a key. Claude Code also refuses a `Box`, `Text`, or `Button` whose `hover` names no `scope` and has no `Box` with a key around it, the `Box` itself included, so drawing one rejects with `cmod: returned a tree Pane refuses: Button "my-mod/all:archive" hover has no Box with a key around it; the nearest keyed Box is what the pointer hovers, or a scope names its group`.
 - A `Button` draws as Claude Code draws it: `[ Save ]`, or `1: Save` when it is `plain` with a `hotkey`, or `Save` when it is `plain` alone. Borders and colors are not drawn.
 - `lines(area)` draws the mod's widgets in that area, in the rows the person would see, and returns them. A new widget is in the first row of its first area. A layout given in `files` as `/test/home/.local/share/cmod/widgets.json` places the widgets another way. `{ columns }` sets the row's width, 80 by default. `lines(TurnEnd)` draws under the last turn that ended, and rejects when none has: end one with `tested.endTurn()` first.
 - `lines(kind, props, requestId?)` draws the mod's style of that kind with `props` and returns its rows. `Default` draws a plain listing of the props it gets, so a test sees what the style changed. Draw `Reply` with a reply's `text` to test a markdown style. Draws that pass one `requestId` grow one streamed reply.
@@ -224,10 +224,10 @@ A `before` listener on the current session answers what `raise` asks, such as `t
 import { expect, test } from 'bun:test'
 import { BelowPrompt, Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { prompts } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 test('the prompt count shows below the prompt', async () => {
-  const tested = testMod(prompts)
+  const tested = testMod(myMod)
   await tested.add({ type: Prompt, text: 'hello' })
 
   expect(await tested.lines(BelowPrompt)).toEqual(['Prompts: 1'])
@@ -333,16 +333,16 @@ Set a fake to answer a call:
 - `tool.call` answers `CronCreate`, `CronDelete`, and `CronList` by default, keeping the crons a `schedule` makes in `shown.schedules`. A call to any other tool needs a fake.
 - `files` takes symbolic links too: `testMod(mod, { files, links: { '/work/skills': '/shared/skills' } })` makes `/work/skills` a link to `/shared/skills`, so a test of `fs.find` or `metadata.update` follows it as a real file system does.
 - `testMod` opens no install page: an option with no default and no value fails `start()` with its fix, and the `installer` steps are not shown. Test a step's `render` and `isDone` by calling them with the started `mod`.
-- The `committer` below runs `git`, and the `process.run` fake answers in its place.
+- The mod below runs `git`, and the `process.run` fake answers in its place.
 
 ```ts
 import { expect, test } from 'bun:test'
 import { Prompt } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
-import { committer } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 test('a Commit answer commits', async () => {
-  const tested = testMod(committer)
+  const tested = testMod(myMod)
   tested.fakes.ui.ask = async () => 'Commit'
   tested.fakes.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
@@ -390,7 +390,7 @@ The test kit keeps no Log, as a cmod older than 4.3.0 keeps none, so every error
 
 ```ts
 test('the Mode prompt follows the mode', async () => {
-  const tested = testMod(modes)
+  const tested = testMod(myMod)
   await tested.fire('prompt.context', { blocks: [] }, { blocks: [] })
 
   tested.state.session.mode = 'build'

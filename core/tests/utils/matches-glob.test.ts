@@ -11,7 +11,7 @@ test('matches a glob anywhere in an absolute path', () => {
 })
 
 test('does not ignore case', () => {
-  expect(matchesGlob('Domain.md', 'domain.md')).toBe(false)
+  expect(matchesGlob('CHANGELOG.md', 'changelog.md')).toBe(false)
 })
 
 test('a single star stays inside one folder', () => {

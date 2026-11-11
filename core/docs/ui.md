@@ -167,8 +167,8 @@ import { notesPage, type NotesState } from './pages/notes.js'
 
 const initialState: NotesState = { global: { notes: [] } }
 
-export const notes = defineMod({
-  name: 'notes',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: initialState,
   hotkeys: {
     toggle: { title: 'Show or hide the notes', default: 'alt+shift+n' },
@@ -312,8 +312,8 @@ This mod places a path on the left of the row below the prompt, and its usage, b
 import { BelowPrompt, defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
-export const status = defineMod({
-  name: 'status',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { session: { path: '', usage: '', branch: '', time: '', date: '' } },
   setup(mod) {
     mod.widgets.add({ id: 'path', title: 'Path', areas: [BelowPrompt], place: { size: 'fill' }, render: (current) => <Text wrap="truncate-end">{current.state.session.path}</Text> })
@@ -367,8 +367,8 @@ The rows a style changes:
 import { defineMod, sessions, TurnEnd } from '../node_modules/@cmodjs/core/mod.js'
 import { Box, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
-export const turns = defineMod({
-  name: 'turns',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { session: { turns: 0 } },
   setup(mod) {
     mod.styles.add({
@@ -415,8 +415,8 @@ function MermaidBlock({ lang, value, Default }: StyleProps<typeof CodeBlock>): J
   return lang === 'mermaid' ? <Text>{`diagram: ${value}`}</Text> : <Default />
 }
 
-export const diagrams = defineMod({
-  name: 'diagrams',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup(mod) {
     mod.styles.add({ kind: CodeBlock, render: (_mod, props) => <MermaidBlock {...props} /> })
   },
@@ -496,8 +496,8 @@ type AskOptions = { options?: readonly string[]; header?: string; multiSelect?: 
 ```ts
 import { defineMod, process, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-export const committer = defineMod({
-  name: 'committer',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup(mod) {
     sessions.current.onTurnEnd(async () => {
       const answer = await mod.ask('Commit the changes?', { options: ['Commit', 'Wait'], header: 'Commit' })

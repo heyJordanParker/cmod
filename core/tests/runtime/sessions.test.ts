@@ -11,7 +11,7 @@ import { fakeClaude } from '../../src/testing/fake-claude.js'
 function titles() {
   const seen: { current: string; listed: string }[] = []
   const mod = defineMod({
-    name: 'titles',
+    name: 'demo',
     setup(mod) {
       engineOf(mod).router.add('classic.UserPromptSubmit', async (e, next) => {
         const current = sessions.current.title
@@ -47,7 +47,7 @@ test('the name Claude Code gives a session is its title', async () => {
 function colors(isListing: boolean) {
   const seen: { readonly current: string | undefined; readonly listed?: Readonly<Record<string, string | undefined>> }[] = []
   const mod = defineMod({
-    name: 'colors',
+    name: 'demo',
     setup(mod) {
       engineOf(mod).router.add('classic.UserPromptSubmit', async (e, next) => {
         const current = sessions.current.color
@@ -89,7 +89,7 @@ test('/color with no color names the color to give in a test, because Claude Cod
 
 test("a listener under a task still hears that task's subtasks start after /clear moves it to the new session", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   const parent = await tested.startTask({ title: 'Find the pane' })
   const [task] = await sessions.current.goal.tasks()
@@ -105,7 +105,7 @@ test("a listener under a task still hears that task's subtasks start after /clea
 
 test("a listener under a task whose tasks it reads while cmod installs shows nothing, and hears that task's subtasks once cmod is ready", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   const parent = await tested.startTask({ title: 'Find the pane' })
   const [task] = await sessions.current.goal.tasks()
@@ -137,11 +137,11 @@ test('a mod that starts after the first prompt takes the title from the index, n
 })
 
 async function installedMod(setup: () => void) {
-  const fake = fakeClaude({ name: 'tracer', root: '/plugins/tracer' })
+  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
   fake.store.set('cmod:announced', { version: '1.0.0', added: [] })
   fake.fakes.cmod.call = async (call) => (call.method === 'cmod:failed' ? { showsToast: true } : null)
-  const lifecycle = createLifecycle(defineMod({ name: 'tracer', setup }))
-  await lifecycle.start(fake.claude, async () => ({ name: 'tracer', root: '/plugins/tracer', version: '1.0.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }))
+  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'demo', root: '/plugins/demo', version: '1.0.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
   return { fake, lifecycle }
 }
@@ -156,12 +156,12 @@ test('a mod listens on every session, with nothing declared in package.json "cmo
 test("a mod's note before a tool call reaches the cmod plugin, with nothing declared in package.json \"cmod\"", async () => {
   const { fake, lifecycle } = await installedMod(() => void sessions.current.beforeToolCall({ name: 'Bash' }, () => ({ note: 'Run it from the project root.' })))
   await lifecycle.route('classic.SessionStart', { session_id: 'test-session', transcript_path: '/t', cwd: '/work', hook_event_name: 'SessionStart', source: 'startup' } as unknown as Frozen<Args<'classic.SessionStart'>>, async () => ({}))
-  const ask = { to: 'tracer', caller: 'cmod', method: conversationMethods.before, input: { session: 'test-session', event: 'toolCall', change: { type: 'message', message: { id: 't1', at: '', type: 'toolCall', session: 'test-session', context: 1, callId: 't1', name: 'Bash', input: {}, cwd: '/work', files: { read: [], changed: [] } } } } }
+  const ask = { to: 'demo', caller: 'cmod', method: conversationMethods.before, input: { session: 'test-session', event: 'toolCall', change: { type: 'message', message: { id: 't1', at: '', type: 'toolCall', session: 'test-session', context: 1, callId: 't1', name: 'Bash', input: {}, cwd: '/work', files: { read: [], changed: [] } } } } }
 
   const answer = await lifecycle.route('cmod.call', ask, async () => ({ deny: 'unanswered' }))
   await fake.settle()
 
-  expect(answer).toEqual({ value: { note: '<tracer_mod>\nRun it from the project root.\n</tracer_mod>' } })
+  expect(answer).toEqual({ value: { note: '<demo_mod>\nRun it from the project root.\n</demo_mod>' } })
   expect(lifecycle.toasts).toEqual([])
 })
 
@@ -169,7 +169,7 @@ const startSession = { session_id: 'test-session', transcript_path: '/t', cwd: '
 
 const askAbout = (event: 'toolCall' | 'toolResult') => {
   const message = { id: 't1', at: '', type: event, session: 'test-session', context: 1, callId: 't1', name: 'Bash', input: { command: 'make test' }, cwd: '/work', files: { read: [], changed: [] }, ...(event === 'toolResult' ? { output: 'Interrupted by user', isError: true } : {}) }
-  return { to: 'tracer', caller: 'cmod', method: conversationMethods.before, input: { session: 'test-session', event, change: { type: 'message', message } } } as unknown as Frozen<Args<'cmod.call'>>
+  return { to: 'demo', caller: 'cmod', method: conversationMethods.before, input: { session: 'test-session', event, change: { type: 'message', message } } } as unknown as Frozen<Args<'cmod.call'>>
 }
 
 type RunsTrace = (time: { readonly signal: AbortSignal }) => Promise<undefined>
@@ -190,7 +190,7 @@ for (const [method, event, listen] of listeners) {
         return undefined
       }),
     )
-    fake.fakes.process.run = () => new Promise((_resolve, reject) => pressedEsc.signal.addEventListener('abort', () => reject(new Error('tracer: $.process.run(/home/.local/share/cmod/programs/trace) aborted'))))
+    fake.fakes.process.run = () => new Promise((_resolve, reject) => pressedEsc.signal.addEventListener('abort', () => reject(new Error('demo: $.process.run(/home/.local/share/cmod/programs/trace) aborted'))))
     await lifecycle.route('classic.SessionStart', startSession, async () => ({}))
 
     const answer = lifecycle.route('cmod.call', askAbout(event), async () => ({ deny: 'unanswered' }), pressedEsc.signal)

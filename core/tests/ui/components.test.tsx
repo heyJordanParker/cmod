@@ -10,7 +10,7 @@ const tabs = [
 ]
 
 const kit = defineMod({
-  name: 'kit',
+  name: 'demo',
   state: { session: { tab: 'controls', showHidden: false, isHelpOpen: false, page: 1 } },
   async setup(mod) {
     await mod.panes
@@ -119,13 +119,13 @@ test('Pagination steps forward, and draws an end it cannot pass as text', async 
 
   expect(tested.state.session.page).toBe(2)
   expect(await tested.shown.pane.lines()).toContain('p: Previous  2 of 2  n: Next')
-  await expect(tested.shown.pane.press('Next')).rejects.toThrow('The pane "kit" of kit draws no Button with the key or label "Next".')
+  await expect(tested.shown.pane.press('Next')).rejects.toThrow('The pane "kit" of demo draws no Button with the key or label "Next".')
 })
 
 test('Dialog draws its title, body, and actions in order', async () => {
   const tested = testMod(
     defineMod({
-      name: 'confirm',
+      name: 'demo',
       state: { session: { kept: 0 } },
       async setup(mod) {
         await mod.panes

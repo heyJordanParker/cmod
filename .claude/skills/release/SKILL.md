@@ -1,6 +1,6 @@
 ---
 name: release
-description: Release a new cmod version, so npm, the GitHub release, and the cmod plugin carry it and the GitHub release says what changed. TRIGGER on "release", "publish", "ship", "cut a version", and after a /commit the Architect asked to release. DO NOT TRIGGER for a mod's own release; `cmod publish` in that mod's folder does it.
+description: Release a new cmod version, so npm, the GitHub release, and the cmod plugin carry it and the GitHub release says what changed. TRIGGER on "release", "publish", "ship", "cut a version", and after a /commit that was asked to release. DO NOT TRIGGER for a mod's own release; `cmod publish` in that mod's folder does it.
 ---
 
 # Release
@@ -45,6 +45,6 @@ Run `gh run watch <run id> --exit-status` on the run the push started. Then `git
 
 `cmod log --json` lists every failure and warning any session on this computer met, newest first, with its mod, `count`, and the versions it ran on. An entry whose `versions.cmod` is older than the newest release on this computer happened before an update and needs no fix.
 
-### Fix each failure the newest cmod still meets
-A failure of `cmod` is yours: find its root cause and fix it before the next release. A failure of another mod goes to that mod's own session with the entry's text and count, through `SendMessage`, because its repository is not yours.
-Never: edit another mod's repository, or hide a failure from the Log to quiet its toast.
+### Fix each failure of `cmod` the newest cmod still meets
+Find its root cause and fix it before the next release. An entry of any other mod belongs to that mod's own repository.
+Never: hide a failure from the Log to quiet its toast.

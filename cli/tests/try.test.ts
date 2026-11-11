@@ -93,29 +93,29 @@ test('try prints each step for a mod with no steps, and passes the arguments aft
 
 test("cmod try places the mod's rules before the session starts, so the first turn has them, and takes them out after", async () => {
   const home = await temporaryHome()
-  const root = join(home, 'house-style')
+  const root = join(home, 'demo')
   await writeFiles(home, {
-    'bin/claude': claudeAnswering(cmodPluginListed, `readlink "$HOME/.claude/rules/house-style" > "${home}/session-rules"`),
-    'house-style/.claude-plugin/plugin.json': JSON.stringify({ name: 'house-style', version: '0.1.0' }),
-    'house-style/rules/tests.md': 'Write a test before each fix.\n',
+    'bin/claude': claudeAnswering(cmodPluginListed, `readlink "$HOME/.claude/rules/demo" > "${home}/session-rules"`),
+    'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'demo/rules/tests.md': 'Write a test before each fix.\n',
   })
 
   const result = await cmod(home, 'try', '--home', '~', root, '--', '-p', 'hello')
 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'session-rules'), 'utf8')).toBe(`${join(root, 'rules')}\n`)
-  expect(existsSync(join(home, '.claude/rules/house-style'))).toBe(false)
+  expect(existsSync(join(home, '.claude/rules/demo'))).toBe(false)
 })
 
 test('try --home ~ loads each mod in its session with --plugin-dir and leaves your settings as they were', async () => {
   const home = await temporaryHome()
   const tried = join(home, 'demo')
-  const other = join(home, 'Developer/tracer')
+  const other = join(home, 'Developer/other')
   const settings = JSON.stringify({ env: { FOO: '1' } })
   await writeFiles(home, {
     'bin/claude': claudeAnswering(cmodPluginListed, 'true'),
     'demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
-    'Developer/tracer/.claude-plugin/plugin.json': JSON.stringify({ name: 'tracer', version: '0.5.0' }),
+    'Developer/other/.claude-plugin/plugin.json': JSON.stringify({ name: 'other', version: '0.5.0' }),
     '.claude/settings.json': settings,
   })
 
@@ -141,9 +141,9 @@ test('try --option sets the option under the id Claude Code gives the mod its se
   expect(JSON.parse(await readFile(join(home, 'configured'), 'utf8'))).toEqual({ branch: 'main' })
 })
 
-const notesMod = (home: string) => ({
-  '.claude-plugin/plugin.json': JSON.stringify({ name: 'notes', version: '0.1.0' }),
-  'package.json': JSON.stringify({ name: 'notes', cmod: { install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+const demoMod = (home: string) => ({
+  '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+  'package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
   'setup/install.sh': '#!/bin/sh\necho ran >> "$CMOD_DATA/runs"\n',
   'setup/uninstall.sh': `#!/bin/sh\necho uninstalled >> "${home}/uninstalls"\n`,
 })
@@ -158,22 +158,22 @@ test('cmod try runs several mods in a new home that it deletes after the session
   const home = await temporaryHome()
   const store = join(home, '.local/share/cmod')
   await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed, recordingSession(home)) })
-  await writeFiles(join(home, 'notes'), notesMod(home))
-  await writeFiles(join(home, 'modes'), {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'modes', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'modes', cmod: { hotkeys: { cycle: { title: 'Cycle the mode', default: 'shift+tab' } } } }),
+  await writeFiles(join(home, 'demo'), demoMod(home))
+  await writeFiles(join(home, 'other'), {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'other', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'other', cmod: { hotkeys: { cycle: { title: 'Cycle the mode', default: 'shift+tab' } } } }),
   })
   const sessionHome = () => readFile(join(home, 'session-home'), 'utf8').then((text) => text.trim())
 
-  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: join(home, '.claude') }, 'try', join(home, 'notes'), join(home, 'modes'), '--', '-p', 'hello')
+  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: join(home, '.claude') }, 'try', join(home, 'demo'), join(home, 'other'), '--', '-p', 'hello')
 
   expect(result.exitCode).toBe(0)
   expect(await sessionHome()).not.toBe(home)
   expect(existsSync(await sessionHome())).toBe(false)
-  expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe(`--plugin-dir ${join(home, 'notes')} --plugin-dir ${join(home, 'modes')} -p hello\n`)
-  expect(await readFile(join(home, 'session-records'), 'utf8')).toBe('modes.json\nnotes.json\n')
+  expect(await readFile(join(home, 'session-arguments'), 'utf8')).toBe(`--plugin-dir ${join(home, 'demo')} --plugin-dir ${join(home, 'other')} -p hello\n`)
+  expect(await readFile(join(home, 'session-records'), 'utf8')).toBe('demo.json\nother.json\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
-  expect(JSON.parse(await readFile(join(home, 'session-keys'), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:modes--cycle' } }] })
+  expect(JSON.parse(await readFile(join(home, 'session-keys'), 'utf8'))).toEqual({ bindings: [{ context: 'Chat', bindings: { 'shift+tab': 'command:other--cycle' } }] })
   expect(await readFile(join(home, 'session-path'), 'utf8')).toBe(`${await sessionHome()}/.local/bin\n`)
   expect(existsSync(store)).toBe(false)
   expect(existsSync(join(home, '.claude/keybindings.json'))).toBe(false)
@@ -185,9 +185,9 @@ test('cmod try links the macOS keychain into the new home, so Claude Code finds 
     'bin/claude': claudeAnswering(cmodPluginListed, `cat "$HOME/Library/Keychains/login.keychain-db" > "${home}/session-keychain"`),
     'Library/Keychains/login.keychain-db': 'keychain\n',
   })
-  await writeFiles(join(home, 'notes'), notesMod(home))
+  await writeFiles(join(home, 'demo'), demoMod(home))
 
-  const result = await cmod(home, 'try', join(home, 'notes'))
+  const result = await cmod(home, 'try', join(home, 'demo'))
 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'session-keychain'), 'utf8')).toBe('keychain\n')
@@ -215,9 +215,9 @@ echo "$ANTHROPIC_CONFIG_DIR $CLAUDE_SECURESTORAGE_CONFIG_DIR" > "${home}/session
     'config/.claude.json': JSON.stringify({ oauthAccount: { emailAddress: 'me@example.com' }, projects: { '/work': {} }, numStartups: 9 }),
     '.config/anthropic/configs/default.json': '{}\n',
   })
-  await writeFiles(join(home, 'notes'), notesMod(home))
+  await writeFiles(join(home, 'demo'), demoMod(home))
 
-  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: config }, 'try', join(home, 'notes'))
+  const result = await cmodWith(home, { CLAUDE_CONFIG_DIR: config }, 'try', join(home, 'demo'))
 
   expect(result.exitCode).toBe(0)
   expect(JSON.parse(await readFile(join(home, 'session-settings'), 'utf8'))).toEqual({
@@ -234,16 +234,16 @@ test('cmod try --home keeps the folder, with the cmod plugin and no mod left set
   const home = await temporaryHome()
   const kept = join(home, 'try-home')
   await writeFiles(home, { 'bin/claude': claudeAnswering([], recordingSession(home)) })
-  await writeFiles(join(home, 'notes'), notesMod(home))
+  await writeFiles(join(home, 'demo'), demoMod(home))
 
-  const result = await cmod(home, 'try', join(home, 'notes'), '--home', kept)
+  const result = await cmod(home, 'try', join(home, 'demo'), '--home', kept)
 
   expect(result.exitCode).toBe(0)
   expect(await readFile(join(home, 'session-home'), 'utf8')).toBe(`${kept}\n`)
   expect(JSON.parse(await readFile(join(kept, '.claude.json'), 'utf8'))).toEqual({ hasCompletedOnboarding: true })
   expect(await readFile(join(kept, 'claude-calls'), 'utf8')).toContain('plugin install cmod@cmod --json\n')
   expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe('uninstalled\n')
-  expect(existsSync(join(kept, '.local/share/cmod/records/notes.json'))).toBe(false)
+  expect(existsSync(join(kept, '.local/share/cmod/records/demo.json'))).toBe(false)
 }, 15_000)
 
 test('cmod try loads a fresh cmod new mod in a home without the cmod plugin', async () => {

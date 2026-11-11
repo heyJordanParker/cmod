@@ -13,7 +13,7 @@ const currentDate = { name: 'currentDate', text: "Today's date is 2026-10-05." }
 function withPrompt(...jobs: Job<void>[]) {
   return testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup(mod) {
         for (const job of jobs) mod.use(job)
       },
@@ -27,7 +27,7 @@ test('prompt adds its text after a matching call', async () => {
   const afterCommit = await claudeCodeOf(tested).fire('tool.call', bash('git add -A && git commit -m "fix: x"', 'toolu_1'), answered)
   const afterStatus = await claudeCodeOf(tested).fire('tool.call', bash('git status', 'toolu_2'), answered)
 
-  expect(afterCommit).toEqual({ ...answered, context: ['<notes_mod>\n# push-reminder\nPush only when the user asks.\n</notes_mod>'] })
+  expect(afterCommit).toEqual({ ...answered, context: ['<demo_mod>\n# push-reminder\nPush only when the user asks.\n</demo_mod>'] })
   expect(afterStatus).toEqual(answered)
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the push-reminder prompt after git commit.')
 })
@@ -37,21 +37,21 @@ test('a prompt after a call gives Claude the string its callback returns', async
 
   const answer = await claudeCodeOf(tested).fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['<notes_mod>\n# reread\nCommitted with 1 command.\n</notes_mod>'])
+  expect(answer.context).toEqual(['<demo_mod>\n# reread\nCommitted with 1 command.\n</demo_mod>'])
 })
 
 test('a prompt after a write gets the call to build its text with', async () => {
   const tested = withPrompt(prompt({ name: 'reread', after: { write: '**/*.md' }, prompt: ({ call }) => (call !== undefined && 'path' in call ? `Reread ${call.path}.` : undefined) }))
 
-  const answer = await claudeCodeOf(tested).fire('tool.call', { tool: 'Write', file_path: '/test/plugins/notes/README.md', content: 'x', tool_use_id: 'toolu_1' } as never, answered)
+  const answer = await claudeCodeOf(tested).fire('tool.call', { tool: 'Write', file_path: '/test/plugins/demo/README.md', content: 'x', tool_use_id: 'toolu_1' } as never, answered)
 
-  expect(answer.context).toEqual(['<notes_mod>\n# reread\nReread /test/plugins/notes/README.md.\n</notes_mod>'])
+  expect(answer.context).toEqual(['<demo_mod>\n# reread\nReread /test/plugins/demo/README.md.\n</demo_mod>'])
 })
 
 test("a prompt callback after a call gets the mod's own typed state, so it counts commits without capturing the mod from setup", async () => {
   const tested = testMod(
     defineMod({
-      name: 'reread',
+      name: 'demo',
       state: { project: { commits: 0 } },
       setup(mod) {
         mod.use(prompt({ name: 'commits', after: { command: 'git commit' }, prompt: (_input, mod) => `Commit ${(mod.state.project.commits += 1)} landed.` }))
@@ -61,7 +61,7 @@ test("a prompt callback after a call gets the mod's own typed state, so it count
 
   const answer = await claudeCodeOf(tested).fire('tool.call', bash('git commit -m x', 'toolu_1'), answered)
 
-  expect(answer.context).toEqual(['<reread_mod>\n# commits\nCommit 1 landed.\n</reread_mod>'])
+  expect(answer.context).toEqual(['<demo_mod>\n# commits\nCommit 1 landed.\n</demo_mod>'])
   expect(tested.state.project.commits).toBe(1)
 })
 
@@ -69,13 +69,13 @@ test('a prompt after a write gets the path from the folder the shell was in befo
   const bashMovesFolder: Job<void> = (job) => {
     const { claude, router } = engineOf(job.mod)
     router.add('tool.call', async (e, next) => {
-      claude.session.cwd = async () => '/test/plugins/notes/app'
+      claude.session.cwd = async () => '/test/plugins/demo/app'
       return next(e)
     })
   }
   const tested = withPrompt(prompt({ name: 'cart', prompt: ({ call }) => (call !== undefined && 'path' in call ? call.path : undefined), after: { write: '**/cart.ts' } }), bashMovesFolder)
 
-  expect(await claudeCodeOf(tested).fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['<notes_mod>\n# cart\n/test/plugins/notes/app/cart.ts\n</notes_mod>'] })
+  expect(await claudeCodeOf(tested).fire('tool.call', bash('cd app && echo x > cart.ts', 'toolu_1'), answered)).toEqual({ ...answered, context: ['<demo_mod>\n# cart\n/test/plugins/demo/app/cart.ts\n</demo_mod>'] })
 })
 
 test('a prompt callback that passes its 5 s deadline adds nothing, and the mod logs why', async () => {
@@ -87,13 +87,13 @@ test('a prompt callback that passes its 5 s deadline adds nothing, and the mod l
   }
 
   expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(tested.shown.debug).toContain('notes: prompt "history" added nothing: the history prompt passed the 5 s deadline of prompt')
+  expect(tested.shown.debug).toContain('demo: prompt "history" added nothing: the history prompt passed the 5 s deadline of prompt')
 })
 
 test('a prompt with no trigger gives Claude its new text once each time the state it reads changes it', async () => {
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'demo',
       state: { session: { mode: 'propose', presses: 0 } },
       setup(mod) {
         mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
@@ -118,7 +118,7 @@ test('a prompt with no trigger gives Claude its new text once each time the stat
 test('after a resume, a prompt with no trigger gives Claude its text on the first change', async () => {
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'demo',
       state: { session: { mode: 'propose' } },
       setup(mod) {
         mod.use(prompt({ name: 'Mode', prompt: (_input, mod) => `You are in ${mod.state.session.mode} mode.` }))
@@ -143,7 +143,7 @@ test('a prompt with a name and a text and no trigger adds one prompt.context blo
 test("a prompt callback gets the mod's own typed state, so a block shows state without capturing the mod from setup", async () => {
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       state: { global: { notes: ['buy milk'] } },
       setup(mod) {
         mod.use(prompt({ name: 'notes', prompt: (_input, mod) => mod.state.global.notes.join('\n') }))
@@ -160,7 +160,7 @@ test('a block with the same name below adds nothing and writes one debug line', 
   const answer = await claudeCodeOf(tested).fire('prompt.context', { blocks: [currentDate] }, { blocks: [currentDate] })
 
   expect(answer).toEqual({ blocks: [currentDate] })
-  expect(tested.shown.debug).toEqual(['notes: prompt "currentDate" added nothing: a block named "currentDate" is already in the context'])
+  expect(tested.shown.debug).toEqual(['demo: prompt "currentDate" added nothing: a block named "currentDate" is already in the context'])
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the currentDate prompt.')
 })
 
@@ -175,11 +175,11 @@ test('a callback that throws adds nothing and writes one debug line', async () =
   )
 
   expect(await claudeCodeOf(tested).fire('prompt.context', { blocks: [] }, { blocks: [] })).toEqual({ blocks: [] })
-  expect(tested.shown.debug).toEqual(['notes: prompt "broken" added nothing: no notes file'])
+  expect(tested.shown.debug).toEqual(['demo: prompt "broken" added nothing: no notes file'])
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the broken prompt.')
 })
 
 test('one name two times in one mod throws in setup', async () => {
   const twice = withPrompt(prompt({ name: 'rules', prompt: 'a' }), prompt({ name: 'rules', prompt: 'b' }))
-  await expect(twice.start()).rejects.toThrow('prompt: notes adds the name "rules" two times. Give each prompt its own name.')
+  await expect(twice.start()).rejects.toThrow('prompt: demo adds the name "rules" two times. Give each prompt its own name.')
 })

@@ -6,7 +6,7 @@ const programs = '/test/home/.local/share/cmod/programs'
 const ran = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
 function started(files: Record<string, string>) {
-  const tested = testMod(defineMod({ name: 'tracer', setup() {} }), { files })
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }), { files })
   const argvs: (readonly string[])[] = []
   tested.fakes.process.run = async (argv) => (argvs.push(argv), ran)
   tested.fakes.process.spawn = (request) => {
@@ -20,27 +20,27 @@ function started(files: Record<string, string>) {
 }
 
 test("a program cmod installed runs cmod's copy by its name, whatever PATH holds", async () => {
-  const { tested, argvs } = started({ [`${programs}/trace`]: '#!/bin/sh\n' })
+  const { tested, argvs } = started({ [`${programs}/demo`]: '#!/bin/sh\n' })
   await tested.start()
 
-  await process.run(['trace', '--version'])
-  for await (const piece of process.spawn(['trace', 'serve'])) void piece
+  await process.run(['demo', '--version'])
+  for await (const piece of process.spawn(['demo', 'serve'])) void piece
 
   expect(argvs).toEqual([
-    [`${programs}/trace`, '--version'],
-    [`${programs}/trace`, 'serve'],
+    [`${programs}/demo`, '--version'],
+    [`${programs}/demo`, 'serve'],
   ])
 })
 
 test('a program cmod did not install, or one named by its path, runs as given', async () => {
-  const { tested, argvs } = started({ [`${programs}/trace`]: '#!/bin/sh\n' })
+  const { tested, argvs } = started({ [`${programs}/demo`]: '#!/bin/sh\n' })
   await tested.start()
 
   await process.run(['git', 'status'])
-  await process.run(['/usr/bin/trace', '-h'])
+  await process.run(['/usr/bin/demo', '-h'])
 
   expect(argvs).toEqual([
     ['git', 'status'],
-    ['/usr/bin/trace', '-h'],
+    ['/usr/bin/demo', '-h'],
   ])
 })

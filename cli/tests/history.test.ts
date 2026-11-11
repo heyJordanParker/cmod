@@ -21,7 +21,7 @@ function conversation(project: string) {
     { type: 'user', uuid: 'u1', timestamp: at(0), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: 'Rename the tree pane' } },
     { type: 'assistant', uuid: 'a1', timestamp: at(1), cwd: project, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'I will find it first.' }, { type: 'tool_use', id: 'toolu_1', name: 'Agent', input: { prompt: 'find the pane file' } }] } },
     { type: 'user', uuid: 'r1', timestamp: at(5), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'found src/panes/tree.tsx' }] } },
-    { type: 'user', uuid: 'p1', timestamp: at(6), origin: { kind: 'plugin', name: 'modes' }, message: { role: 'user', content: 'Switch to build mode' } },
+    { type: 'user', uuid: 'p1', timestamp: at(6), origin: { kind: 'plugin', name: 'demo' }, message: { role: 'user', content: 'Switch to build mode' } },
     { type: 'custom-title', customTitle: 'Tree pane rename', sessionId: 's1' },
   ]
 }
@@ -68,7 +68,7 @@ function mainMessages(project: string) {
     { id: 'a1:0', type: 'reply', at: at(1), session: 's1', context: 1, turn: 'u1', text: 'I will find it first.' },
     { id: 'a1:1', type: 'toolCall', at: at(1), session: 's1', context: 1, turn: 'u1', callId: 'toolu_1', name: 'Agent', input: { prompt: 'find the pane file' }, cwd: project, files: { read: [], changed: [] } },
     { id: 'r1', type: 'toolResult', at: at(5), session: 's1', context: 1, turn: 'u1', callId: 'toolu_1', name: 'Agent', input: { prompt: 'find the pane file' }, cwd: project, files: { read: [], changed: [] }, output: 'found src/panes/tree.tsx', isError: false },
-    { id: 'p1', type: 'prompt', at: at(6), session: 's1', context: 1, turn: 'p1', text: 'Switch to build mode', from: { type: 'mod', name: 'modes' } },
+    { id: 'p1', type: 'prompt', at: at(6), session: 's1', context: 1, turn: 'p1', text: 'Switch to build mode', from: { type: 'mod', name: 'demo' } },
   ]
 }
 
@@ -130,27 +130,27 @@ test.concurrent('messages reads a conversation as typed messages placed in their
 test.concurrent("each mod's note in a hook row is indexed as a Note from that mod", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
-  const hookRow = { type: 'attachment', uuid: 'h1', timestamp: at(2), attachment: { type: 'hook_additional_context', hookName: 'PostToolUse', content: ['<tracer_mod>\nsrc/CLAUDE.md is held.\n</tracer_mod>'] } }
+  const hookRow = { type: 'attachment', uuid: 'h1', timestamp: at(2), attachment: { type: 'hook_additional_context', hookName: 'PostToolUse', content: ['<demo_mod>\nsrc/CLAUDE.md is held.\n</demo_mod>'] } }
   await writeFiles(home, { [`${projectFolder(project)}/s1.jsonl`]: lines([conversation(project)[0] as object, hookRow]) })
 
-  expect(await json(home, 'messages', 's1', '--project', project)).toEqual([firstTurn(), { id: 'h1', type: 'note', at: at(2), session: 's1', context: 1, turn: 'u1', text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'tracer' } }])
+  expect(await json(home, 'messages', 's1', '--project', project)).toEqual([firstTurn(), { id: 'h1', type: 'note', at: at(2), session: 's1', context: 1, turn: 'u1', text: 'src/CLAUDE.md is held.', from: { type: 'mod', name: 'demo' } }])
 })
 
 test.concurrent("each turn ran on the device the cmod plugin's last note before it names, and a transcript without such a note has turns without a device", async () => {
   const home = await temporaryHome()
   const project = join(home, 'work/app')
-  const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Office-Mac-mini', os: 'darwin', arch: 'arm64' }
-  const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' }
+  const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'mac', os: 'darwin', arch: 'arm64' }
+  const linux = { id: 'dc896649b2c644849a1caf192c072c77', name: 'linux', os: 'linux', arch: 'x64' }
   const noted = (uuid: string, second: number, device: typeof mac) => ({
     type: 'attachment',
     uuid,
     timestamp: at(second),
-    attachment: { type: 'hook_additional_context', hookName: 'SessionStart', content: [`<cmod_mod>\nAs of ${at(second)}, this session runs on ${device.name}, a ${device.os} ${device.arch} computer with the cmod device id ${device.id}.\n\nThe house-style mod adds these rules from now on:\n\nWrite a test first.\n</cmod_mod>`] },
+    attachment: { type: 'hook_additional_context', hookName: 'SessionStart', content: [`<cmod_mod>\nAs of ${at(second)}, this session runs on ${device.name}, a ${device.os} ${device.arch} computer with the cmod device id ${device.id}.\n\nThe demo mod adds these rules from now on:\n\nWrite a test first.\n</cmod_mod>`] },
   })
   const prompt = (uuid: string, second: number, text: string) => ({ type: 'user', uuid, timestamp: at(second), cwd: project, origin: { kind: 'human' }, message: { role: 'user', content: text } })
   const agentCall = { type: 'assistant', uuid: 'a3', timestamp: at(7), cwd: project, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'toolu_3', name: 'Agent', input: { prompt: 'look' } }] } }
   await writeFiles(home, {
-    [`${projectFolder(project)}/moved.jsonl`]: lines([noted('n1', 0, mac), prompt('u1', 1, 'Plan it'), prompt('u2', 3, 'Build it'), noted('n2', 5, devbox), prompt('u3', 6, 'Ship it'), agentCall, noted('n3', 9, mac), prompt('u4', 10, 'Check it')]),
+    [`${projectFolder(project)}/moved.jsonl`]: lines([noted('n1', 0, mac), prompt('u1', 1, 'Plan it'), prompt('u2', 3, 'Build it'), noted('n2', 5, linux), prompt('u3', 6, 'Ship it'), agentCall, noted('n3', 9, mac), prompt('u4', 10, 'Check it')]),
     [`${projectFolder(project)}/moved/subagents/agent-t3.jsonl`]: lines([{ type: 'user', uuid: 'x3', timestamp: at(8), message: { role: 'user', content: 'look' } }]),
     [`${projectFolder(project)}/moved/subagents/agent-t3.meta.json`]: JSON.stringify({ agentType: 'explorer', description: 'Look', toolUseId: 'toolu_3' }),
     [`${projectFolder(project)}/older.jsonl`]: lines([prompt('o1', 1, 'Plan it'), prompt('o2', 3, 'Build it')]),
@@ -158,8 +158,8 @@ test.concurrent("each turn ran on the device the cmod plugin's last note before 
 
   const devices = async (...args: string[]) => ((await json(home, 'turns', ...args, '--project', project)) as { prompt: { id: string }; device?: unknown }[]).map((turn) => [turn.prompt.id, turn.device])
 
-  expect(await devices('moved')).toEqual([['u1', mac], ['u2', mac], ['u3', devbox], ['u4', mac]])
-  expect(await devices('moved', '--task', 't3')).toEqual([['x3', devbox]])
+  expect(await devices('moved')).toEqual([['u1', mac], ['u2', mac], ['u3', linux], ['u4', mac]])
+  expect(await devices('moved', '--task', 't3')).toEqual([['x3', linux]])
   expect(await devices('older')).toEqual([['o1', undefined], ['o2', undefined]])
 })
 
@@ -246,7 +246,7 @@ test.concurrent('messages and search print one line per message, with the local 
       '10:00  claude   I will find it first.',
       '10:00  claude   Agent  {"prompt":"find the pane file"}',
       '10:00  →        found src/panes/tree.tsx',
-      '10:00  mod modes  Switch to build mode',
+      '10:00  mod demo  Switch to build mode',
       '',
     ].join('\n'),
   )

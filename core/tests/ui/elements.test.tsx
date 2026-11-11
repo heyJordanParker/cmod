@@ -11,7 +11,7 @@ function Count({ count }: { readonly count: number }): JSX.Element {
 }
 
 const counter = defineMod({
-  name: 'counter',
+  name: 'demo',
   state: { session: { count: 2 } },
   async setup(mod) {
     const pane = mod.panes.add({
@@ -55,7 +55,7 @@ test('an element built outside a render draws once a render places it', async ()
 test('a pane that draws Svg draws under test, with nothing of the Svg in the terminal', async () => {
   const tested = testMod(
     defineMod({
-      name: 'charts',
+      name: 'demo',
       async setup(mod) {
         await mod.panes
           .add({
@@ -77,33 +77,33 @@ test('a pane that draws Svg draws under test, with nothing of the Svg in the ter
 })
 
 test('Image draws', async () => {
-  const fake = fakeClaude({ name: 'charts', root: '/test/plugins/charts' })
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/charts' })
   fake.claude.ui.resolve = () => ({ Image: (props: object) => ({ type: 'Image', props }) }) as unknown as ElementTable
   const chart = { source: { png: 'iVBORw0KGgo=' }, columns: 40, rows: 12, alt: 'p95 latency' }
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'charts',
+      name: 'demo',
       async setup(mod) {
         await mod.panes.add({ id: 'chart', title: 'Chart', render: () => Image(chart) }).open()
       },
     }),
   )
-  await lifecycle.start(fake.claude, async () => ({ name: 'charts', root: '/test/plugins/charts', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  await lifecycle.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/charts', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'chart', props: { title: 'Chart', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
 
   expect(await lifecycle.route('ui.render', pane, async () => Box({}))).toEqual({ type: 'Image', props: chart } as unknown as RenderElement)
 })
 
 test("a Button with an https href draws as the desktop app's own link, and one with another href as a button that copies it there", async () => {
-  const fake = fakeClaude({ name: 'docs', root: '/test/plugins/docs' })
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
   fake.claude.ui.resolve = () => ({ Box: (props: object) => ({ type: 'Box', props }), Button: (props: object) => ({ type: 'Button', props }), Link: (props: object) => ({ type: 'Link', props }) }) as unknown as ElementTable
   const lifecycle = createLifecycle(
     defineMod({
-      name: 'docs',
+      name: 'demo',
       async setup(mod) {
         await mod.panes
           .add({
-            id: 'docs',
+            id: 'demo',
             title: 'Docs',
             render: () => (
               <Box>
@@ -116,13 +116,13 @@ test("a Button with an https href draws as the desktop app's own link, and one w
       },
     }),
   )
-  await lifecycle.start(fake.claude, async () => ({ name: 'docs', root: '/test/plugins/docs', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
-  const pane = { surface: 'desktop', component: 'Pane', requestId: 'docs', props: { title: 'Docs', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
+  await lifecycle.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  const pane = { surface: 'desktop', component: 'Pane', requestId: 'demo', props: { title: 'Docs', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
 
   const drawn = (await lifecycle.route('ui.render', pane, async () => Box({}))) as unknown as { readonly props: { readonly children: readonly { readonly type: string; readonly props: Record<string, unknown> }[] } }
   const [link, button] = drawn.props.children
   const press = button?.props['onPress'] as (press: object) => Promise<void>
-  await press({ plugin: 'docs', element: 'Open the app', component: 'Pane', requestId: 'docs', surface: 'desktop' })
+  await press({ plugin: 'demo', element: 'Open the app', component: 'Pane', requestId: 'demo', surface: 'desktop' })
   await fake.settle()
 
   expect(link).toEqual({ type: 'Link', props: { href: 'https://example.com/docs', label: 'Open the docs' } })

@@ -28,7 +28,7 @@ const label = (id: string, text: string, areas: WidgetInit['areas'] = [BelowProm
 const layout = (areas: Partial<WidgetLayout['areas']>, hidden: readonly string[] = []): string => JSON.stringify({ areas: { ...layoutOf({}).areas, ...areas }, hidden })
 
 test('a new widget goes into the first row of its first area, and only a change the person makes writes the layout', async () => {
-  const tested = testMod(withWidgets('git', label('branch', 'main', [Working, BelowPrompt]), label('dirty', '2 changed')))
+  const tested = testMod(withWidgets('demo', label('branch', 'main', [Working, BelowPrompt]), label('dirty', '2 changed')))
 
   expect(await tested.lines(Working)).toEqual(['main'])
   expect(await tested.lines(BelowPrompt)).toEqual(['2 changed'])
@@ -36,8 +36,8 @@ test('a new widget goes into the first row of its first area, and only a change 
 })
 
 test('a row draws its left widgets at the left and its right widgets at the right, at the width it is given', async () => {
-  const tested = testMod(withWidgets('git', label('branch', 'main'), label('dirty', '2 changed'), label('ahead', '↑1')), {
-    files: { [layoutFile]: layout({ belowPrompt: [{ left: ['git/branch', 'git/dirty'], right: ['git/ahead'] }] }) },
+  const tested = testMod(withWidgets('demo', label('branch', 'main'), label('dirty', '2 changed'), label('ahead', '↑1')), {
+    files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/branch', 'demo/dirty'], right: ['demo/ahead'] }] }) },
   })
 
   expect(await tested.lines(BelowPrompt, { columns: 30 })).toEqual(['main  2 changed             ↑1'])
@@ -45,16 +45,16 @@ test('a row draws its left widgets at the left and its right widgets at the righ
 
 test('a new widget placed on the right draws at the right of the first row of its area, until the person moves it', async () => {
   const clock: WidgetInit = { ...label('clock', '00:03'), place: { side: 'right' } }
-  const fresh = testMod(withWidgets('git', label('branch', 'main'), clock))
-  const movedByPerson = testMod(withWidgets('git', label('branch', 'main'), clock), { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['git/clock', 'git/branch'], right: [] }] }) } })
+  const fresh = testMod(withWidgets('demo', label('branch', 'main'), clock))
+  const movedByPerson = testMod(withWidgets('demo', label('branch', 'main'), clock), { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/clock', 'demo/branch'], right: [] }] }) } })
 
   expect(await fresh.lines(BelowPrompt, { columns: 30 })).toEqual([`main${' '.repeat(21)}00:03`])
   expect(await movedByPerson.lines(BelowPrompt, { columns: 30 })).toEqual(['00:03  main'])
 })
 
 test('a hidden widget keeps its place and draws nothing', async () => {
-  const tested = testMod(withWidgets('git', label('branch', 'main'), label('dirty', '2 changed')), {
-    files: { [layoutFile]: layout({ belowPrompt: [{ left: ['git/branch', 'git/dirty'], right: [] }] }, ['git/branch']) },
+  const tested = testMod(withWidgets('demo', label('branch', 'main'), label('dirty', '2 changed')), {
+    files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/branch', 'demo/dirty'], right: [] }] }, ['demo/branch']) },
   })
 
   expect(await tested.lines(BelowPrompt)).toEqual(['2 changed'])
@@ -62,7 +62,7 @@ test('a hidden widget keeps its place and draws nothing', async () => {
 
 test("hiding Claude Code's hint leaves the BelowPrompt widgets, and hiding its mode labels draws none", async () => {
   const fire = async (hidden: readonly string[], component: 'PromptHint' | 'SessionMode') => {
-    const tested = testMod(withWidgets('git', label('branch', 'main')), { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }, hidden) } })
+    const tested = testMod(withWidgets('demo', label('branch', 'main')), { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }, hidden) } })
     const props = component === 'PromptHint' ? { isDraft: false, isWorking: false, hint: '? for shortcuts' } : { modes: ['auto mode on'] }
     return rowsOf(await tested.fire('ui.render', { surface: 'terminal', component, requestId: component, props, viewport: { columns: 40, rows: 24 } } as never, elements.Text({ children: component === 'PromptHint' ? '? for shortcuts' : 'auto mode on' })), 40).map((row) => row.trimEnd())
   }
@@ -74,7 +74,7 @@ test("hiding Claude Code's hint leaves the BelowPrompt widgets, and hiding its m
 })
 
 test('a prompt narrower than its indent still draws its BelowPrompt widgets, at no width instead of a negative one', async () => {
-  const tested = testMod(withWidgets('git', label('branch', 'main')))
+  const tested = testMod(withWidgets('demo', label('branch', 'main')))
   const drawn = await tested.fire('ui.render', { surface: 'terminal', component: 'PromptHint', requestId: 'PromptHint', props: { isDraft: false, isWorking: false, hint: '' }, viewport: { columns: 2, rows: 24 } } as never, elements.Text({ children: '' }))
 
   expect(rowsOf(drawn, 2)).toEqual(['', 'main'])
@@ -92,7 +92,7 @@ test('a TurnEnd widget draws under the turn that ended, and reads that turn', as
 test("a widget's button runs in the mod that drew it, and the widget draws its new state", async () => {
   const tested = testMod(
     defineMod({
-      name: 'counter',
+      name: 'demo',
       state: { session: { count: 0 } },
       setup(mod) {
         mod.widgets.add({
@@ -120,7 +120,7 @@ test("a widget's button runs in the mod that drew it, and the widget draws its n
 test("a widget's button opens a page of the mod in the Sidebar", async () => {
   const tested = testMod(
     defineMod({
-      name: 'git',
+      name: 'demo',
       setup(mod) {
         const log = mod.sidebar.add({ id: 'log', title: 'Log', render: () => <Text>3 commits</Text> })
         mod.widgets.add({ id: 'branch', title: 'Branch', areas: [BelowPrompt], render: () => <Button key="log" label="main" onPress={() => log.open({ focus: true })} /> })
@@ -137,7 +137,7 @@ test("a widget's button opens a page of the mod in the Sidebar", async () => {
 test('a widget that throws is reported and draws nothing, and the widgets beside it still draw', async () => {
   const tested = testMod(
     withWidgets(
-      'git',
+      'demo',
       {
         id: 'broken',
         title: 'Broken',
@@ -148,12 +148,12 @@ test('a widget that throws is reported and draws nothing, and the widgets beside
       },
       label('branch', 'main'),
     ),
-    { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['git/broken', 'git/branch'], right: [] }] }) } },
+    { files: { [layoutFile]: layout({ belowPrompt: [{ left: ['demo/broken', 'demo/branch'], right: [] }] }) } },
   )
 
   expect(await tested.lines(BelowPrompt)).toEqual(['main'])
   expect(tested.shown.toasts.map((toast) => toast.message)).toContain('The Broken widget could not draw')
-  expect(await tested.fire('cmod.call', { to: 'git', method: partMethods.draw, input: { widget: 'broken', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)).toEqual({ value: { draw: expect.any(Number), tree: null } } as never)
+  expect(await tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { widget: 'broken', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)).toEqual({ value: { draw: expect.any(Number), tree: null } } as never)
 })
 
 test('a widget that draws a Client is reported and draws nothing, and a Raster draws as data the cmod plugin draws', async () => {
@@ -176,7 +176,7 @@ test('a removed widget draws nothing, and an added one draws at once', async () 
   let add = () => {}
   const tested = testMod(
     defineMod({
-      name: 'git',
+      name: 'demo',
       setup(mod: Mod) {
         remove = () => mod.widgets.add(label('branch', 'main')).remove()
         add = () => void mod.widgets.add(label('dirty', '2 changed'))
@@ -192,17 +192,17 @@ test('a removed widget draws nothing, and an added one draws at once', async () 
 })
 
 test('a second widget with one id is refused in setup', async () => {
-  await expect(testMod(withWidgets('git', label('branch', 'main'), label('branch', 'dev'))).start()).rejects.toThrow('git: the widget "branch" is already added. Give each widget its own id.')
+  await expect(testMod(withWidgets('demo', label('branch', 'main'), label('branch', 'dev'))).start()).rejects.toThrow('demo: the widget "branch" is already added. Give each widget its own id.')
 })
 
 test('widgets.add refuses an id that is not one', async () => {
-  await expect(testMod(withWidgets('git', label('a b', 'main'))).start()).rejects.toThrow('git: "a b" is not a widget id. Use 1 to 64 letters, digits, "_", or "-".')
+  await expect(testMod(withWidgets('demo', label('a b', 'main'))).start()).rejects.toThrow('demo: "a b" is not a widget id. Use 1 to 64 letters, digits, "_", or "-".')
 })
 
 test('a press runs the button of the drawing the person saw, after the widget drew again at another width', async () => {
   const tested = testMod(
     defineMod({
-      name: 'pick',
+      name: 'demo',
       state: { session: { picked: '' } },
       setup(mod) {
         mod.widgets.add({ id: 'choice', title: 'Choice', areas: [BelowPrompt], render: (current, { columns }) => <Button key="go" label="Go" onPress={() => void (current.state.session.picked = columns < 50 ? 'narrow' : 'wide')} /> })
@@ -210,11 +210,11 @@ test('a press runs the button of the drawing the person saw, after the widget dr
     }),
   )
   await tested.start()
-  const draw = async (columns: number) => (await tested.fire('cmod.call', { to: 'pick', method: partMethods.draw, input: { widget: 'choice', area: BelowPrompt, columns }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }
+  const draw = async (columns: number) => (await tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { widget: 'choice', area: BelowPrompt, columns }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }
   const narrow = await draw(30)
   await draw(80)
 
-  await tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: narrow.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
+  await tested.fire('cmod.call', { to: 'demo', method: partMethods.press, input: { draw: narrow.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
   await tested.settle()
 
   expect(tested.state.session.picked).toBe('narrow')
@@ -234,7 +234,7 @@ test('a mod that lists a new widget asks Claude Code for one redraw, not one to 
   await fake.settle()
   const start = fake.calls.length
 
-  tell('git', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
+  tell('demo', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
   await fake.settle()
 
   expect(fake.calls.slice(start).filter(({ call }) => call === 'ui.invalidate')).toEqual([{ call: 'ui.invalidate', args: ['ui.render'] }])
@@ -244,7 +244,7 @@ test('a fit widget keeps its width, a fill widget gives up width, only a side ho
   const { fake, widgets, tell } = servedLayout(layout({}))
   fake.fakes.cmod.call = async ({ method, input }) => (method === partMethods.draw ? { draw: 1, tree: { $cmodElement: 'Text', props: { children: (input as { readonly widget: string }).widget } } } : null)
   await fake.settle()
-  tell('git', [
+  tell('demo', [
     { id: 'path', title: 'Path', areas: [BelowPrompt], place: { size: 'fill' } },
     { id: 'clock', title: 'Clock', areas: [BelowPrompt], place: { side: 'right', size: 'fit' } },
     { id: 'later', title: 'Later', areas: [BelowPrompt], place: { side: 'center', size: 'half' } },
@@ -264,26 +264,26 @@ test('a fit widget keeps its width, a fill widget gives up width, only a side ho
 
 test('a layout change marks store-changed, which every other session polls, and placing a new widget marks nothing', async () => {
   const stamp = storeChangedPath('/test/home/.local/share/cmod')
-  const { fake, widgets, tell } = servedLayout(layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }))
+  const { fake, widgets, tell } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
   tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   await fake.settle()
   expect(await fake.claude.fs.exists(stamp)).toBe(false)
 
-  await widgets.change((current) => toggled(current, 'git/branch'))
+  await widgets.change((current) => toggled(current, 'demo/branch'))
 
   expect(await fake.claude.fs.exists(stamp)).toBe(true)
 })
 
 test('a store change that leaves the widget layout as it was asks Claude Code for no redraw, and one that moves a widget asks for one', async () => {
-  const { fake, widgets } = servedLayout(layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }))
+  const { fake, widgets } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
   const redraws = () => fake.calls.filter(({ call }) => call === 'ui.invalidate').length
   const start = redraws()
 
   await widgets.reload()
   const afterSameLayout = redraws() - start
-  await fake.claude.fs.write(layoutFile, layout({ belowPrompt: [{ left: [], right: ['git/branch'] }] }))
+  await fake.claude.fs.write(layoutFile, layout({ belowPrompt: [{ left: [], right: ['demo/branch'] }] }))
   await widgets.reload()
 
   expect([afterSameLayout, redraws() - start]).toEqual([0, 1])
@@ -294,49 +294,49 @@ test("a mod that lists an area that is not one still lets the other mods' new wi
   await fake.settle()
 
   tell('broken', [{ id: 'x', title: 'X', areas: ['status'] }])
-  tell('git', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
+  tell('demo', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
   await fake.settle()
 
-  expect(widgets.layout().areas.belowPrompt).toEqual([{ left: ['git/branch'], right: [] }])
+  expect(widgets.layout().areas.belowPrompt).toEqual([{ left: ['demo/branch'], right: [] }])
 })
 
 test('two sessions place new widgets without writing, so a layout change in one is never lost to the start of another', async () => {
-  const { fake, widgets, tell, saved } = servedLayout(layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }))
+  const { fake, widgets, tell, saved } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
   tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   await fake.settle()
 
-  expect(await saved()).toEqual(layoutOf(JSON.parse(layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }))))
-  await widgets.change((current) => toggled(current, 'git/branch'))
+  expect(await saved()).toEqual(layoutOf(JSON.parse(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))))
+  await widgets.change((current) => toggled(current, 'demo/branch'))
 
-  expect(await saved()).toEqual({ ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['git/branch', 'notes/count'], right: [] }] }, hidden: ['git/branch'] })
+  expect(await saved()).toEqual({ ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['demo/branch', 'notes/count'], right: [] }] }, hidden: ['demo/branch'] })
 })
 
 test('a change to the layout keeps the areas and fields a newer cmod in another session saved', async () => {
-  const newer = { areas: { belowPrompt: [{ left: ['git/branch'], right: [], center: ['git/dirty'] }], sidebarTop: [{ left: ['notes/count'], right: [] }] }, hidden: [] as string[], order: ['git'] }
+  const newer = { areas: { belowPrompt: [{ left: ['demo/branch'], right: [], center: ['demo/dirty'] }], sidebarTop: [{ left: ['notes/count'], right: [] }] }, hidden: [] as string[], order: ['demo'] }
   const { fake, widgets, tell } = servedLayout(JSON.stringify(newer))
   await fake.settle()
   tell('notes', [{ id: 'count', title: 'Count', areas: ['abovePrompt'] }])
-  tell('git', [{ id: 'dirty', title: 'Dirty', areas: ['belowPrompt'] }])
+  tell('demo', [{ id: 'dirty', title: 'Dirty', areas: ['belowPrompt'] }])
 
-  await widgets.change((current) => toggled(current, 'git/branch'))
+  await widgets.change((current) => toggled(current, 'demo/branch'))
 
   const written = JSON.parse(await fake.claude.fs.read(layoutFile)) as typeof newer & { readonly areas: { readonly abovePrompt?: unknown } }
   expect(written.areas.sidebarTop).toEqual(newer.areas.sidebarTop)
   expect(written.areas.belowPrompt).toEqual(newer.areas.belowPrompt)
   expect(written.areas.abovePrompt).toEqual([])
-  expect(written.order).toEqual(['git'])
-  expect(written.hidden).toEqual(['git/branch'])
+  expect(written.order).toEqual(['demo'])
+  expect(written.hidden).toEqual(['demo/branch'])
 })
 
 test('a change to the layout keeps what another session saved a moment before', async () => {
-  const { fake, widgets, saved } = servedLayout(layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }))
+  const { fake, widgets, saved } = servedLayout(layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }))
   await fake.settle()
-  await fake.claude.fs.write(layoutFile, layout({ belowPrompt: [{ left: ['git/branch'], right: [] }] }, ['git/dirty']))
+  await fake.claude.fs.write(layoutFile, layout({ belowPrompt: [{ left: ['demo/branch'], right: [] }] }, ['demo/dirty']))
 
-  await widgets.change((current) => toggled(current, 'git/branch'))
+  await widgets.change((current) => toggled(current, 'demo/branch'))
 
-  expect((await saved()).hidden).toEqual(['git/dirty', 'git/branch'])
+  expect((await saved()).hidden).toEqual(['demo/dirty', 'demo/branch'])
 })
 
 test('the cmod plugin keeps the 200 drawings it showed last, and draws an older one again when it shows', async () => {
@@ -344,22 +344,22 @@ test('the cmod plugin keeps the 200 drawings it showed last, and draws an older 
   const asked: unknown[] = []
   fake.fakes.cmod.call = async (input) => (asked.push(input.input), { draw: asked.length, tree: { $cmodElement: 'Text', props: { children: 'run' } } })
   const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
-  for (let run = 0; run <= 200; run += 1) await parts.fill('ci-watch', `runs ${run}`, { page: 'runs', params: { run } }, 'The runs page')
+  for (let run = 0; run <= 200; run += 1) await parts.fill('demo', `runs ${run}`, { page: 'runs', params: { run } }, 'The runs page')
 
-  expect(parts.element('ci-watch', 'runs 0', 'ci-watch/runs:', 'The runs page', 'page')).toBeUndefined()
-  expect(parts.element('ci-watch', 'runs 1', 'ci-watch/runs:', 'The runs page', 'page')).toBeDefined()
-  await parts.fill('ci-watch', 'runs 0', { page: 'runs', params: { run: 0 } }, 'The runs page')
-  expect(parts.element('ci-watch', 'runs 1', 'ci-watch/runs:', 'The runs page', 'page')).toBeDefined()
-  expect(parts.element('ci-watch', 'runs 2', 'ci-watch/runs:', 'The runs page', 'page')).toBeUndefined()
+  expect(parts.element('demo', 'runs 0', 'demo/runs:', 'The runs page', 'page')).toBeUndefined()
+  expect(parts.element('demo', 'runs 1', 'demo/runs:', 'The runs page', 'page')).toBeDefined()
+  await parts.fill('demo', 'runs 0', { page: 'runs', params: { run: 0 } }, 'The runs page')
+  expect(parts.element('demo', 'runs 1', 'demo/runs:', 'The runs page', 'page')).toBeDefined()
+  expect(parts.element('demo', 'runs 2', 'demo/runs:', 'The runs page', 'page')).toBeUndefined()
   expect(asked).toHaveLength(202)
 })
 
 test('a page keeps the handlers of its newest 200 params, so a page shown again with earlier params still takes a press', async () => {
   let pressed = 0
-  const tested = testMod(defineMod({ name: 'pick', setup: (mod) => void mod.sidebar.add<{ readonly run: number }>({ id: 'runs', title: 'Runs', render: () => Button({ key: 'go', label: 'Go', onPress: () => void (pressed += 1) }) }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.sidebar.add<{ readonly run: number }>({ id: 'runs', title: 'Runs', render: () => Button({ key: 'go', label: 'Go', onPress: () => void (pressed += 1) }) }) }))
   await tested.start()
-  const draw = async (run: number) => ((await tested.fire('cmod.call', { to: 'pick', method: partMethods.draw, input: { page: 'runs', params: { run }, columns: 80, isFocused: false }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }).value.draw
-  const press = (draw: number) => tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw, handler: 0, args: [] }, caller: 'cmod' } as never)
+  const draw = async (run: number) => ((await tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { page: 'runs', params: { run }, columns: 80, isFocused: false }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }).value.draw
+  const press = (draw: number) => tested.fire('cmod.call', { to: 'demo', method: partMethods.press, input: { draw, handler: 0, args: [] }, caller: 'cmod' } as never)
   const first = await draw(0)
   const second = await draw(1)
   for (let run = 2; run <= 200; run += 1) await draw(run)
@@ -378,7 +378,7 @@ test('two presses whose handlers overlap leave the mod telling the cmod plugin a
   const fast = new Promise<void>((resolve) => (finishFast = resolve))
   const tested = testMod(
     defineMod({
-      name: 'pick',
+      name: 'demo',
       state: { session: { count: 0 } },
       setup(mod) {
         mod.sidebar.add({ id: 'runs', title: 'Runs', render: (current) => Box({ children: [Text({ children: `count ${current.state.session.count}` }), Button({ key: 'slow', label: 'slow', onPress: () => slow }), Button({ key: 'fast', label: 'fast', onPress: () => fast })] }) })
@@ -394,7 +394,7 @@ test('two presses whose handlers overlap leave the mod telling the cmod plugin a
   }
   await tested.start()
   await tested.settle()
-  const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'pick', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
+  const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'demo', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
   const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true })).value
 
   const pressSlow = call(partMethods.press, { draw, handler: 0, args: [] })
@@ -418,7 +418,7 @@ test('a state change that leaves every drawing the same tells the cmod plugin no
   const pressed: number[] = []
   const tested = testMod(
     defineMod({
-      name: 'pick',
+      name: 'demo',
       state: { session: { count: 0, label: 'Go' } },
       setup(mod) {
         mod.sidebar.add({
@@ -441,7 +441,7 @@ test('a state change that leaves every drawing the same tells the cmod plugin no
   }
   await tested.start()
   await tested.settle()
-  const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'pick', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
+  const call = (method: string, input: unknown, caller = 'cmod') => tested.fire('cmod.call', { to: 'demo', method, input, caller } as never) as Promise<{ readonly value: { readonly draw: number } }>
   const { draw } = (await call(partMethods.draw, { page: 'runs', params: null, columns: 40, isFocused: true })).value
   heard.length = 0
 
@@ -462,7 +462,7 @@ test("a widget's button keeps working however many other drawings come after it"
   let pressed = 0
   const tested = testMod(
     defineMod({
-      name: 'pick',
+      name: 'demo',
       setup(mod) {
         mod.widgets.add({ id: 'choice', title: 'Choice', areas: [BelowPrompt], render: () => Button({ key: 'go', label: 'Go', onPress: () => void (pressed += 1) }) })
         mod.widgets.add({ id: 'clock', title: 'Clock', areas: [TurnEnd], render: (_mod, context) => Button({ key: 'turn', label: 'turn' in context ? context.turn.prompt.id : '', onPress: () => undefined }) })
@@ -470,43 +470,43 @@ test("a widget's button keeps working however many other drawings come after it"
     }),
   )
   await tested.start()
-  const drawn = (await tested.fire('cmod.call', { to: 'pick', method: partMethods.draw, input: { widget: 'choice', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }
-  const turnEnd = (turn: number) => tested.fire('cmod.call', { to: 'pick', method: partMethods.draw, input: { widget: 'clock', area: TurnEnd, columns: 80, turn: { prompt: { id: `p${turn}` } } }, caller: 'cmod' } as never) as Promise<{ readonly value: { readonly draw: number } }>
+  const drawn = (await tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { widget: 'choice', area: BelowPrompt, columns: 80 }, caller: 'cmod' } as never)) as { readonly value: { readonly draw: number } }
+  const turnEnd = (turn: number) => tested.fire('cmod.call', { to: 'demo', method: partMethods.draw, input: { widget: 'clock', area: TurnEnd, columns: 80, turn: { prompt: { id: `p${turn}` } } }, caller: 'cmod' } as never) as Promise<{ readonly value: { readonly draw: number } }>
   const first = await turnEnd(0)
   for (let turn = 1; turn <= keptDrawInputs; turn += 1) await turnEnd(turn)
   const recent = await turnEnd(keptDrawInputs + 1)
 
-  await tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: drawn.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
-  await tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: recent.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
+  await tested.fire('cmod.call', { to: 'demo', method: partMethods.press, input: { draw: drawn.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
+  await tested.fire('cmod.call', { to: 'demo', method: partMethods.press, input: { draw: recent.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)
   await tested.settle()
 
   expect(pressed).toBe(1)
-  expect(await tested.fire('cmod.call', { to: 'pick', method: partMethods.press, input: { draw: first.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)).toEqual({ deny: expect.stringContaining('that button drew before the last redraw') } as never)
+  expect(await tested.fire('cmod.call', { to: 'demo', method: partMethods.press, input: { draw: first.value.draw, handler: 0, args: [] }, caller: 'cmod' } as never)).toEqual({ deny: expect.stringContaining('that button drew before the last redraw') } as never)
 })
 
 test('a page keeps its last drawing on screen through two redraws that come before the next drawing lands', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/test/cmod' })
   fake.fakes.cmod.call = async () => ({ draw: 1, tree: { $cmodElement: 'Text', props: { children: 'run 7' } } })
   const parts = drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined })
-  await parts.fill('ci-watch', 'runs', { page: 'runs' }, 'The runs page')
+  await parts.fill('demo', 'runs', { page: 'runs' }, 'The runs page')
   fake.fakes.cmod.call = () => new Promise(() => undefined)
 
-  parts.forget('ci-watch')
-  void parts.fill('ci-watch', 'runs', { page: 'runs' }, 'The runs page')
-  parts.forget('ci-watch')
+  parts.forget('demo')
+  void parts.fill('demo', 'runs', { page: 'runs' }, 'The runs page')
+  parts.forget('demo')
 
-  expect(parts.element('ci-watch', 'runs', 'ci-watch/runs:', 'The runs page', 'page')).toBeDefined()
+  expect(parts.element('demo', 'runs', 'demo/runs:', 'The runs page', 'page')).toBeDefined()
 })
 
 test('a draw that was still running when its mod changed is dropped, and the next draw asks again', async () => {
-  const { fake, widgets, tell } = servedLayout(layout({ dashboard: [{ left: ['git/branch'], right: [] }] }))
+  const { fake, widgets, tell } = servedLayout(layout({ dashboard: [{ left: ['demo/branch'], right: [] }] }))
   const answers: ((value: unknown) => void)[] = []
   fake.fakes.cmod.call = (input) => (input.method === partMethods.draw ? new Promise((resolve) => answers.push(resolve)) : Promise.resolve({ widgets: [{ id: 'branch', title: 'Branch', areas: [Dashboard] }], pages: [] }))
-  tell('git', [{ id: 'branch', title: 'Branch', areas: [Dashboard] }])
+  tell('demo', [{ id: 'branch', title: 'Branch', areas: [Dashboard] }])
   await fake.settle()
 
   widgets.rows(Dashboard, 80)
-  widgets.update('git', { redraw: true })
+  widgets.update('demo', { redraw: true })
   answers.shift()?.({ draw: 1, tree: { $cmodElement: 'Text', props: { children: 'old' } } })
   await fake.settle()
   widgets.rows(Dashboard, 80)
@@ -516,7 +516,7 @@ test('a draw that was still running when its mod changed is dropped, and the nex
 
 test('a mod a reload took out of the session or one still installing loses its widgets quietly, one that answers keeps them, and one that fails to answer says so', async () => {
   const { fake, widgets, tell } = servedLayout(layout({}))
-  tell('git', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
+  tell('demo', [{ id: 'branch', title: 'Branch', areas: [BelowPrompt] }])
   tell('notes', [{ id: 'count', title: 'Count', areas: [BelowPrompt] }])
   tell('todo', [{ id: 'open', title: 'Open', areas: [BelowPrompt] }])
   tell('inbox', [{ id: 'waiting', title: 'Waiting', areas: [BelowPrompt] }])
@@ -529,7 +529,7 @@ test('a mod a reload took out of the session or one still installing loses its w
 
   await widgets.recheck()
 
-  expect(widgets.widgets().filter((widget) => widget.mod !== 'claude').map((widget) => widget.key)).toEqual(['git/branch'])
+  expect(widgets.widgets().filter((widget) => widget.mod !== 'claude').map((widget) => widget.key)).toEqual(['demo/branch'])
   expect(fake.shown.debug).toEqual(['cmod: todo did not list its widgets: todo: the list is not JSON'])
 })
 
@@ -546,27 +546,27 @@ test('the dashboard stops asking for a redraw when a widget placed there has no 
 })
 
 test('a widget draws on the dashboard only once the person moves it there', async () => {
-  const branch: PlacedWidget = { key: 'git/branch', mod: 'git', title: 'branch', areas: [BelowPrompt, Dashboard] }
-  const start: WidgetLayout = { ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['git/branch'], right: [] }] } }
+  const branch: PlacedWidget = { key: 'demo/branch', mod: 'demo', title: 'branch', areas: [BelowPrompt, Dashboard] }
+  const start: WidgetLayout = { ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['demo/branch'], right: [] }] } }
 
   const down = moved(moved(moved(start, branch, 'down'), branch, 'down'), branch, 'down')
 
   expect(down.areas.belowPrompt).toEqual([])
-  expect(down.areas.dashboard).toEqual([{ left: ['git/branch'], right: [] }])
-  expect(moved(down, branch, 'up').areas.belowPrompt).toEqual([{ left: ['git/branch'], right: [] }])
+  expect(down.areas.dashboard).toEqual([{ left: ['demo/branch'], right: [] }])
+  expect(moved(down, branch, 'up').areas.belowPrompt).toEqual([{ left: ['demo/branch'], right: [] }])
 })
 
 test('moving a widget left and right walks it across its row, and down gives it its own row', () => {
-  const dirty: PlacedWidget = { key: 'git/dirty', mod: 'git', title: 'dirty', areas: [BelowPrompt] }
-  const start: WidgetLayout = { ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['git/branch', 'git/dirty'], right: ['git/ahead'] }] } }
+  const dirty: PlacedWidget = { key: 'demo/dirty', mod: 'demo', title: 'dirty', areas: [BelowPrompt] }
+  const start: WidgetLayout = { ...layoutOf({}), areas: { ...layoutOf({}).areas, belowPrompt: [{ left: ['demo/branch', 'demo/dirty'], right: ['demo/ahead'] }] } }
 
-  expect(moved(start, dirty, 'left').areas.belowPrompt).toEqual([{ left: ['git/dirty', 'git/branch'], right: ['git/ahead'] }])
-  expect(moved(start, dirty, 'right').areas.belowPrompt).toEqual([{ left: ['git/branch'], right: ['git/dirty', 'git/ahead'] }])
-  expect(moved(start, dirty, 'down').areas.belowPrompt).toEqual([{ left: ['git/branch'], right: ['git/ahead'] }, { left: ['git/dirty'], right: [] }])
+  expect(moved(start, dirty, 'left').areas.belowPrompt).toEqual([{ left: ['demo/dirty', 'demo/branch'], right: ['demo/ahead'] }])
+  expect(moved(start, dirty, 'right').areas.belowPrompt).toEqual([{ left: ['demo/branch'], right: ['demo/dirty', 'demo/ahead'] }])
+  expect(moved(start, dirty, 'down').areas.belowPrompt).toEqual([{ left: ['demo/branch'], right: ['demo/ahead'] }, { left: ['demo/dirty'], right: [] }])
   expect(moved(start, dirty, 'up')).toBe(start)
-  const newer = layoutOf({ areas: { belowPrompt: [{ left: ['git/branch'], right: [] }, { left: ['git/dirty'], right: [], center: ['notes/count'] }] } })
-  expect(moved(newer, dirty, 'up').areas.belowPrompt).toEqual([{ left: ['git/branch', 'git/dirty'], right: [] }, { left: [], right: [], center: ['notes/count'] }] as never)
-  expect(toggled(toggled(start, 'git/dirty'), 'git/dirty').hidden).toEqual([])
+  const newer = layoutOf({ areas: { belowPrompt: [{ left: ['demo/branch'], right: [] }, { left: ['demo/dirty'], right: [], center: ['notes/count'] }] } })
+  expect(moved(newer, dirty, 'up').areas.belowPrompt).toEqual([{ left: ['demo/branch', 'demo/dirty'], right: [] }, { left: [], right: [], center: ['notes/count'] }] as never)
+  expect(toggled(toggled(start, 'demo/dirty'), 'demo/dirty').hidden).toEqual([])
 })
 
 test('a widget sends the cmod plugin only text, numbers, plain objects, and the elements cmod knows', () => {
@@ -574,5 +574,5 @@ test('a widget sends the cmod plugin only text, numbers, plain objects, and the 
 
   expect(elementData(Text({ children: 'main' }), handlers)).toEqual({ $cmodElement: 'Text', props: { children: 'main' } })
   expect(() => elementData(new Map(), handlers)).toThrow('a widget draws only the elements of ui/elements.js and ui/components.js, text, numbers, and plain objects.')
-  expect(() => elementOf({ $cmodElement: 'Script', props: {} }, 'git/branch:', () => {})).toThrow('a widget drew Script, which is not an element of ui/elements.js.')
+  expect(() => elementOf({ $cmodElement: 'Script', props: {} }, 'demo/branch:', () => {})).toThrow('a widget drew Script, which is not an element of ui/elements.js.')
 })

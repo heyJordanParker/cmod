@@ -27,10 +27,10 @@ describe('parseShell', () => {
     expect(parseShell('eval "$x"').isFullyParsed).toBe(false)
   })
 
-  test('cd app && sed -i s/a/b/ ../Domain.md writes Domain.md through the cd folder', () => {
-    const parsed = parseShell('cd app && sed -i s/a/b/ ../Domain.md')
-    expect(parsed.writes).toEqual(['app/../Domain.md'])
-    expect(parsed.commands[1]).toEqual({ argv: ['sed', '-i', 's/a/b/', '../Domain.md'], folder: 'app' })
+  test('cd app && sed -i s/a/b/ ../CHANGELOG.md writes CHANGELOG.md through the cd folder', () => {
+    const parsed = parseShell('cd app && sed -i s/a/b/ ../CHANGELOG.md')
+    expect(parsed.writes).toEqual(['app/../CHANGELOG.md'])
+    expect(parsed.commands[1]).toEqual({ argv: ['sed', '-i', 's/a/b/', '../CHANGELOG.md'], folder: 'app' })
   })
 
   test('a mod finds the folder a command runs in with shell.js and path.js', () => {

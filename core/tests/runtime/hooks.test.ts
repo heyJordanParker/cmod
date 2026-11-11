@@ -7,7 +7,7 @@ function fileWatcher(cwd = '/work', files: string[] = []) {
   const seen: { event: string; files: unknown }[] = []
   const tested = testMod(
     defineMod({
-      name: 'file-watcher',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolCall((call) => void seen.push({ event: 'ToolCall', files: call.files }))
         sessions.current.beforeToolResult((result) => void seen.push({ event: 'ToolResult', files: result.files }))
@@ -32,7 +32,7 @@ async function ran(tested: Tested, name: string, input: Record<string, unknown>,
 
 test("raise.beforeToolResult hands the listener the tool's raw answer, as Claude Code does", async () => {
   const outputs: unknown[] = []
-  const tested = testMod(defineMod({ name: 'patch-reader', setup: () => void sessions.current.beforeToolResult((result) => void outputs.push(result.output)) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.beforeToolResult((result) => void outputs.push(result.output)) }))
   const answered = { filePath: '/work/src/app.ts', structuredPatch: [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ['-a', '+b'] }] }
 
   await tested.add({ type: ToolCall, name: 'Edit', input: { file_path: '/work/src/app.ts', old_string: 'a', new_string: 'b' }, callId: 'toolu_1' })
@@ -131,7 +131,7 @@ test('a Bash read of a path cmod cannot check keeps the other files and logs tha
   await called(tested, 'Bash', { command: 'cat notes.md secret.md' })
 
   expect(seen).toEqual([{ event: 'ToolCall', files: { read: ['/work/notes.md'], changed: [] } }])
-  expect(tested.shown.debug).toContain("file-watcher: the Bash call reads /work/secret.md, which could not be checked: EACCES: permission denied, stat '/work/secret.md'")
+  expect(tested.shown.debug).toContain("demo: the Bash call reads /work/secret.md, which could not be checked: EACCES: permission denied, stat '/work/secret.md'")
 })
 
 test('a Read whose input names no file_path, which Claude Code refuses, lists no files and logs no warning, because it reads nothing', async () => {

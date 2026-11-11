@@ -21,7 +21,7 @@ function preview(spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpaw
   let handle: Program | undefined
   const tested = testMod(
     defineMod({
-      name: 'preview',
+      name: 'demo',
       setup(mod) {
         handle = mod.use(program({ command: ['preview-server', '--port', '0'], singleInstance }))
       },
@@ -74,7 +74,7 @@ test('a first line hello fails the start, closes the program, and the notice and
   )
   const started = await ready()
 
-  await expect(started.ready()).rejects.toThrow('preview: the preview-server program stopped: its first line is "hello".')
+  await expect(started.ready()).rejects.toThrow('demo: the preview-server program stopped: its first line is "hello".')
   expect(started.state).toBe('fatal')
   expect(isClosed).toBe(true)
   expect(tested.shown.toasts).toContainEqual({
@@ -103,14 +103,14 @@ test("a program that exits restarts after 1, 2, 4, 8, and 16 s, then is fatal wi
 
   const started = await ready()
   const answered = expect(started.ready()).rejects.toThrow(
-    'preview: the preview-server program stopped: it did not start again after 5 tries: listen EADDRINUSE (start 6).',
+    'demo: the preview-server program stopped: it did not start again after 5 tries: listen EADDRINUSE (start 6).',
   )
   await tested.settle()
 
   expect(delays.filter((ms) => ms > 0)).toEqual([1000, 2000, 4000, 8000, 16000])
   expect(starts).toBe(6)
   expect(started.state).toBe('fatal')
-  expect(logged).toEqual([expect.objectContaining({ mod: 'preview', id: 'program:preview-server', message: 'The preview-server program stopped', isCritical: false })])
+  expect(logged).toEqual([expect.objectContaining({ mod: 'demo', id: 'program:preview-server', message: 'The preview-server program stopped', isCritical: false })])
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
   await answered
 })
@@ -159,7 +159,7 @@ test('a program that has not exited is in backoff between starts, and ready() wa
   expect(await answer).toEqual({ url: 'http://localhost', socketPath: '/tmp/y.sock' })
 })
 
-test("a singleInstance program runs as the store's cmod program preview --no-wait -- preview-server --port 0", async () => {
+test("a singleInstance program runs as the store's cmod program demo --no-wait -- preview-server --port 0", async () => {
   const spawned: (readonly string[])[] = []
   const { ready } = preview((request) => {
     spawned.push(request.argv)
@@ -167,10 +167,10 @@ test("a singleInstance program runs as the store's cmod program preview --no-wai
   }, true)
 
   expect(await (await ready()).ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/x.sock' })
-  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'preview', '--no-wait', '--', 'preview-server', '--port', '0']])
+  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'demo', '--no-wait', '--', 'preview-server', '--port', '0']])
 })
 
-const instanceFile = '/test/home/.local/share/cmod/instances/preview/preview-server.json'
+const instanceFile = '/test/home/.local/share/cmod/instances/demo/preview-server.json'
 
 const heldCopy = { [instanceFile]: '{"address":"unix:/tmp/held.sock","pid":4242,"started":"Mon Nov  2 09:00:00 2026"}\n', [`${instanceFile}.lock/4242`]: 'Mon Nov  2 09:00:00 2026' }
 
@@ -242,7 +242,7 @@ test('an isService program asks cmod program --service for the computer-wide cop
   let handle: Program | undefined
   const tested = testMod(
     defineMod({
-      name: 'preview',
+      name: 'demo',
       setup(mod) {
         handle = mod.use(program({ command: ['preview-server', '--port', '0'], environment: { PREVIEW_ROOT: '/srv/site' }, isService: true }))
       },
@@ -258,14 +258,14 @@ test('an isService program asks cmod program --service for the computer-wide cop
 
   expect(await handle?.ready()).toEqual({ url: 'http://localhost', socketPath: '/tmp/held.sock' })
   expect(handle?.state).toBe('running')
-  expect(spawned.map(({ argv }) => argv)).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'preview', '--service', '--env', 'PREVIEW_ROOT', '--', 'preview-server', '--port', '0']])
+  expect(spawned.map(({ argv }) => argv)).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'demo', '--service', '--env', 'PREVIEW_ROOT', '--', 'preview-server', '--port', '0']])
   expect(spawned[0]?.env).toMatchObject({ PREVIEW_ROOT: '/srv/site' })
 })
 
 test('two isService programs with one executable in a mod throw at mod.use, so the computer runs one copy', async () => {
   const tested = testMod(
     defineMod({
-      name: 'preview',
+      name: 'demo',
       setup(mod) {
         mod.use(program({ command: ['preview-server', '--port', '0'], isService: true }))
         mod.use(program({ command: ['preview-server', '--port', '1'], isService: true }))
@@ -274,7 +274,7 @@ test('two isService programs with one executable in a mod throw at mod.use, so t
   )
   tested.fakes.process.spawn = () => written([{ stream: 'stdout', text: 'held\n' }], true)
 
-  await expect(tested.start()).rejects.toThrow('preview: the service preview-server is already added. Give each isService program its own executable.')
+  await expect(tested.start()).rejects.toThrow('demo: the service preview-server is already added. Give each isService program its own executable.')
 })
 
 function exitedCleanly(): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
@@ -286,14 +286,14 @@ function exitedCleanly(): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
 }
 
 const recordedService = (program: string) => ({
-  [`/test/home/.local/share/cmod/services/preview/${program}.json`]: `${JSON.stringify({ label: `com.claudemodmanager.preview.${program}`, unit: `/test/home/Library/LaunchAgents/com.claudemodmanager.preview.${program}.plist` })}\n`,
+  [`/test/home/.local/share/cmod/services/demo/${program}.json`]: `${JSON.stringify({ label: `com.claudemodmanager.demo.${program}`, unit: `/test/home/Library/LaunchAgents/com.claudemodmanager.demo.${program}.plist` })}\n`,
 })
 
 const cmodProgram = '/test/home/.local/share/cmod/programs/cmod'
 
 test("a mod whose new version adds no isService program runs cmod program --remove-service at its start for the service the cmod store records, so the old program stops", async () => {
   const spawned: (readonly string[])[] = []
-  const tested = testMod(defineMod({ name: 'preview', setup() {} }), { files: recordedService('preview-server') })
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }), { files: recordedService('preview-server') })
   tested.fakes.process.spawn = (request) => {
     spawned.push(request.argv)
     return exitedCleanly()
@@ -302,7 +302,7 @@ test("a mod whose new version adds no isService program runs cmod program --remo
   await tested.start()
   await tested.settle()
 
-  expect(spawned).toEqual([[cmodProgram, 'program', 'preview', '--remove-service', '--', 'preview-server']])
+  expect(spawned).toEqual([[cmodProgram, 'program', 'demo', '--remove-service', '--', 'preview-server']])
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
@@ -310,7 +310,7 @@ test('a mod whose new version still adds its isService program keeps that servic
   const spawned: (readonly string[])[] = []
   const tested = testMod(
     defineMod({
-      name: 'preview',
+      name: 'demo',
       setup(mod) {
         mod.use(program({ command: ['preview-server', '--port', '0'], isService: true }))
       },
@@ -327,14 +327,14 @@ test('a mod whose new version still adds its isService program keeps that servic
   await tested.settle()
 
   expect(spawned.toSorted()).toEqual([
-    [cmodProgram, 'program', 'preview', '--remove-service', '--', 'old-server'],
-    [cmodProgram, 'program', 'preview', '--service', '--', 'preview-server', '--port', '0'],
+    [cmodProgram, 'program', 'demo', '--remove-service', '--', 'old-server'],
+    [cmodProgram, 'program', 'demo', '--service', '--', 'preview-server', '--port', '0'],
   ])
 })
 
 test('a mod with no services folder in the cmod store spawns no cmod process at its start', async () => {
   const spawned: (readonly string[])[] = []
-  const tested = testMod(defineMod({ name: 'preview', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   tested.fakes.process.spawn = (request) => {
     spawned.push(request.argv)
     return exitedCleanly()
@@ -349,7 +349,7 @@ test('a mod with no services folder in the cmod store spawns no cmod process at 
 test('two singleInstance programs with one executable in a mod throw at mod.use', async () => {
   const tested = testMod(
     defineMod({
-      name: 'preview',
+      name: 'demo',
       setup(mod) {
         mod.use(program({ command: ['preview-server', '--port', '0'], singleInstance: true }))
         mod.use(program({ command: ['preview-server', '--port', '1'], singleInstance: true }))
@@ -358,5 +358,5 @@ test('two singleInstance programs with one executable in a mod throw at mod.use'
   )
   tested.fakes.process.spawn = () => written([{ stream: 'stdout', text: 'unix:/tmp/x.sock\n' }], false)
 
-  await expect(tested.start()).rejects.toThrow('preview: the single instance of preview-server is already added. Give each singleInstance program its own executable.')
+  await expect(tested.start()).rejects.toThrow('demo: the single instance of preview-server is already added. Give each singleInstance program its own executable.')
 })

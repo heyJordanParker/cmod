@@ -45,8 +45,8 @@ Then pass it to `defineMod`:
 import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { initialState } from './state.js'
 
-export const tasks = defineMod({
-  name: 'tasks',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: initialState,
   setup(mod) {
     sessions.current.onPrompt(() => {
@@ -68,8 +68,8 @@ Assign to a key. cmod saves the new value and redraws the mod.
 ```ts
 import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-export const reads = defineMod({
-  name: 'reads',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { memory: { readFiles: [] as readonly string[] } },
   setup(mod) {
     sessions.current.onToolResult(({ files }) => {

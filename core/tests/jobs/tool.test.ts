@@ -11,7 +11,7 @@ test('a call without the required title is denied with title named, and execute 
   const executed: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       setup(mod) {
         mod.use(
           tool({
@@ -36,7 +36,7 @@ test('a call without the required title is denied with title named, and execute 
 test("execute gets the mod's own typed state, so a tool counts its calls without capturing the mod from setup", async () => {
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       state: { project: { opened: [] as string[] } },
       setup(mod) {
         mod.use(
@@ -64,7 +64,7 @@ test('execute gets the input without the keys Claude Code adds, and an object re
   let handle: { readonly name: string } | undefined
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       setup(mod) {
         handle = mod.use(
           tool({
@@ -80,18 +80,18 @@ test('execute gets the input without the keys Claude Code adds, and an object re
     }),
   )
 
-  const answer = await claudeCodeOf(tested).fire('tool.call', { tool: 'mcp__tickets__ticket', tool_use_id: 'toolu_1', agentId: 'a1', consent: 'yes', title: 'Crash' } as Args<'tool.call'>)
+  const answer = await claudeCodeOf(tested).fire('tool.call', { tool: 'mcp__demo__ticket', tool_use_id: 'toolu_1', agentId: 'a1', consent: 'yes', title: 'Crash' } as Args<'tool.call'>)
 
   expect(answer).toEqual({ result: '{"a":1}' })
   expect(executed).toEqual([{ title: 'Crash' }])
-  expect(handle?.name).toBe('mcp__tickets__ticket')
+  expect(handle?.name).toBe('mcp__demo__ticket')
   expect(tested.shown.toasts.find(({ message }) => message === 'Installed')?.description).toContain('Adds the ticket tool.')
 })
 
 test('a call of another tool passes on, and an execute that throws is denied with its message', async () => {
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       setup(mod) {
         mod.use(
           tool({
@@ -114,7 +114,7 @@ test('a call of another tool passes on, and an execute that throws is denied wit
 test('an execute whose fetch passes the 30 s deadline is denied, and the next call runs', async () => {
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       setup(mod) {
         mod.use(
           tool({
@@ -141,26 +141,26 @@ test('an execute whose fetch passes the 30 s deadline is denied, and the next ca
 test('an inputSchema with a key Claude Code keeps for itself throws in setup', async () => {
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       setup(mod) {
         mod.use(tool({ name: 'ticket', description: 'Open a ticket', inputSchema: { type: 'object', properties: { tool: { type: 'string' } } }, execute: () => undefined }))
       },
     }),
   )
 
-  await expect(tested.start()).rejects.toThrow("tickets: the ticket tool's inputSchema has the property tool, which Claude Code keeps for itself. Rename it.")
+  await expect(tested.start()).rejects.toThrow("demo: the ticket tool's inputSchema has the property tool, which Claude Code keeps for itself. Rename it.")
 })
 
 test('isDeferred reaches Claude Code as given, and a tool without it leaves the placement to Claude Code', async () => {
-  const fake = fakeClaude({ name: 'memory', root: '/plugins/memory' })
+  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
   const definition = defineMod({
-    name: 'memory',
+    name: 'demo',
     setup(mod) {
       mod.use(tool({ name: 'zoom', description: 'Zoom into a memory', isDeferred: false, execute: () => undefined }))
       mod.use(tool({ name: 'date', description: 'Find a memory by date', execute: () => undefined }))
     },
   })
-  const plugin = { name: 'memory', root: '/plugins/memory', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
+  const plugin = { name: 'demo', root: '/plugins/demo', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
 
   await createLifecycle(definition).start(fake.claude, async () => plugin)
   await fake.settle()

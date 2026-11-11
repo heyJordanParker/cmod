@@ -128,10 +128,10 @@ test('a write check does not run when no matched file still exists', async () =>
 })
 
 test('a command check in a project runs in the work tree the matched command runs in', async () => {
-  const project = '/work/dent'
+  const project = '/work/app'
   const tested = testMod(
     defineMod({
-      name: 'dent',
+      name: 'demo',
       setup(mod) {
         mod.use(check({ after: { command: 'git commit' }, run: ['bun', 'run', 'test:smoke'] }))
       },

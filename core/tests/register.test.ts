@@ -124,7 +124,7 @@ test("only the cmod plugin registers command.describe, so Claude Code never send
   const withHotkeys = fakeOn()
   const cmod = fakeOn()
 
-  registerMod(withHotkeys.on, defineMod({ name: 'modes', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
+  registerMod(withHotkeys.on, defineMod({ name: 'demo', hotkeys: { cycle: { title: 'Switch mode', default: 'shift+tab' } }, setup: () => undefined }), {})
   registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
   expect(withHotkeys.registrations.map((registration) => registration.pattern)).not.toContain('command.describe')
@@ -188,14 +188,14 @@ test('a mod with no panes, styles, toasts, or listeners registers 42 Claude Code
 })
 
 test("the cmod plugin's ui.render matches only the components it draws, so its redraws never reach the transcript, and a mod's matches every component", () => {
-  const notes = fakeOn()
+  const mod = fakeOn()
   const cmod = fakeOn()
 
-  registerMod(notes.on, defineMod({ name: 'notes', setup: () => undefined }), {})
+  registerMod(mod.on, defineMod({ name: 'demo', setup: () => undefined }), {})
   registerCmodPlugin(cmod.on, defineMod({ name: 'cmod', setup: () => undefined }), {})
 
   const drawing = (registrations: readonly Registration[]) => registrations.find((registration) => registration.pattern === 'ui.render')
-  expect(drawing(notes.registrations)?.hasMatcher).toBe(false)
+  expect(drawing(mod.registrations)?.hasMatcher).toBe(false)
   expect(drawing(cmod.registrations)?.matcher).toEqual({ component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] })
 })
 
@@ -220,18 +220,18 @@ const registeredChain = (names: readonly string[]) =>
   )
 
 test("a command.describe pass reaches the cmod plugin's worker only for hotkey commands, because Claude Code 2.1.310 hops only when a hook's matcher selects the command", () => {
-  const chain = registeredChain(['cmod', 'notes'])
-  const listed = [...Array.from({ length: 188 }, (_, index) => `skill-${index}`), hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('modes', 'cycle')]
+  const chain = registeredChain(['cmod', 'other'])
+  const listed = [...Array.from({ length: 188 }, (_, index) => `skill-${index}`), hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('demo', 'cycle')]
 
   const hops = listed.filter((command) => hearersOf(chain, 'command.describe', { command, description: '', isHidden: false, immediate: true, provider: { plugin: 'cmod', tier: 'user' } }).length > 0)
 
-  expect(hops).toEqual([hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('modes', 'cycle')])
+  expect(hops).toEqual([hotkeyCommand('cmod', 'sidebar'), hotkeyCommand('cmod', 'settings'), hotkeyCommand('demo', 'cycle')])
 })
 
 test('a cmod.call runs the hook of the mod it names only, never every mod in the chain', () => {
-  const chain = registeredChain(['cmod', 'notes', 'tasks'])
+  const chain = registeredChain(['cmod', 'other', 'third'])
 
-  expect([hearersOf(chain, 'cmod.call', { to: 'tasks', method: 'cmod:draw', input: null }), hearersOf(chain, 'cmod.call', { to: 'cmod', method: 'cmod:changed', input: {} }), hearersOf(chain, 'cmod.call', { to: 'missing', method: 'list', input: null })]).toEqual([['tasks'], ['cmod'], []])
+  expect([hearersOf(chain, 'cmod.call', { to: 'third', method: 'cmod:draw', input: null }), hearersOf(chain, 'cmod.call', { to: 'cmod', method: 'cmod:changed', input: {} }), hearersOf(chain, 'cmod.call', { to: 'missing', method: 'list', input: null })]).toEqual([['third'], ['cmod'], []])
 })
 
 test('registerPermissionCheck registers tool.check and PermissionRequest once each', () => {
@@ -730,34 +730,34 @@ test("a mod reads this computer as its device: one id every time the mod starts,
 
 test("a device id is the computer's machine id hashed for cmod the way systemd's sd_id128_get_machine_app_specific hashes it, so the raw id never shows", async () => {
   const linux = {
-    run: () => ({ exitCode: 0, stdout: 'Linux devbox aarch64\n' }),
+    run: () => ({ exitCode: 0, stdout: 'Linux host aarch64\n' }),
     read: () => 'b08dfa6083e7567a1921a715000001fb\n',
   }
   const mac = {
     run: (argv: readonly string[]) => {
-      if (argv[0] === 'uname') return { exitCode: 0, stdout: 'Darwin Office-Mac-mini.local x86_64\n' }
-      if (argv[0] === 'scutil') return { exitCode: 0, stdout: 'Office-Mac-mini\n' }
+      if (argv[0] === 'uname') return { exitCode: 0, stdout: 'Darwin Mac-mini.local x86_64\n' }
+      if (argv[0] === 'scutil') return { exitCode: 0, stdout: 'Mac-mini\n' }
       return { exitCode: 0, stdout: '+-o Mac14,5  <class IOPlatformExpertDevice>\n    {\n      "IOPlatformSerialNumber" = "A1B2C3D4E5"\n      "IOPlatformUUID" = "E1F9C9A2-6B5E-4B9A-9D2C-0A1B2C3D4E5F"\n    }\n' }
     },
   }
 
-  expect((await readDeviceOn(linux))[0]).toEqual({ id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'arm64' })
-  expect((await readDeviceOn(mac))[0]).toEqual({ id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Office-Mac-mini', os: 'darwin', arch: 'x64' })
+  expect((await readDeviceOn(linux))[0]).toEqual({ id: 'dc896649b2c644849a1caf192c072c77', name: 'host', os: 'linux', arch: 'arm64' })
+  expect((await readDeviceOn(mac))[0]).toEqual({ id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Mac-mini', os: 'darwin', arch: 'x64' })
 })
 
 test("a Linux computer whose /etc/machine-id is missing or empty reads D-Bus's /var/lib/dbus/machine-id as systemd does, and one with neither names both files", async () => {
   const id = 'b08dfa6083e7567a1921a715000001fb\n'
   const linuxWith = (files: Readonly<Record<string, string>>) => ({
-    run: () => ({ exitCode: 0, stdout: 'Linux devbox aarch64\n' }),
+    run: () => ({ exitCode: 0, stdout: 'Linux host aarch64\n' }),
     read: (path: string) => {
       const text = files[path]
       if (text === undefined) throw new Error(`ENOENT: no such file or directory, open '${path}'`)
       return text
     },
   })
-  const devbox: Device = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'arm64' }
+  const host: Device = { id: 'dc896649b2c644849a1caf192c072c77', name: 'host', os: 'linux', arch: 'arm64' }
 
-  expect((await readDeviceOn(linuxWith({ '/var/lib/dbus/machine-id': id })))[0]).toEqual(devbox)
-  expect((await readDeviceOn(linuxWith({ '/etc/machine-id': '', '/var/lib/dbus/machine-id': id })))[0]).toEqual(devbox)
+  expect((await readDeviceOn(linuxWith({ '/var/lib/dbus/machine-id': id })))[0]).toEqual(host)
+  expect((await readDeviceOn(linuxWith({ '/etc/machine-id': '', '/var/lib/dbus/machine-id': id })))[0]).toEqual(host)
   await expect(readDeviceOn(linuxWith({ '/etc/machine-id': '\n' }))).rejects.toThrow('cmod could not read this computer: neither /etc/machine-id nor /var/lib/dbus/machine-id holds a machine id.')
 })

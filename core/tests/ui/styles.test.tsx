@@ -14,7 +14,7 @@ const bashRowLines = (command: string) => ['ToolUse', '  tool_use_id: "toolu_1"'
 test('a style changes the props Claude draws with', async () => {
   const tested = testMod(
     defineMod({
-      name: 'redact',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: ToolCall, render: (_mod, { input, Default }) => <Default input={{ command: String((input as { command: string }).command).replace('s3cret', '•••') }} /> })
       },
@@ -25,7 +25,7 @@ test('a style changes the props Claude draws with', async () => {
 })
 
 test('a style knows the app that draws the row, how wide it is, and which row it is', async () => {
-  const tested = testMod(defineMod({ name: 'skin', setup: (mod) => void mod.styles.add({ kind: ToolCall, render: (_mod, { surface, columns, id }) => <Text>{`${surface} ${columns} ${id}`}</Text> }) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void mod.styles.add({ kind: ToolCall, render: (_mod, { surface, columns, id }) => <Text>{`${surface} ${columns} ${id}`}</Text> }) }))
 
   expect(await tested.lines(ToolCall, bashRow, 'toolu_7')).toEqual(['terminal 80 toolu_7'])
 })
@@ -33,7 +33,7 @@ test('a style knows the app that draws the row, how wide it is, and which row it
 test("a style adds to Claude's drawing", async () => {
   const tested = testMod(
     defineMod({
-      name: 'tool-count',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({
           kind: TurnEnd,
@@ -54,7 +54,7 @@ test("a style adds to Claude's drawing", async () => {
 test("a style replaces Claude's drawing", async () => {
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: TurnEnd, render: (_mod, { word }) => <Text>{word} in focus</Text> })
       },
@@ -89,7 +89,7 @@ test('a removed style leaves Claude drawing its own row', async () => {
   let redact: { remove(): void } | undefined
   const tested = testMod(
     defineMod({
-      name: 'redact',
+      name: 'demo',
       setup(mod) {
         redact = mod.styles.add({ kind: ToolCall, render: () => <Text>hidden</Text> })
       },
@@ -130,7 +130,7 @@ test("a pane's onScroll hears its own window move, and never another pane's or t
   const seen: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       async setup(mod) {
         await mod.panes.add({ id: 'log', title: 'Log', render: () => Text({ children: 'rows' }), onScroll: (_mod, { offset, contentRows, bodyRows }) => void seen.push({ offset, contentRows, bodyRows }) }).open()
         await mod.panes.add({ id: 'other', title: 'Other', render: () => Text({ children: 'rows' }) }).open()
@@ -150,7 +150,7 @@ test("a pane's onScroll hears its own window move, and never another pane's or t
 test('every open sends closeOnEscape and holdToasts, a resize included, and only an open that asks sends focus', async () => {
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       state: { session: { isWide: false } },
       async setup(mod) {
         const pane = mod.panes.add({
@@ -187,7 +187,7 @@ test('a pane opened with params draws them, and opening again replaces them', as
   let pane: ReturnType<Mod['panes']['add']> | undefined
   const tested = testMod(
     defineMod({
-      name: 'files',
+      name: 'demo',
       setup(mod) {
         pane = mod.panes.add<{ readonly path: string }>({ id: 'file', title: 'File', render: (_mod, { params }) => <Text>{params.path}</Text> })
       },
@@ -205,7 +205,7 @@ test('a pane opened with params draws them, and opening again replaces them', as
 test('a pane opened without focus draws without the keyboard', async () => {
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       async setup(mod) {
         await mod.panes.add({ id: 'log', title: 'Log', render: (_mod, { isFocused }) => <Text>{isFocused ? 'has the keyboard' : 'without the keyboard'}</Text> }).open()
       },
@@ -220,7 +220,7 @@ test("a pane's onClose hears it close, and a throwing handler is logged", async 
   const closed: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       async setup(mod) {
         await mod.panes.add({ id: 'log', title: 'Log', render: () => Text({ children: 'rows' }), onClose: (_mod, { origin }) => void closed.push(origin.kind) }).open()
         await mod.panes
@@ -238,7 +238,7 @@ test("a pane's onClose hears it close, and a throwing handler is logged", async 
   )
 
   await tested.fire('ui.close', { id: 'log', origin: { kind: 'person' } } as never, undefined)
-  await tested.fire('ui.close', { id: 'board', origin: { kind: 'plugin', name: 'history' } } as never, undefined)
+  await tested.fire('ui.close', { id: 'board', origin: { kind: 'plugin', name: 'demo' } } as never, undefined)
 
   expect(closed).toEqual(['person'])
   expect(tested.shown.toasts).toContainEqual({ type: 'error', message: "The Board pane's onClose threw", description: 'no board file' })
@@ -248,7 +248,7 @@ test('a pane the person closes with its ✕ is no longer open, so the next toggl
   let accounts: Pane | undefined
   const tested = testMod(
     defineMod({
-      name: 'pool',
+      name: 'demo',
       async setup(mod) {
         accounts = mod.panes.add({ id: 'accounts', title: 'Accounts', render: () => Text({ children: 'rows' }) })
         await accounts.open()
@@ -268,7 +268,7 @@ test('a pane the person closes with its ✕ is no longer open, so the next toggl
 test('onScreen is passed on unchanged and cmod draws the bullet beside Default pieces it wraps', async () => {
   const tested = testMod(
     defineMod({
-      name: 'pieces',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({
           kind: Reply,
@@ -301,7 +301,7 @@ test('onScreen is passed on unchanged and cmod draws the bullet beside Default p
 test('a Reply style that draws a row above Default keeps the bullet on the first row', async () => {
   const tested = testMod(
     defineMod({
-      name: 'labels',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({
           kind: Reply,
@@ -322,7 +322,7 @@ test('a Reply style that draws a row above Default keeps the bullet on the first
 test('a Reply style that returns Default unchanged leaves the bullet to Claude Code', async () => {
   const tested = testMod(
     defineMod({
-      name: 'redact',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Reply, render: (_mod, { text, Default }) => <Default text={text.replace('s3cret', '•••')} /> })
       },
@@ -372,7 +372,7 @@ test("two Default pieces in one drawing each draw Claude's row", async () => {
 test("Default inside a Box draws Claude's row when the Box hides its children", async () => {
   const tested = testMod(
     defineMod({
-      name: 'boxed',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({
           kind: TurnEnd,
@@ -441,7 +441,7 @@ test("toasts and a mod's AbovePrompt widget share Claude Code's band above the p
   let toast: Mod['toast'] | undefined
   const tested = testMod(
     defineMod({
-      name: 'indexer',
+      name: 'demo',
       setup(mod) {
         toast = mod.toast
         mod.widgets.add({ id: 'prompts', title: 'Prompts', areas: [AbovePrompt], render: () => <Text>3 prompts</Text> })
@@ -453,9 +453,9 @@ test("toasts and a mod's AbovePrompt widget share Claude Code's band above the p
   const lines = async (hasSurvey: boolean) => rowsOf(await tested.fire('ui.render', band(hasSurvey), Box({})), 75).map((row) => row.trimEnd())
 
   expect((await lines(false)).map((row) => row.replace(/\d\d:\d\d$/, 'hh:mm'))).toEqual([
-    `⠋  indexer           Indexing files${' '.repeat(39)}✕`,
+    `⠋  demo${' '.repeat(14)}Indexing files${' '.repeat(39)}✕`,
     `${' '.repeat(21)}████░░░░`,
-    `✓  indexer           Installed${' '.repeat(44)}✕`,
+    `✓  demo${' '.repeat(14)}Installed${' '.repeat(44)}✕`,
     `${' '.repeat(21)}Adds the Prompts widget.`,
     `${' '.repeat(21)}Settings  hh:mm`,
     '3 prompts',

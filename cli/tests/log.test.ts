@@ -11,7 +11,7 @@ async function homeWithLog() {
   const home = await temporaryHome()
   await writeFiles(home, {
     '.local/share/cmod/data/cmod/log/session-a.json': JSON.stringify([
-      { mod: 'tracer', id: 'index', level: 'warning', message: 'tracer skipped an index', details: 'tracer: the index is locked', at: '2026-11-03T20:00:00.000Z', session: 'session-a', versions },
+      { mod: 'demo', id: 'index', level: 'warning', message: 'demo skipped an index', details: 'demo: the index is locked', at: '2026-11-03T20:00:00.000Z', session: 'session-a', versions },
       { mod: 'cmod', id: 'reload', level: 'error', message: 'Could not reload the plugins', details: 'an older reload failure', at: '2026-11-03T19:00:00.000Z', session: 'session-a', versions },
     ]),
     '.local/share/cmod/data/cmod/log/session-b.json': JSON.stringify([reloadFailure]),
@@ -33,8 +33,8 @@ test("cmod log prints each mod's newest failure and warning across sessions, new
       '  mod 1.2.0 · @cmodjs/core 5.4.2 · cmod 5.4.2 · cmod program 5.4.2 · Claude Code 2.1.317',
       '  3 times in session session-b, first at 2026-11-03T21:02:00.000Z',
       '',
-      '2026-11-03T20:00:00.000Z  warning  tracer  tracer skipped an index',
-      '  tracer: the index is locked',
+      '2026-11-03T20:00:00.000Z  warning  demo  demo skipped an index',
+      '  demo: the index is locked',
       '',
       '  mod 1.2.0 · @cmodjs/core 5.4.2 · cmod 5.4.2 · cmod program 5.4.2 · Claude Code 2.1.317',
       '',

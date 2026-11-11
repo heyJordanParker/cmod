@@ -9,7 +9,7 @@ import { testMod } from '../../src/testing.js'
 test('a schedule from the state makes one Claude Code cron, replaces it when the state changes it, and deletes it when the state turns it off', async () => {
   const tested = testMod(
     defineMod({
-      name: 'loop',
+      name: 'demo',
       state: { project: { isOn: true, cron: '*/10 * * * *', prompt: 'Check the CI.' } },
       setup(mod) {
         mod.use(schedule((state) => (state.project.isOn ? { cron: state.project.cron, prompt: state.project.prompt } : undefined)))
@@ -30,9 +30,9 @@ test('a schedule from the state makes one Claude Code cron, replaces it when the
 })
 
 test('a schedule deletes the cron its mod made before /reload-plugins, so the cron is replaced and never doubled', async () => {
-  const fake = fakeClaude({ name: 'loop', root: '/plugins/loop' })
-  const definition = defineMod({ name: 'loop', setup: (mod) => mod.use(schedule({ cron: '7 * * * *', prompt: 'Summarize the hour.' })) })
-  const plugin = { name: 'loop', root: '/plugins/loop', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
+  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
+  const definition = defineMod({ name: 'demo', setup: (mod) => mod.use(schedule({ cron: '7 * * * *', prompt: 'Summarize the hour.' })) })
+  const plugin = { name: 'demo', root: '/plugins/demo', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
 
   for (let start = 0; start < 2; start += 1) {
     const lifecycle = createLifecycle(definition)
@@ -45,9 +45,9 @@ test('a schedule deletes the cron its mod made before /reload-plugins, so the cr
 })
 
 test('a schedule whose last cron cannot be deleted shows why and still makes its new cron', async () => {
-  const fake = fakeClaude({ name: 'loop', root: '/plugins/loop' })
-  const definition = defineMod({ name: 'loop', setup: (mod) => mod.use(schedule({ cron: '7 * * * *', prompt: 'Summarize the hour.' })) })
-  const plugin = { name: 'loop', root: '/plugins/loop', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
+  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
+  const definition = defineMod({ name: 'demo', setup: (mod) => mod.use(schedule({ cron: '7 * * * *', prompt: 'Summarize the hour.' })) })
+  const plugin = { name: 'demo', root: '/plugins/demo', version: '0.1.0', store: '/home/.local/share/cmod', isInstalled: true, shouldRecord: false, steps: {} }
   const startOnce = async () => {
     const lifecycle = createLifecycle(definition)
     await lifecycle.start(fake.claude, async () => plugin)
@@ -64,7 +64,7 @@ test('a schedule whose last cron cannot be deleted shows why and still makes its
 })
 
 test('a schedule Claude Code refuses shows one failure naming why', async () => {
-  const tested = testMod(defineMod({ name: 'loop', setup: (mod) => mod.use(schedule({ cron: 'every minute', prompt: 'Tick.' })) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => mod.use(schedule({ cron: 'every minute', prompt: 'Tick.' })) }))
   tested.fakes.tool.call = (async () => ({ result: { id: '' }, text: 'Invalid cron expression: every minute', isError: true })) as never
   await tested.start()
   await tested.settle()

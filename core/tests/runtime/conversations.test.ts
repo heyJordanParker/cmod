@@ -16,7 +16,7 @@ import { messageOf } from '../../src/utils/text.js'
 
 declare function setTimeout(run: () => void, ms: number): unknown
 
-const delivery = '<cross-session-message from="uds:/tmp/cc-socks/62955.sock" from-name="project-58">\n<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"send","input":{"type":"prompt","text":"Rerun the deploy","as":"person"}}</cmod-relay>\n</cross-session-message>\n\nThis came from another Claude session.'
+const delivery = '<cross-session-message from="uds:/tmp/cc-socks/62955.sock" from-name="project-58">\n<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"demo","action":"send","input":{"type":"prompt","text":"Rerun the deploy","as":"person"}}</cmod-relay>\n</cross-session-message>\n\nThis came from another Claude session.'
 
 async function received(origin: unknown, text: string) {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
@@ -37,7 +37,7 @@ test("a mod's prompt relayed from another session reaches this session as the pe
 
 test("a mod listens to its own session before the cmod plugin hears SessionStart, stops listening to the session /clear left, and listens to another session", async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
-  const call = (method: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method, input, caller: 'tracer' } as never)
+  const call = (method: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method, input, caller: 'demo' } as never)
 
   expect(await call(conversationMethods.subscribe, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
   expect(await call(conversationMethods.watchBefore, { session: 'test-session', subscriptions: [] })).toEqual({ value: null })
@@ -49,8 +49,8 @@ test("a mod listens to its own session before the cmod plugin hears SessionStart
 test('a relay a newer cmod in another session sends, with an action or a kind this cmod lacks, is refused back by name and runs nothing', async () => {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const relay = async (text: string) => claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
-  await relay('<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"pinger","action":"summarize","input":null}</cmod-relay>')
-  await relay('<cmod-relay>{"kind":"pin","id":"other:2","from":"other","mod":"pinger"}</cmod-relay>')
+  await relay('<cmod-relay>{"kind":"act","id":"other:1","from":"other","caller":"demo","action":"summarize","input":null}</cmod-relay>')
+  await relay('<cmod-relay>{"kind":"pin","id":"other:2","from":"other","mod":"demo"}</cmod-relay>')
   await tested.settle()
 
   expect(tested.calls.filter((call) => call.call === 'tool.call' || call.call === 'prompt.submit')).toEqual([])
@@ -82,7 +82,7 @@ test("a mod's action on another running session goes over the relay, and that se
   tested.fakes.process.spawn = () => printed(JSON.stringify([{ id: 'other', isRunning: true }]))
   await tested.start()
 
-  const asked = claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'other', action: 'surfaces', input: null }, caller: 'pinger' } as never)
+  const asked = claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'other', action: 'surfaces', input: null }, caller: 'demo' } as never)
   const sent = () => tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0] as { to: unknown; text: string })
   for (let waited = 0; sent().length === 0 && waited < 200; waited += 1) await tested.settle()
   const [question] = sent()
@@ -91,7 +91,7 @@ test("a mod's action on another running session goes over the relay, and that se
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: answer } as never, { text: answer } as never)
 
   expect(question?.to).toEqual({ sessionId: 'other' })
-  expect(relayed).toMatchObject({ kind: 'act', caller: 'pinger', action: 'surfaces' })
+  expect(relayed).toMatchObject({ kind: 'act', caller: 'demo', action: 'surfaces' })
   expect(await asked).toEqual({ value: ['mobile'] })
 })
 
@@ -99,7 +99,7 @@ test('an action on an ended session answers from its transcript, or is refused',
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.process.spawn = (request) => printed(request.argv.includes('usage') ? JSON.stringify({ model: 'claude-opus-5-5', context: { tokens: 1200 } }) : '[]')
   await tested.start()
-  const act = (action: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'older', action, input }, caller: 'pinger' } as never)
+  const act = (action: string, input: unknown) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'older', action, input }, caller: 'demo' } as never)
 
   expect(await act('usage', null)).toEqual({ value: { model: 'claude-opus-5-5', context: { tokens: 1200 } } })
   expect(await act('surfaces', null)).toEqual({ value: [] })
@@ -110,12 +110,12 @@ test('a note a mod sends through the cmod plugin, to the session or to one of it
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await claudeCodeOf(tested).fire('agent.spawn', { description: 'Look', subagentType: 'Explore', prompt: 'look', tool_use_id: 'toolu_1' } as never, { agentId: 'a1' } as never)
-  const send = (task?: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'send', input: { type: 'note', text: 'Tests pass.' }, ...(task === undefined ? {} : { task }) }, caller: 'pinger' } as never)
+  const send = (task?: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'send', input: { type: 'note', text: 'Tests pass.' }, ...(task === undefined ? {} : { task }) }, caller: 'demo' } as never)
 
   expect(await send()).toEqual({ value: null })
   expect(await send('a1')).toEqual({ value: null })
-  expect(tested.calls.filter((call) => call.call === 'session.append').map((call) => call.args[0])).toContainEqual({ message: { type: 'user', content: [{ type: 'text', text: '<pinger_mod>\nTests pass.\n</pinger_mod>' }] } })
-  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toContainEqual({ to: { agentId: 'a1' }, text: '<pinger_mod>\nTests pass.\n</pinger_mod>' })
+  expect(tested.calls.filter((call) => call.call === 'session.append').map((call) => call.args[0])).toContainEqual({ message: { type: 'user', content: [{ type: 'text', text: '<demo_mod>\nTests pass.\n</demo_mod>' }] } })
+  expect(tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0])).toContainEqual({ to: { agentId: 'a1' }, text: '<demo_mod>\nTests pass.\n</demo_mod>' })
 })
 
 test("the cmod plugin asks a mod in this session before a prompt enters, and the mod's refusal drops it", async () => {
@@ -127,11 +127,11 @@ test("the cmod plugin asks a mod in this session before a prompt enters, and the
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
 
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' } as never)
   const answer = await claudeCodeOf(tested).fire('prompt.submit', { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false })
 
   expect(answer).toEqual({ drop: 'No deploys from here.' })
-  expect(asked).toMatchObject([{ to: 'guard', method: conversationMethods.before, input: { session: 'test-session', event: 'prompt', change: { type: 'message', message: { type: 'prompt', text: 'Deploy to prod' } } } }])
+  expect(asked).toMatchObject([{ to: 'demo', method: conversationMethods.before, input: { session: 'test-session', event: 'prompt', change: { type: 'message', message: { type: 'prompt', text: 'Deploy to prod' } } } }])
 })
 
 test('the cmod plugin aborts the engine turn that is running', async () => {
@@ -140,12 +140,12 @@ test('the cmod plugin aborts the engine turn that is running', async () => {
   const abort = (caller: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: { turn: 'p1' } }, caller } as never)
   const appended = { uuid: 'p1', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Deploy' }] } }
 
-  expect(await abort('guard')).toEqual({ deny: 'no turn is running in session test-session.' })
+  expect(await abort('demo')).toEqual({ deny: 'no turn is running in session test-session.' })
   await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-0' } as never)
-  expect(await abort('guard')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
+  expect(await abort('demo')).toEqual({ deny: 'turn p1 has ended, so there is nothing to abort.' })
   await claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   await claudeCodeOf(tested).fire('turn.start', { text: 'Deploy', turnId: 'turn-7' } as never)
-  expect(await abort('guard')).toEqual({ value: null })
+  expect(await abort('demo')).toEqual({ value: null })
   expect(tested.calls.filter((call) => call.call === 'turn.abort').map((call) => call.args[0])).toEqual([{ turnId: 'turn-7' }])
 })
 
@@ -177,7 +177,7 @@ test('an abort of a turn that ended aborts nothing, while a later turn runs', as
     const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
     return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   }
-  const abort = (turn: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: { turn } }, caller: 'guard' } as never)
+  const abort = (turn: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action: 'abort', input: { turn } }, caller: 'demo' } as never)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt('p1', 'Rename the tree pane')
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)
@@ -203,8 +203,8 @@ test("a turn ends at Stop with Claude's answer, stays open while a mod refuses t
     return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'watcher' } as never)
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'other' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'demo' } as never)
   await prompt('p1', 'Rename the tree pane')
 
   expect(await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)).toEqual({ block: 'Run the tests first.' })
@@ -233,7 +233,7 @@ test('a message typed during a turn neither ends that turn nor starts one until 
     return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnStart' }, { event: 'turnEnd' }] }, caller: 'watcher' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnStart' }, { event: 'turnEnd' }] }, caller: 'other' } as never)
   await append('p1', 'prompt', 'Rename the tree pane')
   await append('q1', 'queue', 'Then deploy it')
   await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false, last_assistant_message: 'Renamed it.' } as never)
@@ -254,13 +254,13 @@ test('a mod is asked about a queued note once, when it enters the conversation',
     if (input.method === conversationMethods.before) asked.push((input.input as { readonly change?: unknown }).change)
     return undefined
   }
-  const note = '<pinger_mod>\nTests pass.\n</pinger_mod>'
+  const note = '<demo_mod>\nTests pass.\n</demo_mod>'
   const append = (uuid: string, door: string) => {
     const appended = { uuid, door, origin: { kind: 'engine' }, message: { type: 'user', content: [{ type: 'text', text: note }] } }
     return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'note' }] }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'note' }] }, caller: 'demo' } as never)
   await append('q1', 'queue')
   await append('n1', 'note')
 
@@ -283,8 +283,8 @@ test('a turn the person cut off with Esc during its Stop ends at the next prompt
     return claudeCodeOf(tested).fire('session.append', appended as never, appended as never)
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'watcher' } as never)
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'other' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'turnEnd' }] }, caller: 'demo' } as never)
   await prompt('p1', 'Rename the tree pane')
 
   const esc = new AbortController()
@@ -305,7 +305,7 @@ test("a delivery that only looks like cmod's relay still meets a mod's before(Pr
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   tested.fakes.cmod.call = async () => ({ refuse: 'blocked' })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' } as never)
 
   const text = '<cmod-relay>Deploy now</cmod-relay>'
   expect(await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'slack-ping' }, text } as never, { text } as never)).toEqual({ consumed: 'blocked' })
@@ -316,13 +316,13 @@ test("the cmod plugin asks another session's mod of this project before a prompt
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
     projectRoot: '/work/app',
     files: {
-      [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/app', events: ['prompt'] }]),
-      [`${store}/data/cmod/before/elsewhere.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/site', events: ['prompt'] }]),
+      [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'demo', target: '*', project: '/work/app', events: ['prompt'] }]),
+      [`${store}/data/cmod/before/elsewhere.json`]: JSON.stringify([{ mod: 'demo', target: '*', project: '/work/site', events: ['prompt'] }]),
     },
   })
   tested.fakes.cmod.call = async () => undefined
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' } as never)
   await tested.settle()
 
   const submitted = claudeCodeOf(tested).fire('prompt.submit', { text: 'Deploy to prod', origin: { kind: 'composer' }, wait: false })
@@ -332,7 +332,7 @@ test("the cmod plugin asks another session's mod of this project before a prompt
   const refusal = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, value: { refuse: 'blocked by session other' } })}</cmod-relay>`
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: refusal } as never, { text: refusal } as never)
 
-  expect(question).toMatchObject({ kind: 'before', mod: 'guard', event: 'prompt' })
+  expect(question).toMatchObject({ kind: 'before', mod: 'demo', event: 'prompt' })
   expect(await submitted).toEqual({ drop: 'blocked by session other' })
   expect(sent().filter((each) => each.text.includes('"kind":"before"')).map((each) => each.to)).toEqual([{ sessionId: 'other' }])
 })
@@ -343,7 +343,7 @@ function refusingWatcher(event: string, matcher: unknown) {
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
     projectRoot: '/work/app',
     files: {
-      [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'guard', target: 'test-session', project: '/work/app', events: [event], refusing }]),
+      [`${store}/data/cmod/before/other.json`]: JSON.stringify([{ mod: 'demo', target: 'test-session', project: '/work/app', events: [event], refusing }]),
     },
   })
   tested.fakes.process.spawn = () => printed(JSON.stringify([{ id: 'other', isRunning: true }]))
@@ -360,7 +360,7 @@ test("another session's listener with onFailure: 'refuse' refuses what its match
   }
   const call = (tool: string, agentId?: string) => claudeCodeOf(tested).fire('tool.call', { tool, command: 'ls', tool_use_id: 't1', ...(agentId === undefined ? {} : { agentId }) } as never, { result: 'ran' } as never)
 
-  expect(await call('Bash')).toEqual({ deny: 'guard: session other did not answer within 5 s' })
+  expect(await call('Bash')).toEqual({ deny: 'demo: session other did not answer within 5 s' })
   expect(await call('Read')).toEqual({ result: 'ran' })
   expect(await call('Bash', 'a1')).toEqual({ result: 'ran' })
 })
@@ -397,7 +397,7 @@ test("another session's refusing listener lets the event through when that sessi
   const sent = () => tested.calls.filter((call) => call.call === 'session.send').map((call) => call.args[0] as { text: string })
   for (let waited = 0; !sent().some((each) => each.text.includes('"kind":"before"')) && waited < 200; waited += 1) await tested.settle()
   const question = JSON.parse(/<cmod-relay>(.*)<\/cmod-relay>/s.exec(sent().find((each) => each.text.includes('"kind":"before"'))?.text ?? '')?.[1] ?? '{}') as { id: string }
-  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: "guard is installing. Try again when it's ready." })}</cmod-relay>`
+  const denied = `<cmod-relay>${JSON.stringify({ kind: 'answer', id: question.id, deny: "demo is installing. Try again when it's ready." })}</cmod-relay>`
   await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: denied } as never, { text: denied } as never)
 
   expect(await submitted).toMatchObject({ text: 'Deploy to prod' })
@@ -426,12 +426,12 @@ const stopped = (called: boolean): Caught => ({ error: { kind: 'timeout', budget
 
 test("a refusing beforePrompt listener drops the prompt when Claude Code stops the cmod plugin's prompt hook before it answered", async () => {
   const lifecycle = await resumedOnLockedIndex()
-  await lifecycle.route('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt', onFailure: 'refuse' }] }, caller: 'anyhost' } as never, async () => ({ deny: 'unanswered' }))
+  await lifecycle.route('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'prompt', onFailure: 'refuse' }] }, caller: 'demo' } as never, async () => ({ deny: 'unanswered' }))
   void lifecycle.route('prompt.submit', typed, entered)
   const delivered = { origin: { kind: 'peer' }, text: 'Deploy to prod' } as unknown as Frozen<Args<'session.receive'>>
 
-  expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(false))).toEqual({ drop: 'anyhost: it ran past the 10 s Claude Code gives a hook' })
-  expect(await lifecycle.caught('session.receive', delivered, async (e) => ({ text: e.text }), stopped(false))).toEqual({ consumed: 'anyhost: it ran past the 10 s Claude Code gives a hook' })
+  expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(false))).toEqual({ drop: 'demo: it ran past the 10 s Claude Code gives a hook' })
+  expect(await lifecycle.caught('session.receive', delivered, async (e) => ({ text: e.text }), stopped(false))).toEqual({ consumed: 'demo: it ran past the 10 s Claude Code gives a hook' })
   expect(await lifecycle.caught('prompt.submit', typed, entered, stopped(true))).toEqual({ text: 'Deploy to prod' })
 })
 
@@ -449,7 +449,7 @@ test("a prompt is dropped when Claude Code stops the cmod plugin's prompt hook b
 })
 
 const refusingOnFailure = (lifecycle: Awaited<ReturnType<typeof resumedOnLockedIndex>>, event: string) =>
-  lifecycle.route('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event, onFailure: 'refuse' }] }, caller: 'guard' } as never, async () => ({ deny: 'unanswered' }))
+  lifecycle.route('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event, onFailure: 'refuse' }] }, caller: 'demo' } as never, async () => ({ deny: 'unanswered' }))
 
 const ranPast = 'it ran past the 10 s Claude Code gives a hook'
 const deletion = { tool: 'Bash', tool_use_id: 'toolu_1', command: 'rm -rf build' } as unknown as Frozen<Args<'tool.call'>>
@@ -460,7 +460,7 @@ test("a refusing beforeToolCall listener denies the call when Claude Code stops 
   await refusingOnFailure(lifecycle, 'toolCall')
   void lifecycle.route('tool.call', deletion, ran)
 
-  expect(await lifecycle.caught('tool.call', deletion, ran, stopped(false))).toEqual({ deny: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('tool.call', deletion, ran, stopped(false))).toEqual({ deny: `demo: ${ranPast}` })
   expect(await lifecycle.caught('tool.call', deletion, ran, stopped(true))).toEqual({ result: 'ran' })
 })
 
@@ -476,7 +476,7 @@ test("a refusing beforeTaskStart listener denies the spawn when Claude Code stop
   const spawn = { tool_use_id: 'toolu_2', description: 'Audit the deploy', prompt: 'Audit it.', subagentType: 'general-purpose', parentModel: 'opus' } as unknown as Frozen<Args<'agent.spawn'>>
   const started = async () => ({ model: 'opus', agentId: 'agent-1' })
 
-  expect(await lifecycle.caught('agent.spawn', spawn, started, stopped(false))).toEqual({ deny: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('agent.spawn', spawn, started, stopped(false))).toEqual({ deny: `demo: ${ranPast}` })
 })
 
 test("a refusing beforeAttachedFile or beforeInstructionFile listener drops the attachment when Claude Code stops the cmod plugin's attachment hook before it answered", async () => {
@@ -499,8 +499,8 @@ test("a refusing beforeContextEnd listener skips the compaction when Claude Code
   await refusingOnFailure(lifecycle, 'contextEnd')
   const compacted = async () => ({ messages: [] })
 
-  expect(await lifecycle.caught('session.compact', { trigger: 'manual', messages: [] } as never, compacted as never, stopped(false))).toEqual({ skip: `guard: ${ranPast}` })
-  expect(await lifecycle.caught('session.compact', { trigger: 'auto', agentId: 'agent-1', messages: [] } as never, compacted as never, stopped(false))).toEqual({ skip: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('session.compact', { trigger: 'manual', messages: [] } as never, compacted as never, stopped(false))).toEqual({ skip: `demo: ${ranPast}` })
+  expect(await lifecycle.caught('session.compact', { trigger: 'auto', agentId: 'agent-1', messages: [] } as never, compacted as never, stopped(false))).toEqual({ skip: `demo: ${ranPast}` })
   expect(await lifecycle.caught('session.compact', { trigger: 'precompute', messages: [] } as never, compacted as never, stopped(false))).toEqual({ messages: [] })
 })
 
@@ -510,13 +510,13 @@ test("a refusing beforeTurnEnd listener blocks the stop when Claude Code stops t
   const stop = { session_id: 'test-session', stop_hook_active: false, last_assistant_message: 'Shipped.' } as unknown as Frozen<Args<'classic.Stop'>>
   const subagentStop = { session_id: 'test-session', agent_id: 'agent-1', agent_type: 'general-purpose', stop_hook_active: false } as unknown as Frozen<Args<'classic.SubagentStop'>>
 
-  expect(await lifecycle.caught('classic.Stop', stop, async () => ({}), stopped(false))).toEqual({ block: `guard: ${ranPast}` })
-  expect(await lifecycle.caught('classic.SubagentStop', subagentStop, async () => ({}), stopped(false))).toEqual({ block: `guard: ${ranPast}` })
+  expect(await lifecycle.caught('classic.Stop', stop, async () => ({}), stopped(false))).toEqual({ block: `demo: ${ranPast}` })
+  expect(await lifecycle.caught('classic.SubagentStop', subagentStop, async () => ({}), stopped(false))).toEqual({ block: `demo: ${ranPast}` })
 })
 
 test('a tool call that arrives while the cmod plugin still runs its setup is denied at the start limit, because the cmod plugin has not read which mods refuse it', async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
-  const guarding = [{ mod: 'guard', target: 'test-session', project: '/work/app', events: ['toolCall'], refusing: [{ event: 'toolCall', onFailure: 'refuse' }] }]
+  const guarding = [{ mod: 'demo', target: 'test-session', project: '/work/app', events: ['toolCall'], refusing: [{ event: 'toolCall', onFailure: 'refuse' }] }]
   Object.assign(fake.fakes.fs, fakeFiles({ '/test/home/.local/share/cmod/data/cmod/before/other.json': JSON.stringify(guarding) }))
   fake.fakes.process.spawn = () => printed('')
   const timers: { ms: number; fire: () => void }[] = []
@@ -546,7 +546,7 @@ test('a mod listening on this session and on every session is asked once before 
   }
   tested.fakes.process.spawn = () => printed('[]')
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  for (const session of ['test-session', '*']) await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session, subscriptions: [{ event: 'prompt' }] }, caller: 'guard' } as never)
+  for (const session of ['test-session', '*']) await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.watchBefore, input: { session, subscriptions: [{ event: 'prompt' }] }, caller: 'demo' } as never)
 
   await claudeCodeOf(tested).fire('prompt.submit', { text: 'go', origin: { kind: 'composer' }, wait: false })
 
@@ -578,7 +578,7 @@ test('the follower moves with the session to a new project and to a new session'
     return followerChild().stream
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: '*', subscriptions: [{ event: 'message' }] }, caller: 'watcher' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: '*', subscriptions: [{ event: 'message' }] }, caller: 'other' } as never)
   await tested.settle()
 
   await tested.moveTo('/work/new')
@@ -598,14 +598,14 @@ test("a session whose saved listeners do not read still follows the other sessio
   const router = createRouter()
   const reported: string[] = []
   const followed: (string | undefined)[] = []
-  fake.fakes.fs = fakeFiles({ '/store/data/cmod/listeners/next.json': '{"watcher":' })
+  fake.fakes.fs = fakeFiles({ '/store/data/cmod/listeners/next.json': '{"other":' })
   fake.fakes.process.spawn = (request) => {
     if (request.argv.includes('follow')) followed.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
     return followerChild().stream
   }
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message) => void reported.push(message), clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'first', source: 'startup' } as never, async () => ({}))
-  await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: '*', subscriptions: [{ event: 'message' }] }, caller: 'watcher' })
+  await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: '*', subscriptions: [{ event: 'message' }] }, caller: 'other' })
 
   await router.dispatch('classic.SessionStart', { session_id: 'next', source: 'clear' } as never, async () => ({}))
   await fake.settle()
@@ -618,8 +618,8 @@ test("after /cd, a session no longer asks the old project's guards, and asks the
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }), {
     projectRoot: '/work/old',
     files: {
-      [`${store}/data/cmod/before/old-session.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/old', events: ['prompt'] }]),
-      [`${store}/data/cmod/before/new-session.json`]: JSON.stringify([{ mod: 'guard', target: '*', project: '/work/new', events: ['prompt'] }]),
+      [`${store}/data/cmod/before/old-session.json`]: JSON.stringify([{ mod: 'demo', target: '*', project: '/work/old', events: ['prompt'] }]),
+      [`${store}/data/cmod/before/new-session.json`]: JSON.stringify([{ mod: 'demo', target: '*', project: '/work/new', events: ['prompt'] }]),
     },
   })
   const asked: { to: unknown; text: string }[] = []
@@ -644,7 +644,7 @@ test("after /cd, a session no longer asks the old project's guards, and asks the
 test("a new session's first prompt waits for the project's guards to load, and asks them", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  const disk = fakeFiles({ '/store/data/cmod/before/guarding.json': JSON.stringify([{ mod: 'guard', target: '*', project: '/work/app', events: ['prompt'] }]) })
+  const disk = fakeFiles({ '/store/data/cmod/before/guarding.json': JSON.stringify([{ mod: 'demo', target: '*', project: '/work/app', events: ['prompt'] }]) })
   let release = () => {}
   const loaded = new Promise<void>((resolve) => (release = resolve))
   fake.fakes.fs.read = disk.read
@@ -673,7 +673,7 @@ test("a session start reads only the before files that hold a listener, because 
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
   const ended = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`/store/data/cmod/before/ended-${index}.json`, '[]']))
-  const disk = fakeFiles({ ...ended, '/store/data/cmod/before/guarding.json': JSON.stringify([{ mod: 'guard', target: '*', project: '/work/app', events: ['prompt'] }]) })
+  const disk = fakeFiles({ ...ended, '/store/data/cmod/before/guarding.json': JSON.stringify([{ mod: 'demo', target: '*', project: '/work/app', events: ['prompt'] }]) })
   const read: string[] = []
   fake.fakes.fs.read = async (path) => (read.push(path), disk.read(path))
   fake.fakes.fs.list = disk.list
@@ -688,7 +688,7 @@ test("a session start reads only the before files that hold a listener, because 
 test("a guard of a session that ended without saying so lets the prompt in quietly, and is cleared for every later session", async () => {
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
-  const disk = fakeFiles({ '/store/data/cmod/before/crashed.json': JSON.stringify([{ mod: 'guard', target: '*', project: '/work/app', events: ['prompt'] }]) })
+  const disk = fakeFiles({ '/store/data/cmod/before/crashed.json': JSON.stringify([{ mod: 'demo', target: '*', project: '/work/app', events: ['prompt'] }]) })
   const reported: string[] = []
   fake.fakes.fs.read = disk.read
   fake.fakes.fs.list = disk.list
@@ -709,7 +709,7 @@ test("another session's half-written guards keep that session's guards from befo
   const fake = fakeClaude({ name: 'cmod', root: '/plugins/cmod' })
   const router = createRouter()
   const guard = (mod: string) => JSON.stringify([{ mod, target: '*', project: '/work/app', events: ['prompt'] }])
-  const disk = fakeFiles({ '/store/data/cmod/before/writing.json': guard('guard'), '/store/data/cmod/before/fresh.json': '[]' })
+  const disk = fakeFiles({ '/store/data/cmod/before/writing.json': guard('demo'), '/store/data/cmod/before/fresh.json': '[]' })
   const reported: string[] = []
   const asked: string[] = []
   fake.fakes.fs = disk
@@ -726,15 +726,15 @@ test("another session's half-written guards keep that session's guards from befo
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
   await fake.settle()
 
-  await disk.write('/store/data/cmod/before/writing.json', '[{"mod":"guard","tar')
-  await disk.write('/store/data/cmod/before/fresh.json', guard('newguard'))
+  await disk.write('/store/data/cmod/before/writing.json', '[{"mod":"demo","tar')
+  await disk.write('/store/data/cmod/before/fresh.json', guard('other'))
   const watch = '<cmod-relay>{"kind":"watch"}</cmod-relay>'
   await router.dispatch('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text: watch } as never, async () => ({}) as never)
   await fake.settle()
   await router.dispatch('prompt.submit', { text: 'Go on', origin: { kind: 'composer' }, wait: false } as never, async () => ({}) as never)
   await fake.settle()
 
-  expect({ reported, asked: asked.sort() }).toEqual({ reported: [], asked: ['{"sessionId":"fresh"} newguard', '{"sessionId":"writing"} guard'] })
+  expect({ reported, asked: asked.sort() }).toEqual({ reported: [], asked: ['{"sessionId":"fresh"} other', '{"sessionId":"writing"} demo'] })
 })
 
 test('a failure to tell a mod about a change clears once cmod reaches that mod again', async () => {
@@ -744,13 +744,13 @@ test('a failure to tell a mod about a change clears once cmod reaches that mod a
   fake.fakes.process.spawn = () => printed('[]')
   let isDown = true
   fake.fakes.cmod.call = async () => {
-    if (isDown) throw new Error('history is installing')
+    if (isDown) throw new Error('demo is installing')
     return null
   }
   const shown: string[] = []
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (id) => void shown.push(id), clear: (id) => void shown.splice(shown.indexOf(id), 1) })
   await router.dispatch('classic.SessionStart', { session_id: 'here', source: 'startup' } as never, async () => ({}))
-  await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller: 'history' })
+  await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' })
 
   const prompt = (uuid: string, text: string) => {
     const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
@@ -759,7 +759,7 @@ test('a failure to tell a mod about a change clears once cmod reaches that mod a
 
   await prompt('p1', 'First')
   await fake.settle()
-  expect(shown).toEqual(['changed:history'])
+  expect(shown).toEqual(['changed:demo'])
   isDown = false
   await prompt('p2', 'Second')
   await fake.settle()
@@ -785,12 +785,12 @@ test("a goal updated from another session becomes that running session's goal", 
     return { isDelivered: true }
   }
   await target.router.dispatch('prompt.submit', { text: 'Original goal', origin: { kind: 'composer' }, wait: false } as never, async () => ({}) as never)
-  await target.served.answer({ to: 'cmod', method: conversationMethods.updateGoal, input: { session: 'target', text: 'Original goal' }, caller: 'history' })
+  await target.served.answer({ to: 'cmod', method: conversationMethods.updateGoal, input: { session: 'target', text: 'Original goal' }, caller: 'demo' })
 
-  await other.served.answer({ to: 'cmod', method: conversationMethods.updateGoal, input: { session: 'target', text: 'Updated remotely' }, caller: 'history' })
+  await other.served.answer({ to: 'cmod', method: conversationMethods.updateGoal, input: { session: 'target', text: 'Updated remotely' }, caller: 'demo' })
   await target.fake.settle()
 
-  expect(await target.served.answer({ to: 'cmod', method: conversationMethods.goal, input: { session: 'target' }, caller: 'history' })).toEqual({ value: { text: 'Updated remotely' } })
+  expect(await target.served.answer({ to: 'cmod', method: conversationMethods.goal, input: { session: 'target' }, caller: 'demo' })).toEqual({ value: { text: 'Updated remotely' } })
 })
 
 test('another session hears when a before listener on it goes away, and when the listening session ends', async () => {
@@ -805,7 +805,7 @@ test('another session hears when a before listener on it goes away, and when the
   }
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
-  const watch = (subscriptions: readonly unknown[]) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'other', subscriptions }, caller: 'guard' })
+  const watch = (subscriptions: readonly unknown[]) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'other', subscriptions }, caller: 'demo' })
 
   await watch([{ event: 'prompt' }])
   await watch([])
@@ -824,7 +824,7 @@ test('a /clear, where the mods listen on the new session before cmod hears its s
   fake.fakes.session.send = async ({ to }) => (live.has((to as { readonly sessionId?: string }).sessionId ?? '') ? { isDelivered: true } : { isDelivered: false, reason: 'no live session on this machine has that id' })
   fake.fakes.cmod.call = async () => null
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
-  const watch = (session: string) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session, subscriptions: [{ event: 'prompt' }] }, caller: 'guard' })
+  const watch = (session: string) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session, subscriptions: [{ event: 'prompt' }] }, caller: 'demo' })
   await router.dispatch('classic.SessionStart', { session_id: 'before-clear', source: 'startup' } as never, async () => ({}))
   await watch('before-clear')
 
@@ -852,7 +852,7 @@ test("two before listeners registered at once both stay registered", async () =>
   fake.fakes.process.spawn = () => printed('[]')
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
-  const watch = (target: string) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: target, subscriptions: [{ event: 'prompt' }] }, caller: 'guard' })
+  const watch = (target: string) => served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: target, subscriptions: [{ event: 'prompt' }] }, caller: 'demo' })
 
   const first = watch('remote-a')
   const second = watch('remote-b')
@@ -876,8 +876,8 @@ test('a cmod plugin that restarts mid-session keeps asking and telling the mods 
     return { fake, router, served, called }
   }
   const before = await plugin()
-  await before.served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'tracer' })
-  await before.served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'contextEnd' }] }, caller: 'tracer' })
+  await before.served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'test-session', subscriptions: [{ event: 'prompt' }] }, caller: 'demo' })
+  await before.served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'test-session', subscriptions: [{ event: 'contextEnd' }] }, caller: 'demo' })
   await before.fake.settle()
 
   const after = await plugin()
@@ -887,8 +887,8 @@ test('a cmod plugin that restarts mid-session keeps asking and telling the mods 
   await after.fake.settle()
 
   expect(after.called).toEqual([
-    { to: 'tracer', method: conversationMethods.changed },
-    { to: 'tracer', method: conversationMethods.before },
+    { to: 'demo', method: conversationMethods.changed },
+    { to: 'demo', method: conversationMethods.before },
   ])
 })
 
@@ -925,12 +925,12 @@ test("a cmod plugin that restarts after a mod listened again reads every saved l
   }
   const before = plugin()
   await before.start('startup')
-  await before.listen('tracer')
-  await before.listen('watcher')
+  await before.listen('demo')
+  await before.listen('other')
   await before.fake.settle()
 
   const after = plugin()
-  await after.listen('tracer')
+  await after.listen('demo')
   await after.start('resume')
   const appended = { uuid: 'p1', door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text: 'Go on' }] } }
   await after.router.dispatch('session.append', appended as never, async () => appended as never)
@@ -939,10 +939,10 @@ test("a cmod plugin that restarts after a mod listened again reads every saved l
 
   expect({ reported: after.reported, told: after.told.sort() }).toEqual({
     reported: [],
-    told: [`tracer ${conversationMethods.before}`, `tracer ${conversationMethods.changed}`, `watcher ${conversationMethods.before}`, `watcher ${conversationMethods.changed}`],
+    told: [`demo ${conversationMethods.before}`, `demo ${conversationMethods.changed}`, `other ${conversationMethods.before}`, `other ${conversationMethods.changed}`],
   })
-  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/test-session.json'))).toEqual({ tracer: { 'test-session': [{ event: 'prompt' }] }, watcher: { 'test-session': [{ event: 'prompt' }] } })
-  expect((JSON.parse(await disk.read('/store/data/cmod/before/test-session.json')) as { mod: string }[]).map(({ mod }) => mod).sort()).toEqual(['tracer', 'watcher'])
+  expect(JSON.parse(await disk.read('/store/data/cmod/listeners/test-session.json'))).toEqual({ demo: { 'test-session': [{ event: 'prompt' }] }, other: { 'test-session': [{ event: 'prompt' }] } })
+  expect((JSON.parse(await disk.read('/store/data/cmod/before/test-session.json')) as { mod: string }[]).map(({ mod }) => mod).sort()).toEqual(['demo', 'other'])
 })
 
 test("one compaction of a task moves its context once, and one of the session moves the session's once", async () => {
@@ -961,7 +961,7 @@ test("one compaction of a task moves its context once, and one of the session mo
   await router.dispatch('session.compact', { trigger: 'precompute' } as never, async () => ({}) as never)
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'compact' } as never, passed)
   await fake.settle()
-  const contexts = async (task?: string) => (await served.answer({ to: 'cmod', method: conversationMethods.contexts, input: { session: 'mine', ...(task === undefined ? {} : { task }) }, caller: 'history' }))?.value as { number: number }[]
+  const contexts = async (task?: string) => (await served.answer({ to: 'cmod', method: conversationMethods.contexts, input: { session: 'mine', ...(task === undefined ? {} : { task }) }, caller: 'demo' }))?.value as { number: number }[]
 
   expect([(await contexts('task-1')).map((each) => each.number), (await contexts()).map((each) => each.number)]).toEqual([[2], [2]])
 })
@@ -974,7 +974,7 @@ test("a compaction a mod's summary answers, where no model runs, still moves the
   fake.fakes.cmod.call = async ({ method }) => (method === conversationMethods.before ? { summary: 'The tree pane is drawn in src/tree.tsx.' } : null)
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
-  await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'mine', subscriptions: [{ event: 'contextEnd' }] }, caller: 'totalrecall' })
+  await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'mine', subscriptions: [{ event: 'contextEnd' }] }, caller: 'other' })
 
   const compacted = await router.dispatch('session.compact', { trigger: 'manual', messages: [] } as never, async () => {
     throw new Error('Claude Code compacted although a mod answered with its summary')
@@ -982,7 +982,7 @@ test("a compaction a mod's summary answers, where no model runs, still moves the
   await fake.settle()
 
   expect(compacted).toEqual({ messages: [{ role: 'user', text: 'The tree pane is drawn in src/tree.tsx.', toolUses: [] }] })
-  const contexts = (await served.answer({ to: 'cmod', method: conversationMethods.contexts, input: { session: 'mine' }, caller: 'history' }))?.value as { number: number }[]
+  const contexts = (await served.answer({ to: 'cmod', method: conversationMethods.contexts, input: { session: 'mine' }, caller: 'demo' }))?.value as { number: number }[]
   expect(contexts.map((each) => each.number)).toEqual([2])
 })
 
@@ -1005,7 +1005,7 @@ test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and a
   }
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (_id, message, error) => void reported.push(`${message}: ${messageOf(error)}`), clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
-  await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'mine', subscriptions: [{ event: 'instructionFile' }] }, caller: 'tracer' })
+  await served.answer({ to: 'cmod', method: conversationMethods.watchBefore, input: { session: 'mine', subscriptions: [{ event: 'instructionFile' }] }, caller: 'demo' })
   const instructionFile = { type: 'nested_memory', text: 'Contents of /work/src/CLAUDE.md:\n\nUse spaces.', origin: { kind: 'engine' } } as never
   const readAsIs = async (e: { readonly text: string }) => ({ text: e.text }) as never
 
@@ -1022,7 +1022,7 @@ test("a CLAUDE.md whose ask the person cancels with Esc passes on quietly, and a
   await fake.settle()
 
   expect(reported).toEqual([])
-  expect(asked).toEqual(['tracer', 'tracer'])
+  expect(asked).toEqual(['demo', 'demo'])
   expect(JSON.parse(await disk.read('/store/data/cmod/before/mine.json'))).toEqual([])
 })
 
@@ -1035,13 +1035,13 @@ test('a mod that left the session is told of a change once, quietly, and its lis
   const told: string[] = []
   fake.fakes.cmod.call = async ({ to }) => {
     told.push(to)
-    if (to === 'history') throw new Error(notInstalled(to))
+    if (to === 'demo') throw new Error(notInstalled(to))
     return null
   }
   const reported: string[] = []
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: (id) => void reported.push(id), clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'here', source: 'startup' } as never, async () => ({}))
-  for (const caller of ['history', 'notes']) await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller })
+  for (const caller of ['demo', 'other']) await served.answer({ to: 'cmod', method: conversationMethods.subscribe, input: { session: 'here', subscriptions: [{ event: 'prompt' }] }, caller })
   const prompt = (uuid: string, text: string) => {
     const appended = { uuid, door: 'user', origin: { kind: 'composer' }, message: { type: 'user', content: [{ type: 'text', text }] } }
     return router.dispatch('session.append', appended as never, async () => appended as never)
@@ -1053,8 +1053,8 @@ test('a mod that left the session is told of a change once, quietly, and its lis
   await fake.settle()
 
   expect(reported).toEqual([])
-  expect(told).toEqual(['history', 'notes', 'notes'])
-  expect(Object.keys(JSON.parse(await disk.read('/store/data/cmod/listeners/here.json')) as object)).toEqual(['notes'])
+  expect(told).toEqual(['demo', 'other', 'other'])
+  expect(Object.keys(JSON.parse(await disk.read('/store/data/cmod/listeners/here.json')) as object)).toEqual(['other'])
 })
 
 test("a running task of the cmod plugin's session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {
@@ -1062,14 +1062,14 @@ test("a running task of the cmod plugin's session holds its status, its teammate
   const router = createRouter()
   fake.fakes.fs = fakeFiles({})
   fake.fakes.process.spawn = () => printed('[]')
-  fake.fakes.agent.list = async () => [{ id: 'task-1', description: 'Find the pane', type: 'Explore', status: 'waiting', name: 'scout', spawnedBy: 'scoper' }]
+  fake.fakes.agent.list = async () => [{ id: 'task-1', description: 'Find the pane', type: 'Explore', status: 'waiting', name: 'scout', spawnedBy: 'demo' }]
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
   await router.dispatch('classic.SessionStart', { session_id: 'mine', source: 'startup' } as never, async () => ({}))
   await router.dispatch('agent.spawn', { description: 'Find the pane', subagentType: 'Explore', tool_use_id: 'toolu_1' } as never, async () => ({ agentId: 'task-1', model: 'claude-haiku' }))
 
-  const tasks = (await served.answer({ to: 'cmod', method: conversationMethods.tasks, input: { session: 'mine' }, caller: 'history' }))?.value as { status?: string; name?: string; spawnedBy?: string }[]
+  const tasks = (await served.answer({ to: 'cmod', method: conversationMethods.tasks, input: { session: 'mine' }, caller: 'demo' }))?.value as { status?: string; name?: string; spawnedBy?: string }[]
 
-  expect(tasks.map(({ status, name, spawnedBy }) => [status, name, spawnedBy])).toEqual([['waiting', 'scout', 'scoper']])
+  expect(tasks.map(({ status, name, spawnedBy }) => [status, name, spawnedBy])).toEqual([['waiting', 'scout', 'demo']])
 })
 
 test('the cmod plugin asks the before listeners of its session, starts a background task through cmod task start, and closes it when the task’s session relays its answer', async () => {
@@ -1086,7 +1086,7 @@ test('the cmod plugin asks the before listeners of its session, starts a backgro
     return null
   }
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
-  const call = (method: string, input: unknown) => served.answer({ to: 'cmod', method, input, caller: 'scoper' })
+  const call = (method: string, input: unknown) => served.answer({ to: 'cmod', method, input, caller: 'demo' })
   await router.dispatch('classic.SessionStart', { session_id: 'test-session', source: 'startup' } as never, async () => ({}))
   await call(conversationMethods.watchBefore, { session: 'test-session', subscriptions: [{ event: 'taskStart' }] })
   await call(conversationMethods.subscribe, { session: 'test-session', subscriptions: [{ event: 'taskStart' }, { event: 'taskEnd' }] })
@@ -1114,7 +1114,7 @@ test('a clone runs cmod task start with --clone and none of the owner a listener
   const spawned: unknown[] = []
   fake.fakes.agent.spawn = async (args) => (spawned.push(args), { agentId: 'agent-3', model: 'opus' })
   const served = serveConversations({ claude: fake.claude, router, store: '/store', project: () => '/work/app', report: () => {}, clear: () => {} })
-  const act = (action: string, input: unknown) => served.answer({ to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action, input }, caller: 'scoper' })
+  const act = (action: string, input: unknown) => served.answer({ to: 'cmod', method: conversationMethods.act, input: { session: 'test-session', action, input }, caller: 'demo' })
   await router.dispatch('classic.SessionStart', { session_id: 'test-session', source: 'startup' } as never, async () => ({}))
 
   expect(await act('clone', { title: 'Try SQL', prompt: 'Rebuild this on SQL.', agentType: 'Explore' })).toMatchObject({ value: { id: 'clone-1', forkedFrom: 'test-session', isBackground: true } })
@@ -1151,7 +1151,7 @@ test('a relayed act names an action of @cmodjs/core 4.0.0 or 4.1.0, which this c
   const tested = testMod(defineMod({ name: 'cmod', setup() {} }))
   const actions = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort']
   for (const [index, action] of actions.entries()) {
-    const text = `<cmod-relay>${JSON.stringify({ kind: 'act', id: `other:${index}`, from: 'other', caller: 'pinger', action, input: { name: 'Bash', input: {} } })}</cmod-relay>`
+    const text = `<cmod-relay>${JSON.stringify({ kind: 'act', id: `other:${index}`, from: 'other', caller: 'demo', action, input: { name: 'Bash', input: {} } })}</cmod-relay>`
     await claudeCodeOf(tested).fire('session.receive', { origin: { kind: 'peer', plugin: 'cmod' }, text } as never, { text } as never)
   }
   await tested.settle()
@@ -1172,7 +1172,7 @@ test("the cmod plugin tells each mod of its session the color the index holds at
   await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
   await tested.settle()
 
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'other' } as never)
   await tested.settle()
   await pick('Cyan')
   await tested.settle()
@@ -1183,10 +1183,10 @@ test("the cmod plugin tells each mod of its session the color the index holds at
   await tested.settle()
 
   expect(told.filter((call) => (call as { method: string }).method === conversationMethods.sessionColor)).toEqual([
-    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session', color: 'green' },
-    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session', color: 'cyan' },
-    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session' },
-    { to: 'notes', method: conversationMethods.sessionColor, session: 'test-session', color: 'purple' },
+    { to: 'other', method: conversationMethods.sessionColor, session: 'test-session', color: 'green' },
+    { to: 'other', method: conversationMethods.sessionColor, session: 'test-session', color: 'cyan' },
+    { to: 'other', method: conversationMethods.sessionColor, session: 'test-session' },
+    { to: 'other', method: conversationMethods.sessionColor, session: 'test-session', color: 'purple' },
   ])
 })
 
@@ -1198,11 +1198,11 @@ test("a mod still installing misses the session's color with no warning, and hea
   const told: unknown[] = []
   tested.fakes.cmod.call = async (call) => {
     if (call.method !== conversationMethods.sessionColor) return null
-    if (isInstalling) throw new Error("notes is installing. Try again when it's ready.")
+    if (isInstalling) throw new Error("other is installing. Try again when it's ready.")
     told.push({ to: call.to, ...(call.input as object) })
     return null
   }
-  const tellParts = () => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+  const tellParts = () => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'other' } as never)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'resume' })
   await tested.settle()
 
@@ -1212,7 +1212,7 @@ test("a mod still installing misses the session's color with no warning, and hea
   await tellParts()
   await tested.settle()
 
-  expect(told).toEqual([{ to: 'notes', session: 'test-session', color: 'green' }])
+  expect(told).toEqual([{ to: 'other', session: 'test-session', color: 'green' }])
   expect(tested.shown.debug.filter((line) => line.includes("did not hear the session's color"))).toEqual([])
 })
 
@@ -1241,7 +1241,7 @@ test('the cmod plugin restarts its follower quietly, and says so when a follower
     children.push(child)
     return child.stream
   }
-  const listen = (session: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session, subscriptions: [{ event: 'message' }] }, caller: 'watcher' } as never)
+  const listen = (session: string) => claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session, subscriptions: [{ event: 'message' }] }, caller: 'other' } as never)
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
 
   await listen('other-1')
@@ -1267,7 +1267,7 @@ test('a follower that exits after a newer cmod is installed, which deleted the i
     return child.stream
   }
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
-  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'other-1', subscriptions: [{ event: 'message' }] }, caller: 'watcher' } as never)
+  await claudeCodeOf(tested).fire('cmod.call', { to: 'cmod', method: conversationMethods.subscribe, input: { session: 'other-1', subscriptions: [{ event: 'message' }] }, caller: 'other' } as never)
   await tested.settle()
 
   await tested.fakes.fs.write?.(`${store}/bin/cmod/5.7.0/cmod`, '')

@@ -11,7 +11,7 @@ export const help = `Usage: cmod secret store <mod> <key>
 ${summary}
 
 store reads the value from stdin, such as
-printf '%s' "$TOKEN" | cmod secret store anyhost token, and get prints the
+printf '%s' "$TOKEN" | cmod secret store my-mod token, and get prints the
 value to stdout as it was stored, or nothing when the mod has no secret
 <key>. A value never goes in the arguments, where every process on the
 computer can read it. Every mod's secrets live in secrets.json in the cmod

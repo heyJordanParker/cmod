@@ -507,7 +507,7 @@ export const cmodPlugin = defineMod({
       },
       [failedMethod]: failureLog(mod),
       async [loadedMethod](input: { readonly name?: unknown }) {
-        if (typeof input.name !== 'string') throw new Error(`${loadedMethod} takes the name of a mod, as { name: 'anyhost' }.`)
+        if (typeof input.name !== 'string') throw new Error(`${loadedMethod} takes the name of a mod, as { name: 'my-mod' }.`)
         return isLoaded(input.name)
       },
     }

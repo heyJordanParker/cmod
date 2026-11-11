@@ -8,7 +8,7 @@ import { claudeCodeOf } from '../../src/testing/claude-code.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
 
 test("a task's owner is a session: its agent type, its goal from its first prompt, and its own turns", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane', agentType: 'Explore', model: 'haiku' })
@@ -26,7 +26,7 @@ test("a task's owner is a session: its agent type, its goal from its first promp
 })
 
 test('sessions.current.turn() is the running turn, and none once Claude stops', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
 
@@ -44,7 +44,7 @@ test("a turn hears only its own messages, a session only its own agent's, and th
   const inSession: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'history',
+      name: 'demo',
       async setup() {
         sessions.current.onTurnStart({ prompt: { text: 'First' } }, (turn: Turn) => void turn.onReply((reply) => void inTurn.push(reply.text)))
         sessions.current.onMessage((message) => void inMain.push(message.type))
@@ -68,7 +68,7 @@ test("a turn hears only its own messages, a session only its own agent's, and th
 
 test("a task hears its subtask's replies, though it listens only for replies", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
@@ -83,7 +83,7 @@ test("a task hears its subtask's replies, though it listens only for replies", a
 })
 
 test("a running task of this session holds its status, its teammate name, and the plugin that spawned it, as Claude Code lists them", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -95,7 +95,7 @@ test("a running task of this session holds its status, its teammate name, and th
 })
 
 test("a task refuses its subtask's start", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
@@ -108,7 +108,7 @@ test("a task refuses its subtask's start", async () => {
 
 test("beforePrompt in a task hears the spawn's prompt when Claude Code starts the subagent inside the spawn, before cmod knows its task, and its note reaches the subagent", async () => {
   const prompts: { text: string; task: string | undefined }[] = []
-  const tested = testMod(defineMod({ name: 'modes', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   ;sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => {
@@ -124,7 +124,7 @@ test("beforePrompt in a task hears the spawn's prompt when Claude Code starts th
 })
 
 test("a goal refuses its session's top-level task starts", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   ;sessions.current.goal.beforeTaskStart(() => ({ refuse: 'No new tasks' }))
@@ -134,7 +134,7 @@ test("a goal refuses its session's top-level task starts", async () => {
 })
 
 test("a task's owner keeps its context through a compaction and its turn through a stop, when its listeners refuse", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -149,7 +149,7 @@ test("a task's owner keeps its context through a compaction and its turn through
 })
 
 test('a stop the person cut off with Esc asks no beforeTurnEnd listener and refuses nothing, one cut off mid-ask stops its listener at once, and an answered stop still asks', async () => {
-  const tested = testMod(defineMod({ name: 'reviewer', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -192,7 +192,7 @@ test('a stop the person cut off with Esc asks no beforeTurnEnd listener and refu
 })
 
 test("a summary answer to a compaction becomes the conversation that replaces it, so no model writes one, and a refusal still keeps the context", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const summarizing = sessions.current.beforeContextEnd(() => ({ summary: 'The tree pane is drawn in src/tree.tsx.' }))
@@ -208,7 +208,7 @@ test("a summary answer to a compaction becomes the conversation that replaces it
 })
 
 test("a note at the session's turn end, at a task owner's turn end, and on a tool call reaches Claude in the mod's tag", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -220,17 +220,17 @@ test("a note at the session's turn end, at a task owner's turn end, and on a too
   await tested.settle()
   const code = claudeCodeOf(tested)
 
-  expect(await code.fire('Stop', {} as never)).toMatchObject({ additionalContext: ['<history_mod>\nRun the tests before you stop.\n</history_mod>'] })
-  expect(await code.fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ additionalContext: ['<history_mod>\nName the file.\n</history_mod>'] })
+  expect(await code.fire('Stop', {} as never)).toMatchObject({ additionalContext: ['<demo_mod>\nRun the tests before you stop.\n</demo_mod>'] })
+  expect(await code.fire('SubagentStop', { agent_id: id, agent_type: 'general-purpose' } as never)).toMatchObject({ additionalContext: ['<demo_mod>\nName the file.\n</demo_mod>'] })
   expect(await code.fire('tool.call', { tool: 'Edit', tool_use_id: 'toolu_3', file_path: '/work/src/gen/a.ts', old_string: 'a', new_string: 'b' } as never, { result: 'edited' } as never)).toEqual({
     result: 'edited',
-    context: ['<history_mod>\nsrc/gen is generated. Edit src/schema instead.\n</history_mod>'],
+    context: ['<demo_mod>\nsrc/gen is generated. Edit src/schema instead.\n</demo_mod>'],
   })
 })
 
 test('beforeAttachedFile keeps a file out of what Claude reads, or rewrites it, and beforeInstructionFile still answers for a CLAUDE.md', async () => {
   const heard: unknown[] = []
-  const tested = testMod(defineMod({ name: 'secrets', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Read the config' })
   sessions.current.beforeAttachedFile({ path: /\.env$/ }, () => ({ refuse: '.env holds secrets' }))
@@ -247,7 +247,7 @@ test('beforeAttachedFile keeps a file out of what Claude reads, or rewrites it, 
 })
 
 test('an attached file a test adds reaches the mod as the attachment type it was given', async () => {
-  const tested = testMod(defineMod({ name: 'secrets', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Read the config' })
   const types: AttachmentType[] = ['contents', 'reference', 'change']
@@ -258,7 +258,7 @@ test('an attached file a test adds reaches the mod as the attachment type it was
 })
 
 test("a message sent to a task meets that task's prompt guard, and never the session's own", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -272,7 +272,7 @@ test("a message sent to a task meets that task's prompt guard, and never the ses
 
 test('a subtask closes when its result reaches the parent task', async () => {
   const ended: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const parent = await tested.startTask({ title: 'Find the pane' })
@@ -287,7 +287,7 @@ test('a subtask closes when its result reaches the parent task', async () => {
 
 test("a session's context hears only the session's own messages, not a task's in a context with the same number", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Main loop prompt' })
   ;(await sessions.current.context()).onReply((reply) => void heard.push(reply.text))
@@ -302,7 +302,7 @@ test("a session's context hears only the session's own messages, not a task's in
 
 test("a task's TurnStart payload reads that task's messages", async () => {
   const read: string[][] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const id = await tested.startTask({ title: 'Find the pane' })
@@ -316,20 +316,20 @@ test("a task's TurnStart payload reads that task's messages", async () => {
 })
 
 test('a listener on a turn that has ended throws, naming the turn', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.endTurn()
 
   const [ended] = await sessions.current.turns()
 
-  expect(() => ended!.onReply(() => {})).toThrow(/^history: turn .+ has ended, so its onReply never fires\. Listen on its Session\.$/)
+  expect(() => ended!.onReply(() => {})).toThrow(/^demo: turn .+ has ended, so its onReply never fires\. Listen on its Session\.$/)
 })
 
 test("beforeSessionStart's note, title, and first prompt reach Claude Code, and a matcher keeps one source", async () => {
   const tested = testMod(
     defineMod({
-      name: 'tracer',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart({ source: 'resume' }, () => ({ note: 'Docs held: none.', title: 'Tree pane', firstPrompt: 'Go on' }))
       },
@@ -338,13 +338,13 @@ test("beforeSessionStart's note, title, and first prompt reach Claude Code, and 
   await tested.start()
 
   expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'startup', session_id: 's1' })).toEqual({})
-  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'resume', session_id: 's1' })).toEqual({ additionalContext: ['<tracer_mod>\nDocs held: none.\n</tracer_mod>'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
+  expect(await claudeCodeOf(tested).fire('SessionStart', { source: 'resume', session_id: 's1' })).toEqual({ additionalContext: ['<demo_mod>\nDocs held: none.\n</demo_mod>'], sessionTitle: 'Tree pane', initialUserMessage: 'Go on' })
 })
 
 test("a compaction's note reaches the window of the agent that compacted, hidden from the person, and only the goal's listeners hear a subagent's", async () => {
   const tested = testMod(
     defineMod({
-      name: 'tracer',
+      name: 'demo',
       setup() {
         sessions.current.beforeSessionStart({ source: 'compact' }, () => ({ note: 'Main agent docs.' }))
         sessions.current.goal.beforeSessionStart({ source: 'compact' }, ({ task }) => ({ note: `Docs of ${task ?? 'the main agent'}.` }))
@@ -365,7 +365,7 @@ test("a compaction's title, Skill reload, and first prompt answer the SessionSta
   const heard: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'tracer',
+      name: 'demo',
       setup: () =>
         void sessions.current.beforeSessionStart({ source: 'compact' }, (started) => {
           heard.push(started)
@@ -383,7 +383,7 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
   const moved: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'demo',
       setup() {
         sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ refuse: 'This mode keeps opus.' }))
         sessions.current.onCwdChange((change) => void moved.push({ cwd: change.cwd, previous: change.previous }))
@@ -404,7 +404,7 @@ test('beforeModelChange refuses a switch, and onCwdChange hears the new folder w
 test("beforeModelChange's note reaches Claude after the switch, and beforeProjectSetup's in the session claude --init-only sets up", async () => {
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'demo',
       setup() {
         sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' }))
         sessions.current.beforeProjectSetup(() => ({ note: 'Run bun install first.' }))
@@ -416,13 +416,13 @@ test("beforeModelChange's note reaches Claude after the switch, and beforeProjec
   const code = claudeCodeOf(tested)
 
   expect(await code.fire('PreModelSwitch', switched as never)).toEqual({})
-  expect(await code.fire('PostModelSwitch', switched as never)).toEqual({ additionalContext: ['<modes_mod>\nKeep answers short on haiku.\n</modes_mod>'] })
+  expect(await code.fire('PostModelSwitch', switched as never)).toEqual({ additionalContext: ['<demo_mod>\nKeep answers short on haiku.\n</demo_mod>'] })
   expect(await code.fire('PostModelSwitch', switched as never)).toEqual({})
-  expect(await code.fire('Setup', { session_id: 's1', cwd: '/work/a', trigger: 'init' } as never)).toEqual({ additionalContext: ['<modes_mod>\nRun bun install first.\n</modes_mod>'] })
+  expect(await code.fire('Setup', { session_id: 's1', cwd: '/work/a', trigger: 'init' } as never)).toEqual({ additionalContext: ['<demo_mod>\nRun bun install first.\n</demo_mod>'] })
 })
 
 test("a model change's note reaches only the switch it answered, so a switch refused later leaves none for the next", async () => {
-  const tested = testMod(defineMod({ name: 'modes', setup: () => void sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' })) }))
+  const tested = testMod(defineMod({ name: 'demo', setup: () => void sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ note: 'Keep answers short on haiku.' })) }))
   await tested.start()
   const switched = { session_id: 's1', cwd: '/work/a', from_model: 'opus', to_model: 'haiku', requested_model: 'haiku', source: 'command', context_tokens: 0, prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0 } as const
   const code = claudeCodeOf(tested)
@@ -436,7 +436,7 @@ test("a model change's note reaches only the switch it answered, so a switch ref
 test("beforePrompt's note reaches Claude beside the prompt, and its title names the session", async () => {
   const tested = testMod(
     defineMod({
-      name: 'classify',
+      name: 'demo',
       setup() {
         sessions.current.beforePrompt({ text: /^\/?commit/ }, () => ({ note: 'The person asked for a commit.', title: 'Commit' }))
       },
@@ -444,7 +444,7 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
   )
   await tested.start()
 
-  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['<classify_mod>\nThe person asked for a commit.\n</classify_mod>'], origin: { kind: 'composer' } })
+  expect(await claudeCodeOf(tested).fire('prompt.submit', { text: 'commit this', origin: { kind: 'composer' }, wait: false })).toEqual({ text: 'commit this', context: ['<demo_mod>\nThe person asked for a commit.\n</demo_mod>'], origin: { kind: 'composer' } })
   await claudeCodeOf(tested).fire('prompt.submit', { text: 'next', origin: { kind: 'composer' }, wait: false })
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'next' })).toEqual({})
   expect(await claudeCodeOf(tested).fire('UserPromptSubmit', { prompt: 'commit this' })).toEqual({ sessionTitle: 'Commit' })
@@ -458,7 +458,7 @@ test("beforePrompt's note reaches Claude beside the prompt, and its title names 
 test("beforeToolResult adds a note, rewrites the output, or marks the result failed", async () => {
   const tested = testMod(
     defineMod({
-      name: 'docs',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolResult({ name: 'Read' }, () => ({ note: 'src/CLAUDE.md says: no default exports.' }))
         sessions.current.beforeToolResult({ name: 'Bash' }, ({ output }) => ({ output: String(output).replace('sk-secret', '[hidden]') }))
@@ -469,7 +469,7 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
   await tested.start()
   const used = (tool_name: string, tool_response: unknown) => ({ session_id: 's1', cwd: '/work', tool_name, tool_input: {}, tool_use_id: 'toolu_1', tool_response }) as never
 
-  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['<docs_mod>\nsrc/CLAUDE.md says: no default exports.\n</docs_mod>'] })
+  expect(await claudeCodeOf(tested).fire('PostToolUse', used('Read', 'export const a = 1'))).toEqual({ additionalContext: ['<demo_mod>\nsrc/CLAUDE.md says: no default exports.\n</demo_mod>'] })
   expect(await claudeCodeOf(tested).fire('PostToolUse', used('Bash', 'key=sk-secret'))).toEqual({ updatedToolOutput: 'key=[hidden]' })
   expect(await claudeCodeOf(tested).fire('PostToolUse', used('Write', {}))).toEqual({ block: 'Write only under src/.' })
 })
@@ -477,7 +477,7 @@ test("beforeToolResult adds a note, rewrites the output, or marks the result fai
 test('beforePermissionCheck allows, asks about, or refuses a call', async () => {
   const tested = testMod(
     defineMod({
-      name: 'auto-approve',
+      name: 'demo',
       setup() {
         sessions.current.beforePermissionCheck({ name: 'Read' }, () => ({ allow: true }))
         sessions.current.beforePermissionCheck({ name: 'Bash', input: { command: /^git push/ } }, () => ({ ask: 'Pushing leaves this computer.' }))
@@ -494,7 +494,7 @@ test('beforePermissionCheck allows, asks about, or refuses a call', async () => 
 })
 
 test('abort stops a running turn, and throws on an ended one', async () => {
-  const tested = testMod(defineMod({ name: 'guard', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Deploy to prod' })
 
@@ -513,7 +513,7 @@ test('onToolResult hears the files a call changed and read, with the tool and it
   const heard: unknown[] = []
   const tested = testMod(
     defineMod({
-      name: 'tree',
+      name: 'demo',
       setup() {
         sessions.current.onToolResult(({ name, files }) => void heard.push({ name, files }))
       },
@@ -530,7 +530,7 @@ test('onToolResult hears the files a call changed and read, with the tool and it
 })
 
 test('a turn searches only its own messages', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.endTurn()
@@ -543,7 +543,7 @@ test('a turn searches only its own messages', async () => {
 })
 
 test("a session searches its own agent's messages, its goal every agent's, and a task's owner only its own", async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const task = await tested.startTask({ title: 'Find the pane' })
@@ -560,7 +560,7 @@ test("a session searches its own agent's messages, its goal every agent's, and a
 })
 
 test('a search reads page after page until the loop breaks', async () => {
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   for (let index = 0; index < 120; index += 1) await tested.add({ type: Prompt, text: `Rename pane ${index}` })
 
@@ -578,7 +578,7 @@ test('a search reads page after page until the loop breaks', async () => {
 test('beforePrompt rewrites a typed prompt and refuses another', async () => {
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         sessions.current.beforePrompt((prompt) => (prompt.text.includes('prod') ? { refuse: 'No deploys to prod from here.' } : { text: `${prompt.text}, with tests` }))
       },
@@ -595,7 +595,7 @@ test('beforePrompt rewrites a typed prompt and refuses another', async () => {
 test('beforeToolCall refuses one call and rewrites another', async () => {
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^rm / } }, () => ({ refuse: 'Use trash instead of rm.' }))
         sessions.current.beforeToolCall({ name: 'Bash', input: { command: /^ls$/ } }, () => ({ input: { command: 'ls -la' } }))
@@ -615,7 +615,7 @@ test("beforeToolCall's cwd is the folder a subagent runs in, which a task given 
   const folders: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'gate',
+      name: 'demo',
       setup() {
         sessions.current.goal.beforeToolCall((call) => void folders.push(call.cwd))
       },
@@ -640,7 +640,7 @@ test("beforeToolCall's cwd is the folder a subagent runs in, which a task given 
 test('beforeTaskStart picks the model a task runs on', async () => {
   const tested = testMod(
     defineMod({
-      name: 'thrift',
+      name: 'demo',
       setup() {
         sessions.current.beforeTaskStart({ owner: { agentType: 'Explore' } }, () => ({ owner: { model: 'haiku' } }))
       },
@@ -658,7 +658,7 @@ test("beforeTaskStart rewrites a task's prompt and owner, and the task's agent s
   const prompts: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'scoper',
+      name: 'demo',
       setup() {
         sessions.current.beforeTaskStart(() => ({ prompt: 'Find it in src only.', title: 'Find it in src', owner: { agentType: 'Explore', model: 'haiku', cwd: '/work/src' }, isAsync: true }))
         sessions.current.goal.beforePrompt({ task: /./ }, (prompt) => void prompts.push(prompt.text))
@@ -678,7 +678,7 @@ test('a removed before listener stops answering', async () => {
   let listening: Subscription | undefined
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         listening = sessions.current.beforePrompt(() => ({ refuse: 'Not now.' }))
       },
@@ -694,7 +694,7 @@ test('a before listener removed after /clear stops answering in the new session'
   let listening: Subscription | undefined
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup() {
         listening = sessions.current.beforePrompt(() => ({ refuse: 'Stopped by listener' }))
       },
@@ -712,12 +712,12 @@ test('a before listener removed after /clear stops answering in the new session'
 
 test('a task heard starting in another running session is running, and a send reaches it', async () => {
   const called: unknown[] = []
-  const fake = fakeClaude({ name: 'watcher', root: '/plugins/watcher' })
+  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
   fake.fakes.cmod.call = async (input) => {
     called.push(input)
     return { value: null }
   }
-  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {} })
+  const client = createSessionsClient({ name: 'demo', claude: fake.claude, report: () => {} })
   const owners: TaskOwner[] = []
   client.sessions.onTaskStart((task) => void owners.push(task.owner))
   await fake.settle()
@@ -731,9 +731,9 @@ test('a task heard starting in another running session is running, and a send re
 })
 
 test("a session of another project reaches a mod's listener on that session, never its listener on every session", async () => {
-  const fake = fakeClaude({ name: 'watcher', root: '/plugins/watcher' })
+  const fake = fakeClaude({ name: 'demo', root: '/plugins/demo' })
   fake.fakes.cmod.call = async () => ({ value: [] })
-  const client = createSessionsClient({ name: 'watcher', claude: fake.claude, report: () => {} })
+  const client = createSessionsClient({ name: 'demo', claude: fake.claude, report: () => {} })
   const heard: string[] = []
   client.sessions.onPrompt((prompt) => void heard.push(`every: ${prompt.text}`))
   await fake.settle()
@@ -746,7 +746,7 @@ test("a session of another project reaches a mod's listener on that session, nev
 
 test("a task owner's goal hears its own update", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   await tested.startTask({ title: 'Find the pane' })
@@ -764,7 +764,7 @@ test("a task owner's goal hears its own update", async () => {
 
 test("a task goal's event payload updates that task's goal, never the session's", async () => {
   const payloads: { update(goal: { text: string }): Promise<void> }[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Main goal' })
   await tested.startTask({ title: 'Find the pane' })
@@ -782,7 +782,7 @@ test("a task goal's event payload updates that task's goal, never the session's"
 
 test("a task owner's goal hears the owner and the tasks it started", async () => {
   const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'history', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   await tested.start()
   await tested.add({ type: Prompt, text: 'Rename the tree pane' })
   const owner = await tested.startTask({ title: 'Find the pane' })
@@ -801,7 +801,7 @@ test("a task owner's goal hears the owner and the tasks it started", async () =>
 test('callTool runs a tool in this session and answers its result', async () => {
   const tested = testMod(
     defineMod({
-      name: 'runner',
+      name: 'demo',
       setup() {},
     }),
   )
@@ -816,7 +816,7 @@ test('callTool runs a tool in this session and answers its result', async () => 
 })
 
 test('surfaces() names the Claude apps showing the session, and an ended session shows in none', async () => {
-  const tested = testMod(defineMod({ name: 'compact', setup() {} }), { sessions: [{ id: 'older', lastAt: '2026-10-10T09:00:00.000Z', messages: [{ type: Prompt, text: 'Older work' }] }] })
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }), { sessions: [{ id: 'older', lastAt: '2026-10-10T09:00:00.000Z', messages: [{ type: Prompt, text: 'Older work' }] }] })
   await tested.start()
   await tested.add({ type: Prompt, text: 'Now' })
   const older = (await sessions.list()).find((session) => session.id === 'older')
@@ -827,7 +827,7 @@ test('surfaces() names the Claude apps showing the session, and an ended session
 })
 
 test("usage() names each rate limit of the account's plan, how much of it is used, and when it resets", async () => {
-  const tested = testMod(defineMod({ name: 'limits', setup() {} }))
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
   tested.fakes.session.usage = async () => ({ startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'five_hour', percentUsed: 23.5, resetsAt: '2026-10-22T20:00:00.000Z' }, { kind: 'seven_day', percentUsed: 7 }] })
   await tested.start()
 
@@ -846,7 +846,7 @@ test("a subagent's task has no isBackground and no forkedFrom, takes every befor
   const ended: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'tasks',
+      name: 'demo',
       setup() {
         sessions.current.beforeTaskStart((task) => void started.push(task))
         sessions.current.beforeTaskStart(() => ({ prompt: 'Look in src.', title: 'Look in src', owner: { model: 'haiku' }, isAsync: true }))
@@ -870,7 +870,7 @@ test("a fork's owner is a subagent forked from this session, without an agent ty
   const ended: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'tasks',
+      name: 'demo',
       setup() {
         sessions.current.beforeTaskStart((task) => void started.push(task))
         sessions.current.beforeTaskStart(() => ({ title: 'Write the tests now', owner: { model: 'haiku' }, isAsync: true }))
@@ -898,7 +898,7 @@ test("a background task's owner is a new session whose id is the task's, its bef
   const ended: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'tasks',
+      name: 'demo',
       setup() {
         sessions.current.beforeTaskStart({ isBackground: true }, () => ({ title: 'Upgrade the dependencies', owner: { model: 'haiku' } }))
         sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
@@ -921,14 +921,14 @@ test("a background task's owner is a new session whose id is the task's, its bef
   expect((await task.owner.messages()).map((message) => message.type)).toEqual([Prompt, Reply, Prompt])
   expect(await task.owner.goal.text()).toBe('Upgrade every dependency.')
   expect(ended).toEqual([task.id])
-  await expect(sessions.current.startTask({ title: 'Upgrade', prompt: 'Upgrade.', isBackground: true, name: 'upgrader' })).rejects.toThrow('tasks: a background task takes no name.')
+  await expect(sessions.current.startTask({ title: 'Upgrade', prompt: 'Upgrade.', isBackground: true, name: 'upgrader' })).rejects.toThrow('demo: a background task takes no name.')
 })
 
 test("a clone is a background task whose owner is forked from this session, and its beforeTaskStart refuses it", async () => {
   const ended: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'tasks',
+      name: 'demo',
       setup() {
         sessions.current.beforeTaskStart({ isBackground: true, owner: { forkedFrom: 'test-session' }, title: 'Try SQL' }, () => ({ refuse: 'SQL is out.' }))
         sessions.current.goal.onTaskEnd((task) => void ended.push(task.id))
@@ -939,7 +939,7 @@ test("a clone is a background task whose owner is forked from this session, and 
   await tested.add({ type: Prompt, text: 'Store the notes' })
   await tested.settle()
 
-  await expect(sessions.current.clone({ title: 'Try SQL', prompt: 'Rebuild this on SQL.' })).rejects.toThrow('tasks: a beforeTaskStart listener refused the task: SQL is out.')
+  await expect(sessions.current.clone({ title: 'Try SQL', prompt: 'Rebuild this on SQL.' })).rejects.toThrow('demo: a beforeTaskStart listener refused the task: SQL is out.')
   const clone = await sessions.current.clone({ title: 'Try files', prompt: 'Rebuild this on plain files.' })
   await tested.endTurn({ answer: 'Rebuilt.' }, { task: clone.id })
 

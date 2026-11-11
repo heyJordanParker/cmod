@@ -7,7 +7,7 @@ import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporar
 afterAll(deleteTemporaryHomes)
 
 const settings = `{
-  // stowed from dotfiles
+  // a comment the person wrote
   "model": "opus",
   "env": {
     "FOO": "1"
@@ -19,9 +19,9 @@ const settings = `{
 async function linkedHome(text: string): Promise<{ home: string; checkout: string; target: string; link: string }> {
   const home = await temporaryHome()
   const checkout = join(home, 'Developer', 'demo')
-  const target = join(home, 'dotfiles', 'settings.json')
+  const target = join(home, 'shared', 'settings.json')
   const link = join(home, '.claude', 'settings.json')
-  await writeFiles(home, { 'dotfiles/settings.json': text, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
+  await writeFiles(home, { 'shared/settings.json': text, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
   await mkdir(join(home, '.claude'))
   await symlink(target, link)
   return { home, checkout, target, link }
@@ -74,7 +74,7 @@ test("link lists the checkout in a marketplace in its parent folder beside the c
 })
 
 test("link declares its marketplace in the parent folder's .claude/settings.local.json, so the settings.json other computers share holds no path of this one, and unlink takes the declaration out", async () => {
-  const shared = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "tracer@market": true\n  }\n}\n'
+  const shared = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "other@market": true\n  }\n}\n'
   const { home, checkout, target } = await linkedHome(shared)
   const parent = join(home, 'Developer')
   const local = join(parent, '.claude', 'settings.local.json')
@@ -95,16 +95,16 @@ test('two checkouts in one folder share its marketplace, and unlinking one keeps
   const home = await temporaryHome()
   await writeFiles(home, {
     'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
-    'Developer/notes/.claude-plugin/plugin.json': JSON.stringify({ name: 'notes', version: '0.1.0', description: 'Keeps notes' }),
+    'Developer/other/.claude-plugin/plugin.json': JSON.stringify({ name: 'other', version: '0.1.0' }),
   })
 
   expect((await cmod(home, 'link', join(home, 'Developer/demo'))).exitCode).toBe(0)
-  expect((await cmod(home, 'link', join(home, 'Developer/notes'))).exitCode).toBe(0)
+  expect((await cmod(home, 'link', join(home, 'Developer/other'))).exitCode).toBe(0)
   expect((await cmod(home, 'unlink', join(home, 'Developer/demo'))).exitCode).toBe(0)
 
   const listed = JSON.parse(await readFile(linkedMarketplace(home), 'utf8')) as { plugins: { name: string; source: unknown }[] }
   expect(listed.plugins.map((plugin) => [plugin.name, plugin.source])).toEqual([
-    ['notes', './notes'],
+    ['other', './other'],
     ['cmod', { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' }],
   ])
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toContain('plugin uninstall demo@Developer-linked --json\nplugin marketplace update Developer-linked\n')
@@ -132,19 +132,19 @@ test('cmod update and cmod list name a linked install by its checkout, not the c
 test('cmod list --json names the folder each plugin runs from, and for each mod the folder its mod.dataFolder names', async () => {
   const home = await temporaryHome()
   const store = join(home, '.local/share/cmod')
-  const published = join(home, 'cache/notes/0.1.0')
+  const published = join(home, 'cache/other/0.1.0')
   const checkout = join(home, 'Developer/demo')
   const plain = join(home, 'cache/plain/1.0.0')
   const modPackage = (name: string) => JSON.stringify({ name, cmod: { install: './setup/install.sh' } })
   await writeFiles(home, {
     'bin/claude': claudeAnswering([
       ...cmodPluginListed,
-      { id: 'notes@market', version: '0.1.0', scope: 'user', enabled: true, installPath: published },
+      { id: 'other@market', version: '0.1.0', scope: 'user', enabled: true, installPath: published },
       { id: 'demo@Developer-linked', version: '0.1.0', scope: 'user', enabled: true, installPath: join(home, 'cache/demo') },
       { id: 'plain@market', version: '1.0.0', scope: 'user', enabled: true, installPath: plain },
     ]),
-    'cache/notes/0.1.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'notes', version: '0.1.0' }),
-    'cache/notes/0.1.0/package.json': modPackage('notes'),
+    'cache/other/0.1.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'other', version: '0.1.0' }),
+    'cache/other/0.1.0/package.json': modPackage('other'),
     'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
     'Developer/demo/package.json': modPackage('demo'),
     'cache/plain/1.0.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'plain', version: '1.0.0' }),
@@ -157,7 +157,7 @@ test('cmod list --json names the folder each plugin runs from, and for each mod 
   expect(listed.exitCode).toBe(0)
   expect(JSON.parse(listed.stdout)).toEqual([
     { name: 'cmod@cmod', version: '0.1.0', state: '/cmod is missing: run claude plugin update cmod@cmod', unsatisfied: [] },
-    { name: 'notes@market', version: '0.1.0', state: `not set up: run cmod setup ${published}`, unsatisfied: [], folder: published, dataFolder: join(store, 'data/notes') },
+    { name: 'other@market', version: '0.1.0', state: `not set up: run cmod setup ${published}`, unsatisfied: [], folder: published, dataFolder: join(store, 'data/other') },
     { name: 'demo@Developer-linked', version: '0.1.0', state: `linked from ${checkout}, not set up: run cmod setup ${checkout}`, unsatisfied: [], folder: checkout, dataFolder: join(store, 'data/demo') },
     { name: 'plain@market', version: '1.0.0', state: 'enabled', unsatisfied: [], folder: plain },
     { name: 'gone', version: '0.2.0', state: 'removed: run cmod teardown gone', unsatisfied: [], dataFolder: join(store, 'data/gone') },
@@ -180,7 +180,7 @@ test('cmod enable of a linked mod refuses, so it never turns on the published co
 
 test('link refuses a folder whose marketplace.json cmod did not write, and leaves that file as it was', async () => {
   const home = await temporaryHome()
-  const release = JSON.stringify({ name: 'tools', owner: { name: 'someone' }, plugins: [] })
+  const release = JSON.stringify({ name: 'other', owner: { name: 'owner' }, plugins: [] })
   await writeFiles(home, { 'Developer/.claude-plugin/marketplace.json': release, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
 
   const linked = await cmod(home, 'link', join(home, 'Developer/demo'))
@@ -192,7 +192,7 @@ test('link refuses a folder whose marketplace.json cmod did not write, and leave
 
 test('link keeps the checkout\'s own committed marketplace.json as it was', async () => {
   const home = await temporaryHome()
-  const release = JSON.stringify({ name: 'demo', owner: { name: 'someone' }, plugins: [{ name: 'demo', source: { source: 'archive', url: 'https://example.com/demo.zip' } }] })
+  const release = JSON.stringify({ name: 'demo', owner: { name: 'owner' }, plugins: [{ name: 'demo', source: { source: 'archive', url: 'https://example.com/demo.zip' } }] })
   await writeFiles(home, { 'Developer/demo/.claude-plugin/marketplace.json': release, 'Developer/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
 
   expect((await cmod(home, 'link', join(home, 'Developer/demo'))).exitCode).toBe(0)
@@ -267,16 +267,16 @@ test("two builds of one checkout take turns, so one never clears the other's out
 
 test('link names a Rust program by its one [[bin]], not by its package', async () => {
   const home = await temporaryHome()
-  const checkout = join(home, 'Developer', 'greet-mod')
-  const build = `mkdir -p dist && printf '#!/bin/sh\\necho greeted by cargo\\n' > dist/greet-binary-${process.platform}-${process.arch}`
+  const checkout = join(home, 'Developer', 'demo')
+  const build = `mkdir -p dist && printf '#!/bin/sh\\necho greeted by cargo\\n' > dist/demo-binary-${process.platform}-${process.arch}`
   await writeFiles(checkout, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'greet-mod', version: '0.3.0' }),
-    'cli/Cargo.toml': `[package]\nname = "greet-crate"\nversion = "0.3.0"\n\n[package.metadata.cmod]\nbuild = "${build.replaceAll('\\', '\\\\')}"\noutput = "dist"\n\n[[bin]]\nname = "greet-binary"\npath = "src/main.rs"\n`,
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.3.0' }),
+    'cli/Cargo.toml': `[package]\nname = "demo-crate"\nversion = "0.3.0"\n\n[package.metadata.cmod]\nbuild = "${build.replaceAll('\\', '\\\\')}"\noutput = "dist"\n\n[[bin]]\nname = "demo-binary"\npath = "src/main.rs"\n`,
   })
 
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
-  expect(await new Response(Bun.spawn([join(home, '.local/bin/greet-binary')], { stdout: 'pipe' }).stdout).text()).toBe('greeted by cargo\n')
-  expect(existsSync(join(home, '.local/bin/greet-crate'))).toBe(false)
+  expect(await new Response(Bun.spawn([join(home, '.local/bin/demo-binary')], { stdout: 'pipe' }).stdout).text()).toBe('greeted by cargo\n')
+  expect(existsSync(join(home, '.local/bin/demo-crate'))).toBe(false)
 })
 
 test('a failed build shows one sentence that ends with one period', async () => {
@@ -298,7 +298,7 @@ test('a failed build shows one sentence that ends with one period', async () => 
 test("a failed build reports the compiler's error that make's summary line follows, in its last five lines of output", async () => {
   const home = await temporaryHome()
   const checkout = join(home, 'Developer', 'hello-mod')
-  const lines = ['compiling 1', 'compiling 2', 'compiling 3', '# example.com/oneclaude', './cause.go:12:9: undefined: networkCause', 'make: *** [../.target/dist/darwin-arm64/oneclaude-v0.9.5.dylib] Error 1']
+  const lines = ['compiling 1', 'compiling 2', 'compiling 3', '# example.com/demo', './main.go:12:9: undefined: value', 'make: *** [dist/demo] Error 1']
   const build = `${lines.map((line) => `echo '${line}' >&2`).join('; ')}; exit 2`
   await writeFiles(checkout, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.3.0' }),

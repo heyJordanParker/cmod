@@ -38,10 +38,10 @@ describe('the named behaviors', () => {
     expect(await decide(rules, bash('cat a | grep b'))).toBeUndefined()
   })
 
-  test('cd app && sed -i s/a/b/ ../Domain.md writes <cwd>/Domain.md', async () => {
+  test('cd app && sed -i s/a/b/ ../CHANGELOG.md writes <cwd>/CHANGELOG.md', async () => {
     const seen = seenCalls()
-    await decide({ deny: [{ write: 'Domain.md', when: seen.when }] }, bash('cd app && sed -i s/a/b/ ../Domain.md'))
-    expect(seen.calls).toEqual([{ tool: 'Bash', input: { command: 'cd app && sed -i s/a/b/ ../Domain.md' }, path: '/work/app/Domain.md' }])
+    await decide({ deny: [{ write: 'CHANGELOG.md', when: seen.when }] }, bash('cd app && sed -i s/a/b/ ../CHANGELOG.md'))
+    expect(seen.calls).toEqual([{ tool: 'Bash', input: { command: 'cd app && sed -i s/a/b/ ../CHANGELOG.md' }, path: '/work/app/CHANGELOG.md' }])
   })
 
   test("cat .e* does not match read: '**/.env', and cat .env does", async () => {
@@ -143,24 +143,24 @@ describe('path targets', () => {
   })
 
   test.each([
-    [{ tool: 'Edit', input: { file_path: '/work/app/tests/budgets.json', old_string: 'a', new_string: 'b' } }],
-    [{ tool: 'Write', input: { file_path: '/work/app/tests/budgets.json', content: '{}' } }],
-    [{ tool: 'NotebookEdit', input: { notebook_path: '/work/app/tests/budgets.json', new_source: 'x' } }],
-    [{ tool: 'Bash', input: { command: 'echo {} > tests/budgets.json' } }],
-    [{ tool: 'Bash', input: { command: 'rm tests/budgets.json' } }],
-    [{ tool: 'Bash', input: { command: 'mv tests/budgets.json /tmp/' } }],
-    [{ tool: 'Bash', input: { command: 'cp /tmp/b.json tests/budgets.json' } }],
-    [{ tool: 'Bash', input: { command: 'echo {} | tee tests/budgets.json' } }],
-    [{ tool: 'Bash', input: { command: 'cd tests && sed -i s/1/2/ budgets.json' } }],
+    [{ tool: 'Edit', input: { file_path: '/work/app/tests/baseline.json', old_string: 'a', new_string: 'b' } }],
+    [{ tool: 'Write', input: { file_path: '/work/app/tests/baseline.json', content: '{}' } }],
+    [{ tool: 'NotebookEdit', input: { notebook_path: '/work/app/tests/baseline.json', new_source: 'x' } }],
+    [{ tool: 'Bash', input: { command: 'echo {} > tests/baseline.json' } }],
+    [{ tool: 'Bash', input: { command: 'rm tests/baseline.json' } }],
+    [{ tool: 'Bash', input: { command: 'mv tests/baseline.json /tmp/' } }],
+    [{ tool: 'Bash', input: { command: 'cp /tmp/b.json tests/baseline.json' } }],
+    [{ tool: 'Bash', input: { command: 'echo {} | tee tests/baseline.json' } }],
+    [{ tool: 'Bash', input: { command: 'cd tests && sed -i s/1/2/ baseline.json' } }],
   ])('a write rule covers %p', async (use) => {
-    expect(await decide({ deny: [{ write: 'tests/budgets.json' }] }, use)).toEqual({ decision: 'deny' })
+    expect(await decide({ deny: [{ write: 'tests/baseline.json' }] }, use)).toEqual({ decision: 'deny' })
   })
 
   test('a relative pattern is relative to the working folder of the session', async () => {
-    const rules: PermissionRules<TestMod> = { deny: [{ write: 'Domain.md' }] }
-    expect(await decide(rules, bash('rm Domain.md'))).toEqual({ decision: 'deny' })
-    expect(await decide(rules, bash('rm docs/Domain.md'))).toBeUndefined()
-    expect(await decide(rules, bash('rm /elsewhere/Domain.md'))).toBeUndefined()
+    const rules: PermissionRules<TestMod> = { deny: [{ write: 'CHANGELOG.md' }] }
+    expect(await decide(rules, bash('rm CHANGELOG.md'))).toEqual({ decision: 'deny' })
+    expect(await decide(rules, bash('rm docs/CHANGELOG.md'))).toBeUndefined()
+    expect(await decide(rules, bash('rm /elsewhere/CHANGELOG.md'))).toBeUndefined()
   })
 
   test('~ and absolute patterns match their own folders', async () => {
@@ -170,7 +170,7 @@ describe('path targets', () => {
   })
 
   test('matches ignore case', async () => {
-    expect(await decide({ deny: [{ write: 'domain.MD' }] }, bash('rm DOMAIN.md'))).toEqual({ decision: 'deny' })
+    expect(await decide({ deny: [{ write: 'changelog.MD' }] }, bash('rm CHANGELOG.md'))).toEqual({ decision: 'deny' })
   })
 
   test('the rule matches the real path behind a symbolic link', async () => {
@@ -201,7 +201,7 @@ describe('path targets', () => {
   test('a line the job cannot parse matches a path rule when it holds the last segment of the glob', async () => {
     expect(await decide({ deny: [{ read: '**/.env' }] }, bash(`python -c 'open(".env")'`))).toEqual({ decision: 'deny' })
     expect(await decide({ deny: [{ read: '**/*.pem' }] }, bash(`python -c 'open("key.pem")'`))).toBeUndefined()
-    expect(await decide({ deny: [{ write: 'tests/budgets.json' }] }, bash(`python -c 'open("tests/budgets.json", "w")'`))).toEqual({ decision: 'deny' })
+    expect(await decide({ deny: [{ write: 'tests/baseline.json' }] }, bash(`python -c 'open("tests/baseline.json", "w")'`))).toEqual({ decision: 'deny' })
   })
 })
 

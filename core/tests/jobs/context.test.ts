@@ -8,12 +8,12 @@ import { defineMod, process, sessions } from '../../src/mod.js'
 import { testMod } from '../../src/testing.js'
 import { claudeCodeOf } from '../../src/testing/claude-code.js'
 
-const root = '/work/dent'
+const root = '/work/app'
 const files = {
   [`${root}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${root}/.git/worktrees/design/commondir`]: '../..\n',
   [`${root}/worktrees/design/.git`]: `gitdir: ${root}/.git/worktrees/design\n`,
-  [`${root}/worktrees/design/Domain.md`]: '# Domain\n',
+  [`${root}/worktrees/design/CHANGELOG.md`]: '# Changelog\n',
 }
 
 test('targetWords names each target in words a user reads', () => {
@@ -45,28 +45,28 @@ function written(text: string): Stream {
 test("a prompt callback gets the work tree that holds the edited file as the call's folder", async () => {
   const tested = testMod(
     defineMod({
-      name: 'dent',
+      name: 'demo',
       setup(mod) {
-        mod.use(prompt({ name: 'status', after: { write: 'Domain.md' }, prompt: ({ call }) => readAll(process.spawn(['git', 'status'], call === undefined ? {} : { cwd: call.folder })) }))
+        mod.use(prompt({ name: 'status', after: { write: 'CHANGELOG.md' }, prompt: ({ call }) => readAll(process.spawn(['git', 'status'], call === undefined ? {} : { cwd: call.folder })) }))
       },
     }),
     { scope: 'project', projectRoot: root, files },
   )
   tested.fakes.clock.after = () => ({ cancel: () => undefined })
   tested.fakes.process.spawn = () => written('On branch design\n')
-  const edit = { tool: 'Edit', file_path: `${root}/worktrees/design/Domain.md`, old_string: '#', new_string: '##', tool_use_id: 'toolu_1' } as never
-  const answered = { result: { filePath: `${root}/worktrees/design/Domain.md` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
+  const edit = { tool: 'Edit', file_path: `${root}/worktrees/design/CHANGELOG.md`, old_string: '#', new_string: '##', tool_use_id: 'toolu_1' } as never
+  const answered = { result: { filePath: `${root}/worktrees/design/CHANGELOG.md` }, text: 'The file was updated.' } as Extract<EventResult<'tool.call'>, { result: unknown; isError?: undefined }>
 
   const answer = await claudeCodeOf(tested).fire('tool.call', edit, answered)
 
   expect(tested.calls.filter((call) => call.call === 'process.spawn').map((call) => call.args)).toEqual([[{ argv: ['git', 'status'], cwd: `${root}/worktrees/design` }]])
-  expect(answer.context).toEqual(['<dent_mod>\n# status\nOn branch design\n\n</dent_mod>'])
+  expect(answer.context).toEqual(['<demo_mod>\n# status\nOn branch design\n\n</demo_mod>'])
 })
 
 test("the current session's cwd follows a move", async () => {
   const tested = testMod(
     defineMod({
-      name: 'where',
+      name: 'demo',
       setup(mod) {
         mod.use(slashCommand({ name: 'where', description: 'Name the working folder', reply: () => sessions.current.cwd }))
       },
@@ -82,7 +82,7 @@ test("the current session's cwd follows a move", async () => {
 test("a tool's execute that outlasts the job's deadline answers that it passed the deadline", async () => {
   const tested = testMod(
     defineMod({
-      name: 'tickets',
+      name: 'demo',
       setup(mod) {
         mod.use(tool({ name: 'sync', description: 'Sync the tickets', execute: () => new Promise<never>(() => undefined) }))
       },

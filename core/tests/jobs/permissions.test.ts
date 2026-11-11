@@ -12,7 +12,7 @@ const allowedInBypassMode: EventResult<'tool.check'> = { decision: 'allow' }
 test('a deny rule refuses a Bash call in bypassPermissions mode, and its reason reaches the answer', async () => {
   const tested = testMod(
     defineMod({
-      name: 'no-force-push',
+      name: 'demo',
       setup(mod) {
         mod.use(permissions({ deny: [{ command: 'git push --force', reason: 'Force pushes rewrite shared history.' }] }))
       },
@@ -29,7 +29,7 @@ test('a deny rule refuses a Bash call in bypassPermissions mode, and its reason 
 test('rules read from state judge each call by the state at that call', async () => {
   const tested = testMod(
     defineMod({
-      name: 'modes',
+      name: 'demo',
       state: { session: { mode: 'propose' } },
       setup(mod) {
         mod.use(permissions((state) => (state.session.mode === 'propose' ? { deny: [{ write: ['**', '!docs/plans/**'], reason: 'Propose mode writes plans only.' }] } : {})))
@@ -49,7 +49,7 @@ test('rules read from state judge each call by the state at that call', async ()
 test('rules from state that throw deny the call with the reason', async () => {
   const tested = testMod(
     defineMod({
-      name: 'broken-rules',
+      name: 'demo',
       setup(mod) {
         mod.use(permissions(() => ({ deny: [{ write: '!docs/**' }] })))
       },
@@ -58,7 +58,7 @@ test('rules from state that throw deny the call with the reason', async () => {
 
   expect(await claudeCodeOf(tested).fire('tool.check', bashCheck('ls', 'toolu_1'), allowedInBypassMode)).toEqual({
     decision: 'deny',
-    reason: `The permission rules of broken-rules failed, so it denies the call: A write target needs a pattern without "!" for its "!" patterns to leave calls out of, such as ['**', '!docs/**'].`,
+    reason: `The permission rules of demo failed, so it denies the call: A write target needs a pattern without "!" for its "!" patterns to leave calls out of, such as ['**', '!docs/**'].`,
   })
 })
 
@@ -76,7 +76,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
   }
   const tested = testMod(
     defineMod({
-      name: 'read-only-explorers',
+      name: 'demo',
       setup(mod) {
         mod.use(permissions({ deny: [{ command: '*', when: (call) => call.agentType === 'explorer', reason: 'Explorers only read.' }] }))
         mod.use(coreBeneath)
@@ -101,7 +101,7 @@ test("a when rule on agentType refuses an explorer subagent's call, joined throu
 test("a when check gets the mod's own typed state, so a rule follows state without capturing the mod from setup", async () => {
   const tested = testMod(
     defineMod({
-      name: 'freeze',
+      name: 'demo',
       state: { project: { frozen: true } },
       setup(mod) {
         mod.use(permissions({ deny: [{ command: 'git push', when: (_call, mod) => mod.state.project.frozen, reason: 'Pushes are frozen.' }] }))
@@ -118,7 +118,7 @@ test("the main loop's agentType is the session's Agent, read from the classic ho
   const seen: (string | undefined)[] = []
   const tested = testMod(
     defineMod({
-      name: 'agent-reader',
+      name: 'demo',
       setup(mod) {
         mod.use(permissions({ ask: [{ command: '*', when: (call) => (seen.push(call.agentType), false) }] }))
       },
@@ -134,7 +134,7 @@ test("the main loop's agentType is the session's Agent, read from the classic ho
 test('a when check that passes the 2 s deadline gives the rule its own decision', async () => {
   const tested = testMod(
     defineMod({
-      name: 'clean-tree',
+      name: 'demo',
       setup(mod) {
         mod.use(permissions({ deny: [{ command: 'git commit', when: async () => (await process.run(['git', 'status'])).stdout !== '', reason: 'Commit a clean tree.' }] }))
       },
@@ -155,22 +155,22 @@ test('a when check that passes the 2 s deadline gives the rule its own decision'
   expect(tested.calls.find((call) => call.call === 'process.run')?.args[0]).toEqual(['git', 'status'])
 })
 
-const project = '/work/dent'
+const project = '/work/app'
 const files = {
   [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
   [`${project}/.git/worktrees/design/commondir`]: '../..\n',
   [`${project}/worktrees/design/.git`]: `gitdir: ${project}/.git/worktrees/design\n`,
-  [`${project}/worktrees/design/Domain.md`]: '# Domain\n',
-  [`${project}/Domain.md`]: '# Domain\n',
-  [`${project}/docs/Domain.md`]: '# Domain\n',
-  ['/test/home/dotfiles/.git/HEAD']: 'ref: refs/heads/master\n',
-  ['/test/home/dotfiles/Domain.md']: '# Domain\n',
+  [`${project}/worktrees/design/CHANGELOG.md`]: '# Changelog\n',
+  [`${project}/CHANGELOG.md`]: '# Changelog\n',
+  [`${project}/docs/CHANGELOG.md`]: '# Changelog\n',
+  ['/test/home/elsewhere/.git/HEAD']: 'ref: refs/heads/master\n',
+  ['/test/home/elsewhere/CHANGELOG.md']: '# Changelog\n',
 }
 
 function inProject(rules: PermissionRules) {
   const tested = testMod(
     defineMod({
-      name: 'dent',
+      name: 'demo',
       setup(mod) {
         mod.use(permissions(rules))
       },
@@ -183,29 +183,29 @@ function inProject(rules: PermissionRules) {
 
 const editCheck = (path: string, toolUseId: string) => ({ tool: 'Edit', input: { file_path: path, old_string: '#', new_string: '##' }, tool_use_id: toolUseId })
 
-test('a project-scope rule matches Domain.md inside the project and not outside it', async () => {
-  const tested = inProject({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] })
-  const denied: EventResult<'tool.check'> = { decision: 'deny', reason: 'Edit Domain.md with the Architect.' }
+test('a project-scope rule matches CHANGELOG.md inside the project and not outside it', async () => {
+  const tested = inProject({ deny: [{ write: 'CHANGELOG.md', reason: 'Edit CHANGELOG.md with the maintainer.' }] })
+  const denied: EventResult<'tool.check'> = { decision: 'deny', reason: 'Edit CHANGELOG.md with the maintainer.' }
 
-  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/Domain.md`, 'toolu_1'), allowedInBypassMode)).toEqual(denied)
-  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/worktrees/design/Domain.md`, 'toolu_2'), allowedInBypassMode)).toEqual(denied)
-  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/docs/Domain.md`, 'toolu_3'), allowedInBypassMode)).toEqual(allowedInBypassMode)
-  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/test/home/dotfiles/Domain.md', 'toolu_4'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/CHANGELOG.md`, 'toolu_1'), allowedInBypassMode)).toEqual(denied)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/worktrees/design/CHANGELOG.md`, 'toolu_2'), allowedInBypassMode)).toEqual(denied)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck(`${project}/docs/CHANGELOG.md`, 'toolu_3'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/test/home/elsewhere/CHANGELOG.md', 'toolu_4'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
-test('a user-scope deny on Domain.md still denies after Claude runs cd docs', async () => {
+test('a user-scope deny on CHANGELOG.md still denies after Claude runs cd docs', async () => {
   const tested = testMod(
     defineMod({
-      name: 'guard',
+      name: 'demo',
       setup(mod) {
-        mod.use(permissions({ deny: [{ write: 'Domain.md', reason: 'Edit Domain.md with the Architect.' }] }))
+        mod.use(permissions({ deny: [{ write: 'CHANGELOG.md', reason: 'Edit CHANGELOG.md with the maintainer.' }] }))
       },
     }),
     { projectRoot: '/work/app', cwd: '/work/app/docs' },
   )
 
-  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/work/app/Domain.md', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Edit Domain.md with the Architect.' })
-  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/work/app/docs/Domain.md', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/work/app/CHANGELOG.md', 'toolu_1'), allowedInBypassMode)).toEqual({ decision: 'deny', reason: 'Edit CHANGELOG.md with the maintainer.' })
+  expect(await claudeCodeOf(tested).fire('tool.check', editCheck('/work/app/docs/CHANGELOG.md', 'toolu_2'), allowedInBypassMode)).toEqual(allowedInBypassMode)
 })
 
 test("a command rule's when gets the work tree the command cds into as its folder", async () => {

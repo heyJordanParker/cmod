@@ -7,7 +7,7 @@ description: Get a change to the `@cmodjs/core` package in `core/` into the code
 
 A consumer runs what was packed, never what is in `core/src/`. Prove the package, not the tree.
 
-- The consumers are the Claude Mod Manager (cmod) plugin at the repository root and the sample mods. Each depends on `@cmodjs/core` from npm, so `bun install` gives them the published version, never this change.
+- The consumers are the Claude Mod Manager (cmod) plugin at the repository root and a mod `cmod new` makes from the tarball. The cmod plugin depends on `@cmodjs/core` from npm, so `bun install` gives it the published version, never this change.
 - A mod reaches `@cmodjs/core` only as real files in its own `node_modules`, because Claude Code refuses a symbolic link there.
 - The cmod program is the exception: `cli/tsconfig.json` maps `@cmodjs/core/*` to `../core/*`, so it reads `core/src/` edits with no repack.
 
@@ -31,25 +31,24 @@ Run `env -C core bun pm pack`. It writes `core/cmodjs-core-<version>.tgz`.
 ### Check the tarball's file list against the change
 `tar -tzf core/cmodjs-core-<version>.tgz` lists each module the change added under `package/`, and no module it renamed or deleted.
 
-## 4. Unpack the tarball into every consumer
+## 4. Unpack the tarball into the cmod plugin
 
-The consumers, from the repository root, are `.`, `../file-tree`, and `../architecture-diagrams`. Unpacking replaces the installed `@cmodjs/core` and leaves `package.json` and `bun.lock` on the npm version. `bun add` of the tarball fails with a dependency loop.
-Template:
-    tar -xzf core/cmodjs-core-<version>.tgz -C <consumer>/node_modules/@cmodjs/core --strip-components=1
+Unpacking replaces the cmod plugin's installed `@cmodjs/core` and leaves `package.json` and `bun.lock` on the npm version. `bun add` of the tarball fails with a dependency loop.
+Example: from the repository root, `tar -xzf core/cmodjs-core-<version>.tgz -C node_modules/@cmodjs/core --strip-components=1`.
 
 IF the change edits `dependencies` in `core/package.json`:
-### Run `bun add --cwd <consumer> --no-save <dependency>@<range>` for each new dependency
+### Run `bun add --no-save <dependency>@<range>` for each new dependency
 Unpacking copies files only, so a dependency the published version lacks is missing until the next npm release.
 
 IF the work is done with the change:
-### Run `bun install --cwd <consumer> --force` to put the npm version back
+### Run `bun install --force` to put the npm version back
 
-### Check each consumer holds the new build
-`diff -rq core/runtime <consumer>/node_modules/@cmodjs/core/runtime` prints nothing.
+### Check the cmod plugin holds the new build
+`diff -rq core/runtime node_modules/@cmodjs/core/runtime` prints nothing.
 
 ## 5. Run the end gate
 
-The shell's `bun` is a function that turns `bun test` into `bun run test`, and the repository root and the samples have no `test` script. `env -C <folder> bun …` runs Bun itself. `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
+The shell's `bun` is a function that turns `bun test` into `bun run test`, and the repository root has no `test` script. `env -C <folder> bun …` runs Bun itself. `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
 
 From the repository root, every command passes:
     bun run --cwd lint test
@@ -60,12 +59,10 @@ From the repository root, every command passes:
     env -C . bun test
     env -C . bun x tsc --noEmit
     env OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/oxlint --type-aware --deny-warnings src hooks setup tests
-    env -C <sample> bun test                                         (each sample)
-    env -C <sample> bun x tsc --noEmit                               (each sample)
     env HOME=<scratch home> bun run cli/src/main.ts check <mod>      (a mod on the tarball)
 
 ### Count `cmod check` as the gate's only run of Claude Code's validator
 `cmod check` runs `claude plugin validate --strict`, which nothing else in the gate runs. It is also the only way a build-mode Agent reaches the validator, because the Harness refuses `claude` itself in build mode.
 
 ### Run `cmod check` on a mod whose `@cmodjs/core` is the tarball
-`cmod check` runs `bun install` first, which puts the npm version back over an unpacked sample. So in a scratch folder outside the clone, run `env CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz bun run <clone>/cli/src/main.ts new <name>`, use the changed API in its `src/mod.tsx`, and check that mod.
+`cmod check` runs `bun install` first, which puts the npm version back over an unpacked tarball. So in a scratch folder outside the clone, run `env CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz bun run <clone>/cli/src/main.ts new <name>`, use the changed API in its `src/mod.tsx`, and check that mod.

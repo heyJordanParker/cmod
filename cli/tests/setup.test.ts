@@ -200,11 +200,11 @@ test('a link to nothing in a step folder is refused', async () => {
   await expect(readPlugin(claudeOnDisk(home, { name: 'demo', root }))).rejects.toThrow(refusal)
 })
 
-async function createWatcher(home: string, cmodKey: object): Promise<string> {
-  const root = join(home, 'ci-watch')
+async function createDemo(home: string, cmodKey: object): Promise<string> {
+  const root = join(home, 'demo')
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0' }),
-    'package.json': JSON.stringify({ name: 'ci-watch', cmod: cmodKey }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: cmodKey }),
   })
   return root
 }
@@ -213,31 +213,31 @@ const consentFile = (home: string) => join(home, '.local/share/cmod/consent.json
 
 test('setup of a mod built on @cmodjs/core 4 that declares permissions approves its hash and each permission without asking', async () => {
   const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { network: ['api.github.com'], prompt: true } })
+  const root = await createDemo(home, { permissions: { network: ['api.github.com'], prompt: true } })
   const sha256 = await hashOf(root)
 
   const result = await cmod(home, 'setup', root, '--events')
 
-  expect(result).toMatchObject({ stdout: 'done ci-watch 0.2.0\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [sha256, 'network:api.github.com', 'prompt'] })
-  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch')).toMatchObject({ permissions: ['network:api.github.com', 'prompt'], grantedOnUpdate: [] })
+  expect(result).toMatchObject({ stdout: 'done demo 0.2.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'demo': [sha256, 'network:api.github.com', 'prompt'] })
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'demo')).toMatchObject({ permissions: ['network:api.github.com', 'prompt'], grantedOnUpdate: [] })
 })
 
 test('an update of a mod built on @cmodjs/core 4 that adds a permission approves it, and grants nothing on update', async () => {
   const home = await temporaryHome()
-  const root = await createWatcher(home, { permissions: { prompt: true } })
+  const root = await createDemo(home, { permissions: { prompt: true } })
   const installed = await hashOf(root)
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.3.0' }),
-    'package.json': JSON.stringify({ name: 'ci-watch', cmod: { permissions: { prompt: true, conversation: true } } }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.3.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { permissions: { prompt: true, conversation: true } } }),
   })
 
   const updated = await cmod(home, 'setup', root, '--events')
 
-  expect(updated).toMatchObject({ stdout: 'done ci-watch 0.3.0\n', exitCode: 0 })
-  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'ci-watch': [installed, 'prompt', await hashOf(root), 'conversation'] })
-  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'ci-watch')).toMatchObject({ version: '0.3.0', permissions: ['prompt', 'conversation'], grantedOnUpdate: [] })
+  expect(updated).toMatchObject({ stdout: 'done demo 0.3.0\n', exitCode: 0 })
+  expect(JSON.parse(await readFile(consentFile(home), 'utf8'))).toEqual({ 'demo': [installed, 'prompt', await hashOf(root), 'conversation'] })
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'demo')).toMatchObject({ version: '0.3.0', permissions: ['prompt', 'conversation'], grantedOnUpdate: [] })
 })
 
 test('setup --events on a set-up mod prints done and runs nothing', async () => {
@@ -573,37 +573,37 @@ test('setup installs a program whose name PATH finds elsewhere, links it into th
 
 test('setup refuses a mod whose package.json "os" leaves out this system, before any script runs', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'safe-delete')
+  const root = join(home, 'demo')
   const other = process.platform === 'darwin' ? 'linux' : 'darwin'
   const names: Record<string, string> = { darwin: 'macOS', linux: 'Linux' }
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'safe-delete', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'safe-delete', os: [other], cmod: { install: './setup/install.sh' } }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', os: [other], cmod: { install: './setup/install.sh' } }),
     'setup/install.sh': '#!/bin/sh\necho ran > "$CMOD_DATA/ran"\n',
   })
 
   const result = await cmod(home, 'setup', root, '--events')
 
-  expect(result.stdout).toBe(`failed 1\tsafe-delete runs on ${names[other]}, and this is ${names[process.platform]}, so cmod set up nothing.\n`)
+  expect(result.stdout).toBe(`failed 1\tdemo runs on ${names[other]}, and this is ${names[process.platform]}, so cmod set up nothing.\n`)
   expect(result.exitCode).toBe(1)
-  expect(existsSync(join(home, '.local/share/cmod/data/safe-delete'))).toBe(false)
+  expect(existsSync(join(home, '.local/share/cmod/data/demo'))).toBe(false)
 })
 
 test("an install step's PATH puts cmod's programs folder ahead of a system command of the same name", async () => {
   const home = await temporaryHome()
-  const root = join(home, 'env-mod')
+  const root = join(home, 'demo')
   await writeFiles(home, { '.local/share/cmod/bin/env/0.2.0/env': '#!/bin/sh\necho "cmod\'s env"\n' })
   await chmod(join(home, '.local/share/cmod/bin/env/0.2.0/env'), 0o755)
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'env-mod', version: '0.2.0', repository: 'http://127.0.0.1:9/owner/env-mod' }),
-    'package.json': JSON.stringify({ name: 'env-mod', cmod: { program: 'env', install: './setup/install.sh' } }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0', repository: 'http://127.0.0.1:9/owner/demo' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { program: 'env', install: './setup/install.sh' } }),
     'setup/install.sh': '#!/bin/sh\nenv > "$CMOD_DATA/ran"\n',
   })
 
   const result = await cmod(home, 'setup', root, '--events')
 
   expect(result.exitCode).toBe(0)
-  expect(await readFile(join(home, '.local/share/cmod/data/env-mod/ran'), 'utf8')).toBe("cmod's env\n")
+  expect(await readFile(join(home, '.local/share/cmod/data/demo/ran'), 'utf8')).toBe("cmod's env\n")
 })
 
 test('setup installs a program when ~/.local/bin comes before the other folder PATH finds it in', async () => {

@@ -8,7 +8,7 @@ afterAll(deleteTemporaryHomes)
 
 const platforms = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 
-const releasedChangelog = '# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-10-13\n\n### Changed\n- The greeter greets by name.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
+const releasedChangelog = '# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-10-13\n\n### Changed\n- Greets by name.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
 
 async function committedMod(home: string, build: string, manifest: Record<string, unknown> = { name: 'hello' }): Promise<string> {
   const root = join(home, 'cmod')
@@ -157,14 +157,14 @@ test("publish writes the version's CHANGELOG.md section as the release notes, an
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(0)
-  expect(result.stdout).toContain('Its release notes would read:\n\n### Changed\n- The greeter greets by name.\n')
+  expect(result.stdout).toContain('Its release notes would read:\n\n### Changed\n- Greets by name.\n')
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   expect(await zipText(archive, 'CHANGELOG.md')).toBe(releasedChangelog)
 })
 
 test('publish refuses a version the committed CHANGELOG.md has no section for, and names the fix', async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, { 'CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n\n- The greeter greets by name.\n' })
+  const root = await committedHooksMod(home, { 'CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n\n- Greets by name.\n' })
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
@@ -174,7 +174,7 @@ test('publish refuses a version the committed CHANGELOG.md has no section for, a
 
 test("a mod's marketplace lists the cmod plugin from cmod's release branch, so its cmod dependency follows each cmod release", async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'greeter' }) })
+  const root = await committedHooksMod(home, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }), 'package.json': JSON.stringify({ name: 'demo' }) })
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
@@ -184,13 +184,13 @@ test("a mod's marketplace lists the cmod plugin from cmod's release branch, so i
   expect(listed[1]).toEqual({ name: 'cmod', description: 'Claude Mod Manager: runs the uninstall step of each mod Claude Code removes', source: { source: 'url', url: 'https://github.com/heyJordanParker/cmod.git', ref: 'release' } })
 })
 
-const dependsOnOneclaude = { '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'oneclaude', version: '>=0.9.0' }] }), 'package.json': JSON.stringify({ name: 'greeter' }) }
+const dependsOnOther = { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0', dependencies: [{ name: 'other', version: '>=0.9.0' }] }), 'package.json': JSON.stringify({ name: 'demo' }) }
 
-const oneclaudeEntry = { name: 'oneclaude', description: 'One Claude across every session', source: { source: 'url', url: 'https://github.com/heyJordanParker/oneclaude.git', ref: 'release' } }
+const otherEntry = { name: 'other', description: 'Another mod', source: { source: 'url', url: 'https://github.com/owner/other.git', ref: 'release' } }
 
-const oneclaudeManifest = JSON.stringify({ name: 'oneclaude', version: '0.9.0', description: 'One Claude across every session', repository: 'https://github.com/heyJordanParker/oneclaude' })
+const otherManifest = JSON.stringify({ name: 'other', version: '0.9.0', description: 'Another mod', repository: 'https://github.com/owner/other' })
 
-async function installOneclaude(home: string, id: string, installPath: string): Promise<void> {
+async function installOther(home: string, id: string, installPath: string): Promise<void> {
   await writeFiles(home, { 'bin/claude': claudeAnswering([...cmodPluginListed, { id, version: '0.9.0', scope: 'user', enabled: true, installPath }]) })
 }
 
@@ -201,59 +201,59 @@ async function publishedListing(result: { stdout: string }): Promise<unknown[]> 
 
 test("a mod's marketplace lists each mod it depends on from the release branch of the GitHub repository its installed copy names, so the dependency resolves in the mod's marketplace", async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, dependsOnOneclaude)
-  await writeFiles(home, { 'cache/oneclaude/.claude-plugin/plugin.json': oneclaudeManifest })
-  await installOneclaude(home, 'oneclaude@oneclaude', join(home, 'cache/oneclaude'))
+  const root = await committedHooksMod(home, dependsOnOther)
+  await writeFiles(home, { 'cache/other/.claude-plugin/plugin.json': otherManifest })
+  await installOther(home, 'other@other', join(home, 'cache/other'))
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
   const listed = await publishedListing(result)
-  expect(listed.map((plugin) => (plugin as { name: string }).name)).toEqual(['greeter', 'cmod', 'oneclaude'])
-  expect(listed[2]).toEqual(oneclaudeEntry)
-  expect(result.stdout).toContain('Listed oneclaude from the release branch of heyJordanParker/oneclaude, so the oneclaude dependency resolves in this marketplace and follows each oneclaude release\n')
+  expect(listed.map((plugin) => (plugin as { name: string }).name)).toEqual(['demo', 'cmod', 'other'])
+  expect(listed[2]).toEqual(otherEntry)
+  expect(result.stdout).toContain('Listed other from the release branch of owner/other, so the other dependency resolves in this marketplace and follows each other release\n')
 })
 
 test('a dependency installed only as a linked checkout lists from the repository its checkout names', async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, dependsOnOneclaude)
-  const checkout = join(home, 'Developer/oneclaude')
-  await writeFiles(checkout, { '.claude-plugin/plugin.json': oneclaudeManifest })
+  const root = await committedHooksMod(home, dependsOnOther)
+  const checkout = join(home, 'Developer/other')
+  await writeFiles(checkout, { '.claude-plugin/plugin.json': otherManifest })
   await writeLinked(home, checkout)
-  await installOneclaude(home, 'oneclaude@Developer-linked', join(home, '.claude/plugins/cache/Developer-linked/oneclaude/0.9.0'))
+  await installOther(home, 'other@Developer-linked', join(home, '.claude/plugins/cache/Developer-linked/other/0.9.0'))
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.stderr).toBe('')
   expect(result.exitCode).toBe(0)
-  expect((await publishedListing(result))[2]).toEqual(oneclaudeEntry)
+  expect((await publishedListing(result))[2]).toEqual(otherEntry)
 })
 
 test('publish refuses a dependency installed nowhere here before it builds anything, and says to install or link it with its repository', async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, dependsOnOneclaude)
+  const root = await committedHooksMod(home, dependsOnOther)
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toBe(
-    'cmod publish: .claude-plugin/plugin.json depends on oneclaude, and no copy installed here names its GitHub repository in .claude-plugin/plugin.json "repository", so greeter\'s marketplace cannot list it and Claude Code would leave greeter off. Install or link oneclaude, with "repository": "https://github.com/<owner>/<repo>" in its plugin.json, then run cmod publish again.\n',
+    'cmod publish: .claude-plugin/plugin.json depends on other, and no copy installed here names its GitHub repository in .claude-plugin/plugin.json "repository", so demo\'s marketplace cannot list it and Claude Code would leave demo off. Install or link other, with "repository": "https://github.com/<owner>/<repo>" in its plugin.json, then run cmod publish again.\n',
   )
   expect(result.stdout).toBe('')
   expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe('plugin list --json\n')
 })
 
-const greeterRequiring = (range: string) => ({
-  '.claude-plugin/plugin.json': JSON.stringify({ name: 'greeter', version: '0.2.0', dependencies: [{ name: 'cmod', version: range }] }),
-  'package.json': JSON.stringify({ name: 'greeter' }),
+const demoRequiring = (range: string) => ({
+  '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0', dependencies: [{ name: 'cmod', version: range }] }),
+  'package.json': JSON.stringify({ name: 'demo' }),
   'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.1.0' }),
   'node_modules/@cmodjs/core/records.js': "export const oldestCmodVersion = '5.0.0'\n",
 })
 
 test('publish refuses a cmod dependency below the oldest cmod the bundled @cmodjs/core runs on, and names cmod check', async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, greeterRequiring('>=4.3.4'))
+  const root = await committedHooksMod(home, demoRequiring('>=4.3.4'))
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
@@ -265,7 +265,7 @@ test('publish refuses a cmod dependency below the oldest cmod the bundled @cmodj
 
 test('publish releases a mod whose cmod dependency names a newer minimum than the oldest cmod the bundled @cmodjs/core runs on', async () => {
   const home = await temporaryHome()
-  const root = await committedHooksMod(home, greeterRequiring('>=5.6.0'))
+  const root = await committedHooksMod(home, demoRequiring('>=5.6.0'))
 
   const result = await cmod(home, 'publish', root, '--dry-run')
 
@@ -284,11 +284,11 @@ test('publish of the cmod plugin, which installs @cmodjs/core and depends on no 
 })
 
 async function committedHooksMod(home: string, files: Record<string, string> = {}): Promise<string> {
-  const root = join(home, 'greeter')
+  const root = join(home, 'demo')
   await writeFiles(root, {
     '.claude-plugin/plugin.json': JSON.stringify({ name: 'cmod', version: '0.2.0' }),
     'package.json': JSON.stringify({ name: 'cmod' }),
-    'hooks/hooks.json': JSON.stringify({ description: 'greeter hooks module', modules: ['./register.ts'] }),
+    'hooks/hooks.json': JSON.stringify({ description: 'demo hooks module', modules: ['./register.ts'] }),
     'hooks/register.ts': "import { greet } from '../src/greet.js'\n\nexport function register(on) {\n  on('session.start', greet)\n}\n",
     'src/greet.ts': "export async function greet($, e, next) {\n  await $.ui.toast('hello')\n  return next(e)\n}\n",
     '.github/workflows/release.yml': 'name: Release\n',
@@ -300,7 +300,7 @@ async function committedHooksMod(home: string, files: Record<string, string> = {
   await git('init', '-q')
   await git('add', '.')
   await git('commit', '-q', '-m', 'mod')
-  await git('remote', 'add', 'origin', 'https://github.com/owner/greeter.git')
+  await git('remote', 'add', 'origin', 'https://github.com/owner/demo.git')
   return root
 }
 
@@ -319,7 +319,7 @@ test('publish --dry-run bundles the hooks module into one file, and leaves out .
   const [archive = ''] = result.stdout.split('\n').filter((line) => line.startsWith('  /')).map((line) => line.trim())
   const entries = (await new Response(Bun.spawn(['unzip', '-Z1', archive], { stdout: 'pipe' }).stdout).text()).split('\n').filter((entry) => entry !== '' && !entry.endsWith('/'))
   expect(entries.sort()).toEqual(['.claude-plugin/plugin.json', 'CHANGELOG.md', 'hooks/hooks.json', 'hooks/register.js', 'hooks/register.ts', 'package.json', 'src/greet.ts'])
-  expect(JSON.parse(await zipText(archive, 'hooks/hooks.json'))).toEqual({ description: 'greeter hooks module', modules: ['./register.js'] })
+  expect(JSON.parse(await zipText(archive, 'hooks/hooks.json'))).toEqual({ description: 'demo hooks module', modules: ['./register.js'] })
   const bundle = await zipText(archive, 'hooks/register.js')
   expect(bundle).not.toContain('import ')
   const tree = join(dirname(archive), 'release')

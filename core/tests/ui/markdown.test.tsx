@@ -29,7 +29,7 @@ function MermaidBlock({ lang, value, Default }: StyleProps<typeof CodeBlock>): R
 }
 
 const everyBlock = defineMod({
-  name: 'blocks',
+  name: 'demo',
   setup(mod) {
     for (const [name, place] of Object.entries(markdownPlaces)) mod.styles.add({ kind: place, render: (_mod, { Default, surface, columns, id, ...block }) => <Text>{`${name} ${JSON.stringify(block)}`}</Text> })
   },
@@ -54,7 +54,7 @@ async function streamedAgainstWhole(reply: string) {
 test('a markdown place draws its blocks and leaves the rest to Default', async () => {
   const tested = testMod(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, { depth, text, Default }) => (depth === 1 ? <Text bold>{text.toUpperCase()}</Text> : <Default />) })
       },
@@ -80,7 +80,7 @@ test('a markdown place draws its blocks and leaves the rest to Default', async (
 test('a reply whose first block a mod draws keeps the bullet', async () => {
   const tested = testMod(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
@@ -95,7 +95,7 @@ test('a reply whose first block a mod draws keeps the bullet', async () => {
 test("a mod's piece after the first has a blank line above it", async () => {
   const tested = testMod(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
@@ -110,7 +110,7 @@ test("a mod's piece after the first has a blank line above it", async () => {
 test("a mod's block opening a later text block of the reply has a blank line above it", async () => {
   const tested = testMod(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
@@ -125,7 +125,7 @@ test("a mod's block opening a later text block of the reply has a blank line abo
 test('a first block that draws its own row above Default keeps the bullet on the first row', async () => {
   const tested = testMod(
     defineMod({
-      name: 'labels',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({
           kind: Heading,
@@ -148,7 +148,7 @@ test('a first block that draws its own row above Default keeps the bullet on the
 test('a reply whose first block a mod leaves to Default keeps the bullet Claude Code draws', async () => {
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
       },
@@ -163,7 +163,7 @@ test('a reply whose first block a mod leaves to Default keeps the bullet Claude 
 test('a CodeBlock render draws a custom language and leaves other languages to Default', async () => {
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
       },
@@ -178,7 +178,7 @@ test('a CodeBlock render draws a custom language and leaves other languages to D
 test('a block still streaming is drawn by Default', async () => {
   const tested = testMod(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
@@ -194,7 +194,7 @@ test('a block still streaming is drawn by Default', async () => {
 test('a heading stays drawn by its render while the paragraph directly below it streams', async () => {
   const tested = testMod(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
       },
@@ -209,7 +209,7 @@ test('a streaming reply parses its finished blocks once', async () => {
   const parse = spyOn(vendorMarkdown, 'fromMarkdown')
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
       },
@@ -231,7 +231,7 @@ test('a streaming reply parses its finished blocks once', async () => {
 test('a list that continues across a blank line while streaming draws as one list', async () => {
   const tested = testMod(
     defineMod({
-      name: 'lists',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: List, render: (_mod, { start, text }) => <Text>{`List from ${start}: ${JSON.stringify(text)}`}</Text> })
       },
@@ -301,12 +301,12 @@ test("a markdown component that throws keeps Claude's drawing of its block", asy
 test("Markdown in a pane applies the mod's block styles", async () => {
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       async setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, { depth, text, Default }) => (depth === 1 ? <Text bold>{text.toUpperCase()}</Text> : <Default />) })
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => MermaidBlock(props) })
         const pane = mod.panes.add({
-          id: 'notes',
+          id: 'demo',
           title: 'Notes',
           render: () => (
             <Box flexDirection="column">
@@ -326,10 +326,10 @@ test("Markdown in a pane applies the mod's block styles", async () => {
 test("a pane's Markdown puts a blank line above a mod's block, as a reply does", async () => {
   const tested = testMod(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       async setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => Shouted(props) })
-        await mod.panes.add({ id: 'notes', title: 'Notes', render: () => <Markdown text={'Before\n\n# Plan'} /> }).open()
+        await mod.panes.add({ id: 'demo', title: 'Notes', render: () => <Markdown text={'Before\n\n# Plan'} /> }).open()
       },
     }),
   )
@@ -344,7 +344,7 @@ const drawDiagram = ({ lang, value, Default }: StyleProps<typeof CodeBlock>) => 
 
 const rows = (drawn: RenderElement) => textOf(drawn).split('\n').map((row) => row.trimEnd())
 
-const claude = fakeClaude({ name: 'claude', root: '/test' }).claude
+const claude = fakeClaude({ name: 'demo', root: '/test' }).claude
 
 async function drawsLikeClaude(e: Frozen<Args<'ui.render'>>): Promise<RenderElement> {
   const table = claude.ui.resolve(e)
@@ -355,7 +355,7 @@ async function drawsLikeClaude(e: Frozen<Args<'ui.render'>>): Promise<RenderElem
 test('two mods drawing one reply give the same gaps as one mod', async () => {
   const headings = await started(
     defineMod({
-      name: 'headings',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) })
       },
@@ -363,7 +363,7 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
   )
   const diagrams = await started(
     defineMod({
-      name: 'diagrams',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) })
       },
@@ -388,8 +388,8 @@ test('two mods drawing one reply give the same gaps as one mod', async () => {
 })
 
 test("a reply drawn by two mods keeps every block under the bullet's text", async () => {
-  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => void mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) }) }))
-  const diagrams = await started(defineMod({ name: 'architecture-diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
+  const headings = await started(defineMod({ name: 'demo', setup: (mod) => void mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) }) }))
+  const diagrams = await started(defineMod({ name: 'other', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: '## Request flow\n\n```mermaid\ngraph LR\n```\n\nThe flowchart shows a request.', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
   const diagramsAbove = rows(await diagrams.route('ui.render', reply, (e) => headings.route('ui.render', e, drawsLikeClaude)))
@@ -400,14 +400,14 @@ test("a reply drawn by two mods keeps every block under the bullet's text", asyn
 })
 
 test("a pane of one mod draws another mod's markdown style once that mod draws it, and Claude Code's markdown while it does", async () => {
-  const diagrams = await started(defineMod({ name: 'diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
-  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await diagrams.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
-  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  const diagrams = await started(defineMod({ name: 'other', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('demo', await diagrams.route('cmod.call', { ...call, caller: 'demo' } as never, async () => ({ deny: 'no mod answers it' })))
+  const notes = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('cmod.call', { to: 'demo', method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
 
   expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).not.toContain('diagram: graph TD')
   await fake.settle()
@@ -415,24 +415,24 @@ test("a pane of one mod draws another mod's markdown style once that mod draws i
 })
 
 test("a pane whose other mod's markdown style fails to draw draws Claude Code's markdown and reports it to the Log", async () => {
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
   const logged: unknown[] = []
   fake.fakes.cmod.call = async (call) => {
     if (call.method === 'cmod:failed') return (logged.push(call.input), { showsToast: false })
-    if (call.to === 'diagrams') throw new Error('diagrams: $.cmod.call: diagrams is not running')
+    if (call.to === 'other') throw new Error('other: $.cmod.call: other is not running')
     return null
   }
-  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  const notes = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('cmod.call', { to: 'demo', method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
 
   await notes.route('ui.render', pane, drawsLikeClaude)
   await fake.settle()
 
   expect(textOf(await notes.route('ui.render', pane, drawsLikeClaude))).toBe('Done.')
-  expect(logged).toEqual([expect.objectContaining({ mod: 'notes', id: 'draw:diagrams', message: 'The markdown style of diagrams drew nothing', details: expect.stringContaining('diagrams: $.cmod.call: diagrams is not running') })])
+  expect(logged).toEqual([expect.objectContaining({ mod: 'demo', id: 'draw:other', message: 'The markdown style of other drew nothing', details: expect.stringContaining('other: $.cmod.call: other is not running') })])
 })
 
 test('hearing which mods style markdown redraws only a mod with a pane, because the cmod plugin draws every widget and page', async () => {
@@ -442,30 +442,30 @@ test('hearing which mods style markdown redraws only a mod with a pane, because 
     await lifecycle.start(fake.claude, async () => ({ name: definition.name, root: `/test/plugins/${definition.name}`, version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
     await fake.settle()
     const before = fake.calls.filter(({ call }) => call === 'ui.invalidate').length
-    await lifecycle.route('cmod.call', { to: definition.name, method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+    await lifecycle.route('cmod.call', { to: definition.name, method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
     return fake.calls.filter(({ call }) => call === 'ui.invalidate').length - before
   }
 
-  const withWidget = await redrawsOf(defineMod({ name: 'usage', setup: (mod) => void mod.widgets.add({ id: 'usage', title: 'Usage', areas: [BelowPrompt], render: () => Markdown({ text: 'Usage.' }) }) }))
-  const withPane = await redrawsOf(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
+  const withWidget = await redrawsOf(defineMod({ name: 'other', setup: (mod) => void mod.widgets.add({ id: 'usage', title: 'Usage', areas: [BelowPrompt], render: () => Markdown({ text: 'Usage.' }) }) }))
+  const withPane = await redrawsOf(defineMod({ name: 'demo', setup: (mod) => void mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ text: 'Done.' }) }) }))
 
   expect([withWidget, withPane]).toEqual([0, 1])
 })
 
 test("another mod's markdown drawing stays while this mod's own parts change and the stylers stay the same", async () => {
-  const diagrams = await started(defineMod({ name: 'diagrams', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  const diagrams = await started(defineMod({ name: 'other', setup: (mod) => void mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) }) }))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
   let draws = 0
   fake.fakes.cmod.call = async (call) => {
-    if (call.to === 'cmod') return { isHeld: false, stylers: ['diagrams'] }
+    if (call.to === 'cmod') return { isHeld: false, stylers: ['other'] }
     if (call.method === partMethods.draw) draws += 1
-    return calledAnswer('notes', await diagrams.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+    return calledAnswer('demo', await diagrams.route('cmod.call', { ...call, caller: 'demo' } as never, async () => ({ deny: 'no mod answers it' })))
   }
-  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  const notes = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ text: '```mermaid\ngraph TD\n```\n\nDone.' }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['diagrams'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('cmod.call', { to: 'demo', method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
   await notes.route('ui.render', pane, drawsLikeClaude)
   await fake.settle()
 
@@ -479,7 +479,7 @@ test("another mod's markdown drawing stays while this mod's own parts change and
 test("a mod's markdown style draws in its own Sidebar page and widget under test, as the cmod plugin draws them", async () => {
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, props) => drawDiagram(props) })
         mod.widgets.add({ id: 'last', title: 'Last diagram', areas: [BelowPrompt], render: () => Markdown({ text: '```mermaid\ngraph LR\n```' }) })
@@ -495,7 +495,7 @@ test("a mod's markdown style draws in its own Sidebar page and widget under test
 const bulletItems = (source: string) => source.split(/\n(?=- )/).map((item) => item.slice(2))
 
 const bullets = defineMod({
-  name: 'bullets',
+  name: 'demo',
   setup(mod) {
     mod.styles.add({
       kind: List,
@@ -511,7 +511,7 @@ const bullets = defineMod({
       ),
     })
     mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render: () => <Markdown key="list" text={'- you\n- me'} /> })
-    void mod.panes.add({ id: 'notes', title: 'Notes', render: () => <Markdown key="list" text={'Intro\n\n- you\n- me'} /> }).open()
+    void mod.panes.add({ id: 'demo', title: 'Notes', render: () => <Markdown key="list" text={'Intro\n\n- you\n- me'} /> }).open()
     void mod.sidebar.add({ id: 'all', title: 'Bullets', render: () => <Markdown key="list" text={'- you\n- me'} /> }).open()
   },
 })
@@ -551,7 +551,7 @@ const eachItemByDefault = ({ source, Default }: StyleProps<typeof List>) => Box(
 
 const linkSteps = (pressed: string[]) =>
   defineMod({
-    name: 'links',
+    name: 'demo',
     setup(mod) {
       mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) })
       const render = () => <Markdown key="steps" text={linkList} dimColor pressableLinks={[docs]} onLinkPress={({ href }) => void pressed.push(href)} />
@@ -581,7 +581,7 @@ test("a Sidebar page's Markdown keeps its dim color and links in each part its s
   const parts = await defaultPartsDrawn(() => tested.shown.page.lines())
   await tested.shown.page.press('steps', docs)
 
-  expect(parts).toEqual([linkPart('links/all:steps', `[docs](${docs})`), linkPart('links/all:steps:1', 'later')])
+  expect(parts).toEqual([linkPart('demo/all:steps', `[docs](${docs})`), linkPart('demo/all:steps:1', 'later')])
   expect(pressed).toEqual([docs])
 })
 
@@ -593,20 +593,20 @@ test("a widget's Markdown keeps its dim color and links in each part its style d
   await pressDocs(parts[0])
   await tested.settle()
 
-  expect(parts).toEqual([linkPart('links/next:steps', `[docs](${docs})`), linkPart('links/next:steps:1', 'later')])
+  expect(parts).toEqual([linkPart('demo/next:steps', `[docs](${docs})`), linkPart('demo/next:steps:1', 'later')])
   expect(pressed).toEqual([docs])
 })
 
 test("a pane's Markdown keeps its dim color and links in each part another mod's style draws through Default", async () => {
-  const lists = await started(defineMod({ name: 'lists', setup: (mod) => void mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) }) }))
+  const lists = await started(defineMod({ name: 'other', setup: (mod) => void mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) }) }))
   const pressed: string[] = []
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
-  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
-  const notes = createLifecycle(defineMod({ name: 'notes', setup: (mod) => void mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) }) }))
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('demo', await lists.route('cmod.call', { ...call, caller: 'demo' } as never, async () => ({ deny: 'no mod answers it' })))
+  const notes = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) }) }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('cmod.call', { to: 'demo', method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
   await notes.route('ui.render', pane, drawsLikeClaude)
   await fake.settle()
 
@@ -620,19 +620,19 @@ test("a pane's Markdown keeps its dim color and links in each part another mod's
 
 test("a pane's Markdown keeps its dim color and links in each keyless Markdown its own style draws", async () => {
   const pressed: string[] = []
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
   const notes = createLifecycle(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: List, render: (_mod, { source }) => Box({ flexDirection: 'column', children: bulletItems(source).map((item) => Markdown({ text: item })) }) })
-        mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) })
+        mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ key: 'steps', text: linkList, dimColor: true, pressableLinks: [docs], onLinkPress: ({ href }) => void pressed.push(href) }) })
       },
     }),
   )
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
 
   const drawn = await notes.route('ui.render', pane, drawsLikeClaude)
   const parts = ['steps', 'steps:1'].map((key) => findElement(drawn, 'Markdown', key))
@@ -643,27 +643,27 @@ test("a pane's Markdown keeps its dim color and links in each keyless Markdown i
 })
 
 test("a pane's Markdown that its own style and another mod's style both split through Default gives every part its own key", async () => {
-  const lists = await started(defineMod({ name: 'lists', setup: (mod) => void mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) }) }))
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
-  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  const lists = await started(defineMod({ name: 'other', setup: (mod) => void mod.styles.add({ kind: List, render: (_mod, props) => eachItemByDefault(props) }) }))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('demo', await lists.route('cmod.call', { ...call, caller: 'demo' } as never, async () => ({ deny: 'no mod answers it' })))
   const notes = createLifecycle(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) })
-        mod.panes.add({ id: 'notes', title: 'Notes', render: () => Markdown({ key: 'steps', text: `${linkList}\n\n# Next\n\nDone.`, dimColor: true, pressableLinks: [docs], onLinkPress: () => undefined }) })
+        mod.panes.add({ id: 'demo', title: 'Notes', render: () => Markdown({ key: 'steps', text: `${linkList}\n\n# Next\n\nDone.`, dimColor: true, pressableLinks: [docs], onLinkPress: () => undefined }) })
       },
     }),
   )
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('cmod.call', { to: 'demo', method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
   await notes.route('ui.render', pane, drawsLikeClaude)
   await fake.settle()
 
   const drawn = await notes.route('ui.render', pane, drawsLikeClaude)
-  checkKeys(drawn, 'notes', 'Pane')
+  checkKeys(drawn, 'demo', 'Pane')
 
   expect(['steps', 'steps:1', 'steps:2'].map((key) => findElement(drawn, 'Markdown', key))).toEqual([linkPart('steps', `[docs](${docs})`), linkPart('steps:1', 'later'), linkPart('steps:2', 'Done.')])
   expect(rows(drawn)).toEqual([`[docs](${docs})`, 'later', '', 'NEXT', '', 'Done.'])
@@ -679,7 +679,7 @@ const indexKeyed = ({ source }: StyleProps<typeof List>) => (
 
 const ideasDrawing = (render: () => RenderElement) =>
   defineMod({
-    name: 'ideas',
+    name: 'demo',
     setup(mod) {
       mod.styles.add({ kind: List, render: (_mod, props) => indexKeyed(props) })
       mod.widgets.add({ id: 'next', title: 'Next', areas: [BelowPrompt], render })
@@ -737,7 +737,7 @@ test('one Markdown element on a page holding two lists its style keys by index d
 test("one Markdown element in the mod's own pane holding two lists its style keys by index draws both lists, beside a keyless one of the same text", async () => {
   const tested = testMod(
     defineMod({
-      name: 'ideas',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({ kind: List, render: (_mod, props) => indexKeyed(props) })
         void mod.panes
@@ -770,7 +770,7 @@ test("the test kit presses and types into a markdown style's elements by the key
   const done: string[] = []
   const tested = testMod(
     defineMod({
-      name: 'ideas',
+      name: 'demo',
       setup(mod) {
         mod.styles.add({
           kind: List,
@@ -812,7 +812,7 @@ test("a pane draws three blocks of another mod's style that keys by index, each 
   const done: string[] = []
   const lists = await started(
     defineMod({
-      name: 'lists',
+      name: 'other',
       setup: (mod) =>
         void mod.styles.add({
           kind: List,
@@ -826,31 +826,31 @@ test("a pane draws three blocks of another mod's style that keys by index, each 
         }),
     }),
   )
-  const fake = fakeClaude({ name: 'notes', root: '/test/plugins/notes' })
-  fake.fakes.cmod.call = async (call) => calledAnswer('notes', await lists.route('cmod.call', { ...call, caller: 'notes' } as never, async () => ({ deny: 'no mod answers it' })))
+  const fake = fakeClaude({ name: 'demo', root: '/test/plugins/demo' })
+  fake.fakes.cmod.call = async (call) => calledAnswer('demo', await lists.route('cmod.call', { ...call, caller: 'demo' } as never, async () => ({ deny: 'no mod answers it' })))
   const notes = createLifecycle(
     defineMod({
-      name: 'notes',
+      name: 'demo',
       setup: (mod) =>
         void mod.panes.add({
-          id: 'notes',
+          id: 'demo',
           title: 'Notes',
           render: () => Box({ flexDirection: 'column', children: [Markdown({ text: '- Ship it' }), Markdown({ key: 'later', text: '- Rest' }), Markdown({ text: '- Tell the team' })] }),
         }),
     }),
   )
-  await notes.start(fake.claude, async () => ({ name: 'notes', root: '/test/plugins/notes', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  await notes.start(fake.claude, async () => ({ name: 'demo', root: '/test/plugins/demo', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
   await fake.settle()
-  await notes.route('cmod.call', { to: 'notes', method: partMethods.stylers, input: ['lists'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
-  const pane = { surface: 'terminal', component: 'Pane', requestId: 'notes', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
+  await notes.route('cmod.call', { to: 'demo', method: partMethods.stylers, input: ['other'], caller: 'cmod' } as never, async () => ({ deny: 'no mod answers it' }))
+  const pane = { surface: 'terminal', component: 'Pane', requestId: 'demo', props: { isFocused: false } } as unknown as Frozen<Args<'ui.render'>>
   await notes.route('ui.render', pane, drawsLikeClaude)
   await fake.settle()
-  const scopes = ['lists/markdown:0:0:', 'lists/markdown:later:0:', 'lists/markdown:1:0:']
+  const scopes = ['other/markdown:0:0:', 'other/markdown:later:0:', 'other/markdown:1:0:']
   const inputKeys = (drawn: RenderElement) => scopes.map((scope) => findElement(drawn, 'Input', `${scope}note:0`)?.['key'])
 
   const first = await notes.route('ui.render', pane, drawsLikeClaude)
   const second = await notes.route('ui.render', pane, drawsLikeClaude)
-  checkKeys(second, 'notes', 'Pane')
+  checkKeys(second, 'demo', 'Pane')
   for (const scope of scopes) {
     const press = findElement(second, 'Button', `${scope}done:0`)?.['onPress'] as () => unknown
     const submit = findElement(second, 'Input', `${scope}note:0`)?.['onSubmit'] as (value: string) => unknown
@@ -859,7 +859,7 @@ test("a pane draws three blocks of another mod's style that keys by index, each 
   }
   await fake.settle()
 
-  expect(inputKeys(first)).toEqual(['lists/markdown:0:0:note:0', 'lists/markdown:later:0:note:0', 'lists/markdown:1:0:note:0'])
+  expect(inputKeys(first)).toEqual(['other/markdown:0:0:note:0', 'other/markdown:later:0:note:0', 'other/markdown:1:0:note:0'])
   expect(inputKeys(second)).toEqual(inputKeys(first))
   expect(done).toEqual(['Ship it', 'Ship it: later', 'Rest', 'Rest: later', 'Tell the team', 'Tell the team: later'])
 })
@@ -868,7 +868,7 @@ test("a mod's markdown style under test draws at the terminal and at the width o
   const diagram = '```mermaid\ngraph TD\n```'
   const tested = testMod(
     defineMod({
-      name: 'diagrams',
+      name: 'other',
       setup(mod) {
         mod.styles.add({ kind: CodeBlock, render: (_mod, { surface, columns }) => <Text>{`${surface} ${columns}`}</Text> })
         mod.widgets.add({ id: 'last', title: 'Last diagram', areas: [BelowPrompt], render: () => Markdown({ text: diagram }) })
@@ -883,7 +883,7 @@ test("a mod's markdown style under test draws at the terminal and at the width o
 })
 
 test("a reply Claude's text opens keeps a mod's later block under the bullet's text", async () => {
-  const headings = await started(defineMod({ name: 'slots-demo', setup: (mod) => void mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) }) }))
+  const headings = await started(defineMod({ name: 'demo', setup: (mod) => void mod.styles.add({ kind: Heading, render: (_mod, props) => drawHeading(props) }) }))
   const reply = { surface: 'terminal', component: 'AssistantMessage', requestId: 'msg_1', props: { text: 'One sentence.\n\n### Done', isFirstOfReply: true } } as Frozen<Args<'ui.render'>>
 
   expect(rows(await headings.route('ui.render', reply, drawsLikeClaude))).toEqual(['⏺ One sentence.', '', '  DONE'])

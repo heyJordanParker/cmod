@@ -100,8 +100,8 @@ function screensOf(body: AsyncIterable<Uint8Array>): (text: string) => Promise<{
     )
 }
 
-const counter = defineMod({
-  name: 'counter',
+const demo = defineMod({
+  name: 'demo',
   state: { session: { presses: 0, name: '', surfaces: [] as string[] } },
   setup(mod) {
     mod.sidebar.add({
@@ -136,7 +136,7 @@ async function browsed() {
   servers.push(server)
   const address = `http://${await firstLine(server.stdout)}`
 
-  const counted = testMod(counter)
+  const counted = testMod(demo)
   await counted.start()
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files: { [`${store}/preferences.json`]: preferences } })
   tested.fakes.process.spawn = ({ argv }) => (argv.includes('serve') ? running(address.replace('http://', '')) : running('[]'))
@@ -146,9 +146,9 @@ async function browsed() {
     const answer = await fetch(url, { method: init?.method ?? 'GET', headers: init?.headers ?? {}, ...(body === undefined ? {} : { body }) })
     return { status: answer.status, ok: answer.ok, headers: {}, text: await answer.text() }
   }
-  tested.fakes.cmod.call = async (input) => (input.to === 'counter' ? calledAnswer('cmod', await counted.fire('cmod.call', { to: 'counter', method: input.method, input: input.input, caller: 'cmod' } as never)) : null)
+  tested.fakes.cmod.call = async (input) => (input.to === 'demo' ? calledAnswer('cmod', await counted.fire('cmod.call', { to: 'demo', method: input.method, input: input.input, caller: 'cmod' } as never)) : null)
   await tested.start()
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'count', title: 'Count', place: 'sidebar' }] }, requests: [{ open: 'count' }] }, caller: 'counter' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'count', title: 'Count', place: 'sidebar' }] }, requests: [{ open: 'count' }] }, caller: 'demo' } as never)
   await tested.settle()
 
   const browsing = new AbortController()
@@ -159,8 +159,8 @@ async function browsed() {
     return fetch(`${address}/api/press`, { method: 'POST', headers: { origin: address, 'content-type': 'application/json' }, body: JSON.stringify({ stream: 'test-browser', draw: screen.draw, handler: Number(handler), key, ...input }) })
   }
   const page = async () => {
-    const listed = await showing('data-key="tab:counter/count"')
-    await press(listed, 'tab:counter/count', 'data-press', { kind: 'press' })
+    const listed = await showing('data-key="tab:demo/count"')
+    await press(listed, 'tab:demo/count', 'data-press', { kind: 'press' })
     return showing('Pressed ')
   }
   async function sidebar(): Promise<string> {
@@ -273,12 +273,12 @@ test("a mod's Sidebar page shows in a tab of its session in the browser app as H
 test("text typed in a page's Input in the browser app reaches the mod's onInput, and the page it redraws reaches the browser and the Sidebar", async () => {
   const { counted, showing, press, page, sidebar, close } = await browsed()
   const before = await page()
-  const typed = await press(before, 'counter/count:name', 'data-input', { kind: 'change', value: 'Ada' })
+  const typed = await press(before, 'demo/count:name', 'data-input', { kind: 'change', value: 'Ada' })
   const after = await showing('Hello Ada')
   const lines = await sidebar()
   close()
 
-  expect(before.html).toContain('<input type="text" class="input" data-key="counter/count:name" data-input=')
+  expect(before.html).toContain('<input type="text" class="input" data-key="demo/count:name" data-input=')
   expect(typed.status).toBe(200)
   expect(counted.state.session.name).toBe('Ada')
   expect(after.html).toContain('value="Ada"')

@@ -9,7 +9,7 @@ export const help = `Usage: cmod option <name> <key> <value>
 ${summary}
 
 Sets the option <key> of an installed plugin through Claude Code, as /config
-does, such as cmod option ci-watch branch main. A list option takes its items
+does, such as cmod option my-mod branch main. A list option takes its items
 separated by commas. Settings and the option questions a mod asks at
 its first start run it, and the mod reads the new value at its next start.`
 

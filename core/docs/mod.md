@@ -29,8 +29,8 @@ type ModDefinition<State, Name, Options, Hotkeys> = {
 ```tsx
 import { defineMod, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-export const greeter = defineMod({
-  name: 'greeter',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { session: { isGreeted: false } },
 
   setup(mod) {
@@ -110,10 +110,10 @@ A mod's `CHANGELOG.md`, at its root, holds what changed in each version, written
 
 ```ts
 import { registerMod, type AddHook, type PluginOptions } from '../node_modules/@cmodjs/core/register.js'
-import { greeter } from '../src/mod.js'
+import { myMod } from '../src/mod.js'
 
 export function register(addHook: AddHook, options: PluginOptions): void {
-  registerMod(addHook, greeter, options)
+  registerMod(addHook, myMod, options)
 }
 ```
 
@@ -131,7 +131,7 @@ A mod that hears permissions calls `registerPermissionCheck` after `registerMod`
 
 ```ts
 export function register(addHook: AddHook, options: PluginOptions): void {
-  registerMod(addHook, guard, options)
+  registerMod(addHook, myMod, options)
   registerPermissionCheck(addHook)
 }
 ```
@@ -270,7 +270,7 @@ With `{ to: 'transcript' }`, the line shows dim in the conversation, where the p
 With a `level`, the line is a failure the mod works around and goes on past, and it goes to the Log in Settings and `cmod log` too, which counts each repeat with the versions it happened on. An `error` shows a toast only where cmod shows a failure the mod throws: for a mod run from its checkout, in a session working inside it ([ui.md](ui.md#toasts)). A `warning` never shows one. Throw instead when the listener or handler cannot go on.
 
 ```ts
-mod.log(`The rule ${name} did not load, so rulebook skips it: ${messageOf(error)}`, { level: 'error' })
+mod.log(`The rule ${name} did not load, so ${mod.name} skips it: ${messageOf(error)}`, { level: 'error' })
 ```
 
 ### Hotkeys
@@ -297,13 +297,13 @@ type Hotkey = {
 - `tested.hotkey(name)` presses a hotkey in a test ([testing.md](testing.md)).
 
 ```tsx
-export const notes = defineMod({
-  name: 'notes',
+export const myMod = defineMod({
+  name: 'my-mod',
   hotkeys: {
-    toggle: { title: 'Show or hide the notes', default: 'alt+shift+n' },
+    toggle: { title: 'Show or hide the page', default: 'alt+shift+n' },
   },
   setup(mod) {
-    const page = mod.sidebar.add(notesPage)
+    const page = mod.sidebar.add(myPage)
     mod.hotkeys.toggle.onPress(() => page.toggle({ focus: true }))
   },
 })
@@ -421,8 +421,8 @@ A job's deadline bounds the whole callback that makes these calls ([jobs.md](job
 ```ts
 import { defineMod, process, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-export const branchNote = defineMod({
-  name: 'branch-note',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup() {
     sessions.current.beforeSessionStart(async () => {
       const { exitCode, stdout } = await process.run(['git', 'branch', '--show-current'], { cwd: sessions.current.project })
@@ -480,7 +480,7 @@ type FileMatch = { readonly path: string; readonly name?: string; readonly metad
 
 ```ts
 const skills = await fs.find(['~/.claude/skills/*/SKILL.md', '.claude/skills/*/SKILL.md'])
-const planning = skills.filter((skill) => skill.metadata['modes']?.split(' ').includes('plan'))
+const planning = skills.filter((skill) => skill.metadata['tags']?.split(' ').includes('plan'))
 ```
 
 ## metadata: a file's own keys
@@ -498,14 +498,14 @@ Where a file keeps its metadata depends on its type:
 ---
 name: plan
 metadata:
-  modes.modes: plan build
+  my-mod.tags: plan build
 ---
 ```
 
 ```sh
 #!/bin/sh
 # /// metadata
-# modes.modes: plan build
+# my-mod.tags: plan build
 # ///
 ```
 
@@ -519,7 +519,7 @@ metadata:
 
 ```ts
 await metadata.update('.claude/skills/plan/SKILL.md', (keys) => {
-  keys['modes'] = 'plan build'
+  keys['tags'] = 'plan build'
 })
 ```
 
@@ -544,7 +544,7 @@ type Device = { id: string; name: string; os: 'darwin' | 'linux'; arch: 'arm64' 
 ```
 
 - `id` is the same on one computer for every session, mod, and reinstall, and differs between computers. cmod reads it from the operating system and stores nothing: the IOPlatformUUID on macOS, and on Linux `/etc/machine-id`, or `/var/lib/dbus/machine-id` when that holds none, as systemd and D-Bus read them, hashed for cmod the way systemd's `sd_id128_get_machine_app_specific` hashes a machine id for an app, so the id never shows the computer's own.
-- `name` is the name the computer goes by on its network: its LocalHostName on macOS, such as `Office-Mac-mini`, and its hostname on Linux.
+- `name` is the name the computer goes by on its network: its LocalHostName on macOS, such as `Mac-mini`, and its hostname on Linux.
 - `os` and `arch` are the names cmod's builds use, such as `darwin` and `arm64`.
 - `read` reads the computer the first time the mod calls it, and answers the same device after that. It rejects on a computer other than macOS or Linux on arm64 or x64. It also rejects on a Linux computer where neither `/etc/machine-id` nor `/var/lib/dbus/machine-id` holds a machine id, as in many containers, with a sentence that names both files.
 - A mod's program that runs with no session, such as over `ssh`, reads the same device with `cmod device --json` ([commands.md](commands.md#cmod-device)).
@@ -574,8 +574,8 @@ Returns an `Error`'s `message`, or the value as text. Use it in a `catch`, where
 ```ts
 import { defineMod, fs, messageOf, sessions } from '../node_modules/@cmodjs/core/mod.js'
 
-export const notes = defineMod({
-  name: 'notes',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup(mod) {
     sessions.current.onTurnEnd(async () => {
       await fs.write(`${mod.dataFolder}/last-stop.txt`, new Date().toISOString()).catch((error: unknown) => {

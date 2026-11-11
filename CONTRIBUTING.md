@@ -44,17 +44,17 @@ env OXLINT_TSGOLINT_PATH=lint/node_modules/.bin/tsgolint lint/node_modules/.bin/
 
 - `lint/` holds the repository's own lint rules and the pinned `oxlint` that every check runs. Its tests run on Node 22 or newer, because oxlint's rule tester refuses Bun.
 
-Then, for each sample mod checked out beside this repository, `file-tree` and `architecture-diagrams`:
+Then make a mod on the packed library in a scratch folder outside the clone, and check it:
 
 ```sh
-env -C <sample> bun test
-env -C <sample> bun x tsc --noEmit
-env HOME=<scratch home> bun run cli/src/main.ts check <sample>
+env -C core bun pm pack
+env -C <scratch> CMOD_CORE=file:<clone>/core/cmodjs-core-<version>.tgz bun run <clone>/cli/src/main.ts new <name>
+env HOME=<scratch home> bun run cli/src/main.ts check <scratch>/<name>
 ```
 
 - `cmod check` fetches `tsc` and `oxlint` into the cmod store under `HOME`, so it runs with a scratch `HOME`.
 - `cmod check` runs `claude plugin validate --strict`, which nothing else in the gate runs.
-- A sample runs the packed `@cmodjs/core`, never `core/src/`. Repack and unpack the library into each sample before its gate, as the `/repack-core` Skill in `.claude/skills/` does.
+- A mod runs the packed `@cmodjs/core`, never `core/src/`, so the mod is made from the tarball. The `/repack-core` Skill in `.claude/skills/` holds the whole Process.
 
 ## Release
 

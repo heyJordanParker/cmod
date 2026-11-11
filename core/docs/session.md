@@ -206,7 +206,7 @@ sessions.current.beforeTurnEnd(async () => ((await testsPass()) ? undefined : { 
 
 When several listeners answer, each sees what the one before it changed, and the first `refuse` or `result` decides.
 
-Claude reads each mod's `note` inside the mod's own tag, such as `<tracer_mod>…</tracer_mod>` for the mod `tracer`. Every note Claude received becomes a `Note` whose `from` is `{ type: 'mod', name }`, so `onNote({ from: { type: 'mod', name: 'tracer' } })` hears each note of tracer's that Claude got, and never one Claude Code dropped.
+Claude reads each mod's `note` inside the mod's own tag, such as `<my-mod_mod>…</my-mod_mod>` for the mod `my-mod`. Every note Claude received becomes a `Note` whose `from` is `{ type: 'mod', name }`, so `onNote({ from: { type: 'mod', name: 'my-mod' } })` hears each note from my-mod that Claude got, and never one Claude Code dropped.
 
 ### The session's own events
 

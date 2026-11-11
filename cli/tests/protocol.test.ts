@@ -16,9 +16,9 @@ const events: readonly RunnerEvent[] = [
   { type: 'log', text: 'Bound shift+tab to Switch mode' },
   { type: 'needs-consent', sha256: 'abc123', install: './setup/install.sh', uninstall: './setup/uninstall.sh', hotkeys: 'shift+tab to Switch mode', permissions: ['network:api.github.com', 'model'] },
   { type: 'needs-consent', sha256: 'abc123', install: '', uninstall: '', hotkeys: '', permissions: [] },
-  { type: 'done', name: 'safe-delete', version: '0.2.0' },
-  { type: 'missing', name: 'safe-delete' },
-  { type: 'failed', code: 2, message: 'The install step of safe-delete exited 2: no Homebrew.' },
+  { type: 'done', name: 'demo', version: '0.2.0' },
+  { type: 'missing', name: 'demo' },
+  { type: 'failed', code: 2, message: 'The install step of demo exited 2: no Homebrew.' },
   { type: 'retries', when: 'later' },
 ]
 

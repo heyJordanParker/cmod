@@ -81,8 +81,8 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
     { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' },
     { name: 'sql', isGlobal: false, text: 'Quote every identifier.' },
   ]
-  const linked = { linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed: ['house-style'], removed: [], watched }
-  const rulesRuns = answerRules(tested, [linked, { linked: [], placed: [], removed: ['house-style'], watched }])
+  const linked = { linked: [{ mod: 'demo', folder: '/test/home/.claude/rules/demo', rules }], placed: ['demo'], removed: [], watched }
+  const rulesRuns = answerRules(tested, [linked, { linked: [], placed: [], removed: ['demo'], watched }])
   startsAt(tested, startedAt)
 
   const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
@@ -90,7 +90,7 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
 
   await prompt(tested, 'hello')
 
-  expect(started.additionalContext).toEqual([cmodNote(`${testDeviceNote}\n\nThe house-style mod adds these rules from now on:\n\nWrite a test before each fix.`)])
+  expect(started.additionalContext).toEqual([cmodNote(`${testDeviceNote}\n\nThe demo mod adds these rules from now on:\n\nWrite a test before each fix.`)])
   expect(appendedNotes(tested)).toEqual([])
   expect(rulesRuns.runs).toBe(1)
 
@@ -98,15 +98,15 @@ test("a mod's global rules linked after Claude Code started reach Claude as one 
   const noted = await prompt(tested, 'again')
   await settled()
 
-  expect(noted).toEqual([cmodNote("The house-style mod's rules no longer apply.")])
+  expect(noted).toEqual([cmodNote("The demo mod's rules no longer apply.")])
   expect(appendedNotes(tested)).toEqual([])
   expect(rulesRuns.runs).toBe(2)
 })
 
 test("the note Claude reads at every session start, clear, resume, and compaction names the device the session runs on and when, so Claude Code, which drops a resume's note that repeats an earlier one, keeps each", async () => {
-  const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'Office-Mac-mini', os: 'darwin', arch: 'arm64' } as const
-  const devbox = { id: 'dc896649b2c644849a1caf192c072c77', name: 'devbox', os: 'linux', arch: 'x64' } as const
-  const startedOn = async (device: typeof mac | typeof devbox, starts: readonly (readonly ['startup' | 'resume' | 'clear' | 'compact', string])[]) => {
+  const mac = { id: '2e08a4bd6c674208b4d150deaa95ebc6', name: 'mac', os: 'darwin', arch: 'arm64' } as const
+  const linux = { id: 'dc896649b2c644849a1caf192c072c77', name: 'linux', os: 'linux', arch: 'x64' } as const
+  const startedOn = async (device: typeof mac | typeof linux, starts: readonly (readonly ['startup' | 'resume' | 'clear' | 'compact', string])[]) => {
     const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
     tested.fakes.device.read = async () => device
     const notes: (readonly string[] | undefined)[] = []
@@ -116,14 +116,14 @@ test("the note Claude reads at every session start, clear, resume, and compactio
     }
     return notes
   }
-  const noted = (at: string, { id, name, os, arch }: typeof mac | typeof devbox) => [cmodNote(`As of ${at}, this session runs on ${name}, a ${os} ${arch} computer with the cmod device id ${id}.`)]
+  const noted = (at: string, { id, name, os, arch }: typeof mac | typeof linux) => [cmodNote(`As of ${at}, this session runs on ${name}, a ${os} ${arch} computer with the cmod device id ${id}.`)]
 
   const first = await startedOn(mac, [['startup', '2026-10-31T09:00:00.000Z'], ['clear', '2026-10-31T09:30:00.000Z'], ['compact', '2026-10-31T10:00:00.000Z']])
-  const moved = await startedOn(devbox, [['resume', '2026-10-31T12:00:00.000Z'], ['compact', '2026-10-31T13:00:00.000Z']])
+  const moved = await startedOn(linux, [['resume', '2026-10-31T12:00:00.000Z'], ['compact', '2026-10-31T13:00:00.000Z']])
   const back = await startedOn(mac, [['resume', '2026-10-31T18:00:00.000Z']])
 
   expect(first).toEqual([noted('2026-10-31T09:00:00.000Z', mac), noted('2026-10-31T09:30:00.000Z', mac), noted('2026-10-31T10:00:00.000Z', mac)])
-  expect(moved).toEqual([noted('2026-10-31T12:00:00.000Z', devbox), noted('2026-10-31T13:00:00.000Z', devbox)])
+  expect(moved).toEqual([noted('2026-10-31T12:00:00.000Z', linux), noted('2026-10-31T13:00:00.000Z', linux)])
   expect(back).toEqual([noted('2026-10-31T18:00:00.000Z', mac)])
 })
 
@@ -163,10 +163,10 @@ test('a watched file that changes while cmod rules runs makes the next prompt ru
 
 test('a rule taken out of a mod that stays linked is withdrawn by a note, and its other rules keep applying', async () => {
   const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true })
-  const linked = (rules: { name: string; isGlobal: boolean; text: string }[], placed: string[]) => ({ linked: [{ mod: 'house-style', folder: '/test/home/.claude/rules/house-style', rules }], placed, removed: [], watched })
+  const linked = (rules: { name: string; isGlobal: boolean; text: string }[], placed: string[]) => ({ linked: [{ mod: 'demo', folder: '/test/home/.claude/rules/demo', rules }], placed, removed: [], watched })
   const tests = { name: 'tests', isGlobal: true, text: 'Write a test before each fix.' }
   const old = { name: 'old-api', isGlobal: true, text: 'Use the old API.' }
-  answerRules(tested, [linked([tests, old], ['house-style']), linked([tests], [])])
+  answerRules(tested, [linked([tests, old], ['demo']), linked([tests], [])])
   startsAt(tested, startedAt)
 
   const started = (await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })) as { readonly additionalContext?: readonly string[] }
@@ -175,8 +175,8 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
   const noted = await prompt(tested, 'hello')
   await settled()
 
-  expect(started.additionalContext).toEqual([cmodNote(`${testDeviceNote}\n\nThe house-style mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.`)])
-  expect(noted).toEqual([cmodNote('These rules of the house-style mod no longer apply:\n\nUse the old API.')])
+  expect(started.additionalContext).toEqual([cmodNote(`${testDeviceNote}\n\nThe demo mod adds these rules from now on:\n\nWrite a test before each fix.\n\nUse the old API.`)])
+  expect(noted).toEqual([cmodNote('These rules of the demo mod no longer apply:\n\nUse the old API.')])
   expect(appendedNotes(tested)).toEqual([])
 })
 
@@ -309,28 +309,28 @@ function testSettings(files: Readonly<Record<string, string>> = {}, projectRoot?
     state: bound,
     ...(projectRoot === undefined ? {} : { projectRoot }),
     files: {
-      [`${store}/records/ci-watch.json`]: JSON.stringify({ name: 'ci-watch', version: '0.2.0', root: '/plugins/ci-watch', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: { 'ctrl+l': 'ci-watch--runs' } }),
-      '/test/home/.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'ctrl+l': 'command:ci-watch--runs' } }] }),
-      '/plugins/ci-watch/package.json': JSON.stringify({ cmod: { permissions: { network: ['api.github.com'], model: true }, hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+l' } } } }),
-      '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0', description: 'Tells you when CI fails on your branch' }),
+      [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '0.2.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: { 'ctrl+l': 'demo--runs' } }),
+      '/test/home/.claude/keybindings.json': JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'ctrl+l': 'command:demo--runs' } }] }),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: { permissions: { network: ['api.github.com'], model: true }, hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+l' } } } }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0', description: 'A demo mod' }),
       ...files,
     },
   })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': true } })
   const ran: string[] = []
   tested.fakes.process.run = async (argv) => {
     ran.push(argv.join(' '))
     return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
   }
-  tested.fakes.config.list = async () => [{ key: 'ci-watch.branch', label: 'Branch', kind: 'text', value: 'main', provider: { plugin: 'ci-watch', tier: 'user' }, isLocked: false } as never]
+  tested.fakes.config.list = async () => [{ key: 'demo.branch', label: 'Branch', kind: 'text', value: 'main', provider: { plugin: 'demo', tier: 'user' }, isLocked: false } as never]
   const called: string[] = []
   tested.fakes.cmod.call = async (input) => {
     called.push(`${input.to} ${input.method}`)
-    if (input.method === 'cmod:pendingSteps') return called.includes('ci-watch cmod:finishSteps') ? [] : ['Sign in to GitHub']
+    if (input.method === 'cmod:pendingSteps') return called.includes('demo cmod:finishSteps') ? [] : ['Sign in to GitHub']
     if (input.method === 'cmod:draw') return { draw: 1, tree: { $cmodElement: 'Text', props: { children: 'last run passed' } } }
     return null
   }
-  const declare = (pages: readonly unknown[]) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages } }, caller: 'ci-watch' } as never)
+  const declare = (pages: readonly unknown[]) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages } }, caller: 'demo' } as never)
   const shown = async () => (await tested.shown.pane.lines()).join('\n')
   return { tested, ran, called, declare, shown }
 }
@@ -340,7 +340,7 @@ test("Settings lists each set-up mod with its Settings pages, options, and hotke
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
 
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
   await shown()
   await tested.settle()
@@ -354,16 +354,16 @@ test("Settings lists each set-up mod with its Settings pages, options, and hotke
   expect(page).toContain('0: Dashboard')
   expect(page).toContain('Settings')
   expect(page).toContain('0.2.0  Turn off  Remove')
-  expect(page).toContain('Tells you when CI fails on your branch')
+  expect(page).toContain('A demo mod')
   expect(page).not.toContain('Off:')
   expect(page).toContain('last run passed')
   expect(options).toContain('Branch')
-  expect(hotkeys).toContain('│ Show the runs                          │\n                  │ Combo ctrl+l                           │')
+  expect(hotkeys).toContain('│ Show the runs                  │\n              │ Combo ctrl+l                   │')
 })
 
 test('Settings draws no permission row for a mod that declares permissions', async () => {
   const { tested, shown } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
 
   const page = await shown()
@@ -376,22 +376,22 @@ test('Settings draws no permission row for a mod that declares permissions', asy
 test('Settings shows no warning for a mod still installing', async () => {
   const { tested, shown } = testSettings()
   const answer = tested.fakes.cmod.call
-  tested.fakes.cmod.call = async (input) => (input.method === 'cmod:pendingSteps' ? Promise.reject(new Error("ci-watch is installing. Try again when it's ready.")) : answer!(input))
-  await tested.type('/mods ci-watch')
+  tested.fakes.cmod.call = async (input) => (input.method === 'cmod:pendingSteps' ? Promise.reject(new Error("demo is installing. Try again when it's ready.")) : answer!(input))
+  await tested.type('/mods demo')
   await tested.settle()
 
   await shown()
   await tested.settle()
 
-  expect(tested.shown.debug.filter((line) => line.includes('ci-watch did not answer'))).toEqual([])
+  expect(tested.shown.debug.filter((line) => line.includes('demo did not answer'))).toEqual([])
 })
 
 const changelog = '# Changelog\n\n## [Unreleased]\n\n- Watches merge queues.\n\n## [0.2.0] - 2026-10-13\n\n### Added\n- CI failures on your branch.\n\n## [0.1.0] - 2026-09-30\n\n- First release.\n'
 
-const openChangelog = (tested: ReturnType<typeof testMod>, caller = 'ci-watch') => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'changelog' }] }, caller } as never)
+const openChangelog = (tested: ReturnType<typeof testMod>, caller = 'demo') => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ settings: true, tab: 'changelog' }] }, caller } as never)
 
 test("a mod's Changelog button opens Settings at its installed version, one block per version", async () => {
-  const { tested, shown } = testSettings({ '/plugins/ci-watch/CHANGELOG.md': changelog })
+  const { tested, shown } = testSettings({ '/plugins/demo/CHANGELOG.md': changelog })
   await tested.start()
 
   await openChangelog(tested)
@@ -408,14 +408,14 @@ test("a mod's Changelog button opens Settings at its installed version, one bloc
 test('Settings shows no Changelog section for a mod without CHANGELOG.md', async () => {
   const { tested, shown } = testSettings()
 
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
 
   expect(await shown()).not.toContain('Changelog')
 })
 
 test('a checkout whose version has no changelog section yet opens the Changelog at Unreleased', async () => {
-  const { tested } = testSettings({ '/plugins/ci-watch/CHANGELOG.md': changelog.replace('## [0.2.0] - 2026-10-13', '## [0.1.5] - 2026-10-01') })
+  const { tested } = testSettings({ '/plugins/demo/CHANGELOG.md': changelog.replace('## [0.2.0] - 2026-10-13', '## [0.1.5] - 2026-10-01') })
   await tested.start()
 
   await openChangelog(tested)
@@ -426,20 +426,20 @@ test('a checkout whose version has no changelog section yet opens the Changelog 
 
 test('an option saves through cmod option, and a combo binds through cmod hotkey', async () => {
   const { tested, ran } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
 
-  await tested.shown.pane.input('option:ci-watch.branch', 'release')
+  await tested.shown.pane.input('option:demo.branch', 'release')
   await tested.shown.pane.press('section:hotkeys')
   await tested.shown.pane.input('hotkey:runs', 'ctrl+shift+r')
   await tested.settle()
 
-  expect(ran).toEqual([`${cmodProgram} option ci-watch branch release`, `${cmodProgram} hotkey ci-watch runs ctrl+shift+r`])
+  expect(ran).toEqual([`${cmodProgram} option demo branch release`, `${cmodProgram} hotkey demo runs ctrl+shift+r`])
 })
 
 test('Settings lists a hotkey without a default as unbound, and a combo binds it through cmod hotkey', async () => {
-  const { tested, ran, shown } = testSettings({ '/plugins/ci-watch/package.json': JSON.stringify({ cmod: { hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+l' }, next: { title: 'Open the next run' } } } }) })
-  await tested.type('/mods ci-watch')
+  const { tested, ran, shown } = testSettings({ '/plugins/demo/package.json': JSON.stringify({ cmod: { hotkeys: { runs: { title: 'Show the runs', default: 'ctrl+l' }, next: { title: 'Open the next run' } } } }) })
+  await tested.type('/mods demo')
   await tested.settle()
 
   await tested.shown.pane.press('section:hotkeys')
@@ -447,35 +447,35 @@ test('Settings lists a hotkey without a default as unbound, and a combo binds it
   await tested.shown.pane.input('hotkey:next', 'ctrl+shift+n')
   await tested.settle()
 
-  expect(hotkeys).toContain('│ Show the runs                          │\n                  │ Combo ctrl+l                           │')
-  expect(hotkeys).toContain('│ Open the next run · unbound            │\n                  │ Combo                                  │')
-  expect(ran).toEqual([`${cmodProgram} hotkey ci-watch next ctrl+shift+n`])
+  expect(hotkeys).toContain('│ Show the runs                  │\n              │ Combo ctrl+l                   │')
+  expect(hotkeys).toContain('│ Open the next run · unbound    │\n              │ Combo                          │')
+  expect(ran).toEqual([`${cmodProgram} hotkey demo next ctrl+shift+n`])
 })
 
 test('Settings marks a mod turned off in Claude Code, and Turn on runs cmod enable', async () => {
   const { tested, ran, shown } = testSettings()
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': false } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': false } })
 
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
   const lines = await shown()
   await tested.shown.pane.press('turn')
   await tested.settle()
 
-  expect(lines).toContain('ci-watch (off)')
+  expect(lines).toContain('demo (off)')
   expect(lines).toContain('Off: Claude Code does not load it.')
   expect(lines).toContain('Turn on')
-  expect(ran).toEqual([`${cmodProgram} enable ci-watch`])
-  expect((await shown()).replace(/\s+/g, ' ')).toContain('Turned ci-watch on.')
+  expect(ran).toEqual([`${cmodProgram} enable demo`])
+  expect((await shown()).replace(/\s+/g, ' ')).toContain('Turned demo on.')
 })
 
 test('Settings says a mod runs as a service of this computer only when cmod made one of its programs a service', async () => {
-  const service = testSettings({ [`${store}/services/ci-watch/ci-runner.json`]: JSON.stringify({ label: 'com.claudemodmanager.ci-watch.ci-runner', unit: '/test/home/Library/LaunchAgents/com.claudemodmanager.ci-watch.ci-runner.plist' }) })
+  const service = testSettings({ [`${store}/services/demo/server.json`]: JSON.stringify({ label: 'com.claudemodmanager.demo.server', unit: '/test/home/Library/LaunchAgents/com.claudemodmanager.demo.server.plist' }) })
   const plain = testSettings()
 
-  await service.tested.type('/mods ci-watch')
+  await service.tested.type('/mods demo')
   await service.tested.settle()
-  await plain.tested.type('/mods ci-watch')
+  await plain.tested.type('/mods demo')
   await plain.tested.settle()
 
   expect((await service.shown()).replace(/\s+/g, ' ')).toContain('Runs as a service of this computer')
@@ -484,30 +484,30 @@ test('Settings says a mod runs as a service of this computer only when cmod made
 
 test('Settings shows a linked mod on while the copy cmod link turned off stays off', async () => {
   const { tested, shown } = testSettings()
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@inline': false, 'ci-watch@Developer-linked': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@inline': false, 'demo@Developer-linked': true } })
 
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
   const lines = await shown()
 
-  expect(lines).not.toContain('ci-watch (off)')
+  expect(lines).not.toContain('demo (off)')
   expect(lines).not.toContain('Off: Claude Code does not load it.')
 })
 
 test('Turn off runs cmod disable on a mod that is on', async () => {
   const { tested, ran } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
 
   await tested.shown.pane.press('turn')
   await tested.settle()
 
-  expect(ran).toEqual([`${cmodProgram} disable ci-watch`])
+  expect(ran).toEqual([`${cmodProgram} disable demo`])
 })
 
 test('Remove asks first, and Remove again runs cmod remove', async () => {
   const { tested, ran, shown } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
 
   await tested.shown.pane.press('remove')
@@ -518,22 +518,22 @@ test('Remove asks first, and Remove again runs cmod remove', async () => {
   await tested.shown.pane.press('remove-confirmed')
   await tested.settle()
 
-  expect(asked.replace(/[\s│]+/g, ' ')).toContain('Remove ci-watch? Its uninstall step runs, and Claude Code deletes it.')
-  expect(kept).not.toContain('Remove ci-watch?')
-  expect(ran).toEqual([`${cmodProgram} remove ci-watch`])
-  expect((await shown()).replace(/\s+/g, ' ')).toContain('Removed ci-watch.')
+  expect(asked.replace(/[\s│]+/g, ' ')).toContain('Remove demo? Its uninstall step runs, and Claude Code deletes it.')
+  expect(kept).not.toContain('Remove demo?')
+  expect(ran).toEqual([`${cmodProgram} remove demo`])
+  expect((await shown()).replace(/\s+/g, ' ')).toContain('Removed demo.')
 })
 
 test('Settings shows the installer steps a mod still needs, and Finish setup runs them', async () => {
   const { tested, called, shown } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
   expect(await shown()).toContain('Needs setup: Sign in to GitHub')
 
   await tested.shown.pane.press('finish')
   await tested.settle()
 
-  expect(called).toContain('ci-watch cmod:finishSteps')
+  expect(called).toContain('demo cmod:finishSteps')
   expect(await shown()).not.toContain('Needs setup')
 })
 
@@ -542,17 +542,17 @@ test("a mod's page opens as a Sidebar tab with its number, the × closes it, and
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }])
 
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs', params: { run: 42 } }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs', params: { run: 42 } }] }, caller: 'demo' } as never)
   await tested.settle()
   await shown()
   await tested.settle()
   const page = await shown()
-  await tested.shown.pane.press('close:ci-watch/runs')
+  await tested.shown.pane.press('close:demo/runs')
   await tested.settle()
 
   expect(page).toContain('1: Runs')
   expect(page).toContain('last run passed')
-  expect(called).toContain('ci-watch cmod:shown')
+  expect(called).toContain('demo cmod:shown')
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
 
@@ -560,12 +560,12 @@ test("a Sidebar page keeps its last drawing while its mod draws the next one aft
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
-      [`${store}/records/ci-watch.json`]: JSON.stringify({ name: 'ci-watch', version: '0.2.0', root: '/plugins/ci-watch', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
-      '/plugins/ci-watch/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0' }),
+      [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '0.2.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
     },
   })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'ci-watch@ci-watch': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': true } })
   let draws = 0
   let finish = () => {}
   const drawing = new Promise<void>((resolve) => (finish = resolve))
@@ -576,7 +576,7 @@ test("a Sidebar page keeps its last drawing while its mod draws the next one aft
     return { draw: draws, tree: { $cmodElement: 'Text', props: { children: `runs body ${draws}` } } }
   }
   await tested.start()
-  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'ci-watch' } as never)
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
   await changed({ parts: { widgets: [], pages: [{ id: 'runs', title: 'Runs', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'runs' }] })
   await tested.settle()
@@ -596,18 +596,18 @@ test("a Sidebar page whose mod fails to draw it shows the mod's error in place o
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
-      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
-      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+      [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '0.2.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
     },
   })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': true } })
   tested.fakes.cmod.call = async (input) => {
     if (input.method === 'cmod:draw') throw new Error('item 3 has no title')
     return null
   }
   await tested.start()
-  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
   await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'items' }] })
   await tested.settle()
@@ -616,7 +616,7 @@ test("a Sidebar page whose mod fails to draw it shows the mod's error in place o
 
   const lines = (await tested.shown.pane.lines()).join('\n')
 
-  expect(lines).toContain('The items page of inbox could not draw: item 3 has no title')
+  expect(lines).toContain('The items page of demo could not draw: item 3 has no title')
   expect(lines).not.toContain('Drawing')
 })
 
@@ -624,21 +624,21 @@ test('a press on a Sidebar button from an older drawing tells the person nothing
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
-      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
-      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+      [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '0.2.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
     },
   })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': true } })
   let draws = 0
   tested.fakes.cmod.call = async (input) => {
-    if (input.method === 'cmod:press') throw new Error('inbox: that button drew before the last redraw. Press the one it shows now.')
+    if (input.method === 'cmod:press') throw new Error('demo: that button drew before the last redraw. Press the one it shows now.')
     if (input.method !== 'cmod:draw') return null
     draws += 1
     return { draw: draws, tree: { $cmodElement: 'Button', props: { key: 'approve', label: 'Approve', onPress: { $cmodHandler: 0 } } } }
   }
   await tested.start()
-  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
   await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'items' }] })
   await tested.settle()
@@ -650,7 +650,7 @@ test('a press on a Sidebar button from an older drawing tells the person nothing
   await tested.shown.pane.lines()
   await tested.settle()
 
-  expect(tested.shown.toasts).toContainEqual({ type: 'warning', message: 'The inbox button was from an older drawing, so nothing ran', description: 'Press the button it shows now.' })
+  expect(tested.shown.toasts).toContainEqual({ type: 'warning', message: 'The demo button was from an older drawing, so nothing ran', description: 'Press the button it shows now.' })
   expect(draws).toBe(drawnBefore + 1)
 })
 
@@ -658,12 +658,12 @@ test('a Sidebar page opened with params draws, because the cmod plugin sends a p
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
-      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
-      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+      [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '0.2.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
     },
   })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': true } })
   const drawnWith: unknown[] = []
   tested.fakes.cmod.call = async (input) => {
     if (input.method !== 'cmod:draw') return null
@@ -671,7 +671,7 @@ test('a Sidebar page opened with params draws, because the cmod plugin sends a p
     return { draw: 1, tree: { $cmodElement: 'Text', props: { children: 'src/a.ts' } } }
   }
   await tested.start()
-  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
   await changed({ parts: { widgets: [], pages: [{ id: 'file', title: 'File', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'file', params: { project: '/work/app', path: 'src/a.ts' } }] })
   await tested.settle()
@@ -686,20 +686,20 @@ test('a Sidebar page keeps its last drawing, and so its place, when its mod fail
   const tested = testMod(cmodPlugin, {
     state: bound,
     files: {
-      [`${store}/records/inbox.json`]: JSON.stringify({ name: 'inbox', version: '0.2.0', root: '/plugins/inbox', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
-      '/plugins/inbox/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/inbox/.claude-plugin/plugin.json': JSON.stringify({ name: 'inbox', version: '0.2.0' }),
+      [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '0.2.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
     },
   })
-  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'inbox@inbox': true } })
+  tested.fakes.settings.read = async () => ({ enabledPlugins: { 'demo@demo': true } })
   let isReloading = false
   tested.fakes.cmod.call = async (input) => {
     if (input.method !== 'cmod:draw') return null
-    if (isReloading) throw new Error('inbox is not installed. Install it in Plugins.')
+    if (isReloading) throw new Error('demo is not installed. Install it in Plugins.')
     return { draw: 1, tree: { $cmodElement: 'Text', props: { children: 'item 7 of 9' } } }
   }
   await tested.start()
-  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'inbox' } as never)
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
   await changed({ parts: { widgets: [], pages: [{ id: 'items', title: 'Inbox', place: 'sidebar' }] } })
   await changed({ requests: [{ open: 'items' }] })
   await tested.settle()
@@ -717,10 +717,10 @@ test('a Sidebar page keeps its last drawing, and so its place, when its mod fail
 test('a page request of a kind this cmod does not know, from a mod on a newer @cmodjs/core, opens nothing', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   await tested.start()
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ pin: 'runs' }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ pin: 'runs' }] }, caller: 'demo' } as never)
   await tested.settle()
 
-  expect(tested.shown.debug.join('\n')).toContain('ci-watch sent a page request this cmod does not know, so it skips it: {"pin":"runs"}')
+  expect(tested.shown.debug.join('\n')).toContain('demo sent a page request this cmod does not know, so it skips it: {"pin":"runs"}')
   expect(tested.state.session.shown).not.toBe('settings')
 })
 
@@ -729,7 +729,7 @@ test("a mod's focus request moves the Sidebar's keyboard to the field its page d
   tested.fakes.cmod.call = async (input) => (input.method === 'cmod:draw' ? { draw: 1, tree: { $cmodElement: 'Input', props: { key: 'answer', onSubmit: { $cmodHandler: 0 } } } } : null)
   await tested.start()
   await declare([{ id: 'question', title: 'Question', place: 'sidebar' }])
-  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'ci-watch' } as never)
+  const changed = (input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller: 'demo' } as never)
   await changed({ requests: [{ open: 'question', focus: true }] })
   await tested.settle()
   await tested.shown.pane.lines()
@@ -738,8 +738,8 @@ test("a mod's focus request moves the Sidebar's keyboard to the field its page d
   await changed({ requests: [{ focus: 'question', key: 'answer' }] })
   await tested.settle()
 
-  expect(tested.calls.filter((call) => call.call === 'ui.focus').map((call) => call.args[0])).toEqual([{ requestId: 'sidebar', key: 'ci-watch/question:answer' }])
-  expect(await tested.shown.pane.focusedKey()).toBe('ci-watch/question:answer')
+  expect(tested.calls.filter((call) => call.call === 'ui.focus').map((call) => call.args[0])).toEqual([{ requestId: 'sidebar', key: 'demo/question:answer' }])
+  expect(await tested.shown.pane.focusedKey()).toBe('demo/question:answer')
 })
 
 test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the mod hears it shown", async () => {
@@ -753,7 +753,7 @@ test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
 
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'demo' } as never)
   await tested.settle()
   await shown()
   await tested.settle()
@@ -770,12 +770,12 @@ test("picking another mod in Settings draws that mod's page without the last mod
   const tested = testMod(cmodPlugin, {
     state: { global: { installedPlugins: [], areHotkeysBound: true } },
     files: {
-      [`${store}/records/ci-watch.json`]: record('ci-watch'),
-      [`${store}/records/deploys.json`]: record('deploys'),
-      '/plugins/ci-watch/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/ci-watch/.claude-plugin/plugin.json': JSON.stringify({ name: 'ci-watch', version: '0.2.0' }),
-      '/plugins/deploys/package.json': JSON.stringify({ cmod: {} }),
-      '/plugins/deploys/.claude-plugin/plugin.json': JSON.stringify({ name: 'deploys', version: '0.2.0' }),
+      [`${store}/records/demo.json`]: record('demo'),
+      [`${store}/records/other.json`]: record('other'),
+      '/plugins/demo/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/demo/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }),
+      '/plugins/other/package.json': JSON.stringify({ cmod: {} }),
+      '/plugins/other/.claude-plugin/plugin.json': JSON.stringify({ name: 'other', version: '0.2.0' }),
     },
   })
   tested.fakes.settings.read = async () => ({ enabledPlugins: {} })
@@ -792,23 +792,23 @@ test("picking another mod in Settings draws that mod's page without the last mod
   }
   await tested.start()
   const fire = (caller: string, input: object) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input, caller } as never)
-  await fire('ci-watch', { parts: { widgets: [], pages: [{ id: 'runs', title: 'Runs', place: 'settings' }] } })
-  await fire('deploys', { parts: { widgets: [], pages: [{ id: 'queue', title: 'Queue', place: 'settings' }] } })
-  await fire('ci-watch', { requests: [{ open: 'runs', params: { run: 7 } }] })
+  await fire('demo', { parts: { widgets: [], pages: [{ id: 'runs', title: 'Runs', place: 'settings' }] } })
+  await fire('other', { parts: { widgets: [], pages: [{ id: 'queue', title: 'Queue', place: 'settings' }] } })
+  await fire('demo', { requests: [{ open: 'runs', params: { run: 7 } }] })
   await tested.settle()
   await tested.shown.pane.lines()
   await tested.settle()
   draws.length = 0
   told.length = 0
 
-  await tested.shown.pane.press('mod:deploys')
+  await tested.shown.pane.press('mod:other')
   await tested.settle()
   await tested.shown.pane.lines()
   await tested.settle()
 
-  expect(draws).toContainEqual(expect.objectContaining({ to: 'deploys', page: 'queue', params: null }))
-  expect(told).toContainEqual(expect.objectContaining({ to: 'deploys', shown: 'queue' }))
-  expect(told).not.toContainEqual(expect.objectContaining({ to: 'deploys', shown: 'runs' }))
+  expect(draws).toContainEqual(expect.objectContaining({ to: 'other', page: 'queue', params: null }))
+  expect(told).toContainEqual(expect.objectContaining({ to: 'other', shown: 'queue' }))
+  expect(told).not.toContainEqual(expect.objectContaining({ to: 'other', shown: 'runs' }))
 })
 
 test("a mod's Settings page draws with the params it opened with, and closing it leaves the page", async () => {
@@ -821,7 +821,7 @@ test("a mod's Settings page draws with the params it opened with, and closing it
   }
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'settings' }])
-  const request = (requests: readonly object[]) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests }, caller: 'ci-watch' } as never)
+  const request = (requests: readonly object[]) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests }, caller: 'demo' } as never)
 
   await request([{ open: 'runs', params: { run: 7 } }])
   await tested.settle()
@@ -832,7 +832,7 @@ test("a mod's Settings page draws with the params it opened with, and closing it
 
   expect(draws).toContainEqual(expect.objectContaining({ page: 'runs', params: { run: 7 } }))
   expect(tested.state.session.section).not.toBe('page:runs')
-  expect(called).toContain('ci-watch cmod:shown')
+  expect(called).toContain('demo cmod:shown')
 })
 
 test('a start whose hotkey bind fails tries again at the next start', async () => {
@@ -928,16 +928,16 @@ test("a mod's install page is a Sidebar tab named for the mod, drawn by the mod,
   const { tested, called, shown } = testSettings()
   await tested.start()
 
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'cmod:install', focus: true }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'cmod:install', focus: true }] }, caller: 'demo' } as never)
   await tested.settle()
   await shown()
   await tested.settle()
   const lines = await tested.shown.pane.lines()
-  await tested.shown.pane.press('close:ci-watch/cmod:install')
+  await tested.shown.pane.press('close:demo/cmod:install')
   await tested.settle()
 
-  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install ci-watch  ×${' '.repeat(31)}9: Settings`, '▀'.repeat(80), '', ` ╭─ ci-watch ${'─'.repeat(65)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide  open in browser'])
-  expect(called).toContain('ci-watch cmod:draw')
+  expect(lines).toEqual(['▄'.repeat(80), ` 0: Dashboard  1: Install demo  ×${' '.repeat(35)}9: Settings`, '▀'.repeat(80), '', ` ╭─ demo ${'─'.repeat(69)}╮`, ` │ last run passed${' '.repeat(60)}│`, ` ╰${'─'.repeat(76)}╯`, '', ' ↑↓ scroll  tab move  esc hide  open in browser'])
+  expect(called).toContain('demo cmod:draw')
   expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
 
@@ -946,21 +946,21 @@ test('two mods that install at once each get an install tab, and the later one s
   await tested.start()
   const install = (caller: string) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'cmod:install', focus: true }] }, caller } as never)
 
-  await install('ci-watch')
-  await install('notes')
+  await install('demo')
+  await install('other')
   await tested.settle()
   await shown()
   await tested.settle()
 
-  expect((await tested.shown.pane.lines())[1]).toBe(` 0: Dashboard  1: Install ci-watch  ×   2: Install notes  ×${' '.repeat(9)}9: Settings`)
-  expect(tested.state.session.shown).toBe('notes/cmod:install')
+  expect((await tested.shown.pane.lines())[1]).toBe(` 0: Dashboard  1: Install demo  ×   2: Install other  ×${' '.repeat(13)}9: Settings`)
+  expect(tested.state.session.shown).toBe('other/cmod:install')
 })
 
 test('Finish setup in Settings opens the install page the mod answers with', async () => {
   const { tested, shown } = testSettings()
   const answer = tested.fakes.cmod.call
   tested.fakes.cmod.call = async (input) => (input.method === 'cmod:finishSteps' ? { requests: [{ open: 'cmod:install', focus: true }] } : answer?.(input))
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
 
   await tested.shown.pane.press('finish')
@@ -968,13 +968,13 @@ test('Finish setup in Settings opens the install page the mod answers with', asy
   await shown()
   await tested.settle()
 
-  expect(tested.state.session.shown).toBe('ci-watch/cmod:install')
-  expect(await shown()).toContain('1: Install ci-watch')
+  expect(tested.state.session.shown).toBe('demo/cmod:install')
+  expect(await shown()).toContain('1: Install demo')
 })
 
 test('Settings draws a Mods panel with a status mark beside each mod, and a panel for the selected mod with its version and actions, then what it needs and its sections', async () => {
   const { tested } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
   await tested.shown.pane.lines()
   await tested.settle()
@@ -984,18 +984,18 @@ test('Settings draws a Mods panel with a status mark beside each mod, and a pane
     ` 0: Dashboard${' '.repeat(55)}9: Settings`,
     '▀'.repeat(80),
     '',
-    ' ╭─ Mods ───────╮ ╭─ ci-watch ─────────────────────────────╮',
-    ' │  ● cmod      │ │ 0.2.0  Turn off  Remove                │',
-    ' │  ● ci-watch  │ │ Tells you when CI fails on your branch │',
-    ' ╰──────────────╯ │                                        │',
-    '                  │ Needs setup: Sign in to GitHub         │',
-    '                  │ Finish setup                           │',
-    '                  │                                        │',
-    '                  │  Options  Hotkeys                      │',
-    '                  │                                        │',
-    '                  │ Branch                                 │',
-    '                  │ Value main                             │',
-    '                  ╰────────────────────────────────────────╯',
+    ' ╭─ Mods ───╮ ╭─ demo ─────────────────────────╮',
+    ' │  ● cmod  │ │ 0.2.0  Turn off  Remove        │',
+    ' │  ● demo  │ │ A demo mod                     │',
+    ' ╰──────────╯ │                                │',
+    '              │ Needs setup: Sign in to GitHub │',
+    '              │ Finish setup                   │',
+    '              │                                │',
+    '              │  Options  Hotkeys              │',
+    '              │                                │',
+    '              │ Branch                         │',
+    '              │ Value main                     │',
+    '              ╰────────────────────────────────╯',
     '',
     ' ↑↓ scroll  tab move  esc hide  open in browser',
   ])
@@ -1003,7 +1003,7 @@ test('Settings draws a Mods panel with a status mark beside each mod, and a pane
 
 test('Settings stacks the Mods panel above the mod panel when the Sidebar is too narrow for both side by side', async () => {
   const { tested } = testSettings()
-  await tested.type('/mods ci-watch')
+  await tested.type('/mods demo')
   await tested.settle()
   await tested.shown.pane.lines({ columns: 45 })
   await tested.settle()
@@ -1011,12 +1011,12 @@ test('Settings stacks the Mods panel above the mod panel when the Sidebar is too
   expect((await tested.shown.pane.lines({ columns: 45 })).slice(4, 13)).toEqual([
     ' ╭─ Mods ──────────────────────────────────╮',
     ' │  ● cmod                                 │',
-    ' │  ● ci-watch                             │',
+    ' │  ● demo                                 │',
     ' ╰─────────────────────────────────────────╯',
     '',
-    ' ╭─ ci-watch ──────────────────────────────╮',
+    ' ╭─ demo ──────────────────────────────────╮',
     ' │ 0.2.0                  Turn off  Remove │',
-    ' │ Tells you when CI fails on your branch  │',
+    ' │ A demo mod                              │',
     ' │                                         │',
   ])
 })
@@ -1025,7 +1025,7 @@ test('every Sidebar tab keeps its width whether it shows or not, so switching ta
   const { tested, declare } = testSettings()
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }])
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'demo' } as never)
   await tested.settle()
 
   const pageShown = (await tested.shown.pane.lines())[1]
@@ -1043,7 +1043,7 @@ test("a page tab's × draws as a reversed block, its tab's text color filled beh
     { id: 'runs', title: 'Runs', place: 'sidebar' },
     { id: 'logs', title: 'Logs', place: 'sidebar' },
   ])
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }, { open: 'logs' }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }, { open: 'logs' }] }, caller: 'demo' } as never)
   await tested.settle()
 
   const buttons = spyOn(elements, 'Button')
@@ -1052,15 +1052,15 @@ test("a page tab's × draws as a reversed block, its tab's text color filled beh
   buttons.mockRestore()
 
   expect(tabBar).toBe(` 0: Dashboard  1: Runs  ×   2: Logs  ×${' '.repeat(30)}9: Settings`)
-  expect(closes.get('close:ci-watch/runs')).toEqual(elements.Text({ color: 'userMessageBackground', backgroundColor: 'inactive', children: ' × ' }))
-  expect(closes.get('close:ci-watch/logs')).toEqual(elements.Text({ color: 'claude', backgroundColor: 'inverseText', children: ' × ' }))
+  expect(closes.get('close:demo/runs')).toEqual(elements.Text({ color: 'userMessageBackground', backgroundColor: 'inactive', children: ' × ' }))
+  expect(closes.get('close:demo/logs')).toEqual(elements.Text({ color: 'claude', backgroundColor: 'inverseText', children: ' × ' }))
 })
 
 test('the key bar of a Sidebar without the focus says a click focuses it, and names no chord', async () => {
   const { tested, declare } = testSettings()
   await tested.start()
   await declare([{ id: 'runs', title: 'Runs', place: 'sidebar' }])
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { requests: [{ open: 'runs' }] }, caller: 'demo' } as never)
   await tested.settle()
 
   expect((await tested.shown.pane.lines()).at(-1)).toBe(' click focus  open in browser')
@@ -1078,60 +1078,60 @@ async function unansweredCall(): Promise<Cmod['call']> {
 }
 
 test('cmod.call rejects a call to a mod this Claude Code did not load with the install command, because Claude Code resolves the caller with whatever it returns', async () => {
-  await startedWith({ 'notes@market': '1.0.0' })
+  await startedWith({ 'other@market': '1.0.0' })
   const call = await unansweredCall()
 
-  await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow('tracer is not installed. Install it in Plugins.')
+  await expect(call({ to: 'demo', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow('demo is not installed. Install it in Plugins.')
 })
 
 test('cmod.call never calls a loaded mod not installed while the cmod plugin still reads which plugins this Claude Code loaded, because that answer makes cmod forget what the mod listens to', async () => {
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'tracer@market': true })
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'tracer@market': '1.0.0' }))
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'demo@market': true })
+  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'demo@market': '1.0.0' }))
   const read = tested.fakes.fs.read
   let finishRead = () => {}
   const slowDisk = new Promise<void>((resolve) => (finishRead = resolve))
   tested.fakes.fs.read = async (path) => {
-    if (path.endsWith('tracer@market/.claude-plugin/plugin.json')) await slowDisk
+    if (path.endsWith('demo@market/.claude-plugin/plugin.json')) await slowDisk
     return read?.(path) ?? ''
   }
   await tested.start()
   const call = await unansweredCall()
 
-  const refusal = call({ to: 'tracer', method: 'signatures', input: {} }).catch((error: unknown) => error)
+  const refusal = call({ to: 'demo', method: 'signatures', input: {} }).catch((error: unknown) => error)
   finishRead()
 
-  expect(String(await refusal)).toBe('Error: tracer did not answer in time, so Claude Code went on without it.')
+  expect(String(await refusal)).toBe('Error: demo did not answer in time, so Claude Code went on without it.')
   await tested.settle()
 })
 
 test('cmod.call rejects a call to a loaded mod whose hook gave no answer with that reason, and no install command', async () => {
-  await startedWith({ 'tracer@market': '1.0.0' })
+  await startedWith({ 'demo@market': '1.0.0' })
   const call = await unansweredCall()
 
-  await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow(/^tracer did not answer in time, so Claude Code went on without it\.$/)
+  await expect(call({ to: 'demo', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow(/^demo did not answer in time, so Claude Code went on without it\.$/)
 })
 
 test('cmod.call rejects a call to a mod run from its checkout with --plugin-dir, which installed_plugins.json never names, as loaded once the mod told cmod its parts', async () => {
-  const { tested } = await startedWith({ 'notes@market': '1.0.0' })
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'tracer' } as never)
+  const { tested } = await startedWith({ 'other@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'demo' } as never)
   const call = await unansweredCall()
 
-  await expect(call({ to: 'tracer', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow(/^tracer did not answer in time, so Claude Code went on without it\.$/)
-  await expect(call({ to: 'linter', method: 'check', input: {} })).rejects.toThrow('linter is not installed. Install it in Plugins.')
+  await expect(call({ to: 'demo', method: 'signatures', input: { path: 'src/a.ts' } })).rejects.toThrow(/^demo did not answer in time, so Claude Code went on without it\.$/)
+  await expect(call({ to: 'missing', method: 'check', input: {} })).rejects.toThrow('missing is not installed. Install it in Plugins.')
 })
 
 test('cmod:isLoaded answers true for a mod this Claude Code loaded or that told cmod its parts, and false for any other', async () => {
-  const { tested } = await startedWith({ 'notes@market': '1.0.0' })
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'tracer' } as never)
-  const isLoaded = (name: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:isLoaded', input: { name }, caller: 'inbox' } as never)
+  const { tested } = await startedWith({ 'other@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'demo' } as never)
+  const isLoaded = (name: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:isLoaded', input: { name }, caller: 'caller' } as never)
 
-  expect([await isLoaded('notes'), await isLoaded('tracer'), await isLoaded('anyhost')]).toEqual([{ value: true }, { value: true }, { value: false }])
-  expect(await isLoaded(3)).toEqual({ deny: "cmod: cmod:isLoaded takes the name of a mod, as { name: 'anyhost' }." })
+  expect([await isLoaded('other'), await isLoaded('demo'), await isLoaded('missing')]).toEqual([{ value: true }, { value: true }, { value: false }])
+  expect(await isLoaded(3)).toEqual({ deny: "cmod: cmod:isLoaded takes the name of a mod, as { name: 'my-mod' }." })
 })
 
 test('a reload that takes out a mod with widgets asks it for no widgets, so nothing reaches the Log', async () => {
-  const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.0.0' })
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [{ id: 'count', title: 'Count', areas: ['belowPrompt'] }], pages: [] } }, caller: 'notes' } as never)
+  const { tested, reloads, tick } = await startedWith({ 'other@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [{ id: 'count', title: 'Count', areas: ['belowPrompt'] }], pages: [] } }, caller: 'other' } as never)
   tested.fakes.cmod.call = await unansweredCall()
 
   await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
@@ -1144,24 +1144,24 @@ test('a reload that takes out a mod with widgets asks it for no widgets, so noth
 })
 
 test('cmod.call rejects a call to a mod removed after it told cmod its parts with the install command, once the reload took it out', async () => {
-  const { tested, reloads, tick } = await startedWith({ 'notes@market': '1.0.0' })
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'notes' } as never)
+  const { tested, reloads, tick } = await startedWith({ 'other@market': '1.0.0' })
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] } }, caller: 'other' } as never)
 
   await tested.fakes.fs.write?.(installedPlugins, installedJson({}))
   await tick()
   const call = await unansweredCall()
-  await expect(call({ to: 'notes', method: 'search', input: {} })).rejects.toThrow(/^notes did not answer in time/)
+  await expect(call({ to: 'other', method: 'search', input: {} })).rejects.toThrow(/^other did not answer in time/)
 
   await pressInBand(tested, 'Reload')
   await tick()
 
   expect(reloads).toEqual(['reload-plugins'])
-  await expect(call({ to: 'notes', method: 'search', input: {} })).rejects.toThrow('notes is not installed. Install it in Plugins.')
+  await expect(call({ to: 'other', method: 'search', input: {} })).rejects.toThrow('other is not installed. Install it in Plugins.')
 })
 
-const recallSetUp = { [`${store}/records/recall.json`]: JSON.stringify({ name: 'recall', version: '1.0.0', root: '/plugins/recall', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }) }
+const demoSetUp = { [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '1.0.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }) }
 
-function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = recallSetUp) {
+function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = demoSetUp) {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files, projectRoot: '/work/app' })
   const spawned: string[][] = []
   const sessions: (string | undefined)[] = []
@@ -1177,7 +1177,7 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
 }
 
 const linkedFiles = {
-  [`${store}/links.json`]: JSON.stringify({ marketplaces: { 'work-linked': '/work' }, turnedOff: { notes: [] } }),
+  [`${store}/links.json`]: JSON.stringify({ marketplaces: { 'work-linked': '/work' }, turnedOff: { other: [] } }),
   '/test/home/.claude/plugins/known_marketplaces.json': JSON.stringify({ 'work-linked': { source: { source: 'directory', path: '/work' }, installLocation: '/work' } }),
 }
 
@@ -1223,9 +1223,9 @@ test('the sessions service runs cmod history in this session with each request a
   await tested.start()
   await tested.settle()
 
-  expect(await askCmod(tested, 'recall', 'cmod:sessions', { since: '2026-10-09T00:00:00.000Z', everyProject: true, running: true })).toEqual({ value: [session] })
-  expect(await askCmod(tested, 'recall', 'cmod:messages', { session: 's1', task: 'a7', after: 'm9', last: 5 })).toEqual({ value: [] })
-  expect(await askCmod(tested, 'recall', 'cmod:search', { text: 'deploy', before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
+  expect(await askCmod(tested, 'demo', 'cmod:sessions', { since: '2026-10-09T00:00:00.000Z', everyProject: true, running: true })).toEqual({ value: [session] })
+  expect(await askCmod(tested, 'demo', 'cmod:messages', { session: 's1', task: 'a7', after: 'm9', last: 5 })).toEqual({ value: [] })
+  expect(await askCmod(tested, 'demo', 'cmod:search', { text: 'deploy', before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
 
   expect(spawned).toEqual([
     [cmodProgram, 'history', 'index'],
@@ -1237,7 +1237,7 @@ test('the sessions service runs cmod history in this session with each request a
 })
 
 test('the session start builds the history index while one mod besides cmod is set up, whatever consent.json holds', async () => {
-  const { tested, spawned } = cmodAnswering({}, { ...recallSetUp, [`${store}/consent.json`]: '{}' })
+  const { tested, spawned } = cmodAnswering({}, { ...demoSetUp, [`${store}/consent.json`]: '{}' })
   await tested.start()
   await tested.settle()
 
@@ -1253,15 +1253,15 @@ test('the session start builds no history index while no mod besides cmod is set
 })
 
 test("the updateSettings call runs cmod settings for the mod, and a refusal comes back as the deny with cmod's last error line", async () => {
-  const { tested, spawned } = cmodAnswering({ 'settings keeper': { code: 1, stderr: 'keeper is not set up. Run cmod install keeper first.\n' } })
+  const { tested, spawned } = cmodAnswering({ 'settings demo': { code: 1, stderr: 'demo is not set up. Run cmod install demo first.\n' } })
   const update = (mod: string, values: Record<string, unknown>) => tested.fire('cmod.call', { to: 'cmod', method: 'updateSettings', input: { mod, source: 'project', project: '/work/app', values } })
 
-  expect(await update('notes', { cleanupPeriodDays: 365 })).toEqual({ value: null })
-  expect(await update('keeper', { statusLine: null })).toEqual({ deny: 'cmod: keeper is not set up. Run cmod install keeper first.' })
+  expect(await update('other', { cleanupPeriodDays: 365 })).toEqual({ value: null })
+  expect(await update('demo', { statusLine: null })).toEqual({ deny: 'cmod: demo is not set up. Run cmod install demo first.' })
 
   expect(spawned.filter((argv) => argv[1] === 'settings')).toEqual([
-    [cmodProgram, 'settings', 'notes', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
-    [cmodProgram, 'settings', 'keeper', 'project', '{"statusLine":null}', '--project', '/work/app'],
+    [cmodProgram, 'settings', 'other', 'project', '{"cleanupPeriodDays":365}', '--project', '/work/app'],
+    [cmodProgram, 'settings', 'demo', 'project', '{"statusLine":null}', '--project', '/work/app'],
   ])
 })
 
@@ -1272,7 +1272,7 @@ test("a read of this session's newest messages and turns answers from memory, an
   await prompt(tested, 'first')
   await prompt(tested, 'second')
   await tested.settle()
-  const read = async (method: string, input: object) => ((await askCmod(tested, 'recall', method, { session: 'test-session', ...input })) as { value: { text?: string }[] }).value
+  const read = async (method: string, input: object) => ((await askCmod(tested, 'demo', method, { session: 'test-session', ...input })) as { value: { text?: string }[] }).value
 
   expect((await read('cmod:messages', { last: 1 })).map((message) => message.text)).toEqual(['second'])
   expect(await read('cmod:turns', { last: 1 })).toHaveLength(1)
@@ -1289,7 +1289,7 @@ test('the cmod plugin keeps only the newest 200 messages of its session in memor
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   for (let index = 0; index < 201; index += 1) await prompt(tested, `prompt ${index}`)
   await tested.settle()
-  const read = async (input: object) => ((await askCmod(tested, 'recall', 'cmod:messages', { session: 'test-session', ...input })) as { value: { text?: string }[] }).value
+  const read = async (input: object) => ((await askCmod(tested, 'demo', 'cmod:messages', { session: 'test-session', ...input })) as { value: { text?: string }[] }).value
 
   expect((await read({ last: 200 })).map((message) => message.text)).toEqual(Array.from({ length: 200 }, (_, index) => `prompt ${index + 1}`))
   expect(spawned.filter((argv) => argv[1] === 'history' && argv[2] !== 'index')).toEqual([])
@@ -1304,7 +1304,7 @@ test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 or 
   await tested.start()
   const methods = ['cmod:sessions', 'cmod:search', 'cmod:messages', 'cmod:turns', 'cmod:contexts', 'cmod:tasks', 'cmod:goal', 'cmod:updateGoal', 'cmod:subscribe', 'cmod:watchBefore', 'cmod:act', 'cmod:partsChanged', 'forkParent', 'updateSettings', 'cmod:failed', 'cmod:isLoaded']
   const refusal = async (method: string) => {
-    const answer = await askCmod(tested, 'recall', method, {}).catch((error: unknown) => ({ deny: String(error) }))
+    const answer = await askCmod(tested, 'demo', method, {}).catch((error: unknown) => ({ deny: String(error) }))
     return (answer as { deny?: string }).deny ?? ''
   }
 
@@ -1312,13 +1312,13 @@ test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 or 
   for (const method of methods) expect(await refusal(method)).not.toContain('has no method')
 })
 
-const installedRoot = '/test/home/.claude/plugins/cache/ci-watch/ci-watch/0.2.0'
+const installedRoot = '/test/home/.claude/plugins/cache/demo/demo/0.2.0'
 
 const failureOf = (mod: string, root: string, at: string, fields: Record<string, unknown> = {}) => ({
   mod,
   id: 'session:onPrompt',
   message: `${mod}'s onPrompt listener failed`,
-  details: `${mod} 1.0.0, @cmodjs/core 4.3.0, at ${at}\nThe onPrompt listener failed\nthe notes file is missing`,
+  details: `${mod} 1.0.0, @cmodjs/core 4.3.0, at ${at}\nThe onPrompt listener failed\nthe file is missing`,
   at,
   isCritical: false,
   root,
@@ -1326,15 +1326,15 @@ const failureOf = (mod: string, root: string, at: string, fields: Record<string,
 })
 
 test('cmod:failed answers show for a mod run from the checkout this session works in and a critical failure, no show for an installed mod until Show errors from installed mods is on, and the Log lists each newest first with Copy', async () => {
-  const { tested, shown } = testSettings({}, '/work/notes')
+  const { tested, shown } = testSettings({}, '/work/other')
   await tested.start()
   const fail = (caller: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input, caller } as never)
 
-  const linked = await fail('notes', failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z'))
-  const installed = await fail('ci-watch', failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z'))
-  const critical = await fail('ci-watch', failureOf('ci-watch', installedRoot, '2026-10-26T09:02:00.000Z', { id: 'cmod:install', message: 'Its setup failed', isCritical: true }))
+  const linked = await fail('other', failureOf('other', '/work/other', '2026-10-26T09:00:00.000Z'))
+  const installed = await fail('demo', failureOf('demo', installedRoot, '2026-10-26T09:01:00.000Z'))
+  const critical = await fail('demo', failureOf('demo', installedRoot, '2026-10-26T09:02:00.000Z', { id: 'cmod:install', message: 'Its setup failed', isCritical: true }))
   await tested.fakes.fs.write?.(`${store}/preferences.json`, JSON.stringify({ showsInstalledModErrors: true }))
-  const repeated = await fail('ci-watch', failureOf('ci-watch', installedRoot, '2026-10-26T09:03:00.000Z'))
+  const repeated = await fail('demo', failureOf('demo', installedRoot, '2026-10-26T09:03:00.000Z'))
 
   expect([linked, installed, critical, repeated]).toEqual([{ value: { showsToast: true } }, { value: { showsToast: false } }, { value: { showsToast: true } }, { value: { showsToast: true } }])
 
@@ -1342,59 +1342,59 @@ test('cmod:failed answers show for a mod run from the checkout this session work
   await tested.settle()
   await tested.shown.pane.press('section:log')
   const log = await shown()
-  await tested.shown.pane.press('copy:notes/session:onPrompt')
+  await tested.shown.pane.press('copy:other/session:onPrompt')
 
-  const rows = ["ci-watch's onPrompt listener failed", 'Its setup failed', "notes's onPrompt listener failed"]
+  const rows = ["demo's onPrompt listener failed", 'Its setup failed', "other's onPrompt listener failed"]
   expect(rows.map((row) => log.indexOf(row))).toEqual(rows.map((row) => log.indexOf(row)).toSorted((left, right) => left - right))
-  expect(log.split("ci-watch's onPrompt listener failed")).toHaveLength(2)
+  expect(log.split("demo's onPrompt listener failed")).toHaveLength(2)
   expect(log).toContain('Copy')
   expect(log).toContain('Report')
   const copied = tested.calls.filter((call) => call.call === 'ui.copy').map((call) => (call.args[0] as { readonly text: string }).text)
   expect(copied).toHaveLength(1)
-  expect(copied[0]?.startsWith(`${failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z').details}\n\n`)).toBe(true)
+  expect(copied[0]?.startsWith(`${failureOf('other', '/work/other', '2026-10-26T09:00:00.000Z').details}\n\n`)).toBe(true)
   expect(copied[0]).toContain('· Claude Code 2.1.317')
   expect(await shown()).toContain('Copied the error.')
 })
 
 test("a linked mod's failure in a session of another project shows no toast, and still lands in the Log", async () => {
-  const { tested } = testSettings({}, '/work/inbox')
+  const { tested } = testSettings({}, '/work/app')
   await tested.start()
 
-  const answer = await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z'), caller: 'notes' } as never)
+  const answer = await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('other', '/work/other', '2026-10-26T09:00:00.000Z'), caller: 'other' } as never)
   const logged = JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as { readonly mod: string; readonly message: string }[]
 
   expect(answer).toEqual({ value: { showsToast: false } })
-  expect(logged.filter((entry) => entry.mod === 'notes').map((entry) => entry.message)).toEqual(["notes's onPrompt listener failed"])
+  expect(logged.filter((entry) => entry.mod === 'other').map((entry) => entry.message)).toEqual(["other's onPrompt listener failed"])
 })
 
 test("a linked mod's failure in a session inside the mod's checkout shows the toast", async () => {
-  const { tested } = testSettings({}, '/work/notes/src')
+  const { tested } = testSettings({}, '/work/other/src')
   await tested.start()
 
-  const answer = await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('notes', '/work/notes', '2026-10-26T09:00:00.000Z'), caller: 'notes' } as never)
+  const answer = await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('other', '/work/other', '2026-10-26T09:00:00.000Z'), caller: 'other' } as never)
 
   expect(answer).toEqual({ value: { showsToast: true } })
 })
 
 test('the Log keeps the failures of every session, and skips a session file that is not a list, naming it in the debug log', async () => {
-  const other = [{ mod: 'notes', id: 'timer', message: 'The every 1000 ms timer failed', details: 'notes 1.0.0', at: '2026-10-25T08:00:00.000Z' }]
+  const other = [{ mod: 'other', id: 'timer', message: 'The every 1000 ms timer failed', details: 'other 1.0.0', at: '2026-10-25T08:00:00.000Z' }]
   const { tested, shown } = testSettings({ [`${store}/data/cmod/log/other-session.json`]: JSON.stringify(other) })
   await tested.start()
-  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z'), caller: 'ci-watch' } as never)
+  await tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: failureOf('demo', installedRoot, '2026-10-26T09:01:00.000Z'), caller: 'demo' } as never)
 
   await tested.type('/mods cmod')
   await tested.settle()
   await tested.shown.pane.press('section:log')
   const log = await shown()
 
-  expect(log.indexOf("ci-watch's onPrompt listener failed")).toBeLessThan(log.indexOf('The every 1000 ms timer failed'))
-  expect((JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'ci-watch')).toEqual([
+  expect(log.indexOf("demo's onPrompt listener failed")).toBeLessThan(log.indexOf('The every 1000 ms timer failed'))
+  expect((JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'demo')).toEqual([
     {
-      mod: 'ci-watch',
+      mod: 'demo',
       id: 'session:onPrompt',
       level: 'error',
-      message: "ci-watch's onPrompt listener failed",
-      details: failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z').details,
+      message: "demo's onPrompt listener failed",
+      details: failureOf('demo', installedRoot, '2026-10-26T09:01:00.000Z').details,
       at: '2026-10-26T09:01:00.000Z',
       session: 'test-session',
       versions: expect.objectContaining({ claudeCode: '2.1.317' }),
@@ -1409,7 +1409,7 @@ test('the Log keeps the failures of every session, and skips a session file that
   await tested.shown.pane.press('section:log')
   const skipped = await shown()
 
-  expect(skipped).toContain("ci-watch's onPrompt listener failed")
+  expect(skipped).toContain("demo's onPrompt listener failed")
   expect(skipped).not.toContain('The every 1000 ms timer failed')
   expect(skipped).not.toContain('did not load')
   expect(tested.shown.debug).toContain(`cmod: the Log skips a file: ${store}/data/cmod/log/other-session.json is not a list of mod failures. Delete it, and cmod starts it again.`)
@@ -1418,11 +1418,11 @@ test('the Log keeps the failures of every session, and skips a session file that
 test('a warning lands in the Log as a warning with the versions it ran on, counts each repeat, and never shows a toast', async () => {
   const { tested, shown } = testSettings()
   await tested.start()
-  const warning = { ...failureOf('ci-watch', installedRoot, '2026-10-26T09:01:00.000Z'), id: 'pages:list:ci-watch', message: 'cmod: ci-watch did not list its pages', level: 'warning', version: '0.2.0', core: '5.3.0' }
-  const warn = (at: string) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: { ...warning, at }, caller: 'ci-watch' } as never)
+  const warning = { ...failureOf('demo', installedRoot, '2026-10-26T09:01:00.000Z'), id: 'pages:list:demo', message: 'cmod: demo did not list its pages', level: 'warning', version: '0.2.0', core: '5.3.0' }
+  const warn = (at: string) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:failed', input: { ...warning, at }, caller: 'demo' } as never)
 
   const answers = [await warn('2026-10-26T09:01:00.000Z'), await warn('2026-10-26T09:05:00.000Z')]
-  const logged = (JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'ci-watch')
+  const logged = (JSON.parse((await tested.fakes.fs.read?.(`${store}/data/cmod/log/test-session.json`)) ?? '[]') as Record<string, unknown>[]).filter((entry) => entry['mod'] === 'demo')
   await tested.type('/mods cmod')
   await tested.settle()
   await tested.shown.pane.press('section:log')
@@ -1431,10 +1431,10 @@ test('a warning lands in the Log as a warning with the versions it ran on, count
   expect(answers).toEqual([{ value: { showsToast: false } }, { value: { showsToast: false } }])
   expect(logged).toEqual([
     {
-      mod: 'ci-watch',
-      id: 'pages:list:ci-watch',
+      mod: 'demo',
+      id: 'pages:list:demo',
       level: 'warning',
-      message: 'cmod: ci-watch did not list its pages',
+      message: 'cmod: demo did not list its pages',
       details: warning.details,
       at: '2026-10-26T09:05:00.000Z',
       session: 'test-session',
@@ -1443,7 +1443,7 @@ test('a warning lands in the Log as a warning with the versions it ran on, count
       firstAt: '2026-10-26T09:01:00.000Z',
     },
   ])
-  expect(log).toContain('ci-watch warning')
+  expect(log).toContain('demo warning')
   expect(log).toContain('2 times since')
   expect(log).toContain('mod 0.2.0 · @cmodjs/core 5.3.0 · cmod ')
 })
@@ -1532,7 +1532,7 @@ function pluginsListed(lists: readonly (readonly { name: string; version: string
 const turnedOff = 'Claude Code turned it off: Requires "cmod@beta" >=4.0.3, installed 4.0.2'
 
 test('the cmod plugin updates cmod when Claude Code turned a mod off for an older cmod, and the mod turns on', async () => {
-  const { tested, ran } = pluginsListed([[{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }], [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'file-tree@beta', version: '0.1.0' }]])
+  const { tested, ran } = pluginsListed([[{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }], [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'demo@beta', version: '0.1.0' }]])
   await tested.start()
   await tested.settle()
 
@@ -1550,36 +1550,36 @@ test('the cmod plugin updates every copy of cmod when two marketplaces hold diff
 })
 
 test('the cmod plugin updates every copy of a mod two marketplaces hold at different versions once, because Claude Code loads only one', async () => {
-  const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.3.4' }, { name: 'oneclaude@oneclaude', version: '0.9.0' }, { name: 'oneclaude@totalrecall', version: '0.9.1' }]])
+  const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.3.4' }, { name: 'demo@market', version: '0.9.0' }, { name: 'demo@other-market', version: '0.9.1' }]])
   await tested.start()
   await tested.settle()
-  await tested.fakes.fs.write?.(installedPlugins, '{"oneclaude@oneclaude":[]}')
+  await tested.fakes.fs.write?.(installedPlugins, '{"demo@market":[]}')
   for (const run of ticks) run()
   await tested.settle()
 
-  expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update oneclaude', 'list --json', 'list --json'])
+  expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update demo', 'list --json', 'list --json'])
 })
 
 test('a mod the newest cmod still does not satisfy shows why Claude Code turned it off', async () => {
-  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
   const { tested } = pluginsListed([off])
   await tested.start()
   await tested.settle()
 
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'file-tree@beta is off', description: turnedOff }])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'demo@beta is off', description: turnedOff }])
 })
 
 test('an update that leaves a mod off runs once, whichever session checks next, and Retry runs it again', async () => {
-  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
   const other = pluginsListed([off])
   await other.tested.start()
   await other.tested.settle()
-  await other.tested.fakes.fs.write?.(installedPlugins, '{"file-tree@beta":[]}')
+  await other.tested.fakes.fs.write?.(installedPlugins, '{"demo@beta":[]}')
   for (const run of other.ticks) run()
   await other.tested.settle()
 
   expect(other.ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update cmod', 'list --json', 'list --json'])
-  expect(other.tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'file-tree@beta is off', description: turnedOff }])
+  expect(other.tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'demo@beta is off', description: turnedOff }])
 
   const toasts = await other.tested.fire('ui.render', { surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: { hasSurvey: false }, viewport: { columns: 100, rows: 24 } } as never, { type: 'Text', children: ['>'] } as never)
   const retry = findElement(toasts, 'Button', 'Retry')
@@ -1591,8 +1591,8 @@ test('an update that leaves a mod off runs once, whichever session checks next, 
 })
 
 test('the off toast leaves once the next check finds every mod on', async () => {
-  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
-  const { tested, ticks } = pluginsListed([off, off, [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'file-tree@beta', version: '0.1.0' }]])
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const { tested, ticks } = pluginsListed([off, off, [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'demo@beta', version: '0.1.0' }]])
   await tested.start()
   await tested.settle()
   await tested.fakes.fs.write?.(installedPlugins, '{"cmod@beta":[]}')
@@ -1603,7 +1603,7 @@ test('the off toast leaves once the next check finds every mod on', async () => 
 })
 
 test('a plugin check that fails, such as when cmod cannot run Claude Code, runs again at the next start', async () => {
-  const { tested } = pluginsListed([[{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]])
+  const { tested } = pluginsListed([[{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]])
   tested.fakes.process.spawn = () => exited(1, { stream: 'stderr', text: 'cmod list: claude is not on PATH. Install it, then run the command again.\n' })
   await tested.start()
   await tested.settle()
@@ -1710,7 +1710,7 @@ test("a build failure written during the session's turn shows nothing until the 
 })
 
 test('the cmod plugin updates nothing when every mod has the cmod it needs, and a store change that marks no plugin change lists nothing', async () => {
-  const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.0.0' }, { name: 'notes@cmod', version: '0.1.0' }]])
+  const { tested, ran, ticks } = pluginsListed([[{ name: 'cmod@cmod', version: '4.0.0' }, { name: 'other@cmod', version: '0.1.0' }]])
   await tested.start()
   await tested.settle()
   await writeStoreFile(tested, `${store}/widgets.json`, '{}')
@@ -1721,7 +1721,7 @@ test('the cmod plugin updates nothing when every mod has the cmod it needs, and 
 })
 
 test('a session start lists the mods even when no plugin changed since the last check, and shows a mod off for an older cmod', async () => {
-  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
   const first = pluginsListed([off])
   await first.tested.start()
   await first.tested.settle()
@@ -1730,11 +1730,11 @@ test('a session start lists the mods even when no plugin changed since the last 
   await tested.settle()
 
   expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'update cmod', 'list --json'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'file-tree@beta is off', description: turnedOff }])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'demo@beta is off', description: turnedOff }])
 })
 
 test('a session no app shows, such as claude -p, lists no mods at its start when no plugin changed since the last check', async () => {
-  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const off = [{ name: 'cmod@beta', version: '4.0.2' }, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
   const first = pluginsListed([off])
   await first.tested.start()
   await first.tested.settle()
@@ -1747,9 +1747,9 @@ test('a session no app shows, such as claude -p, lists no mods at its start when
 })
 
 test("a linked mod's new plugins-changed mark, with installed_plugins.json unchanged, updates cmod when the mod is off for an older cmod, and shows it while it stays off", async () => {
-  const healthy = [{ name: 'cmod@Developer-linked', version: '4.3.2' }, { name: 'oneclaude@Developer-linked', version: '0.1.0' }]
+  const healthy = [{ name: 'cmod@Developer-linked', version: '4.3.2' }, { name: 'demo@Developer-linked', version: '0.1.0' }]
   const linkedOff = 'Claude Code turned it off: Requires "cmod@Developer-linked" >=4.3.3, installed 4.3.2'
-  const off = [healthy[0]!, { name: 'oneclaude@Developer-linked', version: '0.1.0', state: linkedOff, unsatisfied: ['cmod@Developer-linked'] }]
+  const off = [healthy[0]!, { name: 'demo@Developer-linked', version: '0.1.0', state: linkedOff, unsatisfied: ['cmod@Developer-linked'] }]
   const { tested, ran, ticks } = pluginsListed([healthy, off, off])
   await tested.start()
   await tested.settle()
@@ -1759,19 +1759,19 @@ test("a linked mod's new plugins-changed mark, with installed_plugins.json uncha
   await tested.settle()
 
   expect(ran.filter((command) => !command.startsWith('rules'))).toEqual(['list --json', 'list --json', 'update cmod', 'list --json'])
-  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'oneclaude@Developer-linked is off', description: linkedOff }])
+  expect(tested.shown.toasts.filter((toast) => toast.type === 'error')).toEqual([{ type: 'error', message: 'demo@Developer-linked is off', description: linkedOff }])
 })
 
 test('a mod Claude Code installs while cmod checks the plugin list is checked too', async () => {
   const healthy = [{ name: 'cmod@beta', version: '4.0.2' }]
-  const off = [...healthy, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
-  const { tested, ran } = pluginsListed([healthy, off, [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'file-tree@beta', version: '0.1.0' }]])
+  const off = [...healthy, { name: 'demo@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]
+  const { tested, ran } = pluginsListed([healthy, off, [{ name: 'cmod@beta', version: '4.0.3' }, { name: 'demo@beta', version: '0.1.0' }]])
   const listing = tested.fakes.process.spawn
   let isInstalled = false
   tested.fakes.process.spawn = (request) => {
     if (request.argv[1] === 'list' && !isInstalled) {
       isInstalled = true
-      void tested.fakes.fs.write?.(installedPlugins, '{"file-tree@beta":[]}')
+      void tested.fakes.fs.write?.(installedPlugins, '{"demo@beta":[]}')
     }
     return listing?.(request) as ReturnType<NonNullable<typeof listing>>
   }
@@ -1991,7 +1991,7 @@ test("a linked mod's change during a turn offers Reload only after the turn ends
   const { tested, advance } = await idleSession()
   await prompt(tested, 'Rename the parser')
 
-  await writeStoreFile(tested, `${store}/plugins-changed`, '\n3000 probe\n3000 notes\n')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '\n3000 probe\n3000 other\n')
   await advance(60_000)
   expect(offerOf(tested)).toBeUndefined()
 
@@ -2000,7 +2000,7 @@ test("a linked mod's change during a turn offers Reload only after the turn ends
   expect(offerOf(tested)).toBeUndefined()
   await startedMod(tested, 'probe')
   await advance(1500)
-  expect(offerOf(tested)).toEqual(linkedOffer('notes'))
+  expect(offerOf(tested)).toEqual(linkedOffer('other'))
 })
 
 test('an installed update during a turn offers Reload at once, because only a --plugin-dir mod restarts by itself at the end of the turn', async () => {
@@ -2106,7 +2106,7 @@ async function updated(from: Readonly<Record<string, string>>, to: Readonly<Reco
 }
 
 test('an update of five plugins, which rewrites installed_plugins.json once per plugin, keeps one offer that counts them, and Reload reloads once with no corner toast', async () => {
-  const ids = ['notes@market', 'inbox@market', 'tasks@market', 'deploys@market', 'recall@market']
+  const ids = ['demo@market', 'other@market', 'third@market', 'fourth@market', 'fifth@market']
   const { tested, reloads, tick, advance } = await startedWith(Object.fromEntries(ids.map((id) => [id, '1.0.0'])))
 
   for (const [index] of ids.entries()) {
@@ -2125,21 +2125,21 @@ test('an update of five plugins, which rewrites installed_plugins.json once per 
 })
 
 test('an update after /clear is still offered, because the versions belong to the running Claude Code, not the conversation', async () => {
-  const { tested, tick } = await startedWith({ 'notes@market': '1.2.0' })
+  const { tested, tick } = await startedWith({ 'other@market': '1.2.0' })
   await claudeCodeOf(tested).fire('SessionStart', { source: 'clear', session_id: 'after-clear' })
   await tick()
 
-  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'notes@market': '1.3.0' }))
+  await tested.fakes.fs.write?.(installedPlugins, installedJson({ 'other@market': '1.3.0' }))
   await tick()
 
-  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
+  expect(offerOf(tested)).toEqual(offering('other updated to 1.3.0. Reload to use them in this session.'))
 })
 
 test('the offer names each of three updates', async () => {
-  const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version })
+  const versions = (version: string) => ({ 'demo@market': version, 'other@market': version, 'third@market': version })
   const { tested } = await updated(versions('1.0.0'), versions('1.1.0'))
 
-  expect(offerOf(tested)).toEqual(offering('notes updated to 1.1.0, inbox updated to 1.1.0, tasks updated to 1.1.0. Reload to use them in this session.'))
+  expect(offerOf(tested)).toEqual(offering('demo updated to 1.1.0, other updated to 1.1.0, third updated to 1.1.0. Reload to use them in this session.'))
 })
 
 test('the offer names a plugin whose two copies both updated once, with the version of the copy this session loads', async () => {
@@ -2149,22 +2149,22 @@ test('the offer names a plugin whose two copies both updated once, with the vers
 })
 
 test('the offer names the one plugin an update changed, and the ones turned on and off', async () => {
-  const { tested } = await updated({ 'notes@market': '1.2.0', 'inbox@market': '2.0.0' }, { 'notes@market': '1.3.0', 'inbox@market': '2.0.0' })
-  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
+  const { tested } = await updated({ 'demo@market': '1.2.0', 'other@market': '2.0.0' }, { 'demo@market': '1.3.0', 'other@market': '2.0.0' })
+  expect(offerOf(tested)).toEqual(offering('demo updated to 1.3.0. Reload to use them in this session.'))
 
-  const turned = await updated({ 'notes@market': '1.2.0' }, { 'inbox@market': '2.0.0' })
-  turned.tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'inbox@market': true } })
-  await turned.tested.fakes.fs.write?.(installedPlugins, installedJson({ 'inbox@market': '2.0.1' }))
+  const turned = await updated({ 'demo@market': '1.2.0' }, { 'other@market': '2.0.0' })
+  turned.tested.fakes.settings.read = async () => ({ enabledPlugins: { 'cmod@fixtures': true, 'other@market': true } })
+  await turned.tested.fakes.fs.write?.(installedPlugins, installedJson({ 'other@market': '2.0.1' }))
   await turned.tick()
-  expect(offerOf(turned.tested)).toEqual(offering('inbox turned on, notes turned off. Reload to use them in this session.'))
+  expect(offerOf(turned.tested)).toEqual(offering('other turned on, demo turned off. Reload to use them in this session.'))
 })
 
 test('the offer names an update of a plugin installed from git by the version its plugin.json holds, without the commit Claude Code adds', async () => {
-  const copy = (version: string) => `/test/home/.claude/plugins/cache/market/notes/${version}`
-  const installed = (version: string) => JSON.stringify({ version: 2, plugins: { 'notes@market': [{ scope: 'user', installPath: copy(version), version }] } })
-  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'notes@market': true })
-  await tested.fakes.fs.write?.(`${copy('1.2.0-aaaaaaaaaaaa')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'notes', version: '1.2.0' }))
-  await tested.fakes.fs.write?.(`${copy('1.3.0-bbbbbbbbbbbb')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'notes', version: '1.3.0' }))
+  const copy = (version: string) => `/test/home/.claude/plugins/cache/market/other/${version}`
+  const installed = (version: string) => JSON.stringify({ version: 2, plugins: { 'other@market': [{ scope: 'user', installPath: copy(version), version }] } })
+  const { tested } = testRemovals(['cmod'], { 'cmod@fixtures': true, 'other@market': true })
+  await tested.fakes.fs.write?.(`${copy('1.2.0-aaaaaaaaaaaa')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'other', version: '1.2.0' }))
+  await tested.fakes.fs.write?.(`${copy('1.3.0-bbbbbbbbbbbb')}/.claude-plugin/plugin.json`, JSON.stringify({ name: 'other', version: '1.3.0' }))
   await tested.fakes.fs.write?.(installedPlugins, installed('1.2.0-aaaaaaaaaaaa'))
   const reloads: string[] = []
   tested.fakes.command.run = async ({ command }) => (reloads.push(command), {})
@@ -2176,22 +2176,22 @@ test('the offer names an update of a plugin installed from git by the version it
   await tick()
 
   expect(reloads).toEqual([])
-  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
+  expect(offerOf(tested)).toEqual(offering('other updated to 1.3.0. Reload to use them in this session.'))
 })
 
 test('the offer counts four updates instead of naming them', async () => {
-  const versions = (version: string) => ({ 'notes@market': version, 'inbox@market': version, 'tasks@market': version, 'deploys@market': version })
+  const versions = (version: string) => ({ 'demo@market': version, 'other@market': version, 'third@market': version, 'fourth@market': version })
   const { tested } = await updated(versions('1.0.0'), versions('1.1.0'))
 
   expect(offerOf(tested)).toEqual(offering('4 plugins changed. Reload to use them in this session.'))
 })
 
 test('an update whose install record lists what the update granted is offered by name and version, without reading the record', async () => {
-  const record = `${store}/records/notes.json`
-  const granted = JSON.stringify({ name: 'notes', version: '1.3.0', root: '/plugins/notes', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {}, permissions: ['conversation'], grantedOnUpdate: ['conversation'] })
-  const { tested } = await updated({ 'notes@market': '1.2.0' }, { 'notes@market': '1.3.0' }, { [record]: granted })
+  const record = `${store}/records/other.json`
+  const granted = JSON.stringify({ name: 'other', version: '1.3.0', root: '/plugins/other', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {}, permissions: ['conversation'], grantedOnUpdate: ['conversation'] })
+  const { tested } = await updated({ 'other@market': '1.2.0' }, { 'other@market': '1.3.0' }, { [record]: granted })
 
-  expect(offerOf(tested)).toEqual(offering('notes updated to 1.3.0. Reload to use them in this session.'))
+  expect(offerOf(tested)).toEqual(offering('other updated to 1.3.0. Reload to use them in this session.'))
   expect(tested.calls.filter(({ call, args }) => call === 'fs.read' && args[0] === record)).toEqual([])
 })
 

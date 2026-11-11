@@ -6,9 +6,9 @@ import { cmod, deleteTemporaryHomes, temporaryHome, writeFiles } from './cmod.js
 
 afterAll(deleteTemporaryHomes)
 
-async function setUpKeeper(home: string): Promise<{ project: string }> {
-  const root = join(home, 'keeper')
-  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'keeper', version: '0.1.0' }) })
+async function setUpDemo(home: string): Promise<{ project: string }> {
+  const root = join(home, 'demo')
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
   expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
   return { project: join(home, 'work/app') }
 }
@@ -17,95 +17,95 @@ const read = async (path: string): Promise<unknown> => JSON.parse(await readFile
 
 test('settings writes each key into the named settings file, keeps the rest of the file and its formatting, and puts project mcpServers in .mcp.json', async () => {
   const home = await temporaryHome()
-  const { project } = await setUpKeeper(home)
+  const { project } = await setUpDemo(home)
   await writeFiles(home, { '.claude/settings.json': '{\n    "model": "opus"\n}\n' })
 
-  const user = await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365}')
-  const projectChange = await cmod(home, 'settings', 'keeper', 'project', '{"statusLine":{"type":"command","command":"keeper-line"},"mcpServers":{"keeper":{"command":"keeper-mcp"}}}', '--project', project)
+  const user = await cmod(home, 'settings', 'demo', 'user', '{"cleanupPeriodDays":365}')
+  const projectChange = await cmod(home, 'settings', 'demo', 'project', '{"statusLine":{"type":"command","command":"demo-line"},"mcpServers":{"demo":{"command":"demo-mcp"}}}', '--project', project)
 
-  expect(user).toEqual({ exitCode: 0, stdout: 'Changed cleanupPeriodDays in ~/.claude/settings.json for keeper.\n', stderr: '' })
-  expect(projectChange.stdout).toBe('Changed statusLine in ~/work/app/.claude/settings.json for keeper.\nChanged mcpServers in ~/work/app/.mcp.json for keeper.\n')
+  expect(user).toEqual({ exitCode: 0, stdout: 'Changed cleanupPeriodDays in ~/.claude/settings.json for demo.\n', stderr: '' })
+  expect(projectChange.stdout).toBe('Changed statusLine in ~/work/app/.claude/settings.json for demo.\nChanged mcpServers in ~/work/app/.mcp.json for demo.\n')
   expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe('{\n    "model": "opus",\n    "cleanupPeriodDays": 365\n}\n')
-  expect(await read(join(project, '.claude/settings.json'))).toEqual({ statusLine: { type: 'command', command: 'keeper-line' } })
-  expect(await read(join(project, '.mcp.json'))).toEqual({ mcpServers: { keeper: { command: 'keeper-mcp' } } })
+  expect(await read(join(project, '.claude/settings.json'))).toEqual({ statusLine: { type: 'command', command: 'demo-line' } })
+  expect(await read(join(project, '.mcp.json'))).toEqual({ mcpServers: { demo: { command: 'demo-mcp' } } })
 })
 
 test('settings with the value a file already holds writes neither the file nor the record, so no session reloads its settings', async () => {
   const home = await temporaryHome()
-  await setUpKeeper(home)
+  await setUpDemo(home)
   await writeFiles(home, { '.claude/settings.json': '{\n    "model": "opus"\n}\n' })
-  await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365}')
+  await cmod(home, 'settings', 'demo', 'user', '{"cleanupPeriodDays":365}')
   const settingsFile = join(home, '.claude/settings.json')
-  const recordFile = join(home, '.local/share/cmod/settings/keeper.json')
+  const recordFile = join(home, '.local/share/cmod/settings/demo.json')
   const writtenAt = async () => [(await Bun.file(settingsFile).stat()).mtimeMs, (await Bun.file(recordFile).stat()).mtimeMs]
   const before = await writtenAt()
   await Bun.sleep(20)
 
-  expect((await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365}')).exitCode).toBe(0)
+  expect((await cmod(home, 'settings', 'demo', 'user', '{"cleanupPeriodDays":365}')).exitCode).toBe(0)
   expect(await writtenAt()).toEqual(before)
 })
 
 test('settings writes any key for a mod that declares nothing in package.json "cmod"', async () => {
   const home = await temporaryHome()
-  await setUpKeeper(home)
+  await setUpDemo(home)
 
-  const changed = await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365,"model":"haiku","env":{"OTHER":"1"}}')
+  const changed = await cmod(home, 'settings', 'demo', 'user', '{"cleanupPeriodDays":365,"model":"haiku","env":{"OTHER":"1"}}')
 
-  expect(changed).toEqual({ exitCode: 0, stdout: 'Changed cleanupPeriodDays in ~/.claude/settings.json for keeper.\nChanged model in ~/.claude/settings.json for keeper.\nChanged env in ~/.claude/settings.json for keeper.\n', stderr: '' })
+  expect(changed).toEqual({ exitCode: 0, stdout: 'Changed cleanupPeriodDays in ~/.claude/settings.json for demo.\nChanged model in ~/.claude/settings.json for demo.\nChanged env in ~/.claude/settings.json for demo.\n', stderr: '' })
   expect(await read(join(home, '.claude/settings.json'))).toEqual({ cleanupPeriodDays: 365, model: 'haiku', env: { OTHER: '1' } })
 })
 
 test('a null value removes the key, and teardown takes out only the values that still equal what the mod set', async () => {
   const home = await temporaryHome()
-  const { project } = await setUpKeeper(home)
+  const { project } = await setUpDemo(home)
   await writeFiles(home, { '.claude/settings.json': '{ "model": "opus" }\n' })
-  await cmod(home, 'settings', 'keeper', 'user', '{"cleanupPeriodDays":365,"statusLine":{"type":"command","command":"keeper-line"}}')
-  await cmod(home, 'settings', 'keeper', 'project', '{"statusLine":{"type":"command","command":"keeper-line"}}', '--project', project)
-  await cmod(home, 'settings', 'keeper', 'project', '{"statusLine":null}', '--project', project)
+  await cmod(home, 'settings', 'demo', 'user', '{"cleanupPeriodDays":365,"statusLine":{"type":"command","command":"demo-line"}}')
+  await cmod(home, 'settings', 'demo', 'project', '{"statusLine":{"type":"command","command":"demo-line"}}', '--project', project)
+  await cmod(home, 'settings', 'demo', 'project', '{"statusLine":null}', '--project', project)
   const edited = (await read(join(home, '.claude/settings.json'))) as Record<string, unknown>
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ ...edited, cleanupPeriodDays: 90 }) })
 
   expect(await read(join(project, '.claude/settings.json'))).toEqual({})
-  expect((await cmod(home, 'teardown', 'keeper')).exitCode).toBe(0)
+  expect((await cmod(home, 'teardown', 'demo')).exitCode).toBe(0)
 
   expect(await read(join(home, '.claude/settings.json'))).toEqual({ model: 'opus', cleanupPeriodDays: 90 })
-  expect(existsSync(join(home, '.local/share/cmod/settings/keeper.json'))).toBe(false)
+  expect(existsSync(join(home, '.local/share/cmod/settings/demo.json'))).toBe(false)
 })
 
 test('an object merges into the one the person has, keeping its comments, and teardown takes out only the mod\'s value and the objects it left empty', async () => {
   const home = await temporaryHome()
-  const { project } = await setUpKeeper(home)
+  const { project } = await setUpDemo(home)
   await writeFiles(home, { '.claude/settings.json': '{\n  // my proxy\n  "env": {\n    "FOO": "1"\n  }\n}\n' })
 
-  const user = await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}')
-  await cmod(home, 'settings', 'keeper', 'project', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}', '--project', project)
+  const user = await cmod(home, 'settings', 'demo', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}')
+  await cmod(home, 'settings', 'demo', 'project', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}', '--project', project)
 
-  expect(user).toEqual({ exitCode: 0, stdout: 'Changed env in ~/.claude/settings.json for keeper.\n', stderr: '' })
+  expect(user).toEqual({ exitCode: 0, stdout: 'Changed env in ~/.claude/settings.json for demo.\n', stderr: '' })
   expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe('{\n  // my proxy\n  "env": {\n    "FOO": "1",\n    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317"\n  }\n}\n')
-  expect((await cmod(home, 'teardown', 'keeper')).exitCode).toBe(0)
+  expect((await cmod(home, 'teardown', 'demo')).exitCode).toBe(0)
   expect(await readFile(join(home, '.claude/settings.json'), 'utf8')).toBe('{\n  // my proxy\n  "env": {\n    "FOO": "1"\n  }\n}\n')
   expect(await read(join(project, '.claude/settings.json'))).toEqual({})
 })
 
 test('teardown keeps a value the person changed after the mod set it', async () => {
   const home = await temporaryHome()
-  await setUpKeeper(home)
+  await setUpDemo(home)
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { FOO: '1' } }) })
-  await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}')
+  await cmod(home, 'settings', 'demo', 'user', '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317"}}')
   const edited = (await read(join(home, '.claude/settings.json'))) as { env: Record<string, unknown> }
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { ...edited.env, ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000' } }) })
 
-  expect((await cmod(home, 'teardown', 'keeper')).exitCode).toBe(0)
+  expect((await cmod(home, 'teardown', 'demo')).exitCode).toBe(0)
 
   expect(await read(join(home, '.claude/settings.json'))).toEqual({ env: { FOO: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000' } })
 })
 
 test('a null inside an object removes only that key', async () => {
   const home = await temporaryHome()
-  await setUpKeeper(home)
+  await setUpDemo(home)
   await writeFiles(home, { '.claude/settings.json': JSON.stringify({ env: { FOO: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:8317' } }) })
 
-  expect((await cmod(home, 'settings', 'keeper', 'user', '{"env":{"ANTHROPIC_BASE_URL":null}}')).exitCode).toBe(0)
+  expect((await cmod(home, 'settings', 'demo', 'user', '{"env":{"ANTHROPIC_BASE_URL":null}}')).exitCode).toBe(0)
 
   expect(await read(join(home, '.claude/settings.json'))).toEqual({ env: { FOO: '1' } })
 })

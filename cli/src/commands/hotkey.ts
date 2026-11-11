@@ -15,7 +15,7 @@ export const help = `Usage: cmod hotkey <mod | plugin-root> <hotkey> <combo>
 ${summary}
 
 Binds the hotkey <hotkey> of an installed mod to <combo> in Claude Code's
-keybindings.json, such as cmod hotkey file-tree toggle ctrl+e, and takes its
+keybindings.json, such as cmod hotkey my-mod toggle ctrl+e, and takes its
 old combo off. A plugin root holds a "/", such as ./my-mod, so a mod Claude
 Code loads with --plugin-dir, which has no install record, binds its hotkeys
 too. A combo is one or two of ctrl, alt, shift, and meta in that order, then

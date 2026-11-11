@@ -114,7 +114,7 @@ test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod insta
   await writeFiles(root, {
     'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '4.2.0' }),
     'node_modules/@cmodjs/core/records.js': "export const coreVersion = '4.2.0'\n",
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', marketplace: 'cmod', version: '^4.0.0' }, 'tracer'] }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: [{ name: 'cmod', marketplace: 'cmod', version: '^4.0.0' }, 'other'] }),
     'package.json': JSON.stringify({ name: 'demo' }),
   })
 
@@ -122,7 +122,7 @@ test('cmod check writes the cmod dependency as >= the @cmodjs/core the mod insta
   const again = await cmod(home, 'check', root)
 
   expect(result.stdout).toContain('Pinning the cmod plugin…\n✔ Wrote the cmod dependency ">=4.2.0", the oldest cmod the @cmodjs/core 4.2.0 this mod bundles runs on, so every newer cmod runs it\n')
-  expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', marketplace: 'cmod', version: '>=4.2.0' }, 'tracer'])
+  expect(JSON.parse(await readFile(join(root, '.claude-plugin/plugin.json'), 'utf8')).dependencies).toEqual([{ name: 'cmod', marketplace: 'cmod', version: '>=4.2.0' }, 'other'])
   expect(again.stdout).toContain('✔ plugin.json holds the cmod dependency ">=4.2.0"')
 })
 
@@ -252,7 +252,7 @@ test('cmod check fails and keeps the cmod dependency when Claude Code can instal
 test('cmod check writes the cmod dependency without an update on a machine where Claude Code has no cmod plugin installed', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')
-  await writeFiles(home, { 'bin/claude': claudeAnswering([{ id: 'tracer@market', version: '1.0.0', scope: 'user', enabled: true, installPath: '/tracer' }]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(home, { 'bin/claude': claudeAnswering([{ id: 'other@market', version: '1.0.0', scope: 'user', enabled: true, installPath: '/other' }]), '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, newerCoreMod)
 
   const result = await cmod(home, 'check', root)
@@ -314,12 +314,12 @@ test('cmod check on a machine without Claude Code writes the cmod dependency, fa
 
 test('cmod check names each machine package.json "os" and "cpu" allow that a cmod download line has no build for', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'trash-mod')
+  const root = join(home, 'demo')
   const sha = 'a'.repeat(64)
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'trash-mod', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'trash-mod', os: ['darwin'], cmod: { install: './setup/install.sh' } }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', os: ['darwin'], cmod: { install: './setup/install.sh' } }),
     'setup/install.sh': `#!/bin/sh\ncmod download trash \\\n  darwin-arm64 https://example.com/trash-arm64.zip ${sha}\n`,
   })
 
@@ -329,11 +329,11 @@ test('cmod check names each machine package.json "os" and "cpu" allow that a cmo
     'Checking the machines…\n✘ The install step misses a download the mod needs on macOS\n    fix: trash has no download for darwin-x64. Add a <machine> <url> <sha256> line for each, or list only the machines it downloads for in the "os" and "cpu" keys of package.json.\n',
   )
 
-  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'trash-mod', os: ['darwin'], cpu: ['arm64'], cmod: { install: './setup/install.sh' } }) })
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'demo', os: ['darwin'], cpu: ['arm64'], cmod: { install: './setup/install.sh' } }) })
 
-  expect((await cmod(home, 'check', root)).stdout).toContain('Checking the machines…\n✔ trash-mod runs on macOS on arm64, and the install step downloads a program for each\n')
+  expect((await cmod(home, 'check', root)).stdout).toContain('Checking the machines…\n✔ demo runs on macOS on arm64, and the install step downloads a program for each\n')
 
-  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'trash-mod', os: ['darwin', 'win32'], cmod: { install: './setup/install.sh' } }) })
+  await writeFiles(root, { 'package.json': JSON.stringify({ name: 'demo', os: ['darwin', 'win32'], cmod: { install: './setup/install.sh' } }) })
 
   expect((await cmod(home, 'check', root)).stdout).toContain(
     '✘ package.json "os" and "cpu" list win32, which cmod does not run mods on\n    fix: cmod runs mods on "darwin" and "linux", on "arm64" and "x64". List only those in the "os" and "cpu" keys of package.json.\n',
@@ -342,19 +342,19 @@ test('cmod check names each machine package.json "os" and "cpu" allow that a cmo
 
 test('cmod check adds "approve": true to package.json "cmod" only for a mod that allows or asks on the permission check', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'guard')
+  const root = join(home, 'demo')
   const approvesNone = "Checking the permission check hooks…\n– The mod approves none of Claude's tool calls\n"
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'guard', cmod: { install: './setup/install.sh' } }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh' } }),
     'setup/install.sh': '#!/bin/sh\n',
   })
 
   expect((await cmod(home, 'check', root)).stdout).toContain(approvesNone)
 
   await writeFiles(root, {
-    'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n  registerPermissionCheck(addHook)\n}\n',
+    'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, demo, options)\n  registerPermissionCheck(addHook)\n}\n',
     'src/mod.ts': 'sessions.current.onPermissionCheck((check) => mod.log(check.name))\n',
   })
 
@@ -378,13 +378,13 @@ test('cmod check adds "approve": true to package.json "cmod" only for a mod that
 
 test('cmod check fails a mod on @cmodjs/core 5.0.0 or later that still declares "permissions", and passes one on @cmodjs/core 4', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'guard')
+  const root = join(home, 'demo')
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
     'node_modules/@cmodjs/core/package.json': JSON.stringify({ name: '@cmodjs/core', version: '5.0.0' }),
     'node_modules/@cmodjs/core/records.js': "export const oldestCmodVersion = '5.0.0'\n",
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'guard', cmod: { permissions: { network: ['api.github.com'], approve: true } } }),
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { permissions: { network: ['api.github.com'], approve: true } } }),
   })
 
   const refused = await cmod(home, 'check', root)
@@ -401,12 +401,12 @@ test('cmod check fails a mod on @cmodjs/core 5.0.0 or later that still declares 
 
 test('cmod check fails a mod whose source hears permissions when register.ts does not call registerPermissionCheck', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'guard')
+  const root = join(home, 'demo')
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'guard', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'guard' }),
-    'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, guard, options)\n}\n',
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+    'hooks/register.ts': 'export function register(addHook, options) {\n  registerMod(addHook, demo, options)\n}\n',
     'src/mod.ts': "sessions.current.beforePermissionCheck(() => ({ ask: 'Check first.' }))\n",
     'src/targets.ts': "import type { Call } from '../node_modules/@cmodjs/core/jobs/permissions.js'\n",
   })
@@ -431,13 +431,13 @@ test('cmod check fails a mod whose source hears permissions when register.ts doe
 
 test('cmod check names the line of a metadata block it cannot read', async () => {
   const home = await temporaryHome()
-  const root = join(home, 'tagged')
+  const root = join(home, 'demo')
   await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
   await writeFiles(root, {
-    '.claude-plugin/plugin.json': JSON.stringify({ name: 'tagged', version: '0.1.0' }),
-    'package.json': JSON.stringify({ name: 'tagged' }),
-    'skills/commit/SKILL.md': '---\nname: commit\nmetadata:\n  tagged.mode:\n    - build\n---\n',
-    'agents/reviewer.md': '---\nname: reviewer\nmetadata: { tagged.mode: review }\n---\n',
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+    'skills/commit/SKILL.md': '---\nname: commit\nmetadata:\n  demo.mode:\n    - build\n---\n',
+    'agents/reviewer.md': '---\nname: reviewer\nmetadata: { demo.mode: review }\n---\n',
   })
 
   const shown = await cmod(home, 'check', root)

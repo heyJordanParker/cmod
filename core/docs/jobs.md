@@ -72,8 +72,8 @@ type SlashCommand = { readonly name: string; remove(): void }
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 
-export const todo = defineMod({
-  name: 'todo',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { project: { items: [] as readonly string[] } },
   setup(mod) {
     mod.use(
@@ -118,8 +118,8 @@ type Tool = { readonly name: string; remove(): void }
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { tool } from '../node_modules/@cmodjs/core/jobs/tool.js'
 
-export const tickets = defineMod({
-  name: 'tickets',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { project: { opened: [] as readonly string[] } },
   setup(mod) {
     mod.use(
@@ -187,7 +187,7 @@ type Rule<State> = Target & {
 - The strictest answer wins: a mod's `ask` or `deny` beats Claude Code's `allow`, and Claude Code's `deny` beats a mod's `ask`.
 - `when` narrows a rule. The rule matches only when `when` resolves true. A `when` that throws makes the rule match, and the reason adds `Its when check failed: <error>`.
 - When cmod cannot read the call or the session, it denies the call with the reason.
-- For a PowerShell command, or a Bash command cmod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'Domain.md' }` matches such a command that names `Domain.md`, and `{ write: '**/.env*' }` never matches one. A `!` pattern leaves nothing out of such a line, so the rule errs toward matching.
+- For a PowerShell command, or a Bash command cmod cannot fully parse, a `command` rule matches when every word of its pattern appears in the command line. A `read` or `write` rule matches when the command line holds the last segment of its pattern, after the last `/`, and only when that segment holds none of `*?[]{}`. So `{ write: 'CHANGELOG.md' }` matches such a command that names `CHANGELOG.md`, and `{ write: '**/.env*' }` never matches one. A `!` pattern leaves nothing out of such a line, so the rule errs toward matching.
 - `permissions({})` throws `permissions: give it a deny or an ask rule, or remove it from setup.`
 - A mod that uses `permissions` calls `registerPermissionCheck(addHook)` after `registerMod` in `hooks/register.ts` ([mod.md](mod.md)). Without it `mod.use(permissions(…))` throws, so a mod that uses it in `setup` does not start.
 
@@ -206,8 +206,8 @@ type Rule<State> = Target & {
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { permissions } from '../node_modules/@cmodjs/core/jobs/permissions.js'
 
-export const guard = defineMod({
-  name: 'guard',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { project: { isFrozen: false } },
   setup(mod) {
     mod.use(
@@ -217,7 +217,7 @@ export const guard = defineMod({
           { command: 'git push', when: (_call, mod) => mod.state.project.isFrozen, reason: 'The branch is frozen.' },
           { write: '**/.env*', reason: 'Edit .env files by hand.' },
         ],
-        ask: [{ write: 'Domain.md', when: (call) => call.content?.includes('Avoid') === true, reason: 'Domain.md changes need a review.' }],
+        ask: [{ write: 'CHANGELOG.md', when: (call) => call.content?.includes('Avoid') === true, reason: 'CHANGELOG.md changes need a review.' }],
       }),
     )
   },
@@ -241,8 +241,8 @@ check<State>(options: { readonly after: Target | Target[]; readonly run: readonl
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { check } from '../node_modules/@cmodjs/core/jobs/check.js'
 
-export const lint = defineMod({
-  name: 'lint',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup(mod) {
     mod.use(check({ after: { write: '**/*.ts' }, run: ['bun', 'x', 'oxlint'] }))
   },
@@ -275,8 +275,8 @@ prompt<State>(options: {
 import { defineMod, fs, sessions } from '../node_modules/@cmodjs/core/mod.js'
 import { prompt } from '../node_modules/@cmodjs/core/jobs/prompt.js'
 
-export const conventions = defineMod({
-  name: 'conventions',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { session: { mode: 'build' } },
   setup(mod) {
     mod.use(prompt({ name: 'Commit messages', prompt: 'Write commit messages in the imperative mood.' }))
@@ -306,8 +306,8 @@ type ScheduledPrompt = { readonly cron: string; readonly prompt: string }
 import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
 import { schedule } from '../node_modules/@cmodjs/core/jobs/schedule.js'
 
-export const loop = defineMod({
-  name: 'loop',
+export const myMod = defineMod({
+  name: 'my-mod',
   state: { project: { isOn: false, cron: '*/10 * * * *', prompt: 'Check the CI and fix what failed.' } },
   setup(mod) {
     mod.use(schedule((state) => (state.project.isOn ? { cron: state.project.cron, prompt: state.project.prompt } : undefined)))
@@ -341,8 +341,8 @@ import { defineMod, http } from '../node_modules/@cmodjs/core/mod.js'
 import { program } from '../node_modules/@cmodjs/core/jobs/program.js'
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 
-export const preview = defineMod({
-  name: 'preview',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup(mod) {
     const server = mod.use(program({ command: ['preview-server', '--port', '0'] }))
     mod.use(
@@ -399,8 +399,8 @@ const editCounter = (tool: string): Job<EditCounter> => ({ mod, announce, reserv
   }
 }
 
-export const counter = defineMod({
-  name: 'counter',
+export const myMod = defineMod({
+  name: 'my-mod',
   setup(mod) {
     const writes = mod.use(editCounter('Write'))
     sessions.current.onTurnEnd(() => mod.toast(`${writes.count()} files written so far`))
