@@ -4,6 +4,13 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [5.13.4] - 2026-11-11
+
+### Fixed
+- A session you started with `claude --plugin-dir <checkout>` no longer shows `Plugins changed` for that checkout when you have it linked too. Claude Code reloads the checkout in that session by itself, and cmod now counts a change as loaded once the mod started again after it, whatever started it.
+- A change to a checkout you linked offers Reload 35 seconds after your last change and never while Claude works, so a burst of edits shows one toast, after the turn. 35 seconds is the longest Claude Code takes to reload a `--plugin-dir` checkout by itself: it checks the folder every 30 seconds once it has gone a minute without a change. An update, install, or removal still offers Reload at once.
+- The `Plugins changed` toast names each linked mod that changed, such as `notes changed. Reload to use them in this session.`
+
 ## [5.13.3] - 2026-11-11
 
 ### Changed
