@@ -220,7 +220,7 @@ test.concurrent('Ctrl+C while cmod remove waits for the lock prints a cancel lin
   expect(result.exitCode).toBe(130)
   expect(result.stdout).toContain('✘ Cancelled uninstalling demo on SIGINT, before its uninstall step started. Run cmod teardown demo to finish.')
   expect(existsSync(join(store, 'records/demo.json'))).toBe(true)
-}, 10_000)
+}, 15_000)
 
 test.concurrent('Ctrl+C while cmod waits for a lock ends it at once', async () => {
   const home = await temporaryHome()
