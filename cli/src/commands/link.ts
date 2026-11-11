@@ -24,8 +24,10 @@ marketplace in the parent folder's .claude/settings.local.json, so the
 settings.json you share between computers holds no path of this one. It
 installs the checkout from that marketplace through Claude Code, turns off the
 installed copy of the mod, and runs the checkout's install step. Once a change
-builds, every session offers Reload. A session started with
-claude --plugin-dir <path> reloads the checkout by itself between turns.
+builds, every session still running the old build offers Reload, 35 seconds
+after the last change and between turns. A session started with
+claude --plugin-dir <path> reloads the checkout by itself between turns, and
+offers nothing for it.
 
 Options:
   --option key=value    Set one of the mod's options, as /config does. Repeat it for each option`
@@ -50,6 +52,6 @@ export async function run(argv: string[]): Promise<number> {
   if (values.option !== undefined) await setOptions({ id, installPath: plugin.root }, values.option, progress)
 
   const code = await setupInTerminal(plugin, progress)
-  if (code === 0) progress.note(`Every Claude Code session loads ${plugin.name} from ${tilde(plugin.root)}. Once a change you save builds, every session offers Reload. To have a session reload your changes by itself, start it with claude --plugin-dir ${tilde(plugin.root)}.`)
+  if (code === 0) progress.note(`Every Claude Code session loads ${plugin.name} from ${tilde(plugin.root)}. Once a change you save builds, every session still running the old build offers Reload. To have a session reload your changes by itself, start it with claude --plugin-dir ${tilde(plugin.root)}.`)
   return code
 }

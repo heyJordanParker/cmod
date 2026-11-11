@@ -23,6 +23,7 @@ export type Pages = {
   update(mod: string, update: PartsUpdate): boolean
   tell(mod: string, shown: ShownPages): void
   apply(listener: PageApply): void
+  onStart(listener: (mod: string) => void): void
 }
 
 export function pagesOf(input: unknown): PageDeclaration[] {
@@ -54,6 +55,7 @@ export function servePages({
   let waiting: { readonly mod: string; readonly requests: readonly PageRequest[] }[] = []
   let inputDepth = 0
   let applyTo: PageApply = async () => undefined
+  let started: (mod: string) => void = () => undefined
 
   const run = (mod: string, requests: readonly PageRequest[]) =>
     applyTo(mod, requests).catch((error: unknown) => report(`pages:${mod}`, `Could not show the page ${mod} asked for`, error))
@@ -115,7 +117,8 @@ export function servePages({
     }
   }
 
-  const update = (mod: string, { parts: listing, redraw, requests, isAsked }: PartsUpdate) => {
+  const update = (mod: string, { parts: listing, redraw, requests, isAsked, isStart }: PartsUpdate) => {
+    if (isStart === true) started(mod)
     if (listing !== undefined) declared.set(mod, pagesOf(listing))
     if (listing !== undefined) restyle(mod, isObject(listing) && listing['stylesMarkdown'] === true)
     const isRedrawn = redraw === true || requests?.some((request) => 'open' in request) === true
@@ -172,6 +175,9 @@ export function servePages({
     },
     apply(listener) {
       applyTo = listener
+    },
+    onStart(listener) {
+      started = listener
     },
   }
 }

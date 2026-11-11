@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { consentPath, isAtLeast, isObject, linksPath, parseConsent, parseLinks, pluginsChangedMark, pluginsChangedPath, readCmodVersion, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
+import { consentPath, isAtLeast, isObject, linksPath, parseConsent, parseLinks, parsePluginsChanged, pluginsChangedPath, pluginsChangedText, readCmodVersion, recordPath, storeChangedPath, storeFolder, type Links } from '@cmodjs/core/src/records.js'
 import { version } from '../package.json'
 import { home, ifMissing, readJson, readText, tilde, writeAtomically } from './files.js'
 import { capture } from './process.js'
@@ -20,10 +20,12 @@ export function storePath(...parts: string[]): string {
   return join(storeFolder(process.env), ...parts)
 }
 
-export async function markPluginsChanged(): Promise<void> {
+export async function markPluginsChanged(linked?: { readonly mod: string; readonly at: number }): Promise<void> {
   const store = storeFolder(process.env)
   if (!existsSync(store)) return
-  await writeAtomically(pluginsChangedPath(store), pluginsChangedMark(Date.now(), process.pid))
+  const path = pluginsChangedPath(store)
+  const marked = parsePluginsChanged((await readText(path)) ?? '')
+  await writeAtomically(path, pluginsChangedText(linked === undefined ? { ...marked, command: `${Date.now()} ${process.pid}` } : { ...marked, linked: new Map(marked.linked).set(linked.mod, linked.at) }))
   await markStoreChanged()
 }
 

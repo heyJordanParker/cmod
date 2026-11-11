@@ -14,7 +14,7 @@ import { linkedFolders } from '../settings.js'
 import { isNewerCmodInstalled, markPluginsChanged, markStoreChanged, storePath, takeLock } from '../store.js'
 import { bundledHooks } from './publish.js'
 
-export const summary = 'Build each linked mod after a change, so every session offers Reload.'
+export const summary = 'Build each linked mod after a change, so every session running the old build offers Reload.'
 
 export const help = `Usage: cmod watch
 
@@ -26,9 +26,11 @@ build reads, a file in cli/ or one its JavaScript or TypeScript entry imports,
 it also builds the program cli/ declares, as cmod link does, into cmod's
 programs folder, then stops the program's running copy, so the next one starts
 the new build. A build that writes the same program leaves the file and its running
-copy as they are. Once both build, every session
-offers Reload, and a session started with claude --plugin-dir <folder> reloads
-it by itself between turns. A change only to files git ignores, such as the
+copy as they are. Once both build, it writes the
+time of the mod's last change to plugins-changed, and each session that has not
+started the mod since offers Reload, 35 seconds after the change and between
+turns. A session started with claude --plugin-dir <folder> reloads the mod by
+itself between turns within that time, so it offers nothing for it. A change only to files git ignores, such as the
 .claude-plugin/types/ Claude Code writes each time it loads the mod, to the
 program's output folder, or to a file gone by then that git does not track,
 such as a build's temporary file, offers nothing. A build that still fails
@@ -90,7 +92,7 @@ export async function run(argv: string[]): Promise<number> {
   const failing = new Set<Timer>()
   const attempts = new Map<string, number>()
   const programsDue = new Set<string>()
-  const changedFiles = new Map<string, Set<string>>()
+  const changedFiles = new Map<string, Map<string, number>>()
   const settling = new Map<string, Promise<void>>()
   const failures = new Map(Object.entries(((await readJson(buildFailuresPath(storeFolder(process.env)))) ?? {}) as Record<string, string>))
   const progress = { ...startProgress(process.stderr), note: () => {} }
@@ -105,16 +107,20 @@ export async function run(argv: string[]): Promise<number> {
   const nameOf = async (folder: string) => ((await readJson(join(folder, '.claude-plugin', 'plugin.json'))) as { readonly name: string }).name
 
   const settle = async (folder: string) => {
-    const files = [...(changedFiles.get(folder) ?? [])]
+    const changes = changedFiles.get(folder) ?? new Map<string, number>()
+    const files = [...changes.keys()]
     changedFiles.delete(folder)
     if (files.length === 0) return
     const name = await nameOf(folder)
     let attempt = attempts.get(folder) ?? 0
+    let at = 0
     try {
       const plugin = await readPlugin(folder)
       const program = await readProgram(plugin)
       const sources = await changedSources(folder, files, program === undefined ? undefined : relative(plugin.root, resolve(program.folder, program.output)))
       if (sources?.length === 0) return
+      const sourceTimes = (sources ?? files).flatMap((file) => changes.get(file) ?? [])
+      at = Math.max(...(sourceTimes.length > 0 ? sourceTimes : changes.values()))
       attempt += 1
       attempts.set(folder, attempt)
       if (program !== undefined && (sources === undefined || (await buildReadsAny(program, sources.map((file) => join(plugin.root, file)))))) programsDue.add(folder)
@@ -134,12 +140,12 @@ export async function run(argv: string[]): Promise<number> {
       return
     }
     if (failures.delete(name)) await writeFailures()
-    await markPluginsChanged()
+    await markPluginsChanged({ mod: name, at })
   }
 
   const changed = (folder: string, file: string | null) => {
     if (file !== null && file.split(sep).some((part) => skipped.has(part))) return
-    changedFiles.set(folder, (changedFiles.get(folder) ?? new Set()).add(file ?? ''))
+    changedFiles.set(folder, (changedFiles.get(folder) ?? new Map<string, number>()).set(file ?? '', Date.now()))
     clearTimeout(timers.get(folder))
     timers.set(
       folder,

@@ -1823,6 +1823,7 @@ function watchedStore(tested: ReturnType<typeof testMod>) {
   let now = 0
   const timers = new Set<Timed>()
   const add = (timer: Timed) => (timers.add(timer), { cancel: () => void timers.delete(timer) })
+  tested.fakes.clock.now = async () => now
   tested.fakes.clock.after = (ms, fire) => add({ at: now + ms, fire })
   tested.fakes.clock.every = (ms, fire) => add({ at: now + ms, every: ms, fire })
   const advance = async (ms: number) => {
@@ -1959,6 +1960,72 @@ test('a linked checkout that builds offers Reload in the session working inside 
   await tick()
   await tick()
   expect(reloads).toEqual([])
+  expect(offerOf(tested)).toEqual(changedOffer)
+})
+
+const startedMod = (tested: ReturnType<typeof testMod>, caller: string) => tested.fire('cmod.call', { to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [] }, isStart: true }, caller } as never)
+
+const linkedOffer = (name: string) => offering(`${name} changed. Reload to use them in this session.`)
+
+test('a linked mod that started again after its change, as Claude Code restarts a --plugin-dir mod by itself, offers no Reload, even when the restart waits for Claude Code to poll 30 seconds later', async () => {
+  const { tested, reloads, advance } = await idleSession()
+  await startedMod(tested, 'probe')
+  await writeStoreFile(tested, `${store}/plugins-changed`, '\n2000 probe\n')
+  await advance(40_000)
+  expect(offerOf(tested)).toBeUndefined()
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '\n42500 probe\n')
+  await advance(30_000)
+  expect(offerOf(tested)).toBeUndefined()
+
+  await startedMod(tested, 'probe')
+  await advance(10_000)
+  expect(offerOf(tested)).toBeUndefined()
+  expect(reloads).toEqual([])
+})
+
+test('a linked mod that has not started again 35 seconds after its change offers Reload, and the mark it was loaded with offers nothing after the reload', async () => {
+  const { tested, reloads, advance } = await idleSession()
+  await startedMod(tested, 'probe')
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '\n3000 probe\n')
+  await advance(30_000)
+  expect(offerOf(tested)).toBeUndefined()
+  await advance(10_000)
+  expect(offerOf(tested)).toEqual(linkedOffer('probe'))
+
+  await pressInBand(tested, 'Reload')
+  await advance(2500)
+  expect(reloads).toEqual(['reload-plugins'])
+  expect(offerOf(tested)).toBeUndefined()
+
+  await writeStoreFile(tested, `${store}/build-failures.json`, '{}')
+  await advance(40_000)
+  expect(offerOf(tested)).toBeUndefined()
+})
+
+test("a linked mod's change during a turn offers Reload only after the turn ends, so a --plugin-dir mod Claude Code restarts then offers nothing", async () => {
+  const { tested, advance } = await idleSession()
+  await prompt(tested, 'Rename the parser')
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '\n3000 probe\n3000 notes\n')
+  await advance(60_000)
+  expect(offerOf(tested)).toBeUndefined()
+
+  await claudeCodeOf(tested).fire('Stop', { stop_hook_active: false })
+  await advance(4000)
+  expect(offerOf(tested)).toBeUndefined()
+  await startedMod(tested, 'probe')
+  await advance(1500)
+  expect(offerOf(tested)).toEqual(linkedOffer('notes'))
+})
+
+test('an installed update during a turn offers Reload at once, because only a --plugin-dir mod restarts by itself at the end of the turn', async () => {
+  const { tested, tick } = await idleSession()
+  await prompt(tested, 'Rename the parser')
+
+  await writeStoreFile(tested, `${store}/plugins-changed`, '1 100\n')
+  await tick()
   expect(offerOf(tested)).toEqual(changedOffer)
 })
 

@@ -236,8 +236,20 @@ export function pluginsChangedPath(store: string): string {
   return `${store}/plugins-changed`
 }
 
-export function pluginsChangedMark(at: number, pid: number): string {
-  return `${at} ${pid}\n`
+export type PluginsChanged = { readonly command: string; readonly linked: ReadonlyMap<string, number> }
+
+export function parsePluginsChanged(text: string): PluginsChanged {
+  const [command = '', ...lines] = text.split('\n')
+  const linked = new Map<string, number>()
+  for (const line of lines) {
+    const mark = /^(\d+) (.+)$/.exec(line)
+    if (mark?.[1] !== undefined && mark[2] !== undefined) linked.set(mark[2], Number(mark[1]))
+  }
+  return { command, linked }
+}
+
+export function pluginsChangedText({ command, linked }: PluginsChanged): string {
+  return `${[command, ...[...linked].map(([mod, at]) => `${at} ${mod}`)].join('\n')}\n`
 }
 
 export function storeChangedPath(store: string): string {
@@ -413,7 +425,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.13.3'
+export const coreVersion = '5.13.4'
 
 export const oldestCmodVersion = '5.10.0'
 

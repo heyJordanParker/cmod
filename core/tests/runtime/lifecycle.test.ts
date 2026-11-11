@@ -997,7 +997,7 @@ test("a restarted module refuses a press on a draw number an earlier module of t
   expect(ranIn).toEqual([])
 })
 
-test('a page opened in setup reaches the cmod plugin with the first list of parts', async () => {
+test('a page opened in setup reaches the cmod plugin with the first list of parts, which says the mod just started', async () => {
   const fake = fakeClaude({ name: 'welcome', root })
   const told: unknown[] = []
   fake.fakes.cmod.call = async (call) => void told.push(call)
@@ -1013,7 +1013,7 @@ test('a page opened in setup reaches the cmod plugin with the first list of part
   await lifecycle.start(fake.claude, given({ ...pending, name: 'welcome', isInstalled: true }))
   await fake.settle()
 
-  expect(told).toEqual([{ to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'hello', title: 'Hello', place: 'sidebar' }] }, requests: [{ open: 'hello' }] } }])
+  expect(told).toEqual([{ to: 'cmod', method: 'cmod:partsChanged', input: { parts: { widgets: [], pages: [{ id: 'hello', title: 'Hello', place: 'sidebar' }] }, requests: [{ open: 'hello' }], isStart: true } }])
 })
 
 function loggingFailures(fake: ReturnType<typeof fakeClaude>, answer: unknown): unknown[] {

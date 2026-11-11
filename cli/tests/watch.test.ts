@@ -9,7 +9,7 @@ afterAll(deleteTemporaryHomes)
 
 const store = (home: string, file: string) => join(home, '.local/share/cmod', file)
 
-test.concurrent('cmod watch marks plugins-changed once a linked mod builds after it stops changing, and names a build still failing 10 seconds after the last change', async () => {
+test.concurrent('cmod watch writes when a linked mod last changed to plugins-changed once the mod builds after it stops changing, and names a build still failing 10 seconds after the last change', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')
   await writeFiles(root, {
@@ -32,14 +32,17 @@ test.concurrent('cmod watch marks plugins-changed once a linked mod builds after
   expect(existsSync(store(home, 'plugins-changed'))).toBe(false)
   await until(() => existsSync(store(home, 'store-changed')))
 
+  const changedAt = Date.now()
   await writeFiles(root, { 'hooks/register.js': 'export function register() {}\n' })
   await until(() => existsSync(store(home, 'plugins-changed')))
   expect(existsSync(store(home, 'build-failures.json'))).toBe(false)
-  expect(await readFile(store(home, 'plugins-changed'), 'utf8')).toMatch(/^\d+ \d+\n$/)
+  const marked = Number(/^\n(\d+) demo\n$/.exec(await readFile(store(home, 'plugins-changed'), 'utf8'))?.[1])
+  expect(marked).toBeGreaterThanOrEqual(changedAt)
+  expect(marked).toBeLessThan(changedAt + 2000)
   watching.child.kill()
 }, 60000)
 
-test.concurrent('cmod watch reloads no session for a change only to files git ignores, such as the types Claude Code writes each time it loads the mod', async () => {
+test.concurrent('cmod watch reloads no session for a change only to files git ignores, such as the types Claude Code writes each time it loads the mod, and times a change by its last file git tracks', async () => {
   const home = await temporaryHome()
   const root = join(home, 'Developer/demo-checkout')
   await writeFiles(root, {
@@ -59,8 +62,15 @@ test.concurrent('cmod watch reloads no session for a change only to files git ig
   await Bun.sleep(3500)
   expect(existsSync(store(home, 'plugins-changed'))).toBe(false)
 
+  const changedAt = Date.now()
   await writeFiles(root, { 'hooks/register.js': 'export function register() { return }\n' })
+  await Bun.sleep(1000)
+  const typesWrittenAt = Date.now()
+  await writeFiles(root, { '.claude-plugin/types/claude-code/index.d.ts': 'export type Reloaded = true\n' })
   await until(() => existsSync(store(home, 'plugins-changed')))
+  const marked = Number(/^\n(\d+) demo\n$/.exec(await readFile(store(home, 'plugins-changed'), 'utf8'))?.[1])
+  expect(marked).toBeGreaterThanOrEqual(changedAt)
+  expect(marked).toBeLessThan(typesWrittenAt)
   watching.child.kill()
 }, 60000)
 

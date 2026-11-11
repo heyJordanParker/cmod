@@ -62,7 +62,7 @@ export type PageRequest =
 
 export type SettingsTab = 'changelog' | 'permissions'
 
-export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly requests?: readonly PageRequest[]; readonly isAsked?: true }
+export type PartsUpdate = { readonly parts?: PartList; readonly redraw?: true; readonly requests?: readonly PageRequest[]; readonly isAsked?: true; readonly isStart?: true }
 
 export type ShownPages = { readonly open: readonly { readonly id: string; readonly params: unknown }[]; readonly shown: string | null; readonly isFocused: boolean }
 
@@ -166,7 +166,8 @@ export function merged(updates: readonly PartsUpdate[]): PartsUpdate {
   const parts = updates.findLast((update) => update.parts !== undefined)?.parts
   const requests = updates.flatMap((update) => update.requests ?? [])
   const isRedrawn = updates.some((update) => update.redraw === true)
-  return { ...(parts === undefined ? {} : { parts }), ...(isRedrawn ? { redraw: true } : {}), ...(requests.length === 0 ? {} : { requests }) }
+  const isStart = updates.some((update) => update.isStart === true)
+  return { ...(parts === undefined ? {} : { parts }), ...(isRedrawn ? { redraw: true } : {}), ...(requests.length === 0 ? {} : { requests }), ...(isStart ? { isStart } : {}) }
 }
 
 type MarkdownRender = {
@@ -760,7 +761,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
     started() {
       const held = merged(beforeStart ?? [])
       beforeStart = undefined
-      void send({ ...held, parts: partList() })
+      void send({ ...held, parts: partList(), isStart: true })
     },
     changed() {
       if (widgets.size > 0 || pages.size > 0) void send({ redraw: true })
