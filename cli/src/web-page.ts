@@ -271,7 +271,7 @@ body{margin:0;background:var(--background);color:var(--text);font:13px/var(--row
 .t.cut .t{white-space:inherit}
 .size-caption{font-size:.8em}.size-footnote{font-size:.85em}.size-heading{font-size:1.15em;font-weight:600}.size-title{font-size:1.3em;font-weight:700}
 .bordered::before{content:'';position:absolute;inset:calc(var(--row)/2) .5ch;border:var(--border-width) var(--border-style) var(--border-color);border-radius:var(--border-radius);pointer-events:none}
-.button{font:inherit;color:inherit;background:none;border:1px solid var(--subtle);border-radius:4px;padding:0 1ch;line-height:calc(var(--row) - 2px);cursor:pointer;text-align:left;align-self:flex-start}
+.button{font:inherit;color:inherit;text-decoration:none;background:none;border:1px solid var(--subtle);border-radius:4px;padding:0 1ch;line-height:calc(var(--row) - 2px);cursor:pointer;text-align:left;align-self:flex-start}
 .button.primary{border-color:var(--claude);color:var(--claude)}
 .button.plain{border:0;padding:0;line-height:inherit;border-radius:0}
 .button.dim{color:color-mix(in srgb,currentColor 55%,transparent)}

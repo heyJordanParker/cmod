@@ -33,10 +33,10 @@ import { createHotkeys } from './hotkeys.js'
 import type { Pages } from './pages.js'
 import { drawnParts, type DrawnParts } from './parts.js'
 import { createWatches } from './watches.js'
-import { createUi, partMethods, stalePress, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownPages, type UiArea } from './ui.js'
+import { createUi, openLink, partMethods, stalePress, type BorrowedMarkdown, type PartDraw, type PartPress, type PartsUpdate, type ShownPages, type UiArea } from './ui.js'
 import type { Widgets } from './widgets.js'
 import { Progress } from '../ui/components.js'
-import { Box, Text } from '../ui/elements.js'
+import { Box, Text, withLinks, type Press } from '../ui/elements.js'
 
 export type Plugin = {
   readonly name: string
@@ -698,9 +698,18 @@ export function createLifecycle<State extends object, Declared extends Options =
     },
     async start(claudeCalls, read) {
       if (runtime !== undefined) return
+      const open = (href: string, press: Press) =>
+        void openLink(claudeCalls, href, press.surface).then(
+          (done) => done === 'copied' && runtime?.toaster.toast.success('Copied the link', { description: 'Paste it in your browser.' }),
+          (error: unknown) => toastFailure({ id: 'open-link', message: 'Could not open the link', error, isCritical: true }),
+        )
       const naming: Claude = {
         ...claudeCalls,
-        ui: { ...claudeCalls.ui, warn: (id, text) => (runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text)) },
+        ui: {
+          ...claudeCalls.ui,
+          warn: (id, text) => (runtime === undefined ? claudeCalls.ui.warn(id, text) : runtime.toaster.warn(id, text)),
+          resolve: (e) => withLinks(claudeCalls.ui.resolve(e), e.surface, open),
+        },
         session: { ...claudeCalls.session, id: async () => startingSession ?? claudeCalls.session.id() },
       }
       programs = locatingPrograms(naming)

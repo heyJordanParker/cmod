@@ -1,4 +1,39 @@
-import type { ElementName, ElementTable, Elements, MarkdownProps, RenderElement } from 'claude-code'
+import type {
+  BoxProps as ClaudeBoxProps,
+  ButtonProps as ClaudeButtonProps,
+  ClientProps as ClaudeClientProps,
+  CodeProps as ClaudeCodeProps,
+  Color as ClaudeColor,
+  ElementConstructor,
+  ElementName,
+  ElementTable,
+  Elements,
+  ImageProps as ClaudeImageProps,
+  InputProps as ClaudeInputProps,
+  MarkdownProps as ClaudeMarkdownProps,
+  RasterProps as ClaudeRasterProps,
+  RenderElement,
+  RenderSurface,
+  SelectProps as ClaudeSelectProps,
+  SvgProps as ClaudeSvgProps,
+  TextProps as ClaudeTextProps,
+  UiPressArgument,
+} from 'claude-code'
+
+export type BoxProps = ClaudeBoxProps
+export type TextProps = ClaudeTextProps
+export type CodeProps = ClaudeCodeProps
+export type MarkdownProps = ClaudeMarkdownProps
+export type InputProps = ClaudeInputProps
+export type SelectProps = ClaudeSelectProps
+export type ImageProps = ClaudeImageProps
+export type SvgProps = ClaudeSvgProps
+export type RasterProps = ClaudeRasterProps
+export type ClientProps = ClaudeClientProps
+export type Color = ClaudeColor
+export type Press = UiPressArgument
+
+export type ButtonProps = Omit<ClaudeButtonProps, 'onPress'> & ({ readonly onPress: (press: Press) => void; readonly href?: never } | { readonly href: string; readonly onPress?: never })
 
 type Terminal = Elements['terminal'] & Elements['desktop']
 
@@ -104,10 +139,23 @@ export function drawsFocusable(data: unknown, key: string): boolean {
   return Object.values(fields).some((each) => drawsFocusable(each, key))
 }
 
+export function withLinks(table: ElementTable, surface: RenderSurface, open: (href: string, press: Press) => void): ElementTable {
+  const { Button: button, Link: link } = table as CompletedTable
+  const opening = (props: Readonly<Record<string, unknown>>) => {
+    const { href, ...rest } = props
+    if (typeof href !== 'string') return button(props)
+    const { label, children } = rest
+    const hasChildren = children !== undefined && !(Array.isArray(children) && children.length === 0)
+    if (surface !== 'terminal' && href.startsWith('https:')) return link({ href, ...(typeof label === 'string' ? { label } : {}), ...(hasChildren ? { children } : {}) })
+    return button({ ...rest, onPress: (press: Press) => open(href, press) })
+  }
+  return { ...table, Button: opening }
+}
+
 export const Box = element('Box')
 export const Text = element('Text')
-export const Button = element('Button')
-export const Link = element('Link')
+export const Button = element('Button') as unknown as ElementConstructor<ButtonProps>
+const Link = element('Link')
 export const Code = element('Code')
 export const Markdown = element('Markdown')
 export const Input = element('Input')

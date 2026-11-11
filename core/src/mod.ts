@@ -14,7 +14,6 @@ import type {
   ProcessSpawnChunk,
   ProcessSpawnRequest,
   ProcessSpawnResult,
-  RenderElement,
   Settings,
 } from 'claude-code'
 import { checkHotkeys, type Hotkey, type HotkeyInit, type Hotkeys } from './hotkeys.js'
@@ -32,6 +31,18 @@ import type { Subscription } from './utils/subscription.js'
 
 export type { Subscription }
 
+export type { AskOptions, HttpResponse, ModelCompleteOptions, ModelCompleteRequest, ModelCompleteResult, ProcessRunResult, Settings }
+
+export type ProcessRunOptions = ProcessRunInit
+
+export type ProcessSpawnOptions = Omit<ProcessSpawnRequest, 'argv'>
+
+export type Subprocess = HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+
+export type HttpOptions = HttpInit
+
+export type StatOptions = FsStatOptions
+
 export type Timer = { readonly isRunning: boolean; stop(): void }
 
 export type Reservation = { remove(): void }
@@ -42,7 +53,7 @@ export type ToastType = 'default' | 'success' | 'info' | 'warning' | 'error' | '
 
 export type ToastOptions = {
   readonly id?: ToastId
-  readonly description?: string | RenderElement
+  readonly description?: string | JSX.Element
   readonly action?: { readonly label: string; readonly onClick: () => unknown }
   readonly duration?: number
 }
@@ -126,7 +137,7 @@ export type Imports = {
     exists(path: string): Promise<boolean>
     find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
     list(path?: string): Promise<Entry[]>
-    stat(path: string, options?: FsStatOptions): Promise<Stat>
+    stat(path: string, options?: StatOptions): Promise<Stat>
     onChange(matcher: { readonly path: string | readonly string[] }, listener: (change: FileChange) => unknown): Subscription
   }
   readonly metadata: {
@@ -134,10 +145,10 @@ export type Imports = {
     update(path: string, change: (metadata: Record<string, string>) => void): Promise<void>
   }
   readonly process: {
-    run(argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult>
-    spawn(argv: readonly string[], init?: Omit<ProcessSpawnRequest, 'argv'>): HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+    run(argv: readonly string[], options?: ProcessRunOptions): Promise<ProcessRunResult>
+    spawn(argv: readonly string[], options?: ProcessSpawnOptions): Subprocess
   }
-  readonly http: { fetch(url: string, init?: HttpInit): Promise<HttpResponse> }
+  readonly http: { fetch(url: string, options?: HttpOptions): Promise<HttpResponse> }
   readonly device: { read(): Promise<Device> }
   readonly clipboard: { write(text: string): Promise<void> }
   readonly mods: { isLoaded(name: string): Promise<boolean> }
@@ -190,12 +201,12 @@ export const metadata: Imports['metadata'] = {
 }
 
 export const process: Imports['process'] = {
-  run: (argv, init) => bound().process.run(argv, init),
-  spawn: (argv, init) => bound().process.spawn(argv, init),
+  run: (argv, options) => bound().process.run(argv, options),
+  spawn: (argv, options) => bound().process.spawn(argv, options),
 }
 
 export const http: Imports['http'] = {
-  fetch: (url, init) => bound().http.fetch(url, init),
+  fetch: (url, options) => bound().http.fetch(url, options),
 }
 
 export const device: Imports['device'] = {
@@ -285,7 +296,7 @@ export function defineMod<State extends StateGroups = Record<never, never>, Name
 
 export type { Matcher } from './utils/matcher.js'
 export type { Combo, Hotkey, HotkeyInit, Key } from './hotkeys.js'
-export type { OpenOptions, Page, PageInit, PageProps, Pane, PaneInit, PaneProps, ScrollOptions, ScrollTarget } from './ui/panes.js'
+export type { OpenOptions, Page, PageInit, PageProps, Pane, PaneClose, PaneInit, PaneProps, PaneScroll, ScrollOptions, ScrollTarget } from './ui/panes.js'
 export type { Kind, Row, Style, StyleInit, StyleProps } from './ui/styles.js'
 export type { Block } from './ui/markdown.js'
 export { AskUserQuestion, CommandOutput, ToolGroup, ToolProgress } from './ui/styles.js'

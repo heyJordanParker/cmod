@@ -4,9 +4,9 @@ import { defineMod } from '../../src/mod.js'
 import { createLifecycle } from '../../src/runtime/lifecycle.js'
 import { testMod } from '../../src/testing.js'
 import { fakeClaude } from '../../src/testing/fake-claude.js'
-import { Box, Image, Svg, Text } from '../../src/ui/elements.js'
+import { Box, Button, Image, Svg, Text } from '../../src/ui/elements.js'
 
-function Count({ count }: { readonly count: number }): RenderElement {
+function Count({ count }: { readonly count: number }): JSX.Element {
   return <Text bold>Count: {count}</Text>
 }
 
@@ -92,4 +92,40 @@ test('Image draws', async () => {
   const pane = { surface: 'terminal', component: 'Pane', requestId: 'chart', props: { title: 'Chart', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
 
   expect(await lifecycle.route('ui.render', pane, async () => Box({}))).toEqual({ type: 'Image', props: chart } as unknown as RenderElement)
+})
+
+test("a Button with an https href draws as the desktop app's own link, and one with another href as a button that copies it there", async () => {
+  const fake = fakeClaude({ name: 'docs', root: '/test/plugins/docs' })
+  fake.claude.ui.resolve = () => ({ Box: (props: object) => ({ type: 'Box', props }), Button: (props: object) => ({ type: 'Button', props }), Link: (props: object) => ({ type: 'Link', props }) }) as unknown as ElementTable
+  const lifecycle = createLifecycle(
+    defineMod({
+      name: 'docs',
+      async setup(mod) {
+        await mod.panes
+          .add({
+            id: 'docs',
+            title: 'Docs',
+            render: () => (
+              <Box>
+                <Button href="https://example.com/docs" label="Open the docs" />
+                <Button href="http://127.0.0.1:4567/" label="Open the app" />
+              </Box>
+            ),
+          })
+          .open()
+      },
+    }),
+  )
+  await lifecycle.start(fake.claude, async () => ({ name: 'docs', root: '/test/plugins/docs', version: '1.0.0', store: '/test/store', isInstalled: true, shouldRecord: false, steps: {} }))
+  const pane = { surface: 'desktop', component: 'Pane', requestId: 'docs', props: { title: 'Docs', isFocused: false, bodyColumns: 80, placement: 'dock' } } as Frozen<Args<'ui.render'>>
+
+  const drawn = (await lifecycle.route('ui.render', pane, async () => Box({}))) as unknown as { readonly props: { readonly children: readonly { readonly type: string; readonly props: Record<string, unknown> }[] } }
+  const [link, button] = drawn.props.children
+  const press = button?.props['onPress'] as (press: object) => Promise<void>
+  await press({ plugin: 'docs', element: 'Open the app', component: 'Pane', requestId: 'docs', surface: 'desktop' })
+  await fake.settle()
+
+  expect(link).toEqual({ type: 'Link', props: { href: 'https://example.com/docs', label: 'Open the docs' } })
+  expect(button?.type).toBe('Button')
+  expect(fake.calls.filter((call) => call.call === 'ui.copy').map((call) => call.args)).toEqual([[{ text: 'http://127.0.0.1:4567/', surface: 'desktop' }]])
 })

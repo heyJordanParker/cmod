@@ -108,6 +108,10 @@ async function startMod($: EngineInterface, eventInput: Frozen<Args<'session.sta
       home: () => $.env.get('HOME'),
       dataHome: () => $.env.get('XDG_DATA_HOME'),
       configHome: () => $.env.get('CLAUDE_CONFIG_DIR'),
+      browser: () => $.env.get('BROWSER'),
+      sshConnection: () => $.env.get('SSH_CONNECTION'),
+      display: () => $.env.get('DISPLAY'),
+      waylandDisplay: () => $.env.get('WAYLAND_DISPLAY'),
     },
     device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) },
@@ -145,12 +149,16 @@ export const serveCmodPlugin: ServeCmodPlugin = ({ claude, router, store, projec
   return { conversations, widgets, pages }
 }
 
-export function registerMod<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
+export type AddHook = On
+
+export type { PluginOptions }
+
+export function registerMod<State extends object, Declared extends Options>(addHook: AddHook, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
   registerHooks(addHook, definition, options)
   addHook('ui.render', routeToMod).catch(routeFailure)
 }
 
-export function registerCmodPlugin<State extends object, Declared extends Options>(addHook: On, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
+export function registerCmodPlugin<State extends object, Declared extends Options>(addHook: AddHook, definition: ModDefinition<State, string, Declared>, options: PluginOptions): void {
   registerHooks(addHook, definition, options, serveCmodPlugin)
   addHook('ui.render', { component: ['AbovePrompt', 'PromptHint', 'SessionMode', 'Spinner', 'TurnDuration', 'Pane'] }, routeToMod).catch(routeFailure)
   addHook('command.describe', { command: /--/ }, routeToMod).catch(routeFailure)
@@ -209,7 +217,7 @@ function registerHooks<State extends object, Declared extends Options>(addHook: 
   addHook('session.compact', routeToMod).catch(routeFailure)
 }
 
-export function registerPermissionCheck(addHook: On): void {
+export function registerPermissionCheck(addHook: AddHook): void {
   permissionCheck = permissionRoutes
   addHook('tool.check', routeToMod).catch(routeFailure)
   addHook('classic.PermissionRequest', routeToMod).catch(routeFailure)

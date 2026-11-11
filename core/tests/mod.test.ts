@@ -1348,6 +1348,65 @@ test('pane.scrollTo asks Claude Code to bring a row of the pane into view', asyn
   expect(tested.calls.filter((call) => call.call === 'ui.scroll').map((call) => call.args)).toEqual([[{ to: 'end', in: 'log' }]])
 })
 
+const ranOn = (system: string, ran: (readonly string[])[]) => async (argv: readonly string[]) => (ran.push(argv), { exitCode: 0, stdout: argv[0] === 'uname' ? `${system}\n` : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
+test('a Button with an href opens the page in the browser of the computer the terminal runs on', async () => {
+  const ran: (readonly string[])[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'docs',
+      async setup(mod) {
+        await mod.panes.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
+      },
+    }),
+  )
+  tested.fakes.process.run = ranOn('Darwin', ran)
+
+  await tested.shown.pane.press('Open the docs')
+  await tested.settle()
+
+  expect(ran).toEqual([['uname', '-s'], ['open', 'https://example.com/docs']])
+  expect(tested.calls.some((call) => call.call === 'ui.copy')).toBe(false)
+})
+
+test('a Button with an href copies the link where the computer has no browser to open, and says so', async () => {
+  const ran: (readonly string[])[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'docs',
+      async setup(mod) {
+        await mod.panes.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
+      },
+    }),
+  )
+  tested.fakes.process.run = ranOn('Linux', ran)
+
+  await tested.shown.pane.press('Open the docs')
+  await tested.settle()
+
+  expect(ran).toEqual([['uname', '-s']])
+  expect(tested.calls.filter((call) => call.call === 'ui.copy').map((call) => call.args)).toEqual([[{ text: 'https://example.com/docs', surface: 'terminal' }]])
+  expect(tested.shown.toasts).toContainEqual({ type: 'success', message: 'Copied the link', description: 'Paste it in your browser.' })
+})
+
+test('a Button with an href on a Sidebar page opens the page through cmod, which draws the page', async () => {
+  const ran: (readonly string[])[] = []
+  const tested = testMod(
+    defineMod({
+      name: 'docs',
+      async setup(mod) {
+        await mod.sidebar.add({ id: 'docs', title: 'Docs', render: () => Button({ href: 'https://example.com/docs', label: 'Open the docs' }) }).open()
+      },
+    }),
+  )
+  tested.fakes.process.run = ranOn('Darwin', ran)
+
+  await tested.shown.page.press('Open the docs')
+  await tested.settle()
+
+  expect(ran).toEqual([['uname', '-s'], ['open', 'https://example.com/docs']])
+})
+
 const answerBox = (focus: (key: string) => Promise<void>) => Box({ flexDirection: 'column', children: [Text({ children: 'Ship it on Friday?' }), Button({ key: 'answer-button', label: 'Answer', onPress: () => focus('answer') }), Input({ key: 'answer', placeholder: 'Your answer', onSubmit: () => undefined })] })
 
 test("page.focus moves the keyboard to the page's field once, so the page shown again after the person hid it keeps its own keys", async () => {

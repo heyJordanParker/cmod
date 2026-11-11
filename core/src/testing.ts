@@ -53,12 +53,12 @@ import { fakeSessions, type FakeSession, type FakeSessions, type MessageDraft, t
 import { listed, messageOf } from './utils/text.js'
 import { componentOf, type KindProps, type Row, type StyledAt } from './ui/styles.js'
 import { AbovePrompt, areas, BelowPrompt, Dashboard, TurnEnd as TurnEndArea, Working, type Area } from './ui/areas.js'
-import { drawWith, elementOf } from './ui/elements.js'
+import { drawWith, elementOf, withLinks, type Press } from './ui/elements.js'
 import { drawnParts } from './runtime/parts.js'
 import { serveWidgets, type Widgets } from './runtime/widgets.js'
 import { engineOf } from './runtime/engine.js'
 import { pagesOf, servePages } from './runtime/pages.js'
-import { inheriting, partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
+import { inheriting, openLink, partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
 export type { FakeSession, MessageDraft, StartedTask } from './testing/fake-sessions.js'
@@ -70,7 +70,7 @@ export type ShownPart = {
   readonly params: unknown
   lines(options?: { readonly columns?: number }): Promise<string[]>
   press(key: string, link?: string): Promise<void>
-  input(key: string, text: string, type?: UiInputArgument['kind']): Promise<void>
+  input(key: string, text: string, type?: 'change' | 'submit'): Promise<void>
   select(key: string, value: string): Promise<void>
   focusedKey(): Promise<string | undefined>
 }
@@ -281,8 +281,13 @@ export function testMod<State extends object, Declared extends Options = Options
     missedMarkdown.clear()
     return draw()
   }
-  const cmodClaude: Claude = { ...fake.claude, cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) } }
   const reportPart = (_id: string, message: string, error: unknown) => fake.claude.ui.log(`cmod: ${message}: ${messageOf(error)}`, { to: 'debug' })
+  const openFromCmod = (href: string, press: Press) => void openLink(fake.claude, href, press.surface).catch((error: unknown) => reportPart('open-link', 'Could not open the link', error))
+  const cmodClaude: Claude = {
+    ...fake.claude,
+    ui: { ...fake.claude.ui, resolve: (e) => withLinks(fake.claude.ui.resolve(e), e.surface, openFromCmod) },
+    cmod: { call: async (input) => (input.to === name ? callMod(input.method, input.input) : fake.claude.cmod.call(input)) },
+  }
   const tellRefusedPress = (_mod: string, error: unknown) => fake.claude.ui.log(`cmod: ${name} did not take the press: ${messageOf(error)}`, { to: 'debug' })
   const parts = drawnParts({ claude: cmodClaude, report: reportPart, press: (mod: string, input: PartPress) => void pressPart(input).catch((error: unknown) => tellRefusedPress(mod, error)) })
   const servedWidgets = async (): Promise<Widgets> => {
@@ -503,7 +508,8 @@ export function testMod<State extends object, Declared extends Options = Options
     const drawn = (await callMod(partMethods.draw, { page: pageId, params: page.params, columns, isFocused: page.isFocused })) as DrawnPart | null
     await fake.settle()
     const tree = drawn?.tree ?? null
-    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(elements, () => elementOf(tree, `${name}/${pageId}:`, (handler, args) => void modeling(pressPart({ draw: drawn.draw, handler, args }))), markdownIn(elements, { surface: 'terminal', columns })) as RenderElement)
+    const table = withLinks(elements, 'terminal', openFromCmod)
+    const drawing = tree === null || drawn === null ? elements.Box({}) : await withOwnMarkdown(async () => drawWith(table, () => elementOf(tree, `${name}/${pageId}:`, (handler, args) => void modeling(pressPart({ draw: drawn.draw, handler, args }))), markdownIn(table, { surface: 'terminal', columns })) as RenderElement)
     checkKeys(drawing, cmodPluginName, 'Pane')
     return { drawing, columns }
   }

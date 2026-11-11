@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { parsePreferences, parseWebUi } from '../../src/records.js'
 import { htmlOf } from '../../src/runtime/web.js'
 import { Dialog, Help, Pagination, Panel, Progress, Split, Tabs, Toggle, Tooltip } from '../../src/ui/components.js'
-import { Box, Button, Code, elementData, Image, Input, Link, Markdown, Raster, Select, Svg, Text, type Handler } from '../../src/ui/elements.js'
+import { Box, Button, Code, elementData, Image, Input, Markdown, Raster, Select, Svg, Text, type Handler } from '../../src/ui/elements.js'
 
 const drawn = (element: unknown) => {
   const handlers: Handler[] = []
@@ -77,9 +77,13 @@ test('text a mod draws never becomes markup, and a style or color it names is dr
   expect(html).toBe('<span class="t" style="background:#ff0000">&#60;script&#62;alert(1)&#60;/script&#62;</span>')
 })
 
-test('a Link opens only an http, https, mailto, or file link, in a new tab', () => {
-  expect(drawn(Link({ href: 'https://example.com', label: 'docs' })).html).toBe('<a class="link" href="https://example.com" target="_blank" rel="noopener noreferrer">docs</a>')
-  expect(drawn(Link({ href: 'javascript:alert(1)', label: 'run' })).html).toBe('<span class="t">run</span>')
+test('a Button with an href opens only an http, https, mailto, or file link, in a new tab, drawn as a button', () => {
+  expect(drawn(Button({ plain: true, key: 'docs', href: 'https://example.com', label: 'docs' })).html).toBe('<a class="button plain" href="https://example.com" target="_blank" rel="noopener noreferrer" data-key="docs">docs</a>')
+  expect(drawn(Button({ key: 'run', href: 'javascript:alert(1)', label: 'run' })).html).toBe('<button type="button" class="button" data-key="run">run</button>')
+})
+
+test('a Link from a mod on an older @cmodjs/core still opens in a new tab', () => {
+  expect(htmlOf({ $cmodElement: 'Link', props: { href: 'https://example.com', label: 'docs' } })).toBe('<a class="link" href="https://example.com" target="_blank" rel="noopener noreferrer">docs</a>')
 })
 
 test('an Input keeps its value, its handlers, and its submit label, and rows above 1 draw a textarea', () => {

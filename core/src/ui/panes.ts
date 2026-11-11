@@ -1,5 +1,9 @@
-import type { Frozen, PaneCloseInput, RenderElement, RenderPropsOf, UiScrollInput } from 'claude-code'
+import type { Frozen, PaneCloseInput, RenderPropsOf, UiScrollInput } from 'claude-code'
 import type { Mod, Surface } from '../mod.js'
+
+export type PaneScroll = Frozen<UiScrollInput>
+
+export type PaneClose = Frozen<PaneCloseInput>
 
 export type ScrollTarget = 'start' | 'end' | { readonly key: string }
 
@@ -16,9 +20,9 @@ export type PaneInit<State extends object = Record<never, never>, Params = undef
   readonly rows?: number | ((state: State) => number | undefined)
   readonly closeOnEscape?: true
   readonly holdToasts?: true
-  render(mod: Mod<State>, props: PaneProps<Params>): RenderElement
-  onScroll?(mod: Mod<State>, e: Frozen<UiScrollInput>): void | Promise<void>
-  onClose?(mod: Mod<State>, e: Frozen<PaneCloseInput>): void | Promise<void>
+  render(mod: Mod<State>, props: PaneProps<Params>): JSX.Element
+  onScroll?(mod: Mod<State>, scroll: PaneScroll): void | Promise<void>
+  onClose?(mod: Mod<State>, close: PaneClose): void | Promise<void>
 }
 
 export type Pane<Params = undefined> = {
@@ -40,7 +44,7 @@ export type PageProps<Params> = { readonly params: Params; readonly isFocused: b
 export type PageInit<State extends object = Record<never, never>, Params = undefined> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: PageProps<Params>): RenderElement
+  render(mod: Mod<State>, props: PageProps<Params>): JSX.Element
 }
 
 export type Page<Params = undefined> = {

@@ -1,6 +1,5 @@
 import { afterAll, expect, test } from 'bun:test'
-import type { HookStream, HttpResponse, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
-import { defineMod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, type HttpResponse, type Subprocess } from '../node_modules/@cmodjs/core/mod.js'
 import type { SessionAbout, SessionEvents } from '../node_modules/@cmodjs/core/runtime/web.js'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { calledAnswer } from '../node_modules/@cmodjs/core/testing/fake-claude.js'
@@ -58,12 +57,12 @@ async function firstLine(stream: AsyncIterable<Uint8Array>): Promise<string> {
   throw new Error('cmod web serve printed no address.')
 }
 
-function running(line: string): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
-  async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-    yield { stream: 'stdout', text: `${line}\n` }
-    return await new Promise<ProcessSpawnResult>(() => undefined)
+function running(line: string): Subprocess {
+  async function* read() {
+    yield { stream: 'stdout' as const, text: `${line}\n` }
+    return await new Promise<never>(() => undefined)
   }
-  return Object.assign(read(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  return Object.assign(read(), { result: new Promise<never>(() => undefined) })
 }
 
 async function until<Value>(found: () => Value | undefined, what: () => string): Promise<Value> {

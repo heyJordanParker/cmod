@@ -92,11 +92,10 @@ What changed in each version of ${name}, for the people who use it. cmod publish
 - A rule that tells Claude where to read the count.
 `,
     'hooks/hooks.json': json({ description: `${name} hooks module`, modules: ['./register.ts'] }),
-    'hooks/register.ts': `import type { On, PluginOptions } from 'claude-code'
-import { registerMod } from '../node_modules/@cmodjs/core/register.js'
+    'hooks/register.ts': `import { registerMod, type AddHook, type PluginOptions } from '../node_modules/@cmodjs/core/register.js'
 import { ${definition} } from '../src/mod.js'
 
-export function register(addHook: On, options: PluginOptions): void {
+export function register(addHook: AddHook, options: PluginOptions): void {
   registerMod(addHook, ${definition}, options)
 }
 `,
@@ -148,10 +147,9 @@ export const promptsWidget: WidgetInit<${state}> = {
   render: (mod) => <PromptCount count={mod.state.session.prompts} />,
 }
 `,
-    'src/components/prompt-count.tsx': `import type { RenderElement } from 'claude-code'
-import { Text } from '../../node_modules/@cmodjs/core/ui/elements.js'
+    'src/components/prompt-count.tsx': `import { Text } from '../../node_modules/@cmodjs/core/ui/elements.js'
 
-export function PromptCount({ count }: { readonly count: number }): RenderElement {
+export function PromptCount({ count }: { readonly count: number }): JSX.Element {
   return <Text>{\`Prompts this session: \${count}\`}</Text>
 }
 `,

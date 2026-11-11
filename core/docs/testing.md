@@ -259,7 +259,7 @@ test('the hotkey shows the prompt count in the Sidebar', async () => {
 
 `shown.page` and `shown.pane` act on an element of what shows as the person does, and await its handler. Each rejects when it does not draw the element: `The pane "<pane>" of <mod> draws no <Element> with the key "<key>".`, or the same for a page.
 
-- `press(key)` presses the `Button` whose `key` or `label` is `key`, and runs its `onPress`.
+- `press(key)` presses the `Button` whose `key` or `label` is `key`, and runs its `onPress`. A `Button` with `href` opens its page as a press in the terminal does ([ui.md](ui.md#a-button-opens-a-web-page-with-href)): it runs `uname -s` and the opener through `fakes.process.run`, or copies the link through `ui.copy` on a Linux with no display.
 - `press(key, link)` presses the link `link` in the `Markdown` whose `key` is `key`, and runs its `onLinkPress`.
 - `input(key, text)` types `text` into the `Input` whose `key` is `key` and presses Enter, which runs its `onSubmit`. With a third argument `'change'` it runs `onInput` instead, as one edit does.
 - `select(key, value)` picks the option `value` of the `Select` whose `key` is `key`, and runs its `onSelect`. It rejects an option the `Select` does not have.

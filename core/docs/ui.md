@@ -23,12 +23,11 @@ A mod never asks the person to type a command. When a toast, a page, or a pane n
 
 ## Elements
 
-`ui/elements.js` exports the elements a render draws with. Each takes the props Claude Code types in the `claude-code` module:
+`ui/elements.js` exports the elements a render draws with, and the type of each one's props. A `color` prop takes a `Color`, Claude Code's theme names such as `'claude'` or any CSS color:
 
 - `Box`, with `BoxProps`, draws a flex container: `flexDirection`, `gap`, `padding`, `margin`, `minWidth`, and the rest.
 - `Text`, with `TextProps`, draws text: `bold`, `dimColor`, `color`, `wrap`, and the rest.
-- `Button`, with `ButtonProps`, draws a button: `label` or one string child, `onPress`, `hotkey`, `key`, `variant`.
-- `Link`, with `LinkProps`, draws a link.
+- `Button`, with `ButtonProps`, draws a button: `label` or one string child, `hotkey`, `key`, `variant`, and either `onPress` or `href`. `onPress` gets a `Press`, which names the `surface` the press came from.
 - `Code`, with `CodeProps`, draws highlighted code.
 - `Markdown`, with `MarkdownProps`, draws markdown text, as Claude Code draws a reply.
 - `Input`, with `InputProps`, draws a text input. It is one line tall unless `rows` says more: `rows: 4` draws four lines that wrap, as a `<textarea>`, for a note or a comment.
@@ -40,13 +39,26 @@ A mod never asks the person to type a command. When a toast, a page, or a pane n
 
 Claude Code refuses a whole drawing that holds an element its app does not draw, and draws its own instead. A style reads `surface` to pick what to draw, and a pane reads it from its props.
 
-Write them as JSX in a `.tsx` file. The template's `tsconfig.json` sets `jsx: react` with `jsxFactory: h` and `jsxFragmentFactory: Fragment`. Claude Code declares `h` and `Fragment` as globals, and `testMod` supplies them in tests. Never declare, import, or name anything `h` or `Fragment` in a file that writes JSX. A component is a function that returns a `RenderElement`:
+### A Button opens a web page with href
+
+A `Button` with `href` in place of `onPress` opens that page on the person's own device, so every control a mod draws is a `Button`, and works the same in every terminal. A link inside prose is a `Markdown` link.
 
 ```tsx
-import type { RenderElement } from 'claude-code'
+<Button key="sign-in" href={signInUrl} label="Sign in" />
+```
+
+Where the person presses it decides how it opens:
+
+- In the terminal, cmod opens the page by the rule Claude Code uses for its own links. It runs the program `BROWSER` names, unless `BROWSER` is `true`. Over ssh, or on Linux with neither `DISPLAY` nor `WAYLAND_DISPLAY`, the browser is on another computer, so cmod copies the link to the person's clipboard and shows `Copied the link` with `Paste it in your browser.` under it. Anywhere else it runs `open` on macOS and `xdg-open` on Linux.
+- The desktop, phone, and VS Code apps draw an `https:` link as their own link, which the app opens. They draw any other link as a button whose press copies it there, because they open only `https:`.
+- The browser app draws it as a link styled as a button, which the browser opens in a new tab.
+
+Write them as JSX in a `.tsx` file. The template's `tsconfig.json` sets `jsx: react` with `jsxFactory: h` and `jsxFragmentFactory: Fragment`. Claude Code declares `h` and `Fragment` as globals, and `testMod` supplies them in tests. Never declare, import, or name anything `h` or `Fragment` in a file that writes JSX. A component is a function that returns a `JSX.Element`, and takes its children as `JSX.Children`. Both are global, so a component imports only the elements it draws:
+
+```tsx
 import { Box, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
-export function Count({ label, count }: { readonly label: string; readonly count: number }): RenderElement {
+export function Count({ label, count }: { readonly label: string; readonly count: number }): JSX.Element {
   return (
     <Box gap={1}>
       <Text bold>{label}</Text>
@@ -66,7 +78,7 @@ An element built outside a render, at module load or in a hook, holds its props 
 
 ```ts
 Tabs(props: { tabs: readonly { key: string; label: string; hotkey?: string }[]; selected: string; onSelect(key: string): void; children? })
-Split(props: { children: readonly RenderElement[] })
+Split(props: { children: readonly JSX.Element[] })
 Panel(props: { title: string; children? })
 Toggle(props: { label: string; checked: boolean; onChange(checked: boolean): void })
 Tooltip(props: { text: string; children? })
@@ -114,7 +126,7 @@ export const notesPage: PageInit<NotesState> = {
 type PageInit<State, Params = undefined> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: { readonly params: Params; readonly isFocused: boolean; readonly columns: number }): RenderElement
+  render(mod: Mod<State>, props: { readonly params: Params; readonly isFocused: boolean; readonly columns: number }): JSX.Element
 }
 
 type Page<Params = undefined> = {
@@ -184,9 +196,9 @@ type PaneInit<State, Params = undefined> = {
   readonly rows?: number | ((state: State) => number | undefined)
   readonly closeOnEscape?: true
   readonly holdToasts?: true
-  render(mod: Mod<State>, props: PaneProps<Params>): RenderElement
-  onScroll?(mod: Mod<State>, e: Frozen<UiScrollInput>): void | Promise<void>
-  onClose?(mod: Mod<State>, e: Frozen<PaneCloseInput>): void | Promise<void>
+  render(mod: Mod<State>, props: PaneProps<Params>): JSX.Element
+  onScroll?(mod: Mod<State>, scroll: PaneScroll): void | Promise<void>
+  onClose?(mod: Mod<State>, close: PaneClose): void | Promise<void>
 }
 ```
 
@@ -198,7 +210,7 @@ type PaneInit<State, Params = undefined> = {
 - `closeOnEscape` closes the pane when the person presses Escape while it holds the keyboard. Left out, Escape gives the keyboard back to the prompt and the pane stays.
 - `holdToasts` holds every toast back while the pane is shown, the toasts of other plugins and of Claude Code included. Use it for a pane the person answers and closes, never for one that stays open.
 - `render` draws the pane's body. `props` holds `params`, `surface`, the app that draws it, `title`, `isFocused`, `bodyColumns`, `placement` (`'dock'` or `'inline'`), `scroll`, and `view`, which transcript is on screen beside the pane.
-- `onScroll` runs after this pane's window moved. `onClose` runs after the pane closed, by the person or by `close()`, and `e.origin.kind` is `'person'` or `'plugin'`. A handler that throws shows the error toast `The <title> pane's <handler> threw`.
+- `onScroll` runs after this pane's window moved, with a `PaneScroll`. `onClose` runs after the pane closed, by the person or by `close()`, with a `PaneClose`, whose `origin.kind` is `'person'` or `'plugin'`. A handler that throws shows the error toast `The <title> pane's <handler> threw`.
 - `open` asks Claude Code to show the pane, and `isOpen` turns true once Claude Code places it. A pane opened from what the person did shows at any width, and one opened from anything else only at 144 columns, or 110 for a pane the person opened before.
 - `focus` moves the keyboard once to the `Button`, `Input`, or `Select` the pane drew with that `key`, while the pane holds the keyboard. It resolves once the keyboard moved, and rejects with `<mod>: Claude Code did not focus "<key>" in the <title> pane: <reason>` when it did not.
 - Adding two panes with one id throws `<mod>: the pane "<id>" is already added. Give each pane its own id.`
@@ -253,7 +265,7 @@ type WidgetInit<State> = {
   readonly title: string
   readonly areas: readonly [Area, ...Area[]]
   readonly place?: { readonly side?: 'left' | 'right'; readonly size?: 'fit' | 'fill' }
-  render(mod: Mod<State>, context: WidgetContext): RenderElement | undefined
+  render(mod: Mod<State>, context: WidgetContext): JSX.Element | undefined
 }
 
 type WidgetContext =
@@ -395,12 +407,11 @@ A markdown style draws wherever markdown shows: in Claude's replies and in every
 Claude Code refuses a whole drawing in which two `Input`, `Select`, `Markdown`, `Client`, `Raster`, or `Image` elements share a key. So cmod puts each block's place in front of every key its style draws, and the keys a style draws need be unique only within the one block it draws, as a component's keys are in React. The place is the block's number in its markdown, from `0`, after the `key` of the `Markdown` element that holds it, or that element's number among the ones drawn without a key. A block that draws again in its place keeps its keys, so Claude Code keeps what the person typed in its `Input`.
 
 ```tsx
-import type { RenderElement } from 'claude-code'
 import { defineMod, type StyleProps } from '../node_modules/@cmodjs/core/mod.js'
 import { CodeBlock } from '../node_modules/@cmodjs/core/ui/markdown.js'
 import { Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 
-function MermaidBlock({ lang, value, Default }: StyleProps<typeof CodeBlock>): RenderElement {
+function MermaidBlock({ lang, value, Default }: StyleProps<typeof CodeBlock>): JSX.Element {
   return lang === 'mermaid' ? <Text>{`diagram: ${value}`}</Text> : <Default />
 }
 
@@ -432,7 +443,7 @@ mod.toast.dismiss(id?: ToastId): void
 
 type ToastOptions = {
   id?: ToastId
-  description?: string | RenderElement
+  description?: string | JSX.Element
   action?: { label: string; onClick(): unknown }
   duration?: number
 }

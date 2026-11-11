@@ -1,5 +1,4 @@
-import type { ConfigRow, RenderElement } from 'claude-code'
-import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
+import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type ConfigRow, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
 import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { isStillInstalling } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
@@ -185,7 +184,7 @@ function timeOf(at: string): string {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`
 }
 
-function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets: Widgets): RenderElement {
+function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets: Widgets): JSX.Element {
   const widgetFor = (key: string, area: Area): PlacedWidget => widgets.widgets().find((widget) => widget.key === key) ?? { key, mod: key.slice(0, key.indexOf('/')), title: key, areas: [area] }
   const chip = (key: string, area: Area) => {
     const widget = widgetFor(key, area)
@@ -325,7 +324,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       return { view, section: sections.some(({ key }) => key === section) ? section : (sections[0]?.key ?? 'hotkeys') }
     }
 
-    const failuresLog = (): RenderElement => {
+    const failuresLog = (): JSX.Element => {
       const { log, reporting } = mod.state.memory
       if (log.length === 0) return Text({ dimColor: true, children: 'No mod has failed.' })
       const copy = (entry: LogEntry) =>
@@ -348,7 +347,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             reporting === key
               ? [
                   Button({ plain: true, key: `ask-claude:${key}`, label: 'Ask Claude to report it', onPress: () => askClaude(entry) }),
-                  ...(entry.contact === undefined ? [] : [reportLink(entry.contact, entry.mod, entry.message, logReport(entry))]),
+                  ...(entry.contact === undefined ? [] : [reportLink(`report-link:${key}`, entry.contact, entry.mod, entry.message, logReport(entry))]),
                   Button({ plain: true, dimColor: true, key: `back:${key}`, label: 'Back', onPress: () => void (mod.state.memory.reporting = null) }),
                 ]
               : [
@@ -376,7 +375,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       })
     }
 
-    const drawSection = (view: ModView, section: string, columns: number, isFocused: boolean): RenderElement => {
+    const drawSection = (view: ModView, section: string, columns: number, isFocused: boolean): JSX.Element => {
       if (section.startsWith(pageSection)) return pages.element(view.name, section.slice(pageSection.length), mod.state.session.pageParams, columns, isFocused) ?? Text({ dimColor: true, children: 'Drawing…' })
       if (section === 'widgets') return widgetsLayout(mod, widgets)
       if (section === 'log') return failuresLog()

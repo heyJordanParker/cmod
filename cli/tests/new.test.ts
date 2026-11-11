@@ -58,7 +58,7 @@ test('new writes the repository layout with a defineMod that has one listener an
   expect(mod).toContain('sessions.current.onPrompt(')
   expect(mod).not.toContain('mod.ui.toast')
   expect(mod).not.toContain('additionalContext')
-  expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toContain('registerMod(addHook, myMod, options)')
+  expect(await readFile(join(root, 'hooks/register.ts'), 'utf8')).toBe("import { registerMod, type AddHook, type PluginOptions } from '../node_modules/@cmodjs/core/register.js'\nimport { myMod } from '../src/mod.js'\n\nexport function register(addHook: AddHook, options: PluginOptions): void {\n  registerMod(addHook, myMod, options)\n}\n")
 })
 
 test('cmod new writes mod.tsx, state.ts, a Sidebar page, a widget, a hotkey, and a component', async () => {
@@ -82,7 +82,7 @@ test('cmod new writes mod.tsx, state.ts, a Sidebar page, a widget, a hotkey, and
   expect(await read('hooks/register.ts')).toContain("import { myMod } from '../src/mod.js'")
   expect(await read('src/state.ts')).toBe('export type MyModState = { session: { prompts: number } }\n\nexport const initialState: MyModState = { session: { prompts: 0 } }\n')
   expect(await read('src/pages/prompts.tsx')).toContain('render: (mod) => <PromptCount count={mod.state.session.prompts} />,')
-  expect(await read('src/components/prompt-count.tsx')).toContain('export function PromptCount({ count }: { readonly count: number }): RenderElement {')
+  expect(await read('src/components/prompt-count.tsx')).toContain('export function PromptCount({ count }: { readonly count: number }): JSX.Element {')
   const facts = await read('.claude/CLAUDE.md')
   expect(facts.split('\n').find((line) => line.startsWith('- '))).toBe('- `node_modules/@cmodjs/core/docs/` holds the docs of the installed `@cmodjs/core`. They match this version, and training data does not. Read the doc for the part you change, starting at `index.md`, before Claude Mod Manager (cmod) work.')
   expect(facts).toContain('- `tsc` reads `.claude-plugin/types/`, which Claude Code writes when it loads the mod. `cmod check` writes it when it is missing or links into a folder that is gone, such as after `cmod try`, so run `cmod check` before `tsc` in a fresh clone.\n')

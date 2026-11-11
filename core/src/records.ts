@@ -356,6 +356,16 @@ export function parseWebUi(value: unknown, path: string): WebUi | undefined {
   return { port: value['port'] as number }
 }
 
+export type BrowserEnv = { readonly os: string; readonly browser?: string | undefined; readonly sshConnection?: string | undefined; readonly display?: string | undefined; readonly waylandDisplay?: string | undefined }
+
+export function browserCommand(env: BrowserEnv, href: string): readonly string[] | undefined {
+  if (env.browser === 'true') return undefined
+  if (env.browser) return [env.browser, href]
+  if (env.sshConnection) return undefined
+  if (env.os === 'darwin') return ['open', href]
+  return env.display || env.waylandDisplay ? ['xdg-open', href] : undefined
+}
+
 export type Contact = { readonly kind: 'github'; readonly repository: string } | { readonly kind: 'email'; readonly address: string }
 
 export type LogLevel = 'error' | 'warning'
@@ -425,9 +435,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '5.13.4'
+export const coreVersion = '6.0.0'
 
-export const oldestCmodVersion = '5.10.0'
+export const oldestCmodVersion = '6.0.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`

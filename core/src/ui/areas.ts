@@ -1,4 +1,3 @@
-import type { RenderElement } from 'claude-code'
 import type { Mod, Turn } from '../mod.js'
 
 export const AbovePrompt = 'abovePrompt'
@@ -18,7 +17,7 @@ export type WidgetInit<State extends object = Record<never, never>> = {
   readonly title: string
   readonly areas: readonly [Area, ...Area[]]
   readonly place?: { readonly side?: 'left' | 'right'; readonly size?: 'fit' | 'fill' }
-  render(mod: Mod<State>, context: WidgetContext): RenderElement | undefined
+  render(mod: Mod<State>, context: WidgetContext): JSX.Element | undefined
 }
 
 export type Widget = {

@@ -426,7 +426,7 @@ test('cmod check fails a mod whose source hears permissions when register.ts doe
   const commented = (await cmod(home, 'check', root)).stdout
 
   expect(commented).toContain("Checking the permission check hooks…\n– The mod approves none of Claude's tool calls\n")
-  expect(commented).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
+  expect(commented).toContain('Checking imports…\n✔ Imports reach only the mod and its packages\n')
 })
 
 test('cmod check names the line of a metadata block it cannot read', async () => {
@@ -558,7 +558,25 @@ test('cmod check reads the imports of a script a Skill runs, whose first line is
 
   const result = await cmod(home, 'check', root)
 
-  expect(result.stdout).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
+  expect(result.stdout).toContain('Checking imports…\n✔ Imports reach only the mod and its packages\n')
+})
+
+test("cmod check refuses a mod file that imports claude-code, and keeps a provider's types file that adds to its module", async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo' }),
+    'src/components/count.tsx': "import type { RenderElement } from 'claude-code'\nexport const count = (): RenderElement => undefined as never\n",
+    'types/index.d.ts': "declare module 'claude-code' {\n  interface CmodDependencies { demo: { count(): number } }\n}\nexport {}\n",
+  })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain(
+    "Checking imports…\n✘ 1 problem with the mod's imports\n    fix: src/components/count.tsx imports claude-code: import each type from @cmodjs/core instead. A component returns JSX.Element and takes JSX.Children with no import, element props such as BoxProps and Color come from ui/elements.js, and the rest from mod.js\n",
+  )
 })
 
 test('cmod check skips only the root cli/ folder, so a src/cli/ file is still checked for imports a mod cannot use', async () => {
@@ -593,7 +611,7 @@ test('cmod check skips a file git ignores, which no release holds, and checks th
 
   const ignored = await cmod(home, 'check', root)
 
-  expect(ignored.stdout).toContain('Checking imports…\n✔ Imports reach only the mod, its packages, and claude-code\n')
+  expect(ignored.stdout).toContain('Checking imports…\n✔ Imports reach only the mod and its packages\n')
 
   await writeFiles(root, { '.gitignore': '' })
   const kept = await cmod(home, 'check', root)

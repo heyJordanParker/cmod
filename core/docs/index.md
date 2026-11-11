@@ -32,7 +32,7 @@ my-mod/
 
 The template is a working example to replace. It counts the prompts of the session in `state.session.prompts`, shows the count below the prompt and in a Sidebar page that the `alt+shift+p` hotkey shows or hides, and tests all three. Replace the counter, the page, the widget, the component, the Skill, the rule, and the tests with the mod's own.
 
-A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Types such as `RenderElement` and `On` come from the `claude-code` module.
+A mod imports `@cmodjs/core` by path, such as `../node_modules/@cmodjs/core/mod.js`, because Claude Code loads a plugin's own files only. Every type a mod writes comes from `@cmodjs/core` too, never from the `claude-code` module. A component returns `JSX.Element` and takes `JSX.Children`, which need no import. Element props, such as `BoxProps` and `Color`, come from `ui/elements.js`. The two types of `register`'s parameters, `AddHook` and `PluginOptions`, come from `register.js`, and the rest from `mod.js`.
 
 ## Claude Code's API description
 
@@ -48,6 +48,7 @@ Mod code runs inside Claude Code's hooks environment, not in Node or Bun. It has
 
 - a file in `src/` that imports a Node module, `bun`, or a `bun:` module. Tests in `tests/` run under `bun test` and may import `bun:test`.
 - a file that imports from `cli/`, which the release leaves out
+- a file that imports the `claude-code` module. A provider's types file adds to that module with `declare module 'claude-code'` ([dependencies.md](dependencies.md)), which imports nothing.
 - `devDependencies` in `package.json`. Claude Code installs them for every person, so move each into `dependencies` or drop it.
 - a `bin/` or `target/` folder at the mod's root
 - a prebuilt binary in the mod, outside `cli/`, `node_modules/`, `.git/`, `target/`, `.target/`, and `.claude-plugin/types/`
@@ -87,22 +88,23 @@ A mod imports from the files below, and every other file in this package is inte
 | --- | --- | --- |
 | `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `Subscription`, `Timer`, `Reservation`, `JobContext`, `Job`, `SlashCommand`, `Tool`, `Step`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [install-steps.md](install-steps.md#steps-in-claude-code) |
 | `mod.js` | `Hotkey`, `HotkeyInit`, `Combo`, `Key` | [mod.md](mod.md#hotkeys) |
-| `mod.js` | `settings`, `SettingsFile`, `SettingsFileChange`, `SettingsFileChangeListener`, `config`, `ConfigRow`, `commands`, `CommandInfo`, `CommandRun`, `CommandRunAnswer`, `CommandRunResult`, `model`, `fs`, `Entry`, `Stat`, `FileMatch`, `FileChange`, `metadata`, `Metadata`, `process`, `http`, `clipboard`, `Imports` | [mod.md](mod.md) |
+| `mod.js` | `settings`, `Settings`, `SettingsFile`, `SettingsFileChange`, `SettingsFileChangeListener`, `config`, `ConfigRow`, `commands`, `CommandInfo`, `CommandRun`, `CommandRunAnswer`, `CommandRunResult`, `model`, `ModelCompleteRequest`, `ModelCompleteOptions`, `ModelCompleteResult`, `fs`, `Entry`, `Stat`, `StatOptions`, `FileMatch`, `FileChange`, `metadata`, `Metadata`, `process`, `ProcessRunOptions`, `ProcessRunResult`, `ProcessSpawnOptions`, `Subprocess`, `http`, `HttpOptions`, `HttpResponse`, `clipboard`, `AskOptions`, `Imports` | [mod.md](mod.md) |
 | `mod.js` | `sessions`, `Sessions`, `Session`, `CurrentSession`, `TaskOwner`, `RecordPart`, `OnMethods`, `BeforeMethods`, `Listener`, `ListenerTime`, `ReadOptions`, `AnswerOptions`, `Refusal`, `SearchOptions`, `SessionScope`, `SessionSend`, `TaskStartArgs`, `ToolCallArgs`, `Usage`, `RateLimit`, `TaskStatus`, `Surface`, `Matcher` | [session.md](session.md) |
 | `mod.js` | `Placement`, `ProjectSetup`, `SessionStartAsked`, `SessionStarted`, `SessionEnded`, `ModelChange`, `CwdChange`, `DirectoryAdd`, `Worktree`, `Notification`, `Elicitation`, `ElicitationResponse`, `McpServer`, `PermissionUpdate`, `PermissionCheck`, `PermissionRequest`, `PermissionDenial`, `BatchedCall`, `ToolBatch`, `Todo`, `ReplyDisplay` | [session.md](session.md#the-session-s-own-events) |
 | `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `InstructionFile`, `AttachedFile`, `AttachmentType`, `Notice`, `Sender`, `SenderType`, `Person`, `Mod`, `Schedule`, `Channel`, `Sdk`, `Engine` | [session.md](session.md#message) |
 | `mod.js` | `Context`, `Turn`, `Goal`, `Task` | [session.md](session.md#turn-context-goal-and-task) |
 | `mod.js` | `Toast`, `ToastId`, `ToastType`, `ToastOptions` | [ui.md](ui.md#toasts) |
-| `mod.js` | `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `OpenOptions`, `ScrollTarget`, `ScrollOptions` | [ui.md](ui.md#the-sidebar-and-its-pages) |
+| `mod.js` | `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `PaneScroll`, `PaneClose`, `OpenOptions`, `ScrollTarget`, `ScrollOptions` | [ui.md](ui.md#the-sidebar-and-its-pages) |
 | `mod.js` | `WidgetInit`, `Widget`, `WidgetContext`, `Area`, `AbovePrompt`, `BelowPrompt`, `Working`, `TurnEnd`, `Dashboard` | [ui.md](ui.md#widgets) |
 | `mod.js` | `StyleInit`, `Style`, `StyleProps`, `Kind`, `Row`, `Block`, `ToolGroup`, `ToolProgress`, `CommandOutput`, `AskUserQuestion` | [ui.md](ui.md#styles-change-how-claude-code-draws) |
 | `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
-| `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod` | [mod.md](mod.md) |
+| `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod`, `AddHook`, `PluginOptions` | [mod.md](mod.md) |
 | `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionType`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |
 | `path.js` | `resolve`, `join`, `dirname`, `basename`, `extname`, `relative`, `isAbsolute`, `normalize` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |
 | `testing.js` | `testMod`, `TestOptions`, `TestedMod`, `Raise`, `Fakes`, `Shown`, `ShownToast`, `TestCall`, `FakeSession`, `MessageDraft`, `RoutedEvent` | [testing.md](testing.md) |
-| `ui/elements.js` | `Box`, `Text`, `Button`, `Link`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `Raster`, `Svg`, `Client`, `drawWith` | [ui.md](ui.md) |
+| `ui/elements.js` | `Box`, `Text`, `Button`, `Code`, `Markdown`, `Input`, `Select`, `Image`, `Raster`, `Svg`, `Client`, `drawWith` | [ui.md](ui.md) |
+| `ui/elements.js` | `BoxProps`, `TextProps`, `ButtonProps`, `CodeProps`, `MarkdownProps`, `InputProps`, `SelectProps`, `ImageProps`, `RasterProps`, `SvgProps`, `ClientProps`, `Color`, `Press` | [ui.md](ui.md#elements) |
 | `ui/components.js` | `Tabs`, `Tab`, `Split`, `Panel`, `Toggle`, `Tooltip`, `Help`, `Dialog`, `Pagination`, `Progress` | [ui.md](ui.md) |
 | `ui/markdown.js` | `Heading`, `Paragraph`, `CodeBlock`, `BlockQuote`, `List`, `Table`, `ThematicBreak`, `HtmlBlock`, `Block`, `markdownBlocks`, `BlockProps`, `MarkdownReader`, `MarkdownPiece` | [ui.md](ui.md#markdown-blocks) |
 | `jobs/slash-command.js` | `slashCommand`, `CommandReply` | [jobs.md](jobs.md) |

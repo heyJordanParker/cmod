@@ -1,6 +1,6 @@
 import type { ElementTable, RenderElement, RenderPropsOf, Timer } from 'claude-code'
 import type { Toast, ToastId, ToastOptions, ToastType } from '../mod.js'
-import { Box, Button, drawWith, Link, Text } from '../ui/elements.js'
+import { Box, Button, drawWith, Text } from '../ui/elements.js'
 import { coreVersion, installFix, isObject, secretFix, type Contact, type LogLevel } from '../records.js'
 import { firstLine, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -389,7 +389,7 @@ export function createToaster(claude: Claude, name: string, version: () => strin
       const copied = await claude.ui.copy({ text: details })
       say(copied.isCopied ? 'Copied the error.' : `Could not copy it: ${copied.reason}`)
     }
-    const report = contact === undefined ? [] : [reportLink(contact, name, entry.message, details)]
+    const report = contact === undefined ? [] : [reportLink(`toast:${entry.id}:report`, contact, name, entry.message, details)]
     return [
       Text({ dimColor: true, children: 'Claude writes up the problem and files it with your tools. You approve each step before anything is posted.' }),
       Box({
@@ -461,7 +461,7 @@ async function contactOf(claude: Claude): Promise<Contact | undefined> {
   return typeof address === 'string' && address !== '' ? { kind: 'email', address } : undefined
 }
 
-export function reportLink(contact: Contact, name: string, message: string, details: string): RenderElement {
+export function reportLink(key: string, contact: Contact, name: string, message: string, details: string): RenderElement {
   const title = `${name}: ${message}`.slice(0, 120)
   const linkOf = (body: string) =>
     contact.kind === 'github'
@@ -469,7 +469,7 @@ export function reportLink(contact: Contact, name: string, message: string, deta
       : `mailto:${contact.address}?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`
   let body = details
   while (linkOf(body).length > linkLimit && body.length > 0) body = `${body.slice(0, Math.floor(body.length * 0.8))}…`
-  return Link({ href: linkOf(body), label: contact.kind === 'github' ? 'Report it on GitHub (opens your browser)' : 'Email the author (opens your mail app)' })
+  return Button({ plain: true, key, href: linkOf(body), label: contact.kind === 'github' ? 'Report it on GitHub (opens your browser)' : 'Email the author (opens your mail app)' })
 }
 
 export function reportPrompt(name: string, contact: Contact | undefined, details: string): string {

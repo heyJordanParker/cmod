@@ -1,4 +1,4 @@
-import type { Frozen, RenderComponent, RenderElement, RenderPropsOf } from 'claude-code'
+import type { Frozen, RenderComponent, RenderPropsOf } from 'claude-code'
 import type { Mod, Surface } from '../mod.js'
 import { TurnEnd, Working } from './areas.js'
 import type { Block, BlockProps } from './markdown.js'
@@ -32,7 +32,7 @@ type PropsOf<K extends Kind> = K extends Row ? RowProps[K] : K extends Block<inf
 
 type DefaultOf<K extends Kind> = K extends Row ? Partial<Omit<RowProps[K], 'onScreen'>> : { readonly source?: string }
 
-export type StyleProps<K extends Kind> = Frozen<PropsOf<K>> & StyledAt & (K extends Row ? { readonly id: string } : { readonly id?: string }) & { readonly Default: (props: Frozen<DefaultOf<K>>) => RenderElement }
+export type StyleProps<K extends Kind> = Frozen<PropsOf<K>> & StyledAt & (K extends Row ? { readonly id: string } : { readonly id?: string }) & { readonly Default: (props: Frozen<DefaultOf<K>>) => JSX.Element }
 
 export type KindProps<K extends Kind> = Omit<StyleProps<K>, 'Default' | 'surface' | 'columns' | 'id'>
 
@@ -40,7 +40,7 @@ export type StyledAt = { readonly surface: Surface; readonly columns: number }
 
 export type StyleInit<K extends Kind, State extends object = Record<never, never>> = {
   readonly kind: K
-  render(mod: Mod<State>, props: StyleProps<K>): RenderElement
+  render(mod: Mod<State>, props: StyleProps<K>): JSX.Element
 }
 
 export type Style = {

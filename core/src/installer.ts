@@ -1,11 +1,10 @@
-import type { RenderElement } from 'claude-code'
 import type { Mod } from './mod.js'
 import type { PageProps } from './ui/panes.js'
 
 export type Step<State extends object = Record<never, never>> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: PageProps<undefined>): RenderElement
+  render(mod: Mod<State>, props: PageProps<undefined>): JSX.Element
   isDone(mod: Mod<State>): boolean | Promise<boolean>
 }
 

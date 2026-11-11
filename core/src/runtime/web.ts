@@ -125,6 +125,8 @@ const elements: Readonly<Record<string, (props: Props, drawing: Drawing) => stri
     const hover = hoverClasses(props['hover'], textHover({}), drawing, drawing.scope)
     const classes = ['button', ...(props['plain'] === true ? ['plain'] : props['variant'] === 'primary' ? ['primary'] : []), ...(props['dimColor'] === true ? ['dim'] : []), ...hover]
     const key = keyOf(props) ?? label ?? (typeof props['children'] === 'string' ? props['children'] : undefined)
+    const href = typeof props['href'] === 'string' && linkSchemes.test(props['href']) ? props['href'] : undefined
+    if (href !== undefined) return `<a class="${classes.join(' ')}" href="${escaped(href)}" target="_blank" rel="noopener noreferrer"${attribute('aria-label', drawn === '' ? undefined : label)}${attribute('data-key', key)}>${prefix}${shown}</a>`
     return `<button type="button" class="${classes.join(' ')}"${attribute('aria-label', drawn === '' ? undefined : label)}${attribute('data-key', key)}${handlerAttribute('data-press', props['onPress'])}${attribute('data-hotkey', hotkey)}${props['autoFocus'] === true ? ' autofocus' : ''}>${prefix}${shown}</button>`
   },
   Link: (props, drawing) => {

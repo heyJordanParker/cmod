@@ -109,27 +109,28 @@ A mod's `CHANGELOG.md`, at its root, holds what changed in each version, written
 `hooks/hooks.json` names `hooks/register.ts` as the plugin's hooks module. `register.ts` calls `registerMod` and does nothing else:
 
 ```ts
-import type { On, PluginOptions } from 'claude-code'
-import { registerMod } from '../node_modules/@cmodjs/core/register.js'
+import { registerMod, type AddHook, type PluginOptions } from '../node_modules/@cmodjs/core/register.js'
 import { greeter } from '../src/mod.js'
 
-export function register(addHook: On, options: PluginOptions): void {
+export function register(addHook: AddHook, options: PluginOptions): void {
   registerMod(addHook, greeter, options)
 }
 ```
 
 ```ts
-registerMod<State, Options>(addHook: On, definition: ModDefinition<State, string, Options>, options: PluginOptions): void
-registerPermissionCheck(addHook: On): void
+registerMod<State, Options>(addHook: AddHook, definition: ModDefinition<State, string, Options>, options: PluginOptions): void
+registerPermissionCheck(addHook: AddHook): void
 registeredMod(): ModDefinition | undefined
 ```
+
+`AddHook` is the function Claude Code passes `register` to add each hook, and `PluginOptions` the values it passes with it.
 
 `registerMod` registers one handler per Claude Code event the mod can use, and routes each event to the mod. `options` is what Claude Code passes `register`: the values of the mod's options ([options.md](options.md)). `registeredMod` returns the definition `registerMod` got, for `cmod check` to read the mod's options without starting it. `registerMod` leaves out Claude Code's permission check, the events `tool.check` and `PermissionRequest`.
 
 A mod that hears permissions calls `registerPermissionCheck` after `registerMod`. That covers `sessions.current.onPermissionCheck`, `beforePermissionCheck`, `onPermissionRequest`, `beforePermissionRequest`, and the `permissions` job:
 
 ```ts
-export function register(addHook: On, options: PluginOptions): void {
+export function register(addHook: AddHook, options: PluginOptions): void {
   registerMod(addHook, guard, options)
   registerPermissionCheck(addHook)
 }
@@ -381,7 +382,7 @@ type ConfigRow = { key: string; label: string; description?: string; kind: 'bool
 ## model: one question outside the conversation
 
 ```ts
-model.complete(request: ModelCompleteRequest, options?: { signal?: AbortSignal }): Promise<ModelCompleteResult>
+model.complete(request: ModelCompleteRequest, options?: ModelCompleteOptions): Promise<ModelCompleteResult>
 ```
 
 `complete` asks a model one question through Claude Code's own login, outside the conversation, so the answer costs no context and the person sees no turn. The request names the `model`, such as `'haiku'`, and the `prompt`, and takes `system`, `maxTokens`, `effort`, and `timeoutMs`. `timeoutMs` stops a model that is slow or down, so the listener that waits on it still answers in time. `options.signal` stops the call when its `AbortController` aborts.
@@ -400,19 +401,19 @@ sessions.current.beforeTurnEnd(async (turn, { signal }) => {
 ## process: run a program
 
 ```ts
-process.run(argv: readonly string[], init?: ProcessRunInit): Promise<ProcessRunResult>
-process.spawn(argv: readonly string[], init?: { cwd?, env?, input? }): HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+process.run(argv: readonly string[], options?: ProcessRunOptions): Promise<ProcessRunResult>
+process.spawn(argv: readonly string[], options?: ProcessSpawnOptions): Subprocess
 ```
 
 Both run a program without a shell. `argv[0]` is the program and the rest are its arguments. A bare name that cmod installed, such as `trace`, runs from cmod's programs folder ([install-steps.md](install-steps.md#run-a-program-by-its-name)), and any other name runs through Claude Code's `PATH`.
 
-- `init.cwd` is the program's folder, absolute or relative to the session's working folder. Without it the program runs in the session's working folder.
-- `init.env` sets variables over Claude Code's own environment.
+- `options.cwd` is the program's folder, absolute or relative to the session's working folder. Without it the program runs in the session's working folder.
+- `options.env` sets variables over Claude Code's own environment.
 - `run` takes `stdin`, and `spawn` takes `input`: text written to standard input, which then closes.
 - `run` takes `timeoutMs`: Claude Code kills the program after it, 30 seconds by default and 10 minutes at most. `longestMs`, exported from `mod.js`, is those 10 minutes in milliseconds, `600000`.
 - `run` resolves `{ exitCode, stdout, stderr, isStdoutTruncated, isStderrTruncated }` once the program exits, whatever its exit code. It keeps the first 4 MiB of each stream. A program ended by a signal has `exitCode` 1.
 - `run` rejects when the program cannot start, and when it is still running at `timeoutMs`. It reads the whole output, so a background process the program leaves writing holds the call until the timeout.
-- `spawn` streams `{ stream: 'stdout' | 'stderr', text }` pieces as the program writes them. Its `result` resolves `{ code, signal }` once the stream is read to its end. Its first pull rejects when the program cannot start.
+- `spawn` answers a `Subprocess`, which streams `{ stream: 'stdout' | 'stderr', text }` pieces as the program writes them. Its `result` resolves `{ code, signal }` once the stream is read to its end. Its first pull rejects when the program cannot start.
 - The `for await` loop over a `spawn` is the program's life. Leaving the loop, or calling `return()` on the stream, kills the program, and so does unloading the mod. Returning from the listener does not.
 
 A job's deadline bounds the whole callback that makes these calls ([jobs.md](jobs.md#deadlines)).
@@ -439,7 +440,7 @@ fs.read(path: string): Promise<string>
 fs.write(path: string, text: string): Promise<void>
 fs.list(path?: string): Promise<Entry[]>
 fs.exists(path: string): Promise<boolean>
-fs.stat(path: string, options?: { resolve: boolean }): Promise<Stat>
+fs.stat(path: string, options?: StatOptions): Promise<Stat>
 fs.find(glob: string | readonly string[]): Promise<readonly FileMatch[]>
 fs.onChange({ path: string | readonly string[] }, listener: (change: FileChange) => unknown): Subscription
 ```
@@ -455,7 +456,7 @@ type Stat = { isFile: boolean; isFolder: boolean; isLink: boolean; size: number;
 - `write` writes the whole file and creates its folders.
 - `list` lists a folder, the working folder without a path. A symbolic link is neither a file nor a folder, with `isLink` true. `modifiedAt` is the time it last changed, in milliseconds since 1970.
 - `exists` answers whether the path leads to a file or a folder.
-- `stat` answers what the path leads to, following a symbolic link, and rejects a missing path. With `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
+- `stat` answers what the path leads to, following a symbolic link, and rejects a missing path. With `StatOptions` `{ resolve: true }` it also answers `realPath`: the absolute path, every symbolic link followed.
 - `onChange` hears each file that changes, appears, or goes at a path or under a folder, the mod's own saves included. cmod checks the paths twice a second, and at most 2000 files under one call's folders. A call over more stops, with an error toast that names its paths. It works from `setup` or any time later, and for a path that does not exist yet. A relative path is under the session's working folder. `path` takes strings only, unlike other matchers:
 
 ```ts
@@ -527,10 +528,10 @@ await metadata.update('.claude/skills/plan/SKILL.md', (keys) => {
 ## http: fetch a URL
 
 ```ts
-http.fetch(url: string, init?: HttpInit): Promise<HttpResponse>
+http.fetch(url: string, options?: HttpOptions): Promise<HttpResponse>
 ```
 
-- `init` takes `method` (`GET` by default), `headers`, `body` as text, and `socketPath`, the absolute path of a Unix socket the request goes over.
+- `options` takes `method` (`GET` by default), `headers`, `body` as text, and `socketPath`, the absolute path of a Unix socket the request goes over.
 - The response is `{ status, ok, headers, text }`. `ok` is true for a 2xx status. Header names are lower case.
 - A mod reaches the address its own `program` job answers on the same way ([jobs.md](jobs.md#program)).
 

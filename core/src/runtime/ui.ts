@@ -1,6 +1,6 @@
-import type { Args, ElementTable, Frozen, MarkdownProps, PaneOpenArgs, RenderElement } from 'claude-code'
+import type { Args, ElementTable, Frozen, MarkdownProps, PaneOpenArgs, RenderElement, RenderSurface } from 'claude-code'
 import type { Mod, Turn } from '../mod.js'
-import { isObject } from '../records.js'
+import { browserCommand, isObject } from '../records.js'
 import { TurnEnd, type Area, type Widget, type WidgetContext, type WidgetInit } from '../ui/areas.js'
 import { Box, drawKeyed, drawsFocusable, drawWith, elementData, Markdown, Text, type Handler } from '../ui/elements.js'
 import type { Block, MarkdownPiece, MarkdownReader } from '../ui/markdown.js'
@@ -47,6 +47,18 @@ export function viewportColumns(e: Frozen<Args<'ui.render'>>): number {
 
 export function styledAt(e: Frozen<Args<'ui.render'>>, columns = viewportColumns(e)): StyledAt {
   return { surface: e.surface, columns: Math.max(columns, 0) }
+}
+
+export async function openLink(claude: Claude, href: string, surface: RenderSurface): Promise<'opened' | 'copied'> {
+  if (surface === 'terminal') {
+    const [browser, sshConnection, display, waylandDisplay] = await Promise.all([claude.env.browser(), claude.env.sshConnection(), claude.env.display(), claude.env.waylandDisplay()])
+    const os = browser || sshConnection ? '' : (await claude.process.run(['uname', '-s'])).stdout.trim().toLowerCase()
+    const command = browserCommand({ os, browser, sshConnection, display, waylandDisplay }, href)
+    if (command !== undefined && (await claude.process.run(command)).exitCode === 0) return 'opened'
+  }
+  const copied = await claude.ui.copy({ text: href, surface })
+  if (!copied.isCopied) throw new Error(`cmod could not open ${href} or copy it: ${copied.reason}`)
+  return 'copied'
 }
 
 export type PartPress = { readonly draw: number; readonly handler: number; readonly args: readonly unknown[] }

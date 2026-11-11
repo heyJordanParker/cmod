@@ -72,7 +72,7 @@ export const ciWatch = defineMod({ name: 'ci-watch', installer: [signIn], setup(
 type Step<State> = {
   readonly id: string
   readonly title: string
-  render(mod: Mod<State>, props: PageProps): RenderElement
+  render(mod: Mod<State>, props: PageProps): JSX.Element
   isDone(mod: Mod<State>): boolean | Promise<boolean>
 }
 ```

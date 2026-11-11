@@ -1,4 +1,4 @@
-import { parsePreferences, parseWebUi, preferencesPath, storeFolder, webPath } from '@cmodjs/core/src/records.js'
+import { browserCommand, parsePreferences, parseWebUi, preferencesPath, storeFolder, webPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { readJson, writeAtomically } from '../files.js'
 import { capture } from '../process.js'
@@ -74,8 +74,10 @@ async function open(): Promise<number> {
   const page = saved === undefined ? undefined : await fetch(home, { signal: AbortSignal.timeout(answerMs) }).catch(unanswered)
   if (page?.ok !== true) throw new Error('the browser app does not run now. Press open in browser on the Sidebar in Claude Code, which turns it on.')
   process.stdout.write(`${home}\n`)
-  const opener = process.platform === 'darwin' ? 'open' : 'xdg-open'
-  const opened = await capture([opener, home]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
-  if (opened.exitCode !== 0) throw new Error(`${opener} did not open your browser, so open the address above yourself. ${opened.stderr.trim()}`.trim())
+  const { BROWSER: browser, SSH_CONNECTION: sshConnection, DISPLAY: display, WAYLAND_DISPLAY: waylandDisplay } = process.env
+  const command = browserCommand({ os: process.platform, browser, sshConnection, display, waylandDisplay }, home)
+  if (command === undefined) throw new Error('this computer has no browser to open, so open the address above yourself.')
+  const opened = await capture([...command]).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
+  if (opened.exitCode !== 0) throw new Error(`${command[0]} did not open your browser, so open the address above yourself. ${opened.stderr.trim()}`.trim())
   return 0
 }

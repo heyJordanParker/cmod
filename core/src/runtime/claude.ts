@@ -114,6 +114,10 @@ export type Claude = {
     home(): Promise<string | undefined>
     dataHome(): Promise<string | undefined>
     configHome(): Promise<string | undefined>
+    browser(): Promise<string | undefined>
+    sshConnection(): Promise<string | undefined>
+    display(): Promise<string | undefined>
+    waylandDisplay(): Promise<string | undefined>
   }
   readonly device: { read(): Promise<Device> }
   readonly cmod: { call(input: Args<'cmod.call'>): Promise<unknown> }

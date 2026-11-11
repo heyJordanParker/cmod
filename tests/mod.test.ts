@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
-import type { EngineCreateResult, HookStream, ProcessSpawnChunk, ProcessSpawnResult } from 'claude-code'
+import type { Subprocess } from '../node_modules/@cmodjs/core/mod.js'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { elements, findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
@@ -52,13 +52,17 @@ function answerRules(tested: ReturnType<typeof testMod>, answers: Synced[]): { r
     const isRules = request.argv[1] === 'rules'
     if (isRules) counted.runs += 1
     const answer = !isRules ? [] : answers.length > 1 ? answers.shift() : answers[0]
-    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-      yield { stream: 'stdout', text: `${JSON.stringify(answer)}\n` }
-      return { code: 0, signal: null }
-    }
-    return Object.assign(read(), { result: Promise.resolve({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+    return exited(0, { stream: 'stdout', text: `${JSON.stringify(answer)}\n` })
   }
   return counted
+}
+
+function exited(code: number, ...chunks: readonly { readonly stream: 'stdout' | 'stderr'; readonly text: string }[]): Subprocess {
+  async function* read() {
+    yield* chunks
+    return { code, signal: null }
+  }
+  return Object.assign(read(), { result: Promise.resolve({ code, signal: null }) })
 }
 
 const cmodNote = (text: string) => `<cmod_mod>\n${text}\n</cmod_mod>`
@@ -1063,8 +1067,8 @@ test('the key bar of a Sidebar without the focus says a click focuses it, and na
 })
 
 async function unansweredCall(): Promise<Cmod['call']> {
-  const hooks = new Map<string, (...args: unknown[]) => Promise<EngineCreateResult>>()
-  const on = (event: string, hook: (...args: unknown[]) => Promise<EngineCreateResult>) => {
+  const hooks = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+  const on = (event: string, hook: (...args: unknown[]) => Promise<unknown>) => {
     hooks.set(event, hook)
     return { catch: () => undefined }
   }
@@ -1167,12 +1171,7 @@ function cmodAnswering(answers: Record<string, { code: number; stdout?: string; 
       sessions.push(request.env?.['CLAUDE_CODE_SESSION_ID'])
     }
     const { code, stdout = '', stderr = '' } = answers[request.argv.slice(1, 3).join(' ')] ?? { code: 0 }
-    const chunks: ProcessSpawnChunk[] = [...(stdout === '' ? [] : [{ stream: 'stdout' as const, text: stdout }]), ...(stderr === '' ? [] : [{ stream: 'stderr' as const, text: stderr }])]
-    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-      yield* chunks
-      return { code, signal: null }
-    }
-    return Object.assign(read(), { result: Promise.resolve({ code, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+    return exited(code, ...(stdout === '' ? [] : [{ stream: 'stdout' as const, text: stdout }]), ...(stderr === '' ? [] : [{ stream: 'stderr' as const, text: stderr }]))
   }
   return { tested, spawned, sessions }
 }
@@ -1187,12 +1186,7 @@ test('a session started with a linked mod starts cmod watch only while no watche
   const watches: string[] = []
   tested.fakes.process.spawn = (request) => {
     if (request.argv[1] === 'watch') watches.push('watch')
-    const chunks: ProcessSpawnChunk[] = []
-    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-      yield* chunks
-      return { code: 0, signal: null }
-    }
-    return Object.assign(read(), { result: Promise.resolve({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+    return exited(0)
   }
   let now = 100_000
   let touchedAt = 95_000
@@ -1530,12 +1524,7 @@ function pluginsListed(lists: readonly (readonly { name: string; version: string
   tested.fakes.process.spawn = (request) => {
     if (request.argv[1] !== 'watch') ran.push(request.argv.slice(1).join(' '))
     const rows = request.argv[1] === 'list' ? (answers.length > 1 ? answers.shift() : answers[0]) : undefined
-    const stdout = rows === undefined ? '' : `${JSON.stringify(rows.map((row) => ({ state: 'ready', unsatisfied: [], ...row })))}\n`
-    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-      if (stdout !== '') yield { stream: 'stdout', text: stdout }
-      return { code: 0, signal: null }
-    }
-    return Object.assign(read(), { result: Promise.resolve({ code: 0, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+    return rows === undefined ? exited(0) : exited(0, { stream: 'stdout', text: `${JSON.stringify(rows.map((row) => ({ state: 'ready', unsatisfied: [], ...row })))}\n` })
   }
   return { tested, ran, ticks }
 }
@@ -1615,13 +1604,7 @@ test('the off toast leaves once the next check finds every mod on', async () => 
 
 test('a plugin check that fails, such as when cmod cannot run Claude Code, runs again at the next start', async () => {
   const { tested } = pluginsListed([[{ name: 'cmod@beta', version: '4.0.2' }, { name: 'file-tree@beta', version: '0.1.0', state: turnedOff, unsatisfied: ['cmod@beta'] }]])
-  tested.fakes.process.spawn = () => {
-    async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
-      yield { stream: 'stderr', text: 'cmod list: claude is not on PATH. Install it, then run the command again.\n' }
-      return { code: 1, signal: null }
-    }
-    return Object.assign(read(), { result: Promise.resolve({ code: 1, signal: null }) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
-  }
+  tested.fakes.process.spawn = () => exited(1, { stream: 'stderr', text: 'cmod list: claude is not on PATH. Install it, then run the command again.\n' })
   await tested.start()
   await tested.settle()
 
@@ -2435,12 +2418,12 @@ function servingWeb(tested: ReturnType<typeof testMod>) {
   const started: string[][] = []
   tested.fakes.process.spawn = (request) => {
     started.push([...request.argv])
-    async function* serving(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+    async function* serving() {
       await tested.fakes.fs.write?.(`${store}/web.json`, JSON.stringify({ port: 4567 }))
-      yield { stream: 'stdout', text: '127.0.0.1:4567\n' }
-      return await new Promise<ProcessSpawnResult>(() => undefined)
+      yield { stream: 'stdout' as const, text: '127.0.0.1:4567\n' }
+      return await new Promise<never>(() => undefined)
     }
-    return Object.assign(serving(), { result: new Promise<ProcessSpawnResult>(() => undefined) }) as HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+    return Object.assign(serving(), { result: new Promise<never>(() => undefined) })
   }
   return started
 }

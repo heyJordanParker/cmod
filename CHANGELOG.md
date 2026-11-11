@@ -4,6 +4,21 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-11-11
+
+### Added
+- A `Button` takes `href` in place of `onPress` and opens that web page on your own device, in every terminal. In the terminal cmod opens it by the rule Claude Code uses for its own links: with the program `BROWSER` names, else `open` on macOS and `xdg-open` on Linux. Over ssh, or on Linux with no display, it copies the link and shows `Copied the link`, because the browser is on another computer. The desktop, phone, and VS Code apps draw an `https:` link as their own link, and the browser app draws it as a link styled as a button.
+- `@cmodjs/core` exports every type its API uses, so a mod imports nothing from `claude-code`. `ui/elements.js` exports each element's props, such as `BoxProps`, `ButtonProps`, and `Color`, and `Press`, what `onPress` gets. `mod.js` exports `ProcessRunOptions`, `ProcessRunResult`, `ProcessSpawnOptions`, `Subprocess`, `HttpOptions`, `HttpResponse`, `StatOptions`, `ModelCompleteRequest`, `ModelCompleteOptions`, `ModelCompleteResult`, `Settings`, `AskOptions`, `PaneScroll`, and `PaneClose`. `register.js` exports `AddHook` and `PluginOptions`, the types of `register`'s parameters.
+- `cmod check` fails a mod file that imports `claude-code`, and names where each type comes from instead. A provider's types file still adds to the module with `declare module 'claude-code'`.
+
+### Changed
+- A component returns `JSX.Element` and takes `JSX.Children`, which need no import, where it returned `RenderElement` from `claude-code`. Every `render` in the API is typed that way.
+- `cmod web` opens the browser app by the same rule as a `Button` with `href`. Over ssh it prints the address and says to open it yourself.
+- A mod on this `@cmodjs/core` needs cmod 6.0.0, the first whose cmod plugin opens a `Button`'s `href` on a page or widget it draws.
+
+### Removed
+- `Link` is gone from `ui/elements.js`. A control that opens a page is a `Button` with `href`, and a link inside text is a `Markdown` link. A page or widget drawn by a mod on an older `@cmodjs/core` still draws its `Link`.
+
 ## [5.13.4] - 2026-11-11
 
 ### Fixed

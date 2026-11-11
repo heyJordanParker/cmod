@@ -168,6 +168,8 @@ const scriptFile = /\.(m?[jt]sx?|cts|cjs)$/
 
 const permissionListener = /\bonPermission(?:Check|Request)\s*\(/
 
+const claudeCodeImport = /\b(?:from|import)\s*\(?\s*['"]claude-code['"]/
+
 const answersPermissions = (code: string) => /\bbeforePermission(?:Check|Request)\s*\(/.test(code) || /\bimport\s*\{[^}]*\bpermissions\b[^}]*\}\s*from\s*['"][^'"]*\/jobs\/permissions\.js['"]/.test(code)
 
 const approvesCalls = (code: string) => answersPermissions(code) && /\b(?:allow\s*:\s*true|ask\s*:)/.test(code)
@@ -291,20 +293,22 @@ async function checkImports(plugin: Plugin): Promise<Result> {
   for (const file of await walk(plugin.root)) {
     if (!scriptFile.test(file)) continue
     const isSource = file.startsWith(join(plugin.root, 'src') + sep)
+    const text = (await readText(file)) ?? ''
     let specifiers: string[]
     try {
-      specifiers = importsIn(relative(plugin.root, file), (await readText(file)) ?? '')
+      specifiers = importsIn(relative(plugin.root, file), text)
     } catch (error) {
       problems.push(messageOf(error))
       continue
     }
+    if (claudeCodeImport.test(text)) problems.push(`${relative(plugin.root, file)} imports claude-code: import each type from @cmodjs/core instead. A component returns JSX.Element and takes JSX.Children with no import, element props such as BoxProps and Color come from ui/elements.js, and the rest from mod.js`)
     for (const specifier of specifiers) {
       if (specifier.startsWith('.') && resolve(dirname(file), specifier).startsWith(cli)) problems.push(`${relative(plugin.root, file)} imports ${specifier} from cli/, which the release leaves out: move the shared code into src/`)
       if (isSource && isBuiltin(specifier)) problems.push(`${relative(plugin.root, file)} imports ${specifier}: Claude Code runs mods with no Node or Bun, so use fs, process, or http, imported from @cmodjs/core/mod.js`)
     }
   }
   if (problems.length > 0) return { status: 'fail', text: `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'} with the mod's imports`, fix: problems.join('\n    fix: ') }
-  return { status: 'pass', text: 'Imports reach only the mod, its packages, and claude-code' }
+  return { status: 'pass', text: 'Imports reach only the mod and its packages' }
 }
 
 async function checkBinaries(plugin: Plugin): Promise<Result> {
