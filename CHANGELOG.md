@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.0.4] - 2026-11-13
+
+### Changed
+- `cmod publish` runs the checks of `cmod check` first, and releases nothing when one fails, so a mod whose types, lint, tests, or imports fail never reaches the people who install it. Where `cmod check` would write a fix, such as the options `defineMod` declares, `cmod publish` fails that check and changes no file, `--dry-run` included. Run `cmod check`, commit what it wrote, then publish.
+- `cmod check` reads the imports of only the files the release ships, so a folder your `"files"` list leaves out, such as a library beside the mod, may import `claude-code`.
+
 ## [6.0.3] - 2026-11-13
 
 ### Changed
