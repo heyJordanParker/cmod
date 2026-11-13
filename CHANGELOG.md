@@ -4,6 +4,18 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.0.3] - 2026-11-13
+
+### Changed
+- A mod whose setup needs you shows `Finish setting up` with the step it waits on, such as `Step 1 of 2: Sign in to GitHub` or `Enter one setting`, and a Continue button that opens it. Before, it showed `Installing`, `Waiting for your answer`, and Answer.
+- `cmod setup` sets up the version Claude Code installed, your `cmod link` checkout or the copy `/plugin` installed, whatever folder it is given. A version you install through `/plugin`, older or newer, is set up as you chose. A `claude --plugin-dir` session over an installed mod runs on the installed program, so run `cmod link` to make a checkout the version your computer runs.
+- The install record says which session and process asked for each setup, as `installedBy`.
+
+### Fixed
+- A session still running an older copy of a mod no longer sets your computer back to it. Before, a session left open for days put a mod's old program and service back when its plugins restarted, and the old service could break data the newer version wrote. Only a session on the version set up now writes or removes a mod's service, and a session on any other copy uses the running one.
+- A step whose `isDone` check fails shows the failure and opens nothing, because a check that fails is not a step for you to do. Before, it opened the installer on that step.
+- Mods that start while cmod downloads its new program are answered at once. The cmod plugin starts beside the download, and only its own runs of the cmod program wait for it. Before, every mod that called cmod during the download was refused with `cmod is installing`, and a session forked then started without the session values of the conversation it came from. While it downloads, cmod shows `Downloading the cmod program` with its progress, and a failed download shows its error once, with Retry.
+
 ## [6.0.2] - 2026-11-11
 
 ### Fixed
