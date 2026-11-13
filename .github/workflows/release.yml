@@ -92,13 +92,14 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Build @cmodjs/core into the cmod plugin, and install the Claude Code cmod publish validates it with
+      - name: Build @cmodjs/core into the cmod plugin, and install the Claude Code and the linter cmod publish checks it with
         if: steps.main.outputs.changed != 'true'
         run: |
           curl -fsSL https://claude.ai/install.sh | bash -s latest
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           bun install --cwd core --frozen-lockfile
           bun install --cwd cli --frozen-lockfile
+          bun install --cwd lint --frozen-lockfile
           bun install --frozen-lockfile
           bun run --cwd core build
           (cd core && bun pm pack --quiet --destination "$RUNNER_TEMP")

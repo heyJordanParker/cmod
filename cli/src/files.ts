@@ -45,6 +45,8 @@ export function tilde(path: string): string {
   return value && (path === value || path.startsWith(`${value}/`)) ? `~${path.slice(value.length)}` : path
 }
 
+export type WriteText = (path: string, text: string) => Promise<void>
+
 export async function writeAtomically(path: string, text: string, { mode = 0o664 }: { mode?: number } = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${process.pid}.tmp`

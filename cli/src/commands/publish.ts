@@ -9,10 +9,11 @@ import { changelogSections } from '@cmodjs/core/src/utils/changelog.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { cmodPluginEntry, listPlugins, validatePlugin } from '../claude.js'
 import { readJson, tilde, writeAtomically } from '../files.js'
-import { cmodFloor, cmodRangeOf, raisedCmodRange, readDeclared, readPlugin, type Plugin } from '../plugin.js'
+import { readPlugin, type Plugin } from '../plugin.js'
 import { capture, run as runCommand } from '../process.js'
 import { buildProgram, declaredMachines, readProgram } from '../program.js'
 import { startProgress } from '../progress.js'
+import { publishChecks, refuseWrites, runChecks } from './check.js'
 
 export const summary = 'Build a mod\'s release, tag it, and publish it on GitHub.'
 
@@ -21,7 +22,11 @@ export const help = `Usage: cmod publish [path] [--dry-run]
 ${summary}
 
 Releases the mod at path (default: the current folder) at the version in its
-plugin.json. Builds the release from the files git does not ignore, leaving
+plugin.json. First runs every check cmod check runs but its package install
+and release build, which publish does as it releases, and releases nothing when
+one fails. Where cmod check would write a fix, such as the options defineMod
+declares, publish fails that check and leaves the file as it is. Builds the
+release from the files git does not ignore, leaving
 out cli/, .github/, and .claude/. A "files" list in package.json limits the release to
 those paths, a path in those three folders included, plus the folders of the install and uninstall steps,
 .claude-plugin/, package.json, tsconfig.json, the README, and the license, the
@@ -90,19 +95,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   const notes = changelogSections(await answer('show', 'HEAD:CHANGELOG.md')).find((section) => section.version === plugin.version)?.text
   if (notes === undefined || notes === '') throw new Error(`The committed CHANGELOG.md has no "## [${plugin.version}]" section with notes. Write what changed for the people who use ${plugin.name} under it, commit it, then run cmod publish again.`)
-  const declared = await readDeclared(plugin.root)
-  const written = (await readJson(`${plugin.root}/.claude-plugin/plugin.json`)) as Record<string, unknown>
-  if (declared.type === 'declared' && JSON.stringify(written['userConfig'] ?? {}) !== JSON.stringify(declared.userConfig)) {
-    throw new Error('.claude-plugin/plugin.json userConfig differs from the options defineMod declares, so Claude Code would ask for and store the wrong options. Run cmod check, which writes them, commit .claude-plugin/plugin.json, then run cmod publish again.')
-  }
-  if (declared.type === 'declared' && JSON.stringify(plugin.steps.hotkeys ?? {}) !== JSON.stringify(declared.hotkeys)) {
-    throw new Error('package.json "cmod.hotkeys" differs from the hotkeys defineMod declares, so cmod would bind the wrong combos. Run cmod check, which writes them, commit package.json, then run cmod publish again.')
-  }
-  const floor = await cmodFloor(plugin)
-  const range = cmodRangeOf(written)
-  if (floor !== undefined && range !== raisedCmodRange(range, floor.cmod)) {
-    throw new Error(`.claude-plugin/plugin.json ${range === undefined ? 'names no cmod version' : `depends on cmod "${range}"`}, and this mod bundles @cmodjs/core ${floor.core}, which runs on cmod ${floor.cmod} or later, so it needs ">=${floor.cmod}", or ">=" a newer cmod it needs. Run cmod check, which writes it, commit .claude-plugin/plugin.json, then run cmod publish again.`)
-  }
+  const written =(await readJson(`${plugin.root}/.claude-plugin/plugin.json`)) as Record<string, unknown>
   const dependedOn = (Array.isArray(written['dependencies']) ? written['dependencies'] : [])
     .map((dependency: unknown) => (isObject(dependency) ? dependency['name'] : dependency))
     .filter((name): name is string => typeof name === 'string' && name !== cmodPluginEntry.name)
@@ -119,8 +112,10 @@ export async function run(argv: string[]): Promise<number> {
   if (unlisted.length > 0) {
     throw new Error(`.claude-plugin/plugin.json depends on ${unlisted.join(', ')}, and no copy installed here names its GitHub repository in .claude-plugin/plugin.json "repository", so ${plugin.name}'s marketplace cannot list ${unlisted.length === 1 ? 'it' : 'them'} and Claude Code would leave ${plugin.name} off. Install or link ${unlisted.join(' and ')}, with "repository": "https://github.com/<owner>/<repo>" in its plugin.json, then run cmod publish again.`)
   }
-
   const progress = startProgress()
+  const { fail } = await runChecks(plugin, progress, publishChecks, refuseWrites)
+  if (fail > 0) throw new Error(`${fail === 1 ? 'A check' : `${fail} checks`} of cmod check failed, so ${plugin.name} ${plugin.version} was not released. Fix each, commit, then run cmod publish again.`)
+
   const output = await mkdtemp(join(tmpdir(), `cmod-publish-${plugin.name}-`))
   progress.step('Building the release')
   const { tree, bundle } = await buildRelease(plugin, output)
@@ -204,7 +199,7 @@ async function gitAnswer(root: string, args: readonly string[]): Promise<string>
   return exitCode === 0 ? stdout : ''
 }
 
-export async function buildRelease(plugin: Plugin, output: string): Promise<{ tree: string; bundle: string | undefined }> {
+export async function releasedFiles(plugin: Plugin): Promise<string[]> {
   const listed = plugin.packageJson?.['files']
   if (listed !== undefined && !(Array.isArray(listed) && listed.every((path) => typeof path === 'string'))) {
     throw new Error(`${tilde(plugin.root)}/package.json has a "files" key that is not a list of paths. Write it as "files": ["hooks", "src", "skills"], or remove it to release every file of the mod.`)
@@ -214,7 +209,11 @@ export async function buildRelease(plugin: Plugin, output: string): Promise<{ tr
     if (!files.some((file) => isUnder(file, [path]))) throw new Error(`package.json "files" lists ${path}, which matches no file in the mod. Add the file or remove it from "files", then run the command again.`)
   }
   const stepFolders = [plugin.steps.install, plugin.steps.uninstall].flatMap((command) => (command === undefined ? [] : scriptPaths(command))).map((path) => posix.dirname(posix.normalize(path)))
-  const released = files.filter((file) => (listed === undefined ? !isUnder(file, leftOut) : isUnder(file, listed) || (isUnder(file, [...alwaysReleased, ...stepFolders]) && !isUnder(file, leftOut))))
+  return files.filter((file) => (listed === undefined ? !isUnder(file, leftOut) : isUnder(file, listed) || (isUnder(file, [...alwaysReleased, ...stepFolders]) && !isUnder(file, leftOut))))
+}
+
+export async function buildRelease(plugin: Plugin, output: string): Promise<{ tree: string; bundle: string | undefined }> {
+  const released = await releasedFiles(plugin)
   const tree = join(output, releaseBranch)
   await mkdir(tree)
   for (const file of released) await cp(join(plugin.root, file), join(tree, file), { verbatimSymlinks: true })
@@ -238,7 +237,7 @@ async function filesUnder(root: string, folder = '.'): Promise<string[]> {
   for (const entry of await readdir(join(root, folder), { withFileTypes: true })) {
     const path = posix.join(folder, entry.name)
     if (!entry.isDirectory()) files.push(path)
-    else if (entry.name !== '.git' && entry.name !== 'node_modules') files.push(...(await filesUnder(root, path)))
+    else if (entry.name !== '.git' && entry.name !== 'node_modules' && path !== '.claude-plugin/types') files.push(...(await filesUnder(root, path)))
   }
   return files
 }

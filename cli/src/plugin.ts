@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import { isAtLeast, isObject, readRecord, readSteps, storeFolder, type Steps } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { applyEdits, modify, parse } from 'jsonc-parser'
-import { readJson, readText, writeAtomically } from './files.js'
+import { readJson, readText, type WriteText } from './files.js'
 import { bunArgv, capture, run } from './process.js'
 import { indentation } from './settings.js'
 
@@ -93,24 +93,24 @@ export async function readDeclared(root: string): Promise<Declared> {
   return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as Declared
 }
 
-export async function writeHotkeys(root: string, hotkeys: Record<string, unknown>): Promise<boolean> {
+export async function writeHotkeys(root: string, hotkeys: Record<string, unknown>, write: WriteText): Promise<boolean> {
   const path = `${root}/package.json`
   const text = (await readText(path)) ?? '{}\n'
   const current = parse(text) as Record<string, unknown> | undefined
   const steps = isObject(current?.['cmod']) ? current['cmod'] : {}
   if (JSON.stringify(steps['hotkeys'] ?? {}) === JSON.stringify(hotkeys)) return false
   const next = applyEdits(text, modify(text, ['cmod', 'hotkeys'], Object.keys(hotkeys).length === 0 ? undefined : hotkeys, { formattingOptions: indentation(text) }))
-  await writeAtomically(path, next)
+  await write(path, next)
   return true
 }
 
-export async function writeUserConfig(root: string, userConfig: Record<string, unknown>): Promise<boolean> {
+export async function writeUserConfig(root: string, userConfig: Record<string, unknown>, write: WriteText): Promise<boolean> {
   const path = `${root}/.claude-plugin/plugin.json`
   const text = (await readText(path)) ?? '{}\n'
   const current = parse(text) as Record<string, unknown> | undefined
   if (JSON.stringify(current?.['userConfig'] ?? {}) === JSON.stringify(userConfig)) return false
   const next = applyEdits(text, modify(text, ['userConfig'], Object.keys(userConfig).length === 0 ? undefined : userConfig, { formattingOptions: indentation(text) }))
-  await writeAtomically(path, next)
+  await write(path, next)
   return true
 }
 
@@ -135,7 +135,7 @@ export function raisedCmodRange(range: string | undefined, floor: string): strin
   return `>=${minimum !== undefined && isAtLeast(minimum, floor) ? minimum : floor}`
 }
 
-export async function writeCmodFloor(root: string, floor: string): Promise<boolean> {
+export async function writeCmodFloor(root: string, floor: string, write: WriteText): Promise<boolean> {
   const path = `${root}/.claude-plugin/plugin.json`
   const text = (await readText(path)) ?? '{}\n'
   const current = parse(text) as Record<string, unknown> | undefined
@@ -144,7 +144,7 @@ export async function writeCmodFloor(root: string, floor: string): Promise<boole
   const index = dependencies.findIndex((each) => each === 'cmod' || (isObject(each) && each['name'] === 'cmod'))
   const edit = isObject(dependencies[index]) ? modify(text, ['dependencies', index, 'version'], floor, { formattingOptions: indentation(text) }) : modify(text, ['dependencies', index === -1 ? dependencies.length : index], { name: 'cmod', version: floor }, { formattingOptions: indentation(text), isArrayInsertion: index === -1 })
   const next = applyEdits(text, edit)
-  await writeAtomically(path, next)
+  await write(path, next)
   return true
 }
 

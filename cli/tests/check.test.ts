@@ -579,6 +579,22 @@ test("cmod check refuses a mod file that imports claude-code, and keeps a provid
   )
 })
 
+test('cmod check reads the imports of only the files the release ships, so a library its "files" list leaves out may import claude-code', async () => {
+  const home = await temporaryHome()
+  const root = join(home, 'demo')
+  await writeFiles(home, { '.local/share/cmod/tools/oxlint/1.86.0/node_modules/.bin/oxlint': 'process.exit(0)\n' })
+  await writeFiles(root, {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', files: ['src'] }),
+    'src/greet.ts': "export const greet = (): string => 'hello'\n",
+    'core/src/claude.ts': "import type { RenderElement } from 'claude-code'\nexport type Drawn = RenderElement\n",
+  })
+
+  const result = await cmod(home, 'check', root)
+
+  expect(result.stdout).toContain('Checking imports…\n✔ Imports reach only the mod and its packages\n')
+})
+
 test('cmod check skips only the root cli/ folder, so a src/cli/ file is still checked for imports a mod cannot use', async () => {
   const home = await temporaryHome()
   const root = join(home, 'demo')

@@ -441,7 +441,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '6.0.3'
+export const coreVersion = '6.0.4'
 
 export const oldestCmodVersion = '6.0.0'
 

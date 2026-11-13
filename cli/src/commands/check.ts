@@ -8,12 +8,12 @@ import { isAtLeast, isObject, scriptPaths, scriptsSha256 } from '@cmodjs/core/sr
 import { formatOf, readMetadata, sidecarSuffix } from '@cmodjs/core/src/utils/metadata.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { addClaudeApi, listPlugins, testPlugin, validatePlugin, type InstalledPlugin } from '../claude.js'
-import { listFiles, readJson, readText, writeAtomically } from '../files.js'
+import { listFiles, readJson, readText, writeAtomically, type WriteText } from '../files.js'
 import { cmodFloor, cmodRangeOf, installPackages, raisedCmodRange, readDeclared, readPlugin, writeCmodFloor, writeHotkeys, writeUserConfig, type Declared, type Plugin } from '../plugin.js'
 import { bunArgv, capture, run as runCommand } from '../process.js'
 import { declaredMachines, machineWords, unsupportedSystems } from '../program.js'
-import { interruptProgress, startProgress } from '../progress.js'
-import { buildRelease } from './publish.js'
+import { interruptProgress, startProgress, type Progress } from '../progress.js'
+import { buildRelease, releasedFiles } from './publish.js'
 import * as update from './update.js'
 import { withoutIgnored } from './watch.js'
 import { linkedFolders } from '../settings.js'
@@ -39,15 +39,19 @@ its name. Each failure names its fix.`
 
 type Result = { status: 'pass' | 'skip'; text: string } | { status: 'fail'; text: string; fix: string }
 
-type Check = { heading: string; run(plugin: Plugin): Promise<Result> }
+type Check = { heading: string; run(plugin: Plugin, write: WriteText): Promise<Result> }
 
 const typescript = { name: 'typescript', version: '7.0.2', program: 'tsc' }
 const oxlint = { name: 'oxlint', version: '1.86.0', program: 'oxlint' }
 const skippedFolders = new Set(['node_modules', '.git', 'target', '.target'])
 const componentNames = ['skills', 'commands', 'agents', 'hooks', 'monitors', 'output-styles', 'themes', 'workflows', 'bin', 'settings.json', '.mcp.json', '.lsp.json', 'SKILL.md']
 
+const packagesCheck: Check = { heading: 'Installing packages', run: checkPackages }
+
+const releaseCheck: Check = { heading: 'Building and validating the release', run: checkRelease }
+
 const checks: Check[] = [
-  { heading: 'Installing packages', run: checkPackages },
+  packagesCheck,
   { heading: 'Checking the layout', run: checkLayout },
   { heading: 'Checking the steps', run: checkSteps },
   { heading: 'Checking the machines', run: checkMachines },
@@ -57,7 +61,7 @@ const checks: Check[] = [
   { heading: 'Pinning the cmod plugin', run: checkCmodFloor },
   { heading: 'Checking imports', run: checkImports },
   { heading: 'Looking for prebuilt binaries', run: checkBinaries },
-  { heading: 'Building and validating the release', run: checkRelease },
+  releaseCheck,
   { heading: "Compiling against Claude Code's API", run: checkCompiles },
   { heading: 'Linting', run: checkLint },
   { heading: 'Running tests', run: checkTests },
@@ -69,18 +73,37 @@ export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
   if (positionals.length > 1) throw new Error(`cmod check takes at most one path.\n\n${help}`)
   const plugin = await readPlugin(positionals[0] ?? '.')
-  const progress = startProgress()
+  const counts = await runChecks(plugin, startProgress(), checks, writeAtomically)
+  process.stdout.write(`\n${plugin.name}: ${counts.pass} passed, ${counts.fail} failed, ${counts.skip} skipped\n`)
+  return counts.fail > 0 ? 1 : 0
+}
+
+export const publishChecks: readonly Check[] = checks.filter((check) => check !== packagesCheck && check !== releaseCheck)
+
+export async function runChecks(plugin: Plugin, progress: Progress, chosen: readonly Check[], write: WriteText): Promise<Record<Result['status'], number>> {
   const counts = { pass: 0, fail: 0, skip: 0 }
-  for (const check of checks) {
+  for (const check of chosen) {
     progress.step(check.heading)
-    const result = await check.run(plugin).catch((error: unknown): Result => ({ status: 'fail', text: `${check.heading} could not run`, fix: messageOf(error) }))
+    const result = await check.run(plugin, write).catch((error: unknown): Result => (error instanceof UnwrittenFix ? { status: 'fail', text: `${relative(plugin.root, error.path)} differs from what cmod check writes`, fix: `Run cmod check, which writes it, commit ${relative(plugin.root, error.path)}, then run the command again.` } : { status: 'fail', text: `${check.heading} could not run`, fix: messageOf(error) }))
     counts[result.status] += 1
     if (result.status === 'pass') progress.succeed(result.text)
     if (result.status === 'skip') progress.skip(result.text)
     if (result.status === 'fail') progress.fail(`${result.text}\n    fix: ${result.fix}`)
   }
-  process.stdout.write(`\n${plugin.name}: ${counts.pass} passed, ${counts.fail} failed, ${counts.skip} skipped\n`)
-  return counts.fail > 0 ? 1 : 0
+  return counts
+}
+
+class UnwrittenFix extends Error {
+  readonly path: string
+
+  constructor(path: string) {
+    super(`${path} differs from what cmod check writes.`)
+    this.path = path
+  }
+}
+
+export const refuseWrites: WriteText = async (path) => {
+  throw new UnwrittenFix(path)
 }
 
 async function checkPackages(plugin: Plugin): Promise<Result> {
@@ -134,7 +157,7 @@ function downloadsIn(script: string): { program: string; listed: string[] }[] {
 
 const permissionlessCore = '5.0.0'
 
-async function checkPermissionCheck(plugin: Plugin): Promise<Result> {
+async function checkPermissionCheck(plugin: Plugin, write: WriteText): Promise<Result> {
   const declared = plugin.packageJson?.['cmod']
   const core = await readJson(join(plugin.root, 'node_modules', '@cmodjs', 'core', 'package.json'))
   const coreVersion = isObject(core) && typeof core['version'] === 'string' ? core['version'] : undefined
@@ -155,7 +178,7 @@ async function checkPermissionCheck(plugin: Plugin): Promise<Result> {
     const path = join(plugin.root, 'package.json')
     const manifest = (await readJson(path)) as Record<string, unknown>
     const steps = isObject(manifest['cmod']) ? manifest['cmod'] : {}
-    await writeAtomically(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, approve: true } }, null, 2)}\n`)
+    await write(path, `${JSON.stringify({ ...manifest, cmod: { ...steps, approve: true } }, null, 2)}\n`)
   }
   if (!isAdded && plugin.steps.approve !== true) return { status: 'skip', text: "The mod approves none of Claude's tool calls" }
   const added = isAdded ? 'Added "approve": true to package.json "cmod", because the mod allows or asks on Claude Code\'s permission check\n    ' : ''
@@ -228,7 +251,7 @@ async function checkMetadata(plugin: Plugin): Promise<Result> {
   return { status: 'pass', text: `cmod reads the metadata of ${count === 1 ? '1 file' : `${count} files`}` }
 }
 
-async function checkOptions(plugin: Plugin): Promise<Result> {
+async function checkOptions(plugin: Plugin, write: WriteText): Promise<Result> {
   let declared: Declared
   try {
     declared = await readDeclared(plugin.root)
@@ -240,8 +263,8 @@ async function checkOptions(plugin: Plugin): Promise<Result> {
   if (declared.type === 'old-core') return { status: 'skip', text: 'The @cmodjs/core in node_modules has no options. Raise it in package.json to read them' }
   const options = Object.keys(declared.userConfig)
   const hotkeys = Object.keys(declared.hotkeys)
-  const isOptionsWritten = await writeUserConfig(plugin.root, declared.userConfig)
-  const isHotkeysWritten = await writeHotkeys(plugin.root, declared.hotkeys)
+  const isOptionsWritten = await writeUserConfig(plugin.root, declared.userConfig, write)
+  const isHotkeysWritten = await writeHotkeys(plugin.root, declared.hotkeys, write)
   const lines = [
     ...(options.length === 0 ? (isOptionsWritten ? ['Removed userConfig from plugin.json, as defineMod declares no options'] : []) : [`${isOptionsWritten ? 'Wrote' : 'plugin.json userConfig holds'} the ${options.length === 1 ? 'option' : `${options.length} options`} defineMod declares${isOptionsWritten ? ' into plugin.json userConfig' : ''}: ${options.join(', ')}`]),
     ...(hotkeys.length === 0 ? (isHotkeysWritten ? ['Removed "cmod.hotkeys" from package.json, as defineMod declares no hotkeys'] : []) : [`${isHotkeysWritten ? 'Wrote' : 'package.json "cmod.hotkeys" holds'} the ${hotkeys.length === 1 ? 'hotkey' : `${hotkeys.length} hotkeys`} defineMod declares${isHotkeysWritten ? ' into package.json "cmod.hotkeys"' : ''}: ${hotkeys.join(', ')}`]),
@@ -250,7 +273,7 @@ async function checkOptions(plugin: Plugin): Promise<Result> {
   return { status: 'pass', text: lines.join('\n    ') }
 }
 
-async function checkCmodFloor(plugin: Plugin): Promise<Result> {
+async function checkCmodFloor(plugin: Plugin, write: WriteText): Promise<Result> {
   const floor = await cmodFloor(plugin)
   if (floor === undefined) return { status: 'skip', text: plugin.name === 'cmod' ? 'The cmod plugin depends on no cmod' : 'No @cmodjs/core 4 or later in node_modules, so the mod keeps its own cmod range' }
   const { core, cmod } = floor
@@ -270,7 +293,7 @@ async function checkCmodFloor(plugin: Plugin): Promise<Result> {
   if (oldest !== undefined && !isAtLeast(oldest, cmod)) return { status: 'fail', text: `@cmodjs/core ${core} needs cmod ${cmod}, and the newest cmod Claude Code can install here is ${oldest}`, fix: `Install @cmodjs/core ${oldest} with bun add @cmodjs/core@${oldest}, then run cmod check again.` }
   const linked = copies.find((copy) => copy.isLinked && isOlder(copy))
   if (linked !== undefined) return { status: 'fail', text: `cmod is linked from ${linked.installPath}, at ${linked.version}`, fix: `Pull it to ${cmod} or newer, then run cmod check again.` }
-  const isWritten = await writeCmodFloor(plugin.root, range)
+  const isWritten = await writeCmodFloor(plugin.root, range, write)
   const floorText = `the oldest cmod the @cmodjs/core ${core} this mod bundles runs on`
   const lines = [
     ...(isUpdated && oldest !== undefined ? [`Updated cmod to ${oldest} through Claude Code, so it runs the @cmodjs/core this mod bundles`] : []),
@@ -290,7 +313,7 @@ async function cmodCopies(): Promise<InstalledPlugin[]> {
 async function checkImports(plugin: Plugin): Promise<Result> {
   const problems: string[] = []
   const cli = join(plugin.root, 'cli') + sep
-  for (const file of await walk(plugin.root)) {
+  for (const file of (await releasedFiles(plugin)).map((path) => join(plugin.root, path))) {
     if (!scriptFile.test(file)) continue
     const isSource = file.startsWith(join(plugin.root, 'src') + sep)
     const text = (await readText(file)) ?? ''
