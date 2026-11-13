@@ -332,6 +332,30 @@ test('a mod whose new version still adds its isService program keeps that servic
   ])
 })
 
+test('a session on a copy other than the one set up follows the running service, and neither writes nor removes a service', async () => {
+  const spawned: (readonly string[])[] = []
+  const installed = { name: 'demo', version: '0.8.2', root: '/test/plugins/demo-0.8.2', installedAt: '2026-11-13T09:01:33.793Z', scriptsSha256: 'sha', uninstall: null, program: 'preview-server', keys: {}, permissions: [], grantedOnUpdate: [], installedBy: null }
+  const tested = testMod(
+    defineMod({
+      name: 'demo',
+      setup(mod) {
+        mod.use(program({ command: ['preview-server', '--port', '0'], isService: true }))
+      },
+    }),
+    { files: { ...heldCopy, ...recordedService('preview-server'), ...recordedService('old-server'), '/test/home/.local/share/cmod/records/demo.json': JSON.stringify(installed) } },
+  )
+  tested.fakes.clock.now = async () => 14_999
+  tested.fakes.process.spawn = (request) => {
+    spawned.push(request.argv)
+    return exitedCleanly()
+  }
+
+  await tested.start()
+  await tested.settle()
+
+  expect(spawned).toEqual([])
+})
+
 test('a mod with no services folder in the cmod store spawns no cmod process at its start', async () => {
   const spawned: (readonly string[])[] = []
   const tested = testMod(defineMod({ name: 'demo', setup() {} }))

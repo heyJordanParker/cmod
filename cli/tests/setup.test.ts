@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { chmod, readdir, readFile, readlink, rm, stat, symlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { readRecord } from '@cmodjs/core/src/records.js'
 import { readText } from '../src/files.js'
-import { cmod, cmodOnPath, createMod, createProgramMod, deleteTemporaryHomes, fourStepInstall, hashOf, helloBuild, isGone, platform, release, serveRelease, sha256Sums, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { claudeAnswering, cmod, cmodOnPath, cmodPluginListed, createMod, environment, createProgramMod, deleteTemporaryHomes, fourStepInstall, hashOf, helloBuild, isGone, platform, release, serveRelease, sha256Sums, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -32,7 +32,7 @@ test('setup --events with an install step that prints four progress lines emits 
   expect(result.exitCode).toBe(0)
   const store = join(home, '.local/share/cmod')
   const record = JSON.parse(await readFile(join(store, 'records/demo.json'), 'utf8'))
-  expect(record).toEqual({ name: 'demo', version: '0.1.0', root, installedAt: expect.any(String), scriptsSha256: sha256, uninstall: join(store, 'uninstall/demo/uninstall.sh'), program: null, keys: {}, permissions: [], grantedOnUpdate: [] })
+  expect(record).toEqual({ name: 'demo', version: '0.1.0', root, installedAt: expect.any(String), scriptsSha256: sha256, uninstall: join(store, 'uninstall/demo/uninstall.sh'), program: null, keys: {}, permissions: [], grantedOnUpdate: [], installedBy: { session: process.env['CLAUDE_CODE_SESSION_ID'] || null, pid: process.pid } })
   expect(await readFile(join(store, 'data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
 })
 
@@ -250,6 +250,61 @@ test('setup --events on a set-up mod prints done and runs nothing', async () => 
   expect(again.stdout).toBe('done demo 0.1.0\n')
   expect(again.exitCode).toBe(0)
   expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.1.0\n`)
+})
+
+const listedCopy = (id: string, installPath: string, version: string, enabled = true) => ({ id, version, scope: 'user', enabled, installPath })
+
+test('setup --events of an older copy a session loaded sets up the copy Claude Code installed', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeFiles(root, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  await writeFiles(home, { 'bin/claude': claudeAnswering([...cmodPluginListed, listedCopy('demo@demo', root, '0.2.0')]) })
+  expect((await cmod(home, 'setup', root, '--events')).exitCode).toBe(0)
+  const older = await createMod(join(home, 'older'))
+
+  const result = await cmod(home, 'setup', older, '--events')
+
+  expect(result).toEqual({ exitCode: 0, stdout: 'done demo 0.2.0\n', stderr: '' })
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'demo')).toMatchObject({ version: '0.2.0', root })
+  expect(await readFile(join(home, '.local/share/cmod/data/demo/runs'), 'utf8')).toBe(`ran in ${root} at 0.2.0\n`)
+})
+
+test('an older version you install through Claude Code is set up over the newer one', async () => {
+  const home = await temporaryHome()
+  const newer = await createMod(join(home, 'newer'))
+  await writeFiles(newer, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  expect((await cmod(home, 'setup', newer, '--events')).exitCode).toBe(0)
+  const root = await createMod(home)
+  await writeFiles(home, { 'bin/claude': claudeAnswering([...cmodPluginListed, listedCopy('demo@demo', root, '0.1.0')]) })
+
+  const result = await cmod(home, 'setup', newer, '--events')
+
+  expect(result.stdout).toEndWith('done demo 0.1.0\n')
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'demo')).toMatchObject({ version: '0.1.0', root })
+})
+
+test('setup of a published copy a session loaded sets up the linked checkout instead', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+  await writeLinked(home, root)
+  const published = await createMod(join(home, 'published'))
+  await writeFiles(published, { '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.2.0' }) })
+  await writeFiles(home, { 'bin/claude': claudeAnswering([...cmodPluginListed, listedCopy('demo@demo', published, '0.2.0', false), listedCopy(`demo@${basename(home)}-linked`, '/cache/demo/0.1.0', '0.1.0')]) })
+
+  const result = await cmod(home, 'setup', published, '--events')
+
+  expect(result.stdout).toEndWith('done demo 0.1.0\n')
+  expect(await readRecord(readText, join(home, '.local/share/cmod'), 'demo')).toMatchObject({ version: '0.1.0', root })
+})
+
+test('the record names the session and the process that asked for the setup', async () => {
+  const home = await temporaryHome()
+  const root = await createMod(home)
+
+  const setup = Bun.spawn([process.execPath, join(import.meta.dir, '..', 'src', 'main.ts'), 'setup', root, '--events'], { cwd: home, env: { ...environment(home), CLAUDE_CODE_SESSION_ID: 'a1b2c3d4' }, stdout: 'ignore', stderr: 'ignore' })
+
+  expect(await setup.exited).toBe(0)
+  expect((await readRecord(readText, join(home, '.local/share/cmod'), 'demo'))?.installedBy).toEqual({ session: 'a1b2c3d4', pid: process.pid })
 })
 
 test('setup --events on a failing install step prints failed with the exit code and a sentence naming the last stderr line, and writes no record', async () => {

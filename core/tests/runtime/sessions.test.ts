@@ -103,27 +103,6 @@ test("a listener under a task still hears that task's subtasks start after /clea
   expect(heard).toEqual(['Read tree.ts'])
 })
 
-test("a listener under a task whose tasks it reads while cmod installs shows nothing, and hears that task's subtasks once cmod is ready", async () => {
-  const heard: string[] = []
-  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
-  await tested.start()
-  const parent = await tested.startTask({ title: 'Find the pane' })
-  const [task] = await sessions.current.goal.tasks()
-  const answer = tested.fakes.cmod.call
-  let isInstalling = true
-  tested.fakes.cmod.call = async (call) => (isInstalling && call.method === conversationMethods.tasks ? Promise.reject(new Error("cmod is installing. Try again when it's ready.")) : answer!(call))
-  task!.onTaskStart((started) => void heard.push(started.title))
-  await tested.settle()
-  await tested.startTask({ title: 'Open the pane', parent })
-  isInstalling = false
-
-  await tested.startTask({ title: 'Read tree.ts', parent })
-
-  expect(tested.shown.toasts.filter((toast) => toast.type !== 'success')).toEqual([])
-  expect(tested.shown.debug).toEqual([])
-  expect(heard).toEqual(['Read tree.ts'])
-})
-
 test('a mod that starts after the first prompt takes the title from the index, never from the prompt it first hears', async () => {
   const { tested, seen } = titles()
   await tested.add({ type: 'prompt', text: 'Fix the login bug' })

@@ -16,6 +16,7 @@ export type Engine = {
   readonly hasPermissionCheck: () => boolean
   readonly answerInput: <Answer>(run: () => Promise<Answer>, passOn: () => Promise<unknown>) => Promise<Answer>
   readonly spawnCmod: (args: readonly string[], env?: Readonly<Record<string, string>>) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>
+  readonly isInstalledCopy: () => Promise<boolean>
   readonly watches: Watches
   readonly onRedraw: (listener: () => void) => Subscription
   readonly widgets?: Widgets

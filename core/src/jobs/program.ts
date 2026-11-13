@@ -24,7 +24,7 @@ const retryWithinMs = 1000
 export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean }): Job<Program> {
   const { command, environment, singleInstance = false, isService = false } = options
   return ({ mod, announce, reserveName }) => {
-    const { claude, report, spawnCmod, watches } = engineOf(mod)
+    const { claude, report, spawnCmod, isInstalledCopy, watches } = engineOf(mod)
     const [executable] = command
     if (executable === undefined) throw new Error(`${mod.name}: the program has no command. Name the program on PATH and its arguments, such as ['preview-server', '--port', '0'].`)
     if (isService) for (const type of ['program', 'service']) reserveName(type, basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
@@ -41,9 +41,9 @@ export function program(options: { readonly command: readonly string[]; readonly
     let instance: Promise<string> | undefined
     let leaseCheck: Promise<void> | undefined
 
-    const spawn = () => {
-      if (isService) return spawnCmod(['program', mod.name, '--service', ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
-      return singleInstance ? spawnCmod(['program', mod.name, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
+    const spawn = (isOwnService: boolean) => {
+      if (isOwnService) return spawnCmod(['program', mod.name, '--service', ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
+      return isElected ? spawnCmod(['program', mod.name, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
     }
 
     const instanceFile = () =>
@@ -108,11 +108,12 @@ export function program(options: { readonly command: readonly string[]; readonly
       let lastError = ''
       let isShown = false
       try {
-        if (singleInstance) {
+        const isOwnService = isService && (await isInstalledCopy())
+        if (isElected && !isOwnService) {
           const file = await instanceFile()
           if (await isHeld(claude, `${file}.lock`, staleMs)) return await follow(file)
         }
-        for await (const piece of await spawn()) {
+        for await (const piece of spawn(isOwnService)) {
           if (piece.stream === 'stderr') {
             lastError = piece.text.trim().split('\n').at(-1) ?? lastError
             continue

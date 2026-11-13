@@ -17,6 +17,7 @@ import { createLifecycle, readPlugin, type Lifecycle, type Plugin } from '../../
 import { permissionRoutes } from '../../src/runtime/permission-check.js'
 import { sessionKeyOf } from '../../src/runtime/state.js'
 import { installFix, oldestCmodVersion, readSteps, scriptsSha256, secretFix } from '../../src/records.js'
+import { runCmod } from '../../src/runtime/programs.js'
 import { createToaster } from '../../src/runtime/toaster.js'
 import { testMod, type ShownToast } from '../../src/testing.js'
 import { calledAnswer, fakeClaude } from '../../src/testing/fake-claude.js'
@@ -234,7 +235,7 @@ test('a mod with a pending install registers nothing until done, then runs setup
   step.print('progress 2 4 Installing trash')
   await fake.settle()
 
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
   expect(await fire(lifecycle, 'classic.PostToolBatch', toolBatch, {})).toEqual({})
   expect(runs).toEqual([])
   expect(rowsOf(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 100).map((row) => row.trimEnd())).toEqual([
@@ -302,20 +303,61 @@ test("a call to a mod still installing at the start limit fails with when to ret
   expect(await fire(lifecycle, 'cmod.call', { to: 'other', method: 'signatures', input: { path: 'a.ts' } }, below)).toBe(below)
 })
 
-test("a mod's call to the cmod plugin while it downloads cmod waits for the download, then answers", async () => {
+test("a mod's call to the cmod plugin while it downloads the cmod program answers before the download ends", async () => {
   const fake = fakeClaude({ name: 'cmod', root })
   const bootstrap = controlledStream()
   fake.fakes.process.spawn = () => bootstrap.stream
   const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: () => ({ tasks: () => [{ id: 'a1', parent: undefined }] }) }))
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
   await fake.settle()
+  bootstrap.print('progress 0 2 Downloading cmod 5.10.0')
 
-  const answer = fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'tasks', input: null, caller: 'demo' }, { deny: 'cmod is not installed. Install it in Plugins.' })
+  const answer = await fire(lifecycle, 'cmod.call', { to: 'cmod', method: 'tasks', input: null, caller: 'demo' }, { deny: 'cmod is not installed. Install it in Plugins.' })
+
+  expect(answer).toEqual({ value: [{ id: 'a1', parent: undefined }] })
+})
+
+async function downloadingCmod() {
+  const fake = fakeClaude({ name: 'cmod', root })
+  const bootstrap = controlledStream()
+  const ran: string[] = []
+  fake.fakes.process.spawn = (request) => {
+    if (request.argv.includes('./setup/bootstrap.sh')) return bootstrap.stream
+    ran.push(request.argv.slice(1).join(' '))
+    return finished(['listed'], 0)
+  }
+  let listing: Promise<string> | undefined
+  const lifecycle = createLifecycle(defineMod({ name: 'cmod', setup: (mod) => void (listing = runCmod(engineOf(mod).claude, ['list'], 'test-session')) }))
+  await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
   await fake.settle()
-  bootstrap.print('progress 1 1 Downloading cmod 5.10.0')
-  bootstrap.exit(0)
+  const run = listing as Promise<string>
+  run.catch(() => undefined)
+  return { fake, bootstrap, ran, lifecycle, listing: run }
+}
 
-  expect(await answer).toEqual({ value: [{ id: 'a1', parent: undefined }] })
+test('a run of the cmod program while the cmod plugin downloads it waits for the download, so the plugin never runs an older program', async () => {
+  const { fake, bootstrap, ran, lifecycle, listing } = await downloadingCmod()
+  expect([lifecycle.phase, ran]).toEqual(['active', []])
+
+  bootstrap.exit(0)
+  await fake.settle()
+
+  expect(await listing).toBe('listed')
+  expect(ran).toEqual(['list'])
+  expect(lifecycle.toasts.filter((toast) => toast.type !== 'success')).toEqual([])
+})
+
+test('a failed download of the cmod program fails each run with the bootstrap error, and leaves the cmod plugin answering', async () => {
+  const { fake, bootstrap, ran, lifecycle, listing } = await downloadingCmod()
+
+  bootstrap.printError('cmod bootstrap: could not fetch SHA256SUMS')
+  bootstrap.exit(1)
+  await fake.settle()
+
+  expect(await listing.catch(messageOf)).toBe('bootstrap exited 1: cmod bootstrap: could not fetch SHA256SUMS')
+  expect(ran).toEqual([])
+  expect(lifecycle.phase).toBe('active')
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual(failed('bootstrap exited 1: cmod bootstrap: could not fetch SHA256SUMS'))
 })
 
 test('a draw the cmod plugin asks of a mod that is installing reports nothing, and draws once the mod is active', async () => {
@@ -470,24 +512,24 @@ test('while the installer waits for the answer, its toast stays still, so no red
   timers.fire()
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual([{ type: 'info', message: 'Installing', description: 'Waiting for your answer' }])
+  expect(lifecycle.toasts).toEqual([{ type: 'info', message: 'Finish setting up', description: 'Enter one setting' }])
   expect(redraws()).toBe(shownRedraws)
 })
 
-test("a question Claude Code holds back in a narrow terminal opens from its toast's Answer button, and the toast leaves once answered", async () => {
+test("a question Claude Code holds back in a narrow terminal opens from its toast's Continue button, and the toast leaves once answered", async () => {
   const { fake, lifecycle, start } = askingForToken()
 
   start()
   await fake.settle()
-  const answer = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Answer')
-  if (answer === undefined) throw new Error('The waiting toast has no Answer button.')
+  const answer = findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Continue')
+  if (answer === undefined) throw new Error('The waiting toast has no Continue button.')
   await (answer['onPress'] as () => unknown)()
   await fake.settle()
 
   expect(installRequests(fake)).toEqual([installerOpen, { ...installerOpen, isAsked: true }])
   await pressInInstaller(lifecycle, 'not-now', 'other')
   await fake.settle()
-  expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Answer')).toBeUndefined()
+  expect(findElement(await fire(lifecycle, 'ui.render', abovePrompt, prompt), 'Button', 'Continue')).toBeUndefined()
 })
 
 test('a mod with install steps runs cmod setup once, asks nothing, and starts when it is done', async () => {
@@ -1235,25 +1277,6 @@ test('a failure whose Log call cmod refuses while it installs shows no toast, an
   expect(logged).toEqual([expect.objectContaining({ id: 'session:onSessionStart', message: 'The onSessionStart listener failed', level: 'error' })])
 })
 
-test('the parts a mod tells cmod while cmod installs reach no Log, because the cmod plugin asks every mod for its parts once it starts', async () => {
-  const fake = fakeClaude({ name: 'demo', root })
-  fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
-  const told: unknown[] = []
-  const logged: unknown[] = []
-  fake.fakes.cmod.call = async (call) => {
-    if (call.method === 'cmod:failed') return (logged.push(call.input), { showsToast: false })
-    if (call.method === partMethods.changed) return (told.push(call.input), calledAnswer('demo', { deny: "cmod is installing. Try again when it's ready." }))
-    return null
-  }
-  const lifecycle = createLifecycle(defineMod({ name: 'demo', setup: (mod) => void mod.widgets.add({ id: 'count', title: 'Count', areas: [BelowPrompt], render: () => Text({ children: '1' }) }) }))
-
-  await lifecycle.start(fake.claude, given({ ...pending, isInstalled: true }))
-  await fake.settle()
-
-  expect(told).toEqual([expect.objectContaining({ isStart: true })])
-  expect([logged, fake.shown.debug.filter((line) => line.includes('did not hear about its pages and widgets'))]).toEqual([[], []])
-})
-
 test('a mod loaded mid-session, which hears no SessionStart, runs its session-start listeners before the next prompt, once', async () => {
   const fake = fakeClaude({ name: 'demo', root })
   fake.store.set('cmod:announced', { version: '0.2.0', added: [] })
@@ -1522,7 +1545,7 @@ test('a waiting mod continues its install once the cmod program appears, with no
   cmodCheck?.fire()
   await fake.settle()
 
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
   expect(cmodCheck?.isCancelled).toBe(true)
   expect(runs).toEqual(['setup'])
 })
@@ -1559,7 +1582,7 @@ test('a mod whose cmod stays older than the library it bundles for a minute upda
   timers.find((made) => made.ms === 10_000)?.fire()
   await fake.settle()
 
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'update', 'cmod'] }, { argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'update', 'cmod'] }, { argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
 })
 
 test('a mod runs one update for an older cmod, and when the update leaves it older, the next wait shows why with Retry instead of updating again', async () => {
@@ -1649,7 +1672,7 @@ test('a mod keeps waiting for cmod past 60 seconds and starts once cmod is ready
   await fake.settle()
   await fire(lifecycle, 'classic.PostToolBatch', toolBatch, {})
 
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
   expect(timers.filter((made) => made.ms === 1000 || made.ms === 60_000).map((made) => made.isCancelled)).toEqual([true, true])
   expect(runs).toEqual(['setup', 'PostToolBatch'])
 })
@@ -1787,6 +1810,7 @@ test("a mod's own installer step opens after it starts, and Finish waits for isD
   await fake.settle()
 
   expect(await installerText(lifecycle, 'other')).toContain('Sign in to GitHub  (1 of 1)')
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'info')).toEqual([{ type: 'info', message: 'Finish setting up', description: 'Step 1 of 1: Sign in to GitHub' }])
   await pressInInstaller(lifecycle, 'next', 'other')
   expect(await installerText(lifecycle, 'other')).toContain('Finish Sign in to GitHub first.')
   isSignedIn = true
@@ -1819,7 +1843,7 @@ test("an installer step redraws when the mod's state changes while it shows", as
   expect(await installerText(lifecycle, 'other')).toContain('Signed in as octocat')
 })
 
-test("a step whose isDone fails stays pending, shows the failure, and Finish shows it in the installer", async () => {
+test("a step whose isDone fails shows the failure and opens no step, because a failed check is no step to do", async () => {
   const fake = fakeClaude({ name: 'other', root })
   const lifecycle = createLifecycle(
     defineMod({
@@ -1833,8 +1857,8 @@ test("a step whose isDone fails stays pending, shows the failure, and Finish sho
   await fake.settle()
 
   expect(lifecycle.toasts).toContainEqual({ type: 'error', message: "The Sign in to GitHub step's isDone failed", description: 'gh is not installed' })
-  await pressInInstaller(lifecycle, 'next', 'other')
-  expect(await installerText(lifecycle, 'other')).toContain("The Sign in to GitHub step's isDone failed: gh is not installed")
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'info' || toast.type === 'warning')).toEqual([])
+  expect(installRequests(fake)).toEqual([])
 })
 
 test('a step left on Not now keeps a Finish button and is listed to /mods, and finishing opens the installer on it again without waiting for the person', async () => {
@@ -2144,7 +2168,7 @@ test('a mod with a program and no install step runs setup and then turns on', as
   await lifecycle.start(fake.claude, readPlugin)
   await fake.settle()
 
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
   expect(runs).toEqual(['setup'])
 
   await fire(lifecycle, 'classic.PostToolBatch', toolBatch, {})
@@ -2169,7 +2193,7 @@ test('a mod with no steps activates at once and writes its record in the backgro
   await fake.settle()
 
   expect(runs).toEqual(['setup'])
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.' }])
 
   step.print('done demo 0.2.0')
@@ -2206,7 +2230,7 @@ test('a mod with no steps writes its record silently, and retries on the next pr
   await fire(lifecycle, 'classic.UserPromptSubmit', promptSubmit, {})
   await fake.settle()
 
-  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'] }])
+  expect(spawned).toEqual([{ argv: [cmodProgram, 'setup', root, '--events'], env: { CLAUDE_CODE_SESSION_ID: 'test-session' } }])
   expect(lifecycle.toasts).toEqual([{ type: 'success', message: 'Installed', description: 'Adds the Trash pane.' }])
 })
 
@@ -2315,7 +2339,7 @@ test('the install page is a tab of the Sidebar: closing the tab is Not now, and 
   await tell([], null)
   await fake.settle()
 
-  expect(waiting).toEqual([{ type: 'info', message: 'Installing', description: 'Waiting for your answer' }])
+  expect(waiting).toEqual([{ type: 'info', message: 'Finish setting up', description: 'Enter one setting' }])
   expect(lifecycle.phase).toBe('failed')
   expect(lifecycle.toasts).toEqual(failed('it needs GitHub token', 'Retry asks for it.'))
   expect(installRequests(fake)).toEqual([installerOpen])
@@ -2359,7 +2383,7 @@ test('an empty stderr from the cmod bootstrap leaves no bare colon', async () =>
   await lifecycle.start(fake.claude, given({ ...pending, name: 'cmod' }))
   await fake.settle()
 
-  expect(lifecycle.toasts).toEqual(failed('bootstrap exited 1'))
+  expect(lifecycle.toasts.filter((toast) => toast.type === 'error')).toEqual(failed('bootstrap exited 1'))
 })
 
 test('a reason ending in ? keeps one mark', async () => {

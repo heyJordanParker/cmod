@@ -31,7 +31,7 @@ export type Installer = {
 
 const keptDraws = 8
 
-export function createInstaller(name: string, claude: () => Claude, waiting: { show(open: () => Promise<void>): void; hide(): void }, nextDraw: () => number): Installer {
+export function createInstaller(name: string, claude: () => Claude, waiting: { show(open: () => Promise<void>, next: string): void; hide(): void }, nextDraw: () => number): Installer {
   let question: Question | undefined
   let isOpen = false
   let isSeen = false
@@ -48,7 +48,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
 
   const open = (isAsked: boolean) => send({ requests: [{ open: installPage, focus: true }], ...(isAsked ? { isAsked: true } : {}) })
 
-  const show = async <Answer>(build: (answer: (value: Answer) => void) => Omit<Question, 'cancel'>, cancelled: Answer): Promise<Answer> => {
+  const show = async <Answer>(next: string, build: (answer: (value: Answer) => void) => Omit<Question, 'cancel'>, cancelled: Answer): Promise<Answer> => {
     question?.cancel()
     const answer = new Promise<Answer>((resolve) => {
       let isAnswered = false
@@ -60,7 +60,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       }
       question = { ...build(done), cancel: () => done(cancelled) }
     })
-    waiting.show(() => open(true))
+    waiting.show(() => open(true), next)
     if (isOpen) {
       await send({ redraw: true }).catch(log('the installer did not redraw'))
     } else {
@@ -130,6 +130,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
       const saved = new Map<string, string>()
       const failures = new Map<string, string>()
       return show<boolean>(
+        `Enter ${missing.length === 1 ? 'one setting' : `${missing.length} settings`}`,
         (answer) => ({
           draw: () =>
             dialog(
@@ -170,6 +171,7 @@ export function createInstaller(name: string, claude: () => Claude, waiting: { s
     step(mod, step, index, total) {
       let notice: { readonly color: 'warning' | 'error'; readonly text: string } | undefined
       return show<boolean>(
+        `Step ${index} of ${total}: ${step.title}`,
         (answer) => ({
           draw: (props) => {
             let body: RenderElement

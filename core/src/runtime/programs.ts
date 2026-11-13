@@ -4,7 +4,7 @@ import { ifMissing } from '../utils/paths.js'
 import { formatExit } from '../utils/text.js'
 import type { Claude } from './claude.js'
 
-export type Programs = { readonly claude: Claude; refresh(): Promise<void> }
+export type Programs = { readonly claude: Claude; refresh(): Promise<void>; waitFor(download: Promise<void>): void }
 
 export function lastLineOf(text: string): string | undefined {
   const trimmed = text.trim()
@@ -64,20 +64,57 @@ export async function runCmod(claude: Claude, args: readonly string[], session: 
   return lines.join('\n')
 }
 
+function spawnedAfter(ready: Promise<void>, spawn: () => HookStream<ProcessSpawnChunk, ProcessSpawnResult>): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
+  let resolve: (ended: ProcessSpawnResult) => void = () => undefined
+  let reject: (error: Error) => void = () => undefined
+  const result = new Promise<ProcessSpawnResult>((resolved, rejected) => {
+    resolve = resolved
+    reject = rejected
+  })
+  result.catch(() => undefined)
+  const stream = (async function* () {
+    try {
+      await ready
+      const ended = yield* spawn()
+      resolve(ended)
+      return ended
+    } finally {
+      reject(new Error('cmod: the stream closed before the program ended.'))
+    }
+  })()
+  return Object.assign(stream, { result })
+}
+
 export function locatingPrograms(claude: Claude): Programs {
   let folder: string | undefined
   let names: ReadonlySet<string> = new Set()
+  let downloading: Promise<void> | undefined
   const located = (argv: readonly string[]): readonly string[] => {
     const [name, ...rest] = argv
     return folder !== undefined && name !== undefined && (name === 'cmod' || names.has(name)) ? [`${folder}/${name}`, ...rest] : argv
   }
+  const waiting = (argv: readonly string[]) => (argv[0] === 'cmod' ? downloading : undefined)
   return {
     claude: {
       ...claude,
       process: {
-        run: (argv, init) => claude.process.run(located(argv), init),
-        spawn: (request) => claude.process.spawn({ ...request, argv: located(request.argv) }),
+        run: (argv, init) => {
+          const ready = waiting(argv)
+          return ready === undefined ? claude.process.run(located(argv), init) : ready.then(() => claude.process.run(located(argv), init))
+        },
+        spawn: (request) => {
+          const ready = waiting(request.argv)
+          const spawn = () => claude.process.spawn({ ...request, argv: located(request.argv) })
+          return ready === undefined ? spawn() : spawnedAfter(ready, spawn)
+        },
       },
+    },
+    waitFor(download) {
+      const current = download.then(() => {
+        if (downloading === current) downloading = undefined
+      })
+      current.catch(() => undefined)
+      downloading = current
     },
     async refresh() {
       const [home, dataHome] = await Promise.all([claude.env.home(), claude.env.dataHome()])

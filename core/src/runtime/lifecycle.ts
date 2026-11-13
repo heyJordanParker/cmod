@@ -91,6 +91,7 @@ type ModRuntime = {
   readonly nextDraw: () => number
   readonly installer: Pick<Installer, 'changed'>
   readonly serveCmodPlugin: ServeCmodPlugin | undefined
+  readonly isInstalledCopy: () => Promise<boolean>
 }
 
 type ActiveMod<State extends object, Declared extends Options> = {
@@ -110,6 +111,8 @@ const installId = 'cmod:install'
 const askingId = 'cmod:asking'
 
 const recordId = 'cmod:record'
+
+const downloadId = 'cmod:download'
 
 const installRetrySeconds = [2, 4, 8, 16, 32, 64, 128] as const
 
@@ -211,9 +214,9 @@ export function createLifecycle<State extends object, Declared extends Options =
     definition.name,
     () => claude(),
     {
-      show: (open) => {
+      show: (open, next) => {
         if (phase !== 'active') runtime?.toaster.toast.dismiss(installId)
-        runtime?.toaster.toast.info('Installing', { id: askingId, description: 'Waiting for your answer', duration: Infinity, action: { label: 'Answer', onClick: open } })
+        runtime?.toaster.toast.info('Finish setting up', { id: askingId, description: next, duration: Infinity, action: { label: 'Continue', onClick: open } })
       },
       hide: () => runtime?.toaster.toast.dismiss(askingId),
     },
@@ -309,7 +312,7 @@ export function createLifecycle<State extends object, Declared extends Options =
   const recordThroughCmod = async () => {
     if (plugin === undefined || (await newestCmodVersion(claude())) === undefined) return
     let failed: string | undefined
-    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'] }), (text) => {
+    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'], env: { CLAUDE_CODE_SESSION_ID: await claude().session.id() } }), (text) => {
       const event = parseEvent(text)
       if (event.type === 'done') shouldRecord = false
       if (event.type === 'failed') failed = event.message
@@ -320,6 +323,13 @@ export function createLifecycle<State extends object, Declared extends Options =
     }
     if (failed !== undefined) return void toastFailure({ id: recordId, message: failed, retry: record, isCritical: true })
     throw new Error(`cmod setup ${formatExit(code, lastError)}`)
+  }
+
+  const isInstalledCopy = async () => {
+    await recording
+    if (plugin === undefined) return true
+    const recorded = await readRecord((path) => claude().fs.read(path).catch(ifMissing(undefined)), plugin.store, plugin.name)
+    return recorded === undefined || recorded.root === plugin.root
   }
 
   const record = () => {
@@ -354,18 +364,18 @@ export function createLifecycle<State extends object, Declared extends Options =
     return true
   }
 
-  const isStepDone = async (active: Mod<State>, step: Step<State>) => {
+  const isStepDone = async (active: Mod<State>, step: Step<State>): Promise<boolean | undefined> => {
     try {
       return await step.isDone(active)
     } catch (error) {
       toastFailure({ id: `step:${step.title}`, message: `The ${step.title} step's isDone failed`, error })
-      return false
+      return undefined
     }
   }
 
   const pendingSteps = async (active: Mod<State>) => {
     const pending: string[] = []
-    for (const step of definition.installer ?? []) if (!(await isStepDone(active, step))) pending.push(step.title)
+    for (const step of definition.installer ?? []) if ((await isStepDone(active, step)) !== true) pending.push(step.title)
     return pending
   }
 
@@ -373,7 +383,9 @@ export function createLifecycle<State extends object, Declared extends Options =
     const steps = asksPerson ? (definition.installer ?? []) : []
     try {
       for (const [index, step] of steps.entries()) {
-        if (await isStepDone(active, step)) continue
+        const isDone = await isStepDone(active, step)
+        if (isDone === undefined) break
+        if (isDone) continue
         const isAnswered = (await claude().session.surfaces()).length > 0 && (await installer.step(active, step, index + 1, steps.length))
         if (!isAnswered) {
           runtime?.toaster.toast.warning(steps.length - index === 1 ? 'Needs one more step' : `Needs ${steps.length - index} more steps`, {
@@ -394,7 +406,7 @@ export function createLifecycle<State extends object, Declared extends Options =
     if (runtime === undefined || plugin === undefined) return
     const activeRouter = createRouter()
     startingRouter = activeRouter
-    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw, installer, serveCmodPlugin })
+    const active = await createMod(definition, { ...runtime, router: activeRouter, dataFolder: dataFolder(plugin.store, plugin.name), store: plugin.store, permissionRoutes, options: pluginOptions, nextDraw, installer, serveCmodPlugin, isInstalledCopy })
       .catch(async (error: unknown) => {
         if (error instanceof MissingOptions && (await askOptions(error))) return undefined
         await installer.close()
@@ -453,14 +465,17 @@ export function createLifecycle<State extends object, Declared extends Options =
 
   const install = async (isQuiet = false): Promise<void> => {
     if (plugin === undefined) return
-    if (plugin.name === cmodPluginName) return bootstrap(plugin.root)
     phase = 'installing'
+    if (plugin.name === cmodPluginName) {
+      download(plugin.root)
+      return finish()
+    }
     const found = await newestCmodVersion(claude())
     if (!fits(found)) return waitForcmod(found)
     if (!isQuiet) installing()
     let outcome: RunnerEvent | undefined
     let retries: 'changed' | 'later' | undefined
-    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'] }), (text) => {
+    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['cmod', 'setup', plugin.root, '--events'], env: { CLAUDE_CODE_SESSION_ID: await claude().session.id() } }), (text) => {
       const event = parseEvent(text)
       if (event.type === 'progress' && !isQuiet) installing(progressOf(event))
       if (event.type === 'retries') retries = event.when
@@ -524,15 +539,20 @@ export function createLifecycle<State extends object, Declared extends Options =
     })
   }
 
-  const bootstrap = async (root: string) => {
-    installing()
-    phase = 'installing'
-    const { code, lastError } = await readLines(claude().process.spawn({ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: root }), (text) => {
+  const download = (root: string) => {
+    const downloading = (description?: RenderElement) => runtime?.toaster.toast.loading('Downloading the cmod program', { id: downloadId, ...(description === undefined ? {} : { description }) })
+    downloading()
+    const downloaded = readLines(claude().process.spawn({ argv: ['sh', '-c', './setup/bootstrap.sh'], cwd: root }), (text) => {
       const event = parseEvent(text)
-      if (event.type === 'progress') installing(progressOf(event))
+      if (event.type === 'progress') downloading(progressOf(event))
+    }).then(({ code, lastError }) => {
+      if (code !== 0) throw new Error(`bootstrap ${formatExit(code, lastError)}`)
     })
-    if (code === 0) return finish()
-    fail(`bootstrap ${formatExit(code, lastError)}`, undefined, () => bootstrap(root))
+    programs?.waitFor(downloaded)
+    void downloaded.then(
+      () => runtime?.toaster.toast.dismiss(downloadId),
+      (error: unknown) => toastFailure({ id: downloadId, message: messageOf(error), retry: async () => download(root), isCritical: true }),
+    )
   }
 
   const begin = async (): Promise<void> => {
@@ -1133,6 +1153,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     hasPermissionCheck: () => runtime.permissionRoutes() !== undefined,
     answerInput: area.answerInput,
     spawnCmod: (args, env) => spawnCmod(claude, args, session, env),
+    isInstalledCopy: runtime.isInstalledCopy,
     watches,
     onRedraw(listener) {
       redraws.add(listener)
@@ -1149,6 +1170,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     return { remove: () => void names.delete(key) }
   }
   const removeUndeclaredServices = async () => {
+    if (!(await runtime.isInstalledCopy())) return
     for (const { name } of await claude.fs.list(serviceFolder(runtime.store, definition.name)).catch(ifMissing([]))) {
       const program = name.endsWith('.json') ? name.slice(0, -'.json'.length) : undefined
       if (program !== undefined && !names.has(`service:${program}`)) await runCmod(claude, ['program', definition.name, '--remove-service', '--', program], session)

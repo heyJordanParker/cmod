@@ -9,7 +9,7 @@ import { componentOf, nameOf, type Kind, type Style, type StyledAt, type StyleIn
 import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
-import { cmodPluginName, isStillInstalling } from './dependencies.js'
+import { cmodPluginName } from './dependencies.js'
 import type { Router } from './router.js'
 import type { Failure } from './toaster.js'
 
@@ -317,7 +317,7 @@ export function createUi<State extends object>({ name, claude, router, report, a
           if (isObject(answer) && name !== cmodPluginName) hear(answer['stylers'], false)
         },
         (error: unknown) => {
-          if (!isStillInstalling(cmodPluginName, error)) claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`)
+          claude.ui.warn('parts:tell', `${name}: the cmod plugin did not hear about its pages and widgets: ${messageOf(error)}`)
         },
       )
     }

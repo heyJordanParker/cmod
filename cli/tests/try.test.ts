@@ -470,12 +470,13 @@ test('cmod try refuses a mod another checkout has set up', async () => {
   await writeFiles(checkout, helloMod)
   expect((await cmod(home, 'setup', installed)).exitCode).toBe(0)
   const record = await readFile(join(store, 'records/hello-mod.json'), 'utf8')
+  const callsBefore = await readFile(join(home, 'claude-calls'), 'utf8')
 
   const result = await cmod(home, 'try', '--home', '~', checkout)
 
   expect(result.stderr).toBe('cmod try: hello-mod is set up from ~/installed/hello-mod, so cmod try would replace its record and saved uninstall step. Run cmod remove hello-mod, or cmod unlink ~/installed/hello-mod for a linked checkout, then run cmod try again.\n')
   expect(result.exitCode).toBe(1)
-  expect(existsSync(join(home, 'claude-calls'))).toBe(false)
+  expect(await readFile(join(home, 'claude-calls'), 'utf8')).toBe(callsBefore)
   expect(await readFile(join(store, 'records/hello-mod.json'), 'utf8')).toBe(record)
   expect(await readFile(join(store, 'uninstall/hello-mod/root/setup/uninstall.sh'), 'utf8')).toBe(helloMod['setup/uninstall.sh'])
 })

@@ -12,7 +12,10 @@ export type InstallRecord = {
   keys: Readonly<Record<string, string>>
   permissions: readonly string[] | null
   grantedOnUpdate: readonly string[]
+  installedBy: InstalledBy | null
 }
+
+export type InstalledBy = { readonly session: string | null; readonly pid: number }
 
 export type Steps = {
   install?: string
@@ -137,6 +140,8 @@ function parseRecord(text: string, path: string): InstallRecord {
   if (permissions !== null && !isTextList(permissions)) throw new Error(`${path} has "permissions" that are not a list of permissions. ${fix}`)
   const grantedOnUpdate = value['grantedOnUpdate'] ?? []
   if (!isTextList(grantedOnUpdate)) throw new Error(`${path} has a "grantedOnUpdate" that is not a list of permissions. ${fix}`)
+  const installedBy = value['installedBy'] ?? null
+  if (installedBy !== null && !(isObject(installedBy) && (installedBy['session'] === null || typeof installedBy['session'] === 'string') && typeof installedBy['pid'] === 'number')) throw new Error(`${path} has an "installedBy" that names no session and process. ${fix}`)
   return {
     name: value['name'] as string,
     version: value['version'] as string,
@@ -148,6 +153,7 @@ function parseRecord(text: string, path: string): InstallRecord {
     keys: keys as Record<string, string>,
     permissions,
     grantedOnUpdate,
+    installedBy: installedBy as InstalledBy | null,
   }
 }
 
@@ -435,7 +441,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '6.0.2'
+export const coreVersion = '6.0.3'
 
 export const oldestCmodVersion = '6.0.0'
 

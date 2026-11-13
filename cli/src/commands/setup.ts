@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util'
 import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, isProgramNewer, marketplaceOf, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import type { Hotkeys } from '@cmodjs/core/src/hotkeys.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { relinkPluginFolders } from '../claude.js'
+import { listPlugins, relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
 import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
@@ -31,7 +31,12 @@ version of the program stops its running copy, as cmod program describes, so the
 copy's next holder, or its service, starts the new program. A hotkey you
 rebound keeps your combo, and a combo you already bound to something else
 stays yours, and the setup prints the line to add. An unchanged mod runs
-nothing. While a setup or teardown of the mod runs, another setup waits for it,
+nothing. The copy it sets up is the one Claude Code installed, the cmod link
+checkout or the enabled copy claude plugin list names, whatever folder it is
+given, so a session still running an older copy never sets the computer back
+to it. The folder given is set up only when Claude Code lists no copy of the
+mod, as for a --plugin-dir mod. The record names the session and the process
+that asked. While a setup or teardown of the mod runs, another setup waits for it,
 then checks the mod again. A setup whose process is gone is taken over at once.
 Ctrl+C, a closed terminal, or SIGTERM while it waits or before the install step
 starts stops the setup and removes what it set up. When the install step of a
@@ -60,19 +65,27 @@ export async function run(argv: string[]): Promise<number> {
     options: { events: { type: 'boolean', default: false }, consent: { type: 'string' } },
   })
   if (positionals.length !== 1) throw new Error(`cmod setup takes one plugin root.\n\n${help}`)
-  const root = positionals[0] as string
   await relinkPluginFolders()
-  if (values.events) return setupWithEvents(root)
-  const plugin = await readPlugin(root)
+  const folder = positionals[0] as string
+  if (values.events) return setupWithEvents(folder)
+  const plugin = await readPlugin(await installedCopy(folder))
   const progress = startProgress()
   const code = await setupInTerminal(plugin, progress)
   if (code === 0) noteNextStep(plugin, progress)
   return code
 }
 
-async function setupWithEvents(root: string): Promise<number> {
+async function installedCopy(folder: string): Promise<string> {
+  const { name } = await readPlugin(folder)
+  const copies = (await listPlugins()).filter((copy) => copy.name === name && copy.scope !== 'session')
+  return (copies.find((copy) => copy.enabled) ?? copies[0])?.installPath ?? folder
+}
+
+async function setupWithEvents(folder: string): Promise<number> {
   let failure: unknown
+  let root = folder
   try {
+    root = await installedCopy(folder)
     const plugin = await readPlugin(root)
     const code = await runSetup(plugin, printEvent)
     if (code === 0) printEvent({ type: 'done', name: plugin.name, version: plugin.version })
@@ -246,6 +259,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
       keys: bound,
       permissions: plugin.steps.permissions ?? [],
       grantedOnUpdate: [],
+      installedBy: { session: process.env['CLAUDE_CODE_SESSION_ID'] || null, pid: process.ppid },
     })
     isRecorded = true
     if (state.updates !== undefined) {

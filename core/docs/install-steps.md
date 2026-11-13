@@ -80,7 +80,7 @@ type Step<State> = {
 - `id` is 1 to 64 letters, digits, `_`, or `-`, unique among the steps. `title` is the line above the step, with `(1 of 2)`. `defineMod` throws for an id that is not one, a blank title, or two steps with one id.
 - `render` draws the step's body, the way a page's `render` does, with the elements a page draws ([ui.md](ui.md#the-sidebar-and-its-pages)). Give the step a `Button` that does the work or opens the place to do it, never a command to type.
 - `isDone` says whether the step is finished. A step that is done is skipped, so the page opens only for what is left. `Next` checks `isDone`, and shows `Finish <title> first.` while it is false. The last step's button says `Finish`.
-- An `isDone` that throws or rejects counts as not done, and `Next` shows `The <title> step's isDone failed: <error>`.
+- An `isDone` that throws or rejects opens no step: the mod shows `The <title> step's isDone failed` with the error, and the step stays listed as left to do. Pressed on a step already open, `Next` shows `The <title> step's isDone failed: <error>`.
 - `Not now` closes the page, and the mod keeps running. A toast stays above the prompt, `Needs one more step` with `Starting with <title>.` under it, and its `Finish` button opens the page on the first step left. Settings shows `Needs setup: <title>` with a `Finish setup` button too.
 
 ## Hotkeys
