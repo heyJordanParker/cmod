@@ -1,5 +1,5 @@
 import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type ConfigRow, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, storeFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, parseTailnetRecord, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, storeFolder, tailnetFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { isStillInstalling } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
@@ -51,11 +51,15 @@ export type ModView = {
   readonly pendingSteps: readonly string[]
   readonly changelog: readonly ChangelogSection[]
   readonly isService: boolean
+  readonly webApps: readonly WebAppView[]
 }
+
+type WebAppView = { readonly name: string; readonly url: string | null; readonly reason: string | null }
 
 const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
   servesWebUi: 'Show the Sidebar in your browser',
+  servesTailnet: 'Open web apps from your other machines, through Tailscale',
 } satisfies Partial<Record<keyof Preferences, string>>
 
 const pageSection = 'page:'
@@ -248,7 +252,15 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         pendingSteps: await ask(pendingStepsMethod),
         changelog: changelogSections((await read(`${root}/CHANGELOG.md`)) ?? ''),
         isService: (await fs.list(serviceFolder(store, name)).catch(ifMissing([]))).some((entry) => entry.name.endsWith('.json')),
+        webApps: await webAppsOf(store, name),
       }
+    }
+
+    const webAppsOf = async (store: string, name: string): Promise<WebAppView[]> => {
+      const folder = tailnetFolder(store, name)
+      const files = (await fs.list(folder).catch(ifMissing([]))).filter((entry) => entry.name.endsWith('.json'))
+      const views = await Promise.all(files.map(async (file) => ({ name: file.name.slice(0, -'.json'.length), record: parseTailnetRecord(await readJson(`${folder}/${file.name}`), `${folder}/${file.name}`) })))
+      return views.flatMap(({ name: program, record }) => (record === undefined ? [] : [{ name: program, url: record.url, reason: record.reason }]))
     }
 
     const load = async (): Promise<readonly ModView[]> => {
@@ -493,6 +505,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             Box({ justifyContent: 'space-between', columnGap: 2, flexWrap: 'wrap', children: [Text({ dimColor: true, children: view.version }), ...actions] }),
             ...(view.description === undefined ? [] : [Text({ dimColor: true, wrap: 'wrap', children: view.description })]),
             ...(view.isService ? [Text({ dimColor: true, wrap: 'wrap', children: 'Runs as a service of this computer' })] : []),
+            ...view.webApps.flatMap((app) => (app.url !== null ? [Text({ dimColor: true, wrap: 'wrap', children: `${app.name} opens from your other machines at ${app.url}` })] : app.reason !== null ? [Text({ dimColor: true, wrap: 'wrap', children: `${app.name} is not on your tailnet: ${app.reason}` })] : [])),
           ],
         })
         const removal =

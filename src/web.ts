@@ -239,7 +239,7 @@ export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State
 
   const serve = (): Program | undefined => {
     if (!isOn()) return undefined
-    server ??= mod.use(program({ command: ['cmod', 'web', 'serve'], singleInstance: true }))
+    server ??= mod.use(program({ command: ['cmod', 'web', 'serve'], singleInstance: true, isWebApp: true }))
     void follow(server)
     return server
   }
