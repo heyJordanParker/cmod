@@ -13,7 +13,7 @@ import { deleteSecrets, isHolding, storePath, takeLock } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
 
-export type Instance = { readonly address: string; readonly pid: number; readonly started: string }
+export type Instance = { readonly address: string; readonly pid: number; readonly started: string; readonly tailnetUrl?: string }
 
 export const programSteps = 3
 

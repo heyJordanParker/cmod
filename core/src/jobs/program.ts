@@ -8,7 +8,7 @@ import { basename } from '../vendor.js'
 
 export type Program = {
   readonly state: 'stopped' | 'starting' | 'running' | 'backoff' | 'fatal'
-  ready(): Promise<{ url: string; socketPath?: string }>
+  ready(): Promise<{ url: string; socketPath?: string; tailnetUrl?: string }>
 }
 
 type Address = Awaited<ReturnType<Program['ready']>>
@@ -21,8 +21,8 @@ const staleMs = 15_000
 
 const retryWithinMs = 1000
 
-export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean }): Job<Program> {
-  const { command, environment, singleInstance = false, isService = false } = options
+export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean; readonly isWebApp?: boolean }): Job<Program> {
+  const { command, environment, singleInstance = false, isService = false, isWebApp = false } = options
   return ({ mod, announce, reserveName }) => {
     const { claude, report, spawnCmod, isInstalledCopy, watches } = engineOf(mod)
     const [executable] = command
@@ -30,6 +30,8 @@ export function program(options: { readonly command: readonly string[]; readonly
     if (isService) for (const type of ['program', 'service']) reserveName(type, basename(executable), `${mod.name}: the service ${executable} is already added. Give each isService program its own executable.`)
     else if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
     const isElected = singleInstance || isService
+    if (isWebApp && !isElected) throw new Error(`${mod.name}: the web app ${executable} runs a copy per session, and your tailnet reaches one copy per computer. Add singleInstance: true or isService: true.`)
+    const webApp = isWebApp ? ['--web-app'] : []
     const request = { argv: command, ...(environment === undefined ? {} : { env: environment }) }
     let state: Program['state'] = 'stopped'
     let address: Address | undefined
@@ -42,8 +44,8 @@ export function program(options: { readonly command: readonly string[]; readonly
     let leaseCheck: Promise<void> | undefined
 
     const spawn = (isOwnService: boolean) => {
-      if (isOwnService) return spawnCmod(['program', mod.name, '--service', ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
-      return isElected ? spawnCmod(['program', mod.name, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
+      if (isOwnService) return spawnCmod(['program', mod.name, ...webApp, '--service', ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
+      return isElected ? spawnCmod(['program', mod.name, ...webApp, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
     }
 
     const instanceFile = () =>
@@ -64,6 +66,14 @@ export function program(options: { readonly command: readonly string[]; readonly
       for (const waiter of waiting.splice(0)) waiter.reject(failure)
     }
 
+    const recordedAddress = async (file: string): Promise<Address | undefined> => {
+      const recorded = await claude.fs.read(file).catch(ifMissing(undefined))
+      if (recorded === undefined) return undefined
+      const instance = JSON.parse(recorded) as { readonly address?: unknown; readonly tailnetUrl?: unknown }
+      const next = addressOf(String(instance.address).trim())
+      return next !== undefined && typeof instance.tailnetUrl === 'string' ? { ...next, tailnetUrl: instance.tailnetUrl } : next
+    }
+
     const show = (next: Address) => {
       address = next
       state = 'running'
@@ -82,8 +92,7 @@ export function program(options: { readonly command: readonly string[]; readonly
 
     const track = async (file: string) => {
       if (!isFollowing) return
-      const recorded = await claude.fs.read(file).catch(ifMissing(undefined))
-      const next = recorded === undefined ? undefined : addressOf(String((JSON.parse(recorded) as { readonly address?: unknown }).address).trim())
+      const next = await recordedAddress(file)
       if (next !== undefined) return show(next)
       address = undefined
       state = 'starting'
@@ -128,7 +137,7 @@ export function program(options: { readonly command: readonly string[]; readonly
               stop(`its first line is "${line.trim()}". Write 127.0.0.1:<port> or unix:<socket path> as the first line on standard output.`)
               return
             }
-            show(next)
+            show(isWebApp ? ((await recordedAddress(await instanceFile())) ?? next) : next)
             isShown = true
           }
         }

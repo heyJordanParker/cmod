@@ -340,14 +340,31 @@ export function preferencesPath(store: string): string {
   return `${store}/preferences.json`
 }
 
-export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean }
+export type Preferences = { readonly showsInstalledModErrors: boolean; readonly servesWebUi: boolean; readonly servesTailnet: boolean }
 
-const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi'] as const satisfies readonly (keyof Preferences)[]
+const preferenceKeys = ['showsInstalledModErrors', 'servesWebUi', 'servesTailnet'] as const satisfies readonly (keyof Preferences)[]
 
 export function parsePreferences(value: unknown, path: string): Preferences {
   if (value !== undefined && (!isObject(value) || preferenceKeys.some((key) => value[key] !== undefined && typeof value[key] !== 'boolean'))) throw new Error(`${path} is not a map of cmod's preferences to true or false. Delete it, and cmod uses its defaults.`)
   const saved = isObject(value) ? value : {}
-  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true }
+  return { showsInstalledModErrors: saved['showsInstalledModErrors'] === true, servesWebUi: saved['servesWebUi'] === true, servesTailnet: saved['servesTailnet'] !== false }
+}
+
+export function tailnetFolder(store: string, mod: string): string {
+  return `${store}/tailnet/${checkedName(mod)}`
+}
+
+export function tailnetPath(store: string, mod: string, executable: string): string {
+  return `${tailnetFolder(store, mod)}/${checkedName(executable)}.json`
+}
+
+export type TailnetRecord = { readonly port: number | null; readonly url: string | null; readonly reason: string | null }
+
+export function parseTailnetRecord(value: unknown, path: string): TailnetRecord | undefined {
+  if (value === undefined) return undefined
+  const isRecord = isObject(value) && (value['port'] === null || Number.isInteger(value['port'])) && (value['url'] === null || typeof value['url'] === 'string') && (value['reason'] === null || typeof value['reason'] === 'string')
+  if (!isRecord) throw new Error(`${path} is not the tailnet address cmod keeps for a web app. Delete it, and the web app's next start writes it again.`)
+  return { port: value['port'] as number | null, url: value['url'] as string | null, reason: value['reason'] as string | null }
 }
 
 export function webPath(store: string): string {
@@ -441,9 +458,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '6.0.4'
+export const coreVersion = '6.1.0'
 
-export const oldestCmodVersion = '6.0.0'
+export const oldestCmodVersion = '6.1.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`

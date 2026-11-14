@@ -277,6 +277,50 @@ test('two isService programs with one executable in a mod throw at mod.use, so t
   await expect(tested.start()).rejects.toThrow('demo: the service preview-server is already added. Give each isService program its own executable.')
 })
 
+function webApp(options: { readonly singleInstance?: boolean; readonly isService?: boolean }, files: Record<string, string>, spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>) {
+  let handle: Program | undefined
+  const tested = testMod(defineMod({ name: 'demo', setup: (mod) => void (handle = mod.use(program({ command: ['preview-server', '--port', '0'], ...options, isWebApp: true }))) }), { files })
+  tested.fakes.process.spawn = spawn
+  return { tested, ready: async () => (await tested.start(), handle as Program) }
+}
+
+const onTailnet = (address: string) => ({ [instanceFile]: `${JSON.stringify({ address, pid: 4242, started: 'Mon Nov  2 09:00:00 2026', tailnetUrl: 'https://macbook.example.ts.net:62021/' })}\n` })
+
+test('a singleInstance web app runs cmod program --web-app, and ready() resolves the tailnet address the holder wrote beside the local one', async () => {
+  const spawned: (readonly string[])[] = []
+  const { ready } = webApp({ singleInstance: true }, onTailnet('127.0.0.1:62021'), (request) => {
+    spawned.push(request.argv)
+    return written([{ stream: 'stdout', text: '127.0.0.1:62021\n' }], false)
+  })
+
+  expect(await (await ready()).ready()).toEqual({ url: 'http://127.0.0.1:62021', tailnetUrl: 'https://macbook.example.ts.net:62021/' })
+  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'demo', '--web-app', '--no-wait', '--', 'preview-server', '--port', '0']])
+})
+
+test('an isService web app asks cmod program --web-app --service for the copy, and ready() resolves the tailnet address in the instance file', async () => {
+  const spawned: (readonly string[])[] = []
+  const { tested, ready } = webApp({ isService: true }, { ...onTailnet('127.0.0.1:62021'), [`${instanceFile}.lock/4242`]: 'Mon Nov  2 09:00:00 2026' }, (request) => {
+    spawned.push(request.argv)
+    return written([{ stream: 'stdout', text: 'held\n' }], true)
+  })
+  tested.fakes.clock.now = async () => 14_999
+
+  expect(await (await ready()).ready()).toEqual({ url: 'http://127.0.0.1:62021', tailnetUrl: 'https://macbook.example.ts.net:62021/' })
+  expect(spawned).toEqual([['/test/home/.local/share/cmod/programs/cmod', 'program', 'demo', '--web-app', '--service', '--', 'preview-server', '--port', '0']])
+})
+
+test('a web app off the tailnet resolves ready() to its local address alone', async () => {
+  const { ready } = webApp({ singleInstance: true }, {}, () => written([{ stream: 'stdout', text: '127.0.0.1:62021\n' }], false))
+
+  expect(await (await ready()).ready()).toEqual({ url: 'http://127.0.0.1:62021' })
+})
+
+test('a web app with a copy per session throws at mod.use, because the tailnet reaches one copy per computer', async () => {
+  const { tested } = webApp({}, {}, () => written([], false))
+
+  await expect(tested.start()).rejects.toThrow('demo: the web app preview-server runs a copy per session, and your tailnet reaches one copy per computer. Add singleInstance: true or isService: true.')
+})
+
 function exitedCleanly(): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
   async function* read(): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
     yield* []

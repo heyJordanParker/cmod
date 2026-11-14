@@ -3,15 +3,17 @@ import { mkdir, open, readdir, rm, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { instancePath, serviceLogPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
 import { killMs, programsFolder, stopCopy, type Instance } from '../program.js'
 import { removeService, startService } from '../service.js'
 import { isHolding, modLock, startTime, takeLock } from '../store.js'
+import { hasTailnetChanged, readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 
 export const summary = "Run one copy of a mod's program for every session."
 
-export const help = `Usage: cmod program <mod> [--no-wait | --service [--env <name>]... | --remove-service] -- <command…>
+export const help = `Usage: cmod program <mod> [--web-app] [--no-wait | --service [--env <name>]... | --remove-service] -- <command…>
 
 ${summary}
 
@@ -56,12 +58,26 @@ deletes the service and its record, as cmod remove does, and fails with the
 error. Both failures keep the log and name it, or the journalctl command on
 Linux.
 
+With --web-app, which a session passes for a program job with isWebApp, the
+holder puts the copy on your tailnet while servesTailnet in preferences.json
+is on, its default, and Tailscale is signed in with HTTPS on. It gives the copy
+CMOD_TAILNET_NAME, this computer's tailnet name, and CMOD_TAILNET_LOGIN, your
+Tailscale login, and once the copy prints 127.0.0.1:<port>, runs tailscale
+serve --bg --https=<tailnet port> before it writes the address. The tailnet
+port is the first port the copy listened on, kept in tailnet/<mod>/<program>.json
+with the address, https://<name>:<tailnet port>/, or the reason it is not on
+the tailnet. The holder takes the mapping off when the copy exits, and stops
+the copy, so it starts again, when servesTailnet changes or, checked every
+minute, Tailscale becomes ready. cmod teardown takes every mapping of the mod off.
+
 With --remove-service, which a session passes for each service in
 services/<mod>/ that the mod's setup no longer adds, it stops the program's
 service, deletes its unit, its record, and its log, and exits 0. A program
 with no service changes nothing.`
 
 const checkMs = 5000
+
+const tailnetChecks = 12
 
 const serviceStartMs = 15_000
 
@@ -74,7 +90,7 @@ export async function run(argv: string[]): Promise<number> {
   const separator = rest.indexOf('--')
   const [executable, ...args] = separator === -1 ? [] : rest.slice(separator + 1)
   if (mod === undefined || executable === undefined) throw new Error(`cmod program takes a mod's name, --, and the program's command.\n\n${help}`)
-  const { values } = parseArgs({ args: rest.slice(0, separator), options: { 'no-wait': { type: 'boolean', default: false }, service: { type: 'boolean', default: false }, env: { type: 'string', multiple: true, default: [] }, 'remove-service': { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ args: rest.slice(0, separator), options: { 'no-wait': { type: 'boolean', default: false }, service: { type: 'boolean', default: false }, env: { type: 'string', multiple: true, default: [] }, 'remove-service': { type: 'boolean', default: false }, 'web-app': { type: 'boolean', default: false } } })
   if (values['remove-service']) {
     const lock = await takeLock(modLock(mod))
     try {
@@ -90,7 +106,7 @@ export async function run(argv: string[]): Promise<number> {
   if (values.service) {
     const lock = await takeLock(modLock(mod))
     try {
-      const service = await startService(mod, [executable, ...args], values.env)
+      const service = await startService(mod, [executable, ...args], values.env, values['web-app'] ? ['--web-app'] : [])
       if (service !== undefined) {
         if (!(await isStartedWithin(file, serviceStartMs))) {
           await removeService(mod, basename(executable), { keepsLog: true })
@@ -124,7 +140,7 @@ export async function run(argv: string[]): Promise<number> {
       const lock = await takeLock(lockPath, AbortSignal.abort())
       if (lock !== undefined) {
         try {
-          return await hold(file, serviceLogPath(storeFolder(process.env), mod, basename(executable)), executable, args, ending.signal)
+          return await hold(mod, file, serviceLogPath(storeFolder(process.env), mod, basename(executable)), executable, args, values['web-app'], ending.signal)
         } finally {
           await lock[Symbol.asyncDispose]()
         }
@@ -156,13 +172,14 @@ export async function run(argv: string[]): Promise<number> {
   }
 }
 
-async function hold(file: string, log: string, executable: string, args: readonly string[], ending: AbortSignal): Promise<number> {
+async function hold(mod: string, file: string, log: string, executable: string, args: readonly string[], isWebApp: boolean, ending: AbortSignal): Promise<number> {
   const left = (await readJson(file)) as Instance | undefined
   if (left !== undefined) await stopCopy(left.pid, left.started)
   await rm(file, { force: true })
   await trimLog(log)
+  const tailnet = isWebApp ? await readTailnet().catch((error: unknown) => ({ reason: messageOf(error) })) : undefined
   const linked = join(programsFolder(), executable)
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'CLAUDE_CODE_SESSION_ID'))
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'CLAUDE_CODE_SESSION_ID')), ...(tailnet === undefined ? {} : tailnetEnvironment(tailnet)) }
   const child = spawn([existsSync(linked) ? linked : executable, ...args], { env, stdout: 'pipe', stderr: 'inherit' })
   const stopping = () => {
     child.kill('SIGTERM')
@@ -170,13 +187,27 @@ async function hold(file: string, log: string, executable: string, args: readonl
   }
   ending.addEventListener('abort', stopping)
   if (ending.aborted) stopping()
-  const ticking = setInterval(() => void touchHolders(`${file}.lock`), checkMs)
+  let ticks = 0
+  const ticking = setInterval(() => {
+    ticks += 1
+    void touchHolders(`${file}.lock`)
+    if (tailnet !== undefined) {
+      hasTailnetChanged(tailnet, ticks % tailnetChecks === 0).then(
+        (isChanged) => isChanged && stopping(),
+        (error: unknown) => void process.stderr.write(`cmod program: could not check whether ${executable} belongs on your tailnet: ${messageOf(error)}\n`),
+      )
+    }
+  }, checkMs)
   try {
     const started = await startTime(child.pid)
     let shown: Promise<void> | undefined
     await readLines(child.stdout, (line) => {
       const address = line.trim()
-      shown ??= writeAtomically(file, `${JSON.stringify({ address, pid: child.pid, started } satisfies Instance)}\n`).then(() => void process.stdout.write(`${address}\n`))
+      shown ??= (async () => {
+        const tailnetUrl = tailnet === undefined ? undefined : await serveOnTailnet(tailnet, mod, executable, address)
+        await writeAtomically(file, `${JSON.stringify({ address, pid: child.pid, started, ...(tailnetUrl === undefined ? {} : { tailnetUrl }) } satisfies Instance)}\n`)
+        process.stdout.write(`${address}\n`)
+      })()
     })
     await shown
     const code = await child.exited
@@ -188,6 +219,7 @@ async function hold(file: string, log: string, executable: string, args: readonl
     clearInterval(ticking)
     ending.removeEventListener('abort', stopping)
     await rm(file, { force: true })
+    if (tailnet !== undefined) await stopServing(mod, executable)
   }
 }
 

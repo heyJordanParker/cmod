@@ -22,7 +22,7 @@ const passedVariables = ['XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR']
 
 const systemFolders = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
 
-export async function startService(mod: string, command: readonly string[], variables: readonly string[]): Promise<{ readonly label: string; readonly status: string } | undefined> {
+export async function startService(mod: string, command: readonly string[], variables: readonly string[], flags: readonly string[]): Promise<{ readonly label: string; readonly status: string } | undefined> {
   const executable = basename(command[0] ?? '')
   const label = `com.claudemodmanager.${mod}.${executable}`
   const unit = manager.unit(label)
@@ -31,7 +31,7 @@ export async function startService(mod: string, command: readonly string[], vari
   const passed = Object.fromEntries([...passedVariables, ...variables].flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])))
   const launcher = claudeCodeLauncher()
   const environment = { HOME: home(), PATH: [programsFolder(), ...systemFolders].join(':'), ...(launcher === undefined ? {} : { CLAUDE_CODE_EXECPATH: launcher }), ...passed }
-  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, '--', ...command], environment, log)
+  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, ...flags, '--', ...command], environment, log)
   try {
     await writeAtomically(record, `${JSON.stringify({ label, unit } satisfies Service)}\n`)
     const isChanged = (await readText(unit)) !== text

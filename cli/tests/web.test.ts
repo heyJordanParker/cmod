@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SessionEvents } from '@cmodjs/core/src/runtime/web.js'
-import { cmodWith, deleteTemporaryHomes, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { cmodWith, deleteTemporaryHomes, startCmod, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
 
 const store = (home: string, file: string) => join(home, '.local/share/cmod', file)
 
@@ -109,6 +109,28 @@ test.concurrent('loading / shows the browser app at once, with no sign-in, and c
   expect((await change('/api/press', {})).status).toBe(403)
   expect((await change('/api/sessions/s1', { origin: 'http://evil.example' })).status).toBe(403)
   expect((await change('/api/press', { origin: base })).status).toBe(410)
+  serving.child.kill()
+}, 30_000)
+
+test.concurrent('the browser app answers you through your tailnet, by the Tailscale login of the request, and nobody else there', async () => {
+  const home = await homeWith({})
+  const serving = startCmodWith(home, { CMOD_TAILNET_NAME: 'computer.example.ts.net', CMOD_TAILNET_LOGIN: 'person@example.com' }, 'web', 'serve')
+  children.push(serving.child)
+  await serving.waitForOutput('127.0.0.1:')
+  const { port } = JSON.parse(await readFile(store(home, 'web.json'), 'utf8')) as { readonly port: number }
+  const base = `http://127.0.0.1:${port}`
+  const tailnet = 'computer.example.ts.net:62021'
+  const through = (path: string, login: string, init: RequestInit = {}) => fetch(`${base}${path}`, { ...init, headers: { host: tailnet, 'tailscale-user-login': login, ...(init.headers as Record<string, string>) } })
+  const change = (path: string, login: string, origin: string) => through(path, login, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: '{}' })
+
+  expect((await through('/', 'person@example.com')).status).toBe(200)
+  expect((await through('/', 'someone@example.com')).status).toBe(421)
+  expect((await fetch(`${base}/`, { headers: { host: tailnet } })).status).toBe(421)
+  expect((await change('/api/press', 'person@example.com', `https://${tailnet}`)).status).toBe(410)
+  expect((await change('/api/press', 'person@example.com', `http://${tailnet}`)).status).toBe(403)
+  expect((await change('/api/sessions/s1', 'person@example.com', `https://${tailnet}`)).status).toBe(403)
+  await writeFiles(home, { '.local/share/cmod/tailnet/cmod/cmod.json': JSON.stringify({ port: 62021, url: `https://${tailnet}/`, reason: null }) })
+  expect((await cmodWith(home, { BROWSER: 'true' }, 'web')).stdout).toBe(`${base}/\nFrom your other machines: https://${tailnet}/\n`)
   serving.child.kill()
 }, 30_000)
 

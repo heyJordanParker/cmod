@@ -2428,7 +2428,7 @@ function servingWeb(tested: ReturnType<typeof testMod>) {
   return started
 }
 
-const webServe = [cmodProgram, 'program', 'cmod', '--no-wait', '--', 'cmod', 'web', 'serve']
+const webServe = [cmodProgram, 'program', 'cmod', '--web-app', '--no-wait', '--', 'cmod', 'web', 'serve']
 
 test('a session with the web UI on runs cmod web serve once, as the single copy cmod program keeps for the computer', async () => {
   const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/preferences.json`]: JSON.stringify({ servesWebUi: true }) } })

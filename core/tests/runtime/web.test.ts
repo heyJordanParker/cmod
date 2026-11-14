@@ -162,6 +162,12 @@ test("web.json holds the web UI's port, and preferences.json says whether the pe
   expect(parseWebUi({ port: 4567 }, 'web.json')).toEqual({ port: 4567 })
   expect(parseWebUi(undefined, 'web.json')).toBeUndefined()
   expect(() => parseWebUi({ port: '4567' }, 'web.json')).toThrow("web.json is not the web UI's port. Delete it, and cmod web serve writes it again.")
-  expect(parsePreferences({ servesWebUi: true }, 'preferences.json')).toEqual({ showsInstalledModErrors: false, servesWebUi: true })
+  expect(parsePreferences({ servesWebUi: true }, 'preferences.json')).toEqual({ showsInstalledModErrors: false, servesWebUi: true, servesTailnet: true })
   expect(() => parsePreferences({ servesWebUi: 'yes' }, 'preferences.json')).toThrow("preferences.json is not a map of cmod's preferences to true or false.")
+})
+
+test('web apps are on the tailnet unless the person turned servesTailnet off', () => {
+  expect(parsePreferences(undefined, 'preferences.json').servesTailnet).toBe(true)
+  expect(parsePreferences({ servesTailnet: false }, 'preferences.json').servesTailnet).toBe(false)
+  expect(() => parsePreferences({ servesTailnet: 'no' }, 'preferences.json')).toThrow("preferences.json is not a map of cmod's preferences to true or false.")
 })

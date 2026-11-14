@@ -162,11 +162,21 @@ case "$(basename "$0") $*" in
 esac
 `
 
+const tailscale = `#!/bin/sh
+echo "tailscale $*" >> "$HOME/tailscale-calls"
+case "$*" in
+  "status --json")
+    if [ -e "$HOME/tailscale-signed-out" ]; then echo '{"BackendState":"NeedsLogin","Self":{"DNSName":""},"User":null,"CertDomains":null}'; exit 0; fi
+    echo '{"BackendState":"Running","Self":{"DNSName":"computer.example.ts.net.","UserID":7},"User":{"7":{"LoginName":"person@example.com"}},"CertDomains":["computer.example.ts.net"]}' ;;
+  "serve status --json") cat "$HOME/tailscale-serve.json" 2>/dev/null ;;
+esac
+`
+
 export async function temporaryHome(): Promise<string> {
   const home = await mkdtemp(join(temporaryRoot, 'cmod-test-'))
   homes.push(home)
   await mkdir(join(home, 'tmp'))
-  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed), 'bin/launchctl': serviceManager, 'bin/systemctl': serviceManager })
+  await writeFiles(home, { 'bin/claude': claudeAnswering(cmodPluginListed), 'bin/launchctl': serviceManager, 'bin/systemctl': serviceManager, 'bin/tailscale': tailscale })
   return home
 }
 
@@ -175,7 +185,11 @@ export async function cmod(home: string, ...args: string[]): Promise<{ exitCode:
 }
 
 export function startCmod(home: string, ...args: string[]) {
-  const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: environment(home), stdout: 'pipe', stderr: 'pipe' })
+  return startCmodWith(home, {}, ...args)
+}
+
+export function startCmodWith(home: string, env: Record<string, string>, ...args: string[]) {
+  const child = Bun.spawn([process.execPath, main, ...args], { cwd: home, env: { ...environment(home), ...env }, stdout: 'pipe', stderr: 'pipe' })
   return { child, ...watchOutput(child) }
 }
 

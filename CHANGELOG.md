@@ -4,6 +4,17 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-11-14
+
+### Added
+- Mods' web apps open from each of your machines through Tailscale, with nothing to set up. A program a mod marks `isWebApp: true`, beside `singleInstance` or `isService`, goes on your tailnet once Tailscale is signed in with HTTPS on, at `https://<computer>.<tailnet>.ts.net:<port>/`, which stays the same across restarts, and `ready()` resolves it as `tailnetUrl`. cmod takes it off your tailnet when the program stops and when the mod is removed.
+- cmod's browser app is one of them: `cmod web` prints its tailnet address, and it answers only you there, by your Tailscale login.
+- A web app gets `CMOD_TAILNET_NAME` and `CMOD_TAILNET_LOGIN`, so it answers a request through your tailnet only when it comes from you, never from someone else on a work tailnet or a device you shared.
+- Settings shows each web app's tailnet address on its mod's page, or why it is not on your tailnet and how to fix that. `Open web apps from your other machines, through Tailscale`, under cmod, Preferences, turns it off.
+
+### Changed
+- A mod built on `@cmodjs/core` 6.1.0 needs cmod 6.1.0 or later, because its programs run through the newer `cmod program`. `cmod check` raises the mod's `cmod` dependency to `>=6.1.0`.
+
 ## [6.0.4] - 2026-11-13
 
 ### Changed

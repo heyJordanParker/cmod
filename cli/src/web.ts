@@ -116,6 +116,9 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
 
   const report = (doing: string, error: unknown) => process.stderr.write(`cmod web serve: ${doing}: ${messageOf(error)}\n`)
 
+  const { CMOD_TAILNET_NAME: tailnetName = '', CMOD_TAILNET_LOGIN: tailnetLogin = '' } = process.env
+  const isOwnTailnet = (request: Request, host: string) => tailnetName !== '' && host.replace(/:\d+$/, '') === tailnetName && request.headers.get('tailscale-user-login') === tailnetLogin
+
   const postedOf = (id: string): Posted => {
     const known = posted.get(id)
     if (known !== undefined) return known
@@ -569,10 +572,12 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
       async fetch(request, server) {
         const host = request.headers.get('host') ?? ''
         const origin = request.headers.get('origin')
-        const own = `http://${host}`
-        if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return Response.json({ error: 'cmod web answers only 127.0.0.1 and localhost.' }, { status: 421 })
+        const isTailnet = isOwnTailnet(request, host)
+        const own = `${isTailnet ? 'https' : 'http'}://${host}`
+        if (!isTailnet && host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return Response.json({ error: 'cmod web answers only 127.0.0.1, localhost, and you on your tailnet.' }, { status: 421 })
         const url = new URL(request.url)
         const isSessionCall = sessionPath.test(url.pathname)
+        if (isTailnet && isSessionCall) return Response.json({ error: "cmod web takes a session's calls only from this computer." }, { status: 403 })
         if (origin !== null ? origin !== own : request.method !== 'GET' && !isSessionCall) return Response.json({ error: `cmod web takes a change only from its own page, and this came from ${origin ?? 'no page'}.` }, { status: 403 })
         try {
           return await route(request, url, server)
