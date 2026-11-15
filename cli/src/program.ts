@@ -21,6 +21,8 @@ export const killMs = 5000
 
 const failedBuildLines = 5
 
+const bunTemporary = /^\.[0-9a-f]{16}-[0-9a-f]{8}\.bun-build$/
+
 export const machine = `${process.platform}-${process.arch}`
 
 export const machines: readonly string[] = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
@@ -138,12 +140,14 @@ async function runBuild(program: Program, wanted: readonly string[], progress: P
   progress.step(heading)
   const startedAt = Math.floor(Date.now() / 1000) * 1000
   const lastLines: string[] = []
-  const result = await runStep(['sh', '-c', program.build], program.folder, { ...environment, CMOD_MACHINES: wanted.join(' ') }, (event) => {
-    if (event.type === 'progress') return progress.update(heading, event.done, event.total, event.label)
-    progress.log(event.text)
-    if (event.text.trim() !== '') lastLines.push(event.text)
-    if (lastLines.length > failedBuildLines) lastLines.shift()
-  })
+  const result = await removingBunTemporaries(program.folder, () =>
+    runStep(['sh', '-c', program.build], program.folder, { ...environment, CMOD_MACHINES: wanted.join(' ') }, (event) => {
+      if (event.type === 'progress') return progress.update(heading, event.done, event.total, event.label)
+      progress.log(event.text)
+      if (event.text.trim() !== '') lastLines.push(event.text)
+      if (lastLines.length > failedBuildLines) lastLines.shift()
+    }),
+  )
   if (result.exitCode !== 0) {
     progress.fail(`Could not build ${program.name}`)
     throw new Error(`Building ${program.name} with "${program.build}" ${formatExit(result.exitCode, lastLines.join('\n'))}. Fix the build in ${tilde(program.folder)}, then save a file there or run the command again.`)
@@ -162,6 +166,19 @@ async function runBuild(program: Program, wanted: readonly string[], progress: P
   if (missing.length > 0) throw new Error(`The build of ${program.name} wrote no ${missing.map((each) => `${program.name}-${each}`).join(', ')}, but the mod runs on ${machineWords(wanted)}. Build each machine CMOD_MACHINES names, or list only the machines it builds in the "os" and "cpu" keys of the mod's package.json, such as "os": ["darwin"].`)
   progress.succeed(`Built ${program.name}: ${builds.map((build) => basename(build)).join(', ')}`)
   return builds
+}
+
+async function removingBunTemporaries<Result>(folder: string, build: () => Promise<Result>): Promise<Result> {
+  const before = new Set(await bunTemporaries(folder))
+  try {
+    return await build()
+  } finally {
+    for (const name of await bunTemporaries(folder)) if (!before.has(name)) await rm(join(folder, name), { force: true })
+  }
+}
+
+async function bunTemporaries(folder: string): Promise<string[]> {
+  return (await readdir(folder)).filter((name) => bunTemporary.test(name))
 }
 
 export async function installProgram(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {

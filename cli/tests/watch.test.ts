@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { chmod, mkdir, readFile, symlink } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version } from '../package.json'
 import { cmodFromSource, deleteTemporaryHomes, environment, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
@@ -74,7 +74,7 @@ test.concurrent('cmod watch reloads no session for a change only to files git ig
   watching.child.kill()
 }, 60000)
 
-const programBuild = `trap 'rm -f .hello.bun-build' EXIT; touch .hello.bun-build; echo built >> "$HOME/builds"; mkdir -p dist && if grep -q broken message; then echo "error: expected ;" >&2; exit 1; fi; for machine in $CMOD_MACHINES; do printf '#!/bin/sh\\necho %s\\n' "$(cat message)" > dist/hello-$machine; done`
+const programBuild = `touch ".$(printf '%016x' $$)-00000000.bun-build"; echo built >> "$HOME/builds"; mkdir -p dist && if grep -q broken message; then echo "error: expected ;" >&2; exit 1; fi; for machine in $CMOD_MACHINES; do printf '#!/bin/sh\\necho %s\\n' "$(cat message)" > dist/hello-$machine; done`
 
 async function linkedProgramMod(home: string): Promise<string> {
   const root = join(home, 'Developer/hello-checkout')
@@ -138,7 +138,7 @@ test.concurrent("cmod watch names a linked mod whose program fails to build in b
   watching.child.kill()
 }, 60000)
 
-test.concurrent("cmod watch reloads once for a change whose program build writes its output and a temporary file into the checkout", async () => {
+test.concurrent("cmod watch builds once and reloads once for a change whose program build writes its output and leaves Bun's temporary file in the checkout, and deletes that file", async () => {
   const home = await temporaryHome()
   const root = await linkedProgramMod(home)
   await writeFiles(root, { '.gitignore': 'cli/dist/\n' })
@@ -150,6 +150,8 @@ test.concurrent("cmod watch reloads once for a change whose program build writes
   const mark = await readFile(store(home, 'plugins-changed'), 'utf8')
   await Bun.sleep(4000)
   expect(await readFile(store(home, 'plugins-changed'), 'utf8')).toBe(mark)
+  expect(await readFile(join(home, 'builds'), 'utf8')).toBe('built\n')
+  expect((await readdir(join(root, 'cli'))).filter((name) => name.endsWith('.bun-build'))).toEqual([])
   watching.child.kill()
 }, 60000)
 

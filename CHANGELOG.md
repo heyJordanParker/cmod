@@ -4,6 +4,9 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+### Fixed
+- A linked mod whose program builds with `bun build --compile` builds once per change again. Bun 1.4.4 leaves an 89 MB `.<hash>-00000000.bun-build` file in `cli/` after every compile, `cmod watch` read that file as a new change, and rebuilt the program every few seconds, filling the disk and offering Reload over and over. cmod now deletes the file each build it runs leaves.
+
 ## [6.1.0] - 2026-11-14
 
 ### Added
