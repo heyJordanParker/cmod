@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { chmod, mkdir, readdir, readFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { version } from '../package.json'
-import { cmodFromSource, deleteTemporaryHomes, environment, startCmod, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { cmodFromSource, deleteTemporaryHomes, startCmod, startProcess, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -240,7 +240,7 @@ test.concurrent('a second cmod watch exits at once while the first one watches, 
 test.concurrent('cmod watch exits within one touch and lets go of watch.lock when its parent process dies, so a crashed session leaves no watcher behind', async () => {
   const home = await temporaryHome()
   await writeFiles(home, { 'bin/cmod': cmodFromSource, '.local/share/cmod/records/.keep': '' })
-  const parent = Bun.spawn(['sh', '-c', 'cmod watch & wait'], { cwd: home, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  const parent = startProcess(home, ['sh', '-c', 'cmod watch & wait'])
   await until(() => existsSync(store(home, 'watch.lock')))
 
   parent.kill('SIGKILL')

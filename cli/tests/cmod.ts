@@ -206,6 +206,12 @@ export function startCmodWith(home: string, env: Record<string, string>, ...args
   return { child, ...watchOutput(child) }
 }
 
+export function startProcess(home: string, argv: string[], cwd = home): Started {
+  const child = Bun.spawn(argv, { cwd, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  started.push(child)
+  return child
+}
+
 export async function cmodOnPath(home: string, path: string, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return cmodWith(home, { PATH: path }, ...args)
 }

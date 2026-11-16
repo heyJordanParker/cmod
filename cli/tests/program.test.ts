@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from 'node:fs'
 import { chmod, mkdir, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, environment, isGone, startCmod, temporaryHome, writeFiles } from './cmod.js'
+import { claudeAnswering, cmod, cmodFromSource, cmodPluginListed, cmodWith, createMod, deleteTemporaryHomes, isGone, startCmod, startProcess, temporaryHome, writeFiles } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -151,7 +151,7 @@ test.concurrent('after the owner is killed with SIGKILL, the next owner stops th
 test.concurrent('the owner stops its copy and gives up the election when its parent process dies', async () => {
   const home = await serverHome()
   await writeFiles(home, { 'bin/cmod': cmodFromSource })
-  const parent = Bun.spawn(['sh', '-c', 'cmod program demo -- fake-server & wait'], { cwd: home, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  const parent = startProcess(home, ['sh', '-c', 'cmod program demo -- fake-server & wait'])
   await until(() => serverIds(home, 'start').length === 1)
   const [copy] = serverIds(home, 'start')
 
@@ -166,7 +166,7 @@ test.concurrent('the owner stops its copy and gives up the election when its par
 test.concurrent("SIGTERM stops the owner's copy even after the session's working folder is deleted", async () => {
   const home = await serverHome()
   await writeFiles(home, { 'bin/cmod': cmodFromSource, 'project/.keep': '' })
-  const first = Bun.spawn([join(home, 'bin/cmod'), 'program', 'demo', '--', 'fake-server'], { cwd: join(home, 'project'), env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  const first = startProcess(home, [join(home, 'bin/cmod'), 'program', 'demo', '--', 'fake-server'], join(home, 'project'))
   await until(() => serverIds(home, 'start').length === 1)
   await rm(join(home, 'project'), { recursive: true })
 
@@ -279,9 +279,9 @@ rmSync(file, { force: true })
 rmSync(file + '.lock', { recursive: true, force: true })
 `
 
-async function startHolderWithoutBuildCheck(home: string, instance: string, program: string): Promise<Bun.Subprocess> {
+async function startHolderWithoutBuildCheck(home: string, instance: string, program: string): Promise<ReturnType<typeof startProcess>> {
   await writeFiles(home, { 'holder-without-build-check.mjs': holderWithoutBuildCheck })
-  const holder = Bun.spawn([process.execPath, join(home, 'holder-without-build-check.mjs'), instance, join(home, '.local/share/cmod/programs', program)], { cwd: home, env: environment(home), stdout: 'ignore', stderr: 'ignore' })
+  const holder = startProcess(home, [process.execPath, join(home, 'holder-without-build-check.mjs'), instance, join(home, '.local/share/cmod/programs', program)])
   await until(() => existsSync(instance))
   return holder
 }
