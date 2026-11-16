@@ -134,6 +134,7 @@ When the install step succeeds, cmod saves a copy of every script folder the uni
 
 - After the person removes the mod with `/plugin uninstall`, the cmod plugin runs the uninstall step at the next session start or prompt.
 - `cmod remove <mod>` uninstalls the mod and runs the step at once.
+- The step runs only once Claude Code has no copy of the mod left. When `cmod remove`, `cmod unlink`, or `/plugin uninstall` takes away one copy and another stays, such as an installed copy beside a linked checkout, cmod sets up the copy that stays and keeps the mod's data and secrets.
 - In the copy, `CMOD_PLUGIN_ROOT` is the copy's folder, and `CMOD_DATA` and `CMOD_VERSION` are the same as at install.
 - After the step, cmod deletes the mod's install record, its program, its data folder, and the approvals of its scripts. It keeps the mod's config folders, because the files there are the person's.
 - A failed uninstall step keeps the record. `cmod teardown <mod>` runs it again.

@@ -2,7 +2,9 @@ import { parseArgs } from 'node:util'
 import { readRecord, storeFolder } from '@cmodjs/core/src/records.js'
 import { changePlugin, listPlugins } from '../claude.js'
 import { readText } from '../files.js'
+import { readPlugin } from '../plugin.js'
 import { startProgress } from '../progress.js'
+import { installedCopyOf, setupInTerminal } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
 
 export const summary = "Uninstall any plugin through Claude Code, and run a mod's uninstall step."
@@ -12,7 +14,10 @@ export const help = `Usage: cmod remove <name>
 ${summary}
 
 Uninstalls the plugin through Claude Code. When cmod set the plugin up as a
-mod, then runs the uninstall step cmod saved and removes what cmod set up.`
+mod and Claude Code still has another copy of it, such as one from another
+marketplace or a linked checkout, sets that copy up, which keeps the mod's
+data and secrets. When no copy is left, runs the uninstall step cmod saved and
+removes what cmod set up.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
@@ -29,5 +34,7 @@ export async function run(argv: string[]): Promise<number> {
     await changePlugin('uninstall', installed.id)
     progress.succeed(`Uninstalled ${installed.id} from Claude Code`)
   }
-  return record === undefined ? 0 : teardownInTerminal(pluginName, progress)
+  if (record === undefined) return 0
+  const copy = await installedCopyOf(pluginName)
+  return copy === undefined ? teardownInTerminal(pluginName, progress) : setupInTerminal(await readPlugin(copy), progress)
 }

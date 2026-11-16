@@ -76,9 +76,12 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function installedCopy(folder: string): Promise<string> {
-  const { name } = await readPlugin(folder)
+  return (await installedCopyOf((await readPlugin(folder)).name)) ?? folder
+}
+
+export async function installedCopyOf(name: string): Promise<string | undefined> {
   const copies = (await listPlugins()).filter((copy) => copy.name === name && copy.scope !== 'session')
-  return (copies.find((copy) => copy.enabled) ?? copies[0])?.installPath ?? folder
+  return (copies.find((copy) => copy.enabled) ?? copies[0])?.installPath
 }
 
 async function setupWithEvents(folder: string): Promise<number> {
@@ -179,7 +182,7 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   const store = storeFolder(process.env)
   const record = await readRecord(readText, store, plugin.name)
   const programModifiedMs = record === undefined || record.program === null ? undefined : (await stat(programPath(store, record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
-  const isCurrent = record !== undefined && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, programModifiedMs)
+  const isCurrent = record !== undefined && record.root === plugin.root && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, programModifiedMs)
   const approved = await approvals(plugin.name)
   return { sha256, isCurrent, approving: items.filter((item) => !approved.includes(item)), updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
 }

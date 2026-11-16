@@ -44,7 +44,7 @@ It refuses a parent folder whose `.claude-plugin/marketplace.json` cmod did not 
 cmod unlink [path]
 ```
 
-Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace and its declaration in `<parent>/.claude/settings.local.json` from Claude Code, and deletes its file and its line in `.git/info/exclude`. The line for `settings.local.json` stays while that file does, because Claude Code leaves it behind, empty. Then it turns back on the copy of the mod `cmod link` turned off, runs the checkout's uninstall step, and removes the program `cmod link` built, with its links.
+Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace and its declaration in `<parent>/.claude/settings.local.json` from Claude Code, and deletes its file and its line in `.git/info/exclude`. The line for `settings.local.json` stays while that file does, because Claude Code leaves it behind, empty. Then it turns back on the copy of the mod `cmod link` turned off, removes the program `cmod link` built, with its links, and sets up the copy of the mod Claude Code still has, which keeps the mod's data and secrets. Only when Claude Code has no other copy does it run the checkout's uninstall step and remove what cmod set up.
 
 ### cmod check
 
@@ -175,7 +175,7 @@ Updates the named plugin, or every plugin Claude Code has installed, through Cla
 cmod remove <name>
 ```
 
-Uninstalls the plugin through Claude Code. When cmod set the plugin up as a mod, it then runs the uninstall step cmod saved and removes what cmod set up.
+Uninstalls the plugin through Claude Code. When cmod set the plugin up as a mod and Claude Code still has another copy of it, such as one from another marketplace or a linked checkout, it sets that copy up, which keeps the mod's data and secrets. When no copy is left, it runs the uninstall step cmod saved and removes what cmod set up.
 
 ### cmod enable and cmod disable
 

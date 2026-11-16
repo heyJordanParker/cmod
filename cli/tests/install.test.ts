@@ -278,6 +278,47 @@ test('cmod remove of a plain plugin uninstalls it through Claude Code', async ()
   expect(existsSync(storeOf(home))).toBe(false)
 })
 
+test("cmod remove of one copy of a mod sets up the copy Claude Code still has, so the mod keeps its data and its uninstall step never runs", async () => {
+  const files = {
+    ...modFiles('demo'),
+    'package.json': JSON.stringify({ name: 'demo', private: true, cmod: { install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+    'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled from $CMOD_PLUGIN_ROOT" >> "$HOME/uninstalls"\n',
+  }
+  const home = await marketplaceHome({ demo: files })
+  const other = join(home, 'other/demo')
+  await writeFiles(other, files)
+  await writeFiles(home, { 'installed/demo@other': JSON.stringify({ id: 'demo@other', version: '0.1.0', scope: 'user', enabled: true, installPath: other }) })
+  expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
+  const data = join(storeOf(home), 'data/demo')
+  await writeFiles(data, { token: 'joined' })
+
+  const result = await cmod(home, 'remove', 'demo@market')
+
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain('✔ Uninstalled demo@market from Claude Code\n')
+  expect(result.stdout).toContain('✔ demo 0.1.0 is ready')
+  expect(await readFile(join(data, 'token'), 'utf8')).toBe('joined')
+  expect(JSON.parse(await readFile(join(storeOf(home), 'records/demo.json'), 'utf8')).root).toBe(other)
+  expect(existsSync(join(home, 'uninstalls'))).toBe(false)
+})
+
+test('cmod remove of the last copy of a mod runs its uninstall step and removes its data', async () => {
+  const files = {
+    ...modFiles('demo'),
+    'package.json': JSON.stringify({ name: 'demo', private: true, cmod: { install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+    'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled from $CMOD_PLUGIN_ROOT" >> "$HOME/uninstalls"\n',
+  }
+  const home = await marketplaceHome({ demo: files })
+  expect((await cmod(home, 'install', 'demo@market')).exitCode).toBe(0)
+
+  const result = await cmod(home, 'remove', 'demo@market')
+
+  expect(result.exitCode).toBe(0)
+  expect(await readFile(join(home, 'uninstalls'), 'utf8')).toBe(`uninstalled from ${join(storeOf(home), 'uninstall/demo/root')}\n`)
+  expect(existsSync(join(storeOf(home), 'data/demo'))).toBe(false)
+  expect(existsSync(join(storeOf(home), 'records/demo.json'))).toBe(false)
+})
+
 test('cmod remove of a name Claude Code does not hold and cmod never set up points at cmod list', async () => {
   const home = await marketplaceHome({})
 

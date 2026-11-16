@@ -5,7 +5,7 @@ import { readText, tilde } from '../files.js'
 import { readPlugin } from '../plugin.js'
 import { readProgram, removeProgram } from '../program.js'
 import { startProgress } from '../progress.js'
-import { holdSignals } from './setup.js'
+import { holdSignals, installedCopyOf, setupInTerminal } from './setup.js'
 import { teardownInTerminal } from './teardown.js'
 
 export const summary = 'Stop loading a linked checkout.'
@@ -19,8 +19,10 @@ Claude Code session. Uninstalls it through Claude Code and takes it out of the
 marketplace cmod keeps in its parent folder, removing that marketplace with the
 cmod plugin it lists, and its declaration in the parent folder's
 .claude/settings.local.json, once it lists no checkout. Turns the installed
-copy of the mod that cmod link turned off back on, runs the checkout's
-uninstall step, and removes the program cmod link built, with its links.`
+copy of the mod that cmod link turned off back on, removes the program cmod
+link built, with its links, and sets up the copy of the mod Claude Code still
+has, which keeps the mod's data and secrets. When Claude Code has no other
+copy, it runs the checkout's uninstall step and removes what cmod set up.`
 
 export async function run(argv: string[]): Promise<number> {
   const { positionals } = parseArgs({ args: argv, allowPositionals: true, options: {} })
@@ -34,11 +36,13 @@ export async function run(argv: string[]): Promise<number> {
   const hold = holdSignals()
   try {
     const record = await readRecord(readText, storeFolder(process.env), plugin.name)
-    const exitCode = record === undefined || record.root !== plugin.root ? 0 : await teardownInTerminal(plugin.name, progress)
+    const copy = await installedCopyOf(plugin.name)
+    const isCheckoutSetUp = record?.root === plugin.root
+    const exitCode = copy === undefined && isCheckoutSetUp ? await teardownInTerminal(plugin.name, progress) : 0
 
     const program = await readProgram(plugin)
-    if (program !== undefined && (await removeProgram(program.name))) progress.succeed(`Removed the program ${program.name}`)
-    return exitCode
+    if ((record === undefined || isCheckoutSetUp) && program !== undefined && (await removeProgram(program.name))) progress.succeed(`Removed the program ${program.name}`)
+    return copy === undefined ? exitCode : setupInTerminal(await readPlugin(copy), progress)
   } finally {
     hold[Symbol.dispose]()
   }

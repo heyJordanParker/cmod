@@ -66,10 +66,15 @@ if (missing.length === 0) console.log("✔ Validation passed")
 else console.log("✘ Found " + missing.length + " error" + (missing.length === 1 ? "" : "s") + ":\\n\\n" + missing.map(([key, value]) => "  ❯ " + key + ": Path not found: " + value + ". The runtime loader will report this as a load failure.").join("\\n") + "\\n\\n✘ Validation failed")
 process.exit(missing.length === 0 ? 0 : 1)`
 
+const withoutUninstalled = `const fs = require("node:fs")
+const gone = fs.readFileSync(process.env.HOME + "/claude-uninstalled", "utf8").split("\\n")
+console.log(JSON.stringify(JSON.parse(fs.readFileSync(0, "utf8")).filter((plugin) => !gone.includes(plugin.id))))`
+
 export const claudeAnswering = (listed: unknown[], session = 'exit 1', updated = listed) => `#!/bin/sh
 echo "$*" >> "$HOME/claude-calls"
+installed() { if [ -e "$HOME/claude-uninstalled" ]; then "${process.execPath}" -e '${withoutUninstalled}'; else cat; fi; }
 case "$*" in
-  "plugin list --json") if grep -q '^plugin update ' "$HOME/claude-calls"; then echo '${JSON.stringify(updated)}'; else echo '${JSON.stringify(listed)}'; fi ;;
+  "plugin list --json") if grep -q '^plugin update ' "$HOME/claude-calls"; then echo '${JSON.stringify(updated)}'; else echo '${JSON.stringify(listed)}'; fi | installed ;;
   "plugin update "*" --json") echo '{"outcome":"ok"}' ;;
   "plugin marketplace list --json") "${process.execPath}" -e '${marketplaces}' list ;;
   "plugin marketplace add "*) "${process.execPath}" -e '${marketplaces}' add "$4" "$5" "$6" ;;
@@ -83,6 +88,14 @@ case "$*" in
 ${session}
     ;;
 esac
+answered=$?
+if [ $answered -eq 0 ]; then
+  case "$*" in
+    "plugin uninstall "*) echo "$3" >> "$HOME/claude-uninstalled" ;;
+    "plugin install "*) if [ -e "$HOME/claude-uninstalled" ]; then grep -vxF "$3" "$HOME/claude-uninstalled" > "$HOME/claude-uninstalled.next"; mv "$HOME/claude-uninstalled.next" "$HOME/claude-uninstalled"; fi ;;
+  esac
+fi
+exit $answered
 `
 
 export async function deleteTemporaryHomes(): Promise<void> {

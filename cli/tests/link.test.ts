@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, temporaryHome, writeFiles, writeLinked } from './cmod.js'
+import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, fourStepInstall, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
 afterAll(deleteTemporaryHomes)
 
@@ -29,7 +29,7 @@ async function linkedHome(text: string): Promise<{ home: string; checkout: strin
 
 const published = { id: 'demo@market', version: '0.1.0', scope: 'user', enabled: true, installPath: '/demo' }
 
-const claudeWithPublished = claudeAnswering([...cmodPluginListed, published]).replace(
+const claudeWithPublished = (installPath: string) => claudeAnswering([...cmodPluginListed, { ...published, installPath }]).replace(
   '  "plugin "*) exit 1 ;;',
   '  "plugin disable demo@market --json"|"plugin enable demo@market --json") echo \'{"outcome":"ok"}\' ;;\n  "plugin "*) exit 1 ;;',
 )
@@ -38,7 +38,7 @@ const linkedMarketplace = (home: string) => join(home, 'Developer', '.claude-plu
 
 test("link lists the checkout in a marketplace in its parent folder beside the cmod plugin, excludes that file from the parent's git, installs it from there, and turns the published copy off, and unlink undoes each", async () => {
   const { home, checkout, target, link } = await linkedHome(settings)
-  await writeFiles(home, { 'bin/claude': claudeWithPublished })
+  await writeFiles(home, { 'bin/claude': claudeWithPublished(join(home, 'cache/demo/0.1.0')), 'cache/demo/0.1.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }) })
   expect(await Bun.spawn(['git', 'init', '--quiet', join(home, 'Developer')]).exited).toBe(0)
   const excludes = join(home, 'Developer', '.git', 'info', 'exclude')
   const excludedBefore = await readFile(excludes, 'utf8')
@@ -71,6 +71,33 @@ test("link lists the checkout in a marketplace in its parent folder beside the c
   expect(await readFile(excludes, 'utf8')).toBe(`${excludedBefore}/.claude/settings.local.json\n`)
   expect(existsSync(join(home, '.local/share/cmod/links.json'))).toBe(false)
   expect(await readFile(target, 'utf8')).toBe(settings)
+})
+
+test("unlink sets up the installed copy cmod link turned off, so the mod keeps its data and its uninstall step never runs", async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer/demo')
+  const copy = join(home, 'cache/demo/0.1.0')
+  const modFiles = {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'demo', version: '0.1.0' }),
+    'package.json': JSON.stringify({ name: 'demo', cmod: { install: './setup/install.sh', uninstall: './setup/uninstall.sh' } }),
+    'setup/install.sh': fourStepInstall,
+    'setup/uninstall.sh': '#!/bin/sh\necho "uninstalled from $CMOD_PLUGIN_ROOT" >> "$HOME/uninstalls"\n',
+  }
+  await writeFiles(checkout, modFiles)
+  await writeFiles(copy, modFiles)
+  await writeFiles(home, { 'bin/claude': claudeWithPublished(copy) })
+  const data = join(home, '.local/share/cmod/data/demo')
+  expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
+  await writeFiles(data, { token: 'joined' })
+
+  const unlinked = await cmod(home, 'unlink', checkout)
+
+  expect(unlinked.exitCode).toBe(0)
+  expect(unlinked.stdout).toContain('✔ demo 0.1.0 is ready')
+  expect(await readFile(join(data, 'runs'), 'utf8')).toBe(`ran in ${checkout} at 0.1.0\nran in ${copy} at 0.1.0\n`)
+  expect(await readFile(join(data, 'token'), 'utf8')).toBe('joined')
+  expect(JSON.parse(await readFile(join(home, '.local/share/cmod/records/demo.json'), 'utf8')).root).toBe(copy)
+  expect(existsSync(join(home, 'uninstalls'))).toBe(false)
 })
 
 test("link declares its marketplace in the parent folder's .claude/settings.local.json, so the settings.json other computers share holds no path of this one, and unlink takes the declaration out", async () => {
