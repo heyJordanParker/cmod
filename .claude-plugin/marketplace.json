@@ -10,8 +10,8 @@
       "description": "Claude Mod Manager: fetches the cmod program for every mod, runs the uninstall step of each mod Claude Code removes, and carries calls from one mod to another.",
       "source": {
         "source": "archive",
-        "url": "https://github.com/heyJordanParker/cmod/releases/download/v6.1.1/cmod-6.1.1.zip",
-        "sha256": "c59812be21b5c2d2cc83746a8b2e60b6cb50e93c6305778d310edf67779bdac7"
+        "url": "https://github.com/heyJordanParker/cmod/releases/download/v6.2.0/cmod-6.2.0.zip",
+        "sha256": "0c9e7be6fab469593e053e30a0aaad089e51052d601acff5969596dac5f6c0a9"
       }
     }
   ]

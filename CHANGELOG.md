@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.2.1] - 2026-11-17
+
+### Fixed
+- `cmod unlink` switches back to the installed copy of a mod at once. The program `cmod link` builds from your checkout now sits beside the released program instead of over it, so unlinking points the mod back at the release it already has, with no download and no moment when the mod's program is missing. Through 6.2.0, unlinking deleted both and downloaded the release again, and a mod's service could not restart until the download arrived.
+- A checkout linked before 6.2.1 built over its released program. Run `cmod link` on it again, then delete `bin/<program>/<version>/<program>` in the cmod store, and its next `cmod unlink` downloads that release once.
+
 ## [6.2.0] - 2026-11-17
 
 ### Added
