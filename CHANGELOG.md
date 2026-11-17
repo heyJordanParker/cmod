@@ -4,6 +4,12 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.3.0] - 2026-11-17
+
+### Added
+- History, a tab of the Sidebar that maps the session you are in. `meta+h` shows or hides it, and `/history` opens it. Each prompt is a row with its time and how many tools ran and failed for it, and opening one shows Claude's replies, tool calls, Skills, files read, and your mods' notes, with each subagent under the call that started it, marked `running` until it ends. Press a row to scroll the conversation to it. Find, the Show filter for prompts, tools, and errors, and the Timeline narrow it down. It follows the conversation while it is open, and the browser app shows it as a tab too.
+- A hotkey a newer cmod adds binds at that cmod's first start, so `meta+h` binds on a computer whose cmod already bound `meta+0` and `meta+m`. A combo you rebound or took off stays as you left it.
+
 ## [6.2.2] - 2026-11-17
 
 ### Fixed

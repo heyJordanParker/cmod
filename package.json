@@ -6,7 +6,8 @@
     "program": "cmod",
     "hotkeys": {
       "sidebar": { "title": "Show or hide the Sidebar", "default": "meta+0" },
-      "settings": { "title": "Show or hide Settings", "default": "meta+m" }
+      "settings": { "title": "Show or hide Settings", "default": "meta+m" },
+      "history": { "title": "Show or hide History", "default": "meta+h" }
     }
   },
   "files": ["cli/bin/cmod", "cli/package.json", "hooks", "setup", "src", "types/index.d.ts"],

@@ -13,21 +13,22 @@ import { ifMissing } from '../node_modules/@cmodjs/core/utils/paths.js'
 import { formatExit } from '../node_modules/@cmodjs/core/utils/text.js'
 import { sessionKeyOf, sessionsWith } from '../node_modules/@cmodjs/core/runtime/state.js'
 import { configRootOf, failureLog, readJson, refreshPreferences, setUpMods, settings as settingsView, settingsMemory, settingsSession, storeOf, type SettingsState } from './settings.js'
+import { history, historyMemory, historySession, type HistoryState } from './history.js'
 import { sidebar, sidebarSession, type SidebarState } from './sidebar.js'
 import { addClaudeTools } from './tools.js'
 import { webUi } from './web.js'
 
 export type CmodPluginState = {
-  readonly global: { installedPlugins: readonly string[] | null; areHotkeysBound: boolean; pluginsCheckedAt: readonly [number | null, number | null] | null }
-  readonly session: { tip: string | null } & SidebarState['session'] & SettingsState['session']
-  readonly memory: SettingsState['memory']
+  readonly global: { installedPlugins: readonly string[] | null; boundHotkeys: readonly string[]; pluginsCheckedAt: readonly [number | null, number | null] | null }
+  readonly session: { tip: string | null } & SidebarState['session'] & SettingsState['session'] & HistoryState['session']
+  readonly memory: SettingsState['memory'] & HistoryState['memory']
 }
 
-const cmodGlobal: CmodPluginState['global'] = { installedPlugins: null, areHotkeysBound: false, pluginsCheckedAt: null }
+const cmodGlobal: CmodPluginState['global'] = { installedPlugins: null, boundHotkeys: [], pluginsCheckedAt: null }
 
 type Listed = { readonly name: string; readonly version: string; readonly state: string; readonly unsatisfied: readonly string[] }
 
-const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, ...settingsSession }
+const cmodSession: CmodPluginState['session'] = { tip: null, ...sidebarSession, ...settingsSession, ...historySession }
 
 type InstalledCopy = { readonly version: string; readonly installPath: string; readonly projectPath?: string }
 
@@ -92,10 +93,11 @@ async function tipOf(mod: Mod<CmodPluginState>): Promise<string | null> {
 
 export const cmodPlugin = defineMod({
   name: 'cmod',
-  state: { global: cmodGlobal, session: cmodSession, memory: settingsMemory },
+  state: { global: cmodGlobal, session: cmodSession, memory: { ...settingsMemory, ...historyMemory } },
   hotkeys: {
     sidebar: { title: 'Show or hide the Sidebar', default: 'meta+0' },
     settings: { title: 'Show or hide Settings', default: 'meta+m' },
+    history: { title: 'Show or hide History', default: 'meta+h' },
   },
 
   async setup(mod) {
@@ -109,10 +111,11 @@ export const cmodPlugin = defineMod({
     unloaded.clear()
 
     addClaudeTools(mod)
-    const shown = sidebar(mod, settingsView(mod), (): Promise<void> => web.openInBrowser())
+    const shown = sidebar(mod, settingsView(mod), (isShown) => history(mod, isShown), (): Promise<void> => web.openInBrowser())
     const web = webUi(mod, shown)
     mod.hotkeys.sidebar.onPress(() => shown.toggle())
     mod.hotkeys.settings.onPress(() => shown.toggleSettings())
+    mod.hotkeys.history.onPress(() => shown.toggleHistory())
 
     mod.use(
       slashCommand({
@@ -123,19 +126,29 @@ export const cmodPlugin = defineMod({
         reply: ({ positionals }) => shown.openSettings(positionals[0]),
       }),
     )
+    mod.use(
+      slashCommand({
+        name: 'history',
+        description: 'Show this session as a map: each prompt with what Claude did for it, and press a row to scroll the conversation there',
+        immediate: true,
+        reply: () => shown.openHistory(),
+      }),
+    )
 
-    const bindHotkeys = async () => {
-      let isBound = true
-      for (const [name, hotkey] of Object.entries(cmodPlugin.hotkeys ?? {})) {
-        if (mod.hotkeys[name as keyof typeof mod.hotkeys].combo !== undefined) continue
-        const { exitCode, stderr } = await process.run(['cmod', 'hotkey', claude.plugin.root, name, hotkey.default])
-        if (exitCode === 0) continue
-        isBound = false
-        report({ id: `hotkey:${name}`, message: `Could not bind ${hotkey.default} to ${hotkey.title}`, description: `cmod hotkey ${formatExit(exitCode, cmodError(stderr, 'hotkey'))}` })
+    const bindHotkeys = async (unbound: readonly (readonly [string, { readonly title: string; readonly default: string }])[]) => {
+      for (const [name, hotkey] of unbound) {
+        if (mod.hotkeys[name as keyof typeof mod.hotkeys].combo === undefined) {
+          const { exitCode, stderr } = await process.run(['cmod', 'hotkey', claude.plugin.root, name, hotkey.default])
+          if (exitCode !== 0) {
+            report({ id: `hotkey:${name}`, message: `Could not bind ${hotkey.default} to ${hotkey.title}`, description: `cmod hotkey ${formatExit(exitCode, cmodError(stderr, 'hotkey'))}` })
+            continue
+          }
+        }
+        mod.state.global.boundHotkeys = [...mod.state.global.boundHotkeys, name]
       }
-      mod.state.global.areHotkeysBound = isBound
     }
-    if (!mod.state.global.areHotkeysBound) void bindHotkeys().catch((error: unknown) => report({ id: 'hotkeys', message: 'Could not bind the hotkeys', error }))
+    const unbound = Object.entries(cmodPlugin.hotkeys ?? {}).filter(([name]) => !mod.state.global.boundHotkeys.includes(name))
+    if (unbound.length > 0) void bindHotkeys(unbound).catch((error: unknown) => report({ id: 'hotkeys', message: 'Could not bind the hotkeys', error }))
 
     const store = await storeOf(mod)
     const changed = pluginsChangedPath(store)
