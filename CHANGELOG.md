@@ -4,6 +4,14 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-11-17
+
+### Added
+- `parseShell` names the command that runs each command. A `ShellCommand` from `shell.js` carries `runner`, the index in `commands` of the `sudo`, `xargs`, `find -exec`, `bash -c`, or other command that runs it, and none for a command the line's own shell runs. So a mod can tell `find . -exec rm {} \;` from `find . -name x; rm y`, and tell an `rm` your shell runs, which reaches a shell function or alias, from one another program runs, which is `/bin/rm`.
+
+### Fixed
+- A `find -exec` action reads and writes the paths the `find` starts from. `find /etc -exec rm {} +` wrote a file named `{}` in the working folder, so a `write: '/etc/**'` rule of the `permissions` job and a tool call's `files` missed it, while `find /etc -delete` was caught.
+
 ## [6.1.1] - 2026-11-16
 
 ### Fixed
