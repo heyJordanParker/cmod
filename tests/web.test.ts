@@ -7,7 +7,9 @@ import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { Box, Button, Input, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
 import { cmodPlugin } from '../src/mod.js'
 
-type Spawned = { readonly stdout: AsyncIterable<Uint8Array>; kill(): void }
+const allHotkeys = Object.keys(cmodPlugin.hotkeys ?? {})
+
+type Spawned ={ readonly stdout: AsyncIterable<Uint8Array>; kill(): void }
 
 type Fetched = { readonly ok: boolean; readonly status: number; readonly body: AsyncIterable<Uint8Array> | null; text(): Promise<string> }
 
@@ -138,7 +140,7 @@ async function browsed() {
 
   const counted = testMod(demo)
   await counted.start()
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files: { [`${store}/preferences.json`]: preferences } })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys } }, files: { [`${store}/preferences.json`]: preferences } })
   tested.fakes.process.spawn = ({ argv }) => (argv.includes('serve') ? running(address.replace('http://', '')) : running('[]'))
   tested.fakes.http.fetch = async (url, init): Promise<HttpResponse> => {
     const body = init?.body
@@ -205,7 +207,7 @@ function sessionChannel() {
 
 async function poster() {
   const channel = sessionChannel()
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files: { [`${store}/preferences.json`]: preferences } })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys } }, files: { [`${store}/preferences.json`]: preferences } })
   tested.fakes.process.spawn = ({ argv }) => (argv.includes('serve') ? running('127.0.0.1:4567') : running('[]'))
   tested.fakes.http.fetch = channel.fetched
   await tested.start()
@@ -233,6 +235,19 @@ test('the session tells the browser app it works, what permission it waits on wi
   expect(allowed.waiting).toBeUndefined()
   expect(stopped).toMatchObject({ isWorking: false, lastTurn: { reason: 'stopped' } })
   expect(stopped.waiting).toBeUndefined()
+})
+
+test('History the person opened shows in the browser app as a tab of the session it maps', async () => {
+  const { tested, about } = await poster()
+
+  await tested.type('/history')
+  const told = await about((each) => each.tabs.some((tab) => tab.label === 'History'))
+
+  expect(told.tabs).toEqual([
+    { key: 'dashboard', label: 'Dashboard', isClosable: false },
+    { key: 'cmod/history', label: 'History', isClosable: true },
+    { key: 'settings', label: 'Settings', isClosable: false },
+  ])
 })
 
 test('a prompt the browser app queues reaches Claude Code as the person own prompt, and its Stop aborts the running turn', async () => {

@@ -4,7 +4,7 @@
 
 <h1 align="center">Claude Mod Manager</h1>
 
-Claude Mod Manager (cmod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can hear and change what happens in a session, and add panes, slash commands, tools, and permission rules, and it can run its own install step. cmod installs mods, runs their install and uninstall steps, and helps you build and publish your own.
+Claude Mod Manager (cmod) installs and builds Claude Code mods. A mod is a Claude Code plugin built with the `@cmodjs/core` package. It can hear and change what happens in a session, and add panes, slash commands, tools, and permission rules, and it can run its own install step. cmod installs mods, runs their install and uninstall steps, shows you each session as a map of what Claude did, and helps you build and publish your own.
 
 ## Install a mod
 
@@ -24,6 +24,8 @@ Claude Code installs the cmod plugin with the mod. To install the cmod plugin on
 Once a mod is installed, cmod fetches the cmod program and opens the mod's install page, the `Install <mod>` tab of the Sidebar, and the mod runs its install step. The page asks for any setting the mod needs, and walks you through any step only you can do, such as signing in. A progress bar shows each step. A notice tells you when the mod is ready.
 
 The Sidebar is cmod's pane beside the conversation. `meta+0` shows or hides it. Its tabs are the Dashboard, each page a mod opened, and Settings, and `0`, `1` to `8`, and `9` switch between them. `meta+m` and `/mods` open Settings.
+
+History is a tab of the Sidebar that maps the session. `meta+h` shows or hides it, and `/history` opens it. Each prompt is a row with its time and how many tools ran and failed for it. The newest prompt is open, and opening any prompt shows Claude's replies, its tool calls, the Skills and files it read, and your mods' notes. A subagent sits under the call that started it, marked `running` until it ends. Press a row to scroll the conversation to it. Find keeps the rows that hold your text, Show cycles through all rows, prompts, tools, and errors, and the Timeline lists every row in the order it happened.
 
 Settings lists every mod with the one-line description from its `plugin.json`, whether Claude Code has it turned off, its own settings pages, its options, its hotkeys, and its changelog. When a mod installs, a toast says what it adds. Type a new combo for a hotkey, and every session uses it at once. `Turn off` and `Turn on` run `cmod disable` and `cmod enable`, and `Remove` asks once, then runs `cmod remove <mod>`. Under cmod, the Log lists the newest 100 errors and warnings of your mods from every session, each with the versions it happened on, how often it repeated, `Copy`, and `Report`, and Preferences holds the switch `Show errors from installed mods`.
 

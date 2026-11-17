@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
-import type { Subprocess } from '../node_modules/@cmodjs/core/mod.js'
+import { Prompt, Reply, ToolCall, ToolResult, type Subprocess } from '../node_modules/@cmodjs/core/mod.js'
 import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { elements, findElement } from '../node_modules/@cmodjs/core/testing/fake-elements.js'
 import type { Claude } from '../node_modules/@cmodjs/core/runtime/claude.js'
@@ -15,8 +15,10 @@ type Answer = { exitCode: number; stdout: string; stderr: string }
 
 const cmodProgram = '/test/home/.local/share/cmod/programs/cmod'
 
+const allHotkeys = Object.keys(cmodPlugin.hotkeys ?? {})
+
 function testRemovals(installedPlugins: readonly string[] | null, userPlugins: Record<string, boolean>, answers: Record<string, Answer> = {}, mergedPlugins: Record<string, boolean> = userPlugins) {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins, areHotkeysBound: true } } })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins, boundHotkeys: allHotkeys } } })
   const teardowns: string[] = []
   tested.fakes.settings.read = async (args) => ({ enabledPlugins: args?.source === 'user' ? userPlugins : mergedPlugins })
   tested.fakes.process.run = async (argv) => {
@@ -182,7 +184,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the compact tool, the start_background_agent tool, the Sidebar pane and /mods.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the compact tool, the start_background_agent tool, the Sidebar pane, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -302,7 +304,7 @@ test('a teardown that fails before any event shows its last line of standard err
 
 const store = '/test/home/.local/share/cmod'
 
-const bound = { global: { installedPlugins: [], areHotkeysBound: true } }
+const bound = { global: { installedPlugins: [], boundHotkeys: allHotkeys } }
 
 function testSettings(files: Readonly<Record<string, string>> = {}, projectRoot?: string) {
   const tested = testMod(cmodPlugin, {
@@ -768,7 +770,7 @@ test("a mod's Settings page opens inside Settings, not as a Sidebar tab, and the
 test("picking another mod in Settings draws that mod's page without the last mod's params, and tells it the page it shows", async () => {
   const record = (name: string) => JSON.stringify({ name, version: '0.2.0', root: `/plugins/${name}`, installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} })
   const tested = testMod(cmodPlugin, {
-    state: { global: { installedPlugins: [], areHotkeysBound: true } },
+    state: { global: { installedPlugins: [], boundHotkeys: allHotkeys } },
     files: {
       [`${store}/records/demo.json`]: record('demo'),
       [`${store}/records/other.json`]: record('other'),
@@ -843,7 +845,7 @@ test('a start whose hotkey bind fails tries again at the next start', async () =
 
   await tested.settle()
 
-  expect(tested.state.global.areHotkeysBound).toBe(false)
+  expect(tested.state.global.boundHotkeys).toEqual([])
   expect(tested.shown.toasts.map(({ message }) => message)).toContain('Could not bind meta+0 to Show or hide the Sidebar')
   expect(await ownLog(tested)).toContain('Could not bind meta+0 to Show or hide the Sidebar')
 })
@@ -853,16 +855,27 @@ async function ownLog(tested: ReturnType<typeof testMod>): Promise<string[]> {
   return logged.filter(({ level }) => level === 'error').map(({ message }) => message)
 }
 
-test('on its first start cmod binds its own hotkeys by its plugin folder, meta+0 for the Sidebar and meta+m for Settings, and never again', async () => {
+test('on its first start cmod binds its own hotkeys by its plugin folder, meta+0 for the Sidebar, meta+m for Settings, and meta+h for History, and never again', async () => {
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: [] } } })
   const ran: string[] = []
   tested.fakes.process.run = async (argv) => (ran.push(argv.join(' ')), { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
 
   await tested.start()
 
-  expect(ran).toEqual([`${cmodProgram} hotkey /test/plugins/cmod sidebar meta+0`, `${cmodProgram} hotkey /test/plugins/cmod settings meta+m`])
-  expect(tested.state.global.areHotkeysBound).toBe(true)
-  expect(tested.shown.commands).toEqual(expect.arrayContaining(['cmod--sidebar', 'cmod--settings', 'mods']))
+  expect(ran).toEqual([`${cmodProgram} hotkey /test/plugins/cmod sidebar meta+0`, `${cmodProgram} hotkey /test/plugins/cmod settings meta+m`, `${cmodProgram} hotkey /test/plugins/cmod history meta+h`])
+  expect(tested.state.global.boundHotkeys).toEqual(['sidebar', 'settings', 'history'])
+  expect(tested.shown.commands).toEqual(expect.arrayContaining(['cmod--sidebar', 'cmod--settings', 'cmod--history', 'mods', 'history']))
+})
+
+test('a cmod that bound its first hotkeys binds a hotkey a newer cmod adds, and leaves the ones it bound before', async () => {
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: [], boundHotkeys: ['sidebar', 'settings'] } } })
+  const ran: string[] = []
+  tested.fakes.process.run = async (argv) => (ran.push(argv.join(' ')), { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
+  await tested.start()
+
+  expect(ran).toEqual([`${cmodProgram} hotkey /test/plugins/cmod history meta+h`])
+  expect(tested.state.global.boundHotkeys).toEqual(['sidebar', 'settings', 'history'])
 })
 
 test('the Sidebar hotkey shows the Dashboard, and the Settings hotkey switches to Settings, then hides it', async () => {
@@ -892,6 +905,171 @@ test('after the person hides the Sidebar with Escape, one press of the Sidebar h
 
   expect(tested.shown.openPanes.has('sidebar')).toBe(true)
   expect((await tested.shown.pane.lines()).join('\n')).toContain('Nothing is on the Dashboard yet.')
+})
+
+const indexedConversation = (() => {
+  const device = { id: 'a'.repeat(32), name: 'test-computer', os: 'darwin', arch: 'arm64' }
+  const at = (minute: number, second = 0) => new Date(2026, 10, 17, 10, minute, second).toISOString()
+  const first = { id: 'p1', type: Prompt, at: at(0), context: 1, turn: 'p1', text: 'set up the auth tests', from: { type: 'person' } }
+  const second = { id: 'p2', type: Prompt, at: at(5), context: 1, turn: 'p2', text: 'fix the login bug', from: { type: 'person' } }
+  const inSecond = (id: string, second: number, message: object) => ({ id, at: at(5, second), context: 1, turn: 'p2', ...message })
+  const main = [
+    first,
+    { id: 'r1', type: Reply, at: at(0, 30), context: 1, turn: 'p1', text: 'Set up.' },
+    second,
+    inSecond('c1', 1, { type: ToolCall, callId: 'call-read', name: 'Read', input: { file_path: 'src/auth.ts' } }),
+    inSecond('c1r', 2, { type: ToolResult, callId: 'call-read', name: 'Read', input: { file_path: 'src/auth.ts' }, output: 'export function login() {}', isError: false }),
+    inSecond('c2', 3, { type: ToolCall, callId: 'call-bash', name: 'Bash', input: { command: 'bun test' } }),
+    inSecond('c2r', 4, { type: ToolResult, callId: 'call-bash', name: 'Bash', input: { command: 'bun test' }, output: '1 fail', isError: true }),
+    inSecond('c3', 5, { type: ToolCall, callId: 'call-agent', name: 'Agent', input: { description: 'Find the callers' } }),
+    inSecond('r2', 9, { type: Reply, text: 'Fixed the expired token check in auth.ts.' }),
+  ]
+  const inTask = [
+    { id: 'a-p', type: Prompt, at: at(5, 6), context: 1, turn: 'a-p', task: 'a1', text: 'Find every caller of refreshToken.', from: { type: 'engine' } },
+    { id: 'a-c', type: ToolCall, at: at(5, 7), context: 1, turn: 'a-p', task: 'a1', callId: 'call-grep', name: 'Grep', input: { pattern: 'refreshToken' } },
+  ]
+  return {
+    turns: [
+      { prompt: first, context: 1, openedAt: first.at, closedAt: at(0, 30), answer: 'Set up.', device },
+      { prompt: second, context: 1, openedAt: second.at, device },
+    ],
+    messages: { main, a1: inTask } as Readonly<Record<string, readonly object[]>>,
+    tasks: [{ id: 'a1', title: 'find every caller of refreshToken', agentType: 'Explore', openedBy: 'call-agent', openedAt: at(5, 6) }],
+  }
+})()
+
+function answerIndex(tested: ReturnType<typeof testMod>) {
+  tested.fakes.process.spawn = (request) => {
+    const [, command, kind] = request.argv
+    const flag = (name: string) => request.argv[request.argv.indexOf(name) + 1]
+    const task = request.argv.includes('--task') ? flag('--task') : undefined
+    const answer =
+      command !== 'history' ? undefined
+      : kind === 'turns' ? (task === undefined ? indexedConversation.turns : [])
+      : kind === 'messages' ? (indexedConversation.messages[task ?? 'main'] ?? []).filter((message) => !request.argv.includes('--turn') || (message as { turn?: string }).turn === flag('--turn'))
+      : kind === 'tasks' ? (task === undefined ? indexedConversation.tasks : [])
+      : undefined
+    return answer === undefined ? exited(0) : exited(0, { stream: 'stdout', text: `${JSON.stringify(answer)}\n` })
+  }
+}
+
+async function conversationWithTask(tested: ReturnType<typeof testMod>) {
+  answerIndex(tested)
+  await tested.start()
+  return { read: { id: 'c1' } }
+}
+
+async function historyLines(tested: ReturnType<typeof testMod>): Promise<string> {
+  await tested.settle()
+  await tested.shown.pane.lines()
+  await tested.settle()
+  return (await tested.shown.pane.lines()).join('\n')
+}
+
+test('/history opens History as a tab of the Sidebar: each prompt with its counts, the newest open with what Claude did, and a subagent under the call that started it, running', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  await conversationWithTask(tested)
+
+  await tested.type('/history')
+  const shown = await historyLines(tested)
+
+  expect(shown).toContain('1: History  ×')
+  expect(shown).toMatch(/▸ \d\d:\d\d set up the auth tests/)
+  expect(shown).toMatch(/▾ \d\d:\d\d fix the login bug +4 tools · 1 failed/)
+  expect(shown).toContain('Read src/auth.ts')
+  expect(shown).toMatch(/Bash bun test +failed/)
+  expect(shown).toMatch(/▾ Explore find every caller of refreshToken +running/)
+  expect(shown).toContain('Grep refreshToken')
+  expect(shown).toContain('Claude Fixed the expired token check in auth.ts.')
+  expect(shown).not.toContain('Set up.')
+})
+
+test('History shows a prompt the person sends while it is open', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  await conversationWithTask(tested)
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.type('/history')
+  await historyLines(tested)
+
+  await prompt(tested, 'add a regression test')
+  await Bun.sleep(1100)
+  const shown = await historyLines(tested)
+
+  const rows = shown.split('\n')
+  expect(rows.findIndex((row) => /\d\d:\d\d add a regression test/.test(row))).toBeGreaterThan(rows.findIndex((row) => row.includes('Claude Fixed the expired token check')))
+})
+
+test('pressing a row of History scrolls the conversation to that message', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  const scrolled: unknown[] = []
+  tested.fakes.ui.scroll = async (request) => (scrolled.push(request), {})
+  const { read } = await conversationWithTask(tested)
+  await tested.type('/history')
+  await historyLines(tested)
+
+  await tested.shown.pane.press(`history:${read.id}`)
+
+  expect(scrolled).toEqual([{ to: { requestId: read.id }, block: 'start' }])
+})
+
+test('Find keeps the matching rows and opens the prompts and subagents that hold them, and the filter cycles through prompts, tools, and errors', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  await conversationWithTask(tested)
+  await tested.type('/history')
+  await historyLines(tested)
+
+  await tested.shown.pane.input('history:find', 'refreshtoken')
+  const found = await historyLines(tested)
+  await tested.shown.pane.input('history:find', '')
+  await tested.shown.pane.press('history:filter')
+  const prompts = await historyLines(tested)
+  await tested.shown.pane.press('history:filter')
+  await tested.shown.pane.press('history:filter')
+  const errors = await historyLines(tested)
+
+  expect(found).toContain('Explore find every caller of refreshToken')
+  expect(found).toContain('Grep refreshToken')
+  expect(found).not.toContain('set up the auth tests')
+  expect(found).not.toContain('Read src/auth.ts')
+  expect(prompts).toContain('Show: Prompts')
+  expect(prompts).toContain('set up the auth tests')
+  expect(prompts).toContain('fix the login bug')
+  expect(prompts).not.toContain('Read src/auth.ts')
+  expect(errors).toContain('Show: Errors')
+  expect(errors).toContain('Bash bun test')
+  expect(errors).not.toContain('Read src/auth.ts')
+  expect(errors).not.toContain('set up the auth tests')
+})
+
+test('the Timeline lists every row in the order it happened, with no nesting', async () => {
+  const tested = testMod(cmodPlugin, { state: bound })
+  await conversationWithTask(tested)
+  await tested.type('/history')
+  await historyLines(tested)
+
+  await tested.shown.pane.press('history:layout')
+  const rows = (await historyLines(tested)).split('\n').map((line) => line.replace(/^[\s│]+|[\s│]+$/g, ''))
+
+  const order = ['set up the auth tests', 'Claude Set up.', 'fix the login bug', 'Read src/auth.ts', 'Bash bun test', 'Agent Find the callers', 'Explore find every caller', 'Grep refreshToken', 'Claude Fixed the expired']
+  const places = order.map((text) => rows.findIndex((row) => row.includes(text)))
+  expect(places.every((place) => place !== -1)).toBe(true)
+  expect(places).toEqual([...places].sort((one, other) => one - other))
+  expect(rows.some((row) => row.startsWith('▾') || row.startsWith('▸'))).toBe(false)
+})
+
+test('the History hotkey opens History, and pressed again while it shows, closes its tab', async () => {
+  const tested = testMod(cmodPlugin, { state: bound, files: { '/test/plugins/cmod/package.json': JSON.stringify({ cmod: { hotkeys: cmodPlugin.hotkeys } }) } })
+  await conversationWithTask(tested)
+
+  await tested.hotkey('history')
+  const opened = await historyLines(tested)
+  await tested.hotkey('history')
+  await tested.settle()
+
+  expect(opened).toContain('1: History  ×')
+  expect(opened).toContain('fix the login bug')
+  expect(tested.state.session.pages).toEqual([])
+  expect(tested.shown.openPanes.has('sidebar')).toBe(false)
 })
 
 test("an empty Dashboard says what goes there, and Arrange widgets opens cmod's Widgets in Settings", async () => {
@@ -1162,7 +1340,7 @@ test('cmod.call rejects a call to a mod removed after it told cmod its parts wit
 const demoSetUp = { [`${store}/records/demo.json`]: JSON.stringify({ name: 'demo', version: '1.0.0', root: '/plugins/demo', installedAt: '', scriptsSha256: '', uninstall: null, program: null, keys: {} }) }
 
 function cmodAnswering(answers: Record<string, { code: number; stdout?: string; stderr?: string }>, files: Record<string, string> = demoSetUp) {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files, projectRoot: '/work/app' })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys } }, files, projectRoot: '/work/app' })
   const spawned: string[][] = []
   const sessions: (string | undefined)[] = []
   tested.fakes.process.spawn = (request) => {
@@ -1182,7 +1360,7 @@ const linkedFiles = {
 }
 
 test('a session started with a linked mod starts cmod watch only while no watcher touched its lock file in the last 15 seconds', async () => {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true } }, files: linkedFiles })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys } }, files: linkedFiles })
   const watches: string[] = []
   tested.fakes.process.spawn = (request) => {
     if (request.argv[1] === 'watch') watches.push('watch')
@@ -1516,7 +1694,7 @@ test("Claude's compact tool compacts the conversation once Claude's answer ends,
 const installedPlugins = '/test/home/.claude/plugins/installed_plugins.json'
 
 function pluginsListed(lists: readonly (readonly { name: string; version: string; state?: string; unsatisfied?: string[] }[])[], global: Partial<CmodPluginState['global']> = {}) {
-  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], areHotkeysBound: true, pluginsCheckedAt: null, ...global } }, files: { [installedPlugins]: '{}', [`${store}/store-changed`]: '' } })
+  const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys, pluginsCheckedAt: null, ...global } }, files: { [installedPlugins]: '{}', [`${store}/store-changed`]: '' } })
   const ticks: (() => void)[] = []
   tested.fakes.clock.every = (_ms, run) => (ticks.push(run), { cancel: () => undefined })
   const ran: string[] = []

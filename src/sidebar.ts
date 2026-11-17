@@ -6,6 +6,7 @@ import type { PageRequest, SettingsTab } from '../node_modules/@cmodjs/core/runt
 import type { SidebarTab } from '../node_modules/@cmodjs/core/runtime/web.js'
 import { Panel } from '../node_modules/@cmodjs/core/ui/components.js'
 import { Box, Button, Text } from '../node_modules/@cmodjs/core/ui/elements.js'
+import type { HistoryView } from './history.js'
 
 export type OpenPage = { readonly mod: string; readonly page: string; readonly params: unknown }
 
@@ -50,16 +51,22 @@ export type SettingsView = {
 
 const keyOf = ({ mod, page }: Pick<OpenPage, 'mod' | 'page'>) => `${mod}/${page}`
 
-export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void) => SettingsView, openInBrowser: () => Promise<void>) {
+export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (sidebar: Pane, changed: () => void) => SettingsView, history: (isShown: () => boolean) => HistoryView, openInBrowser: () => Promise<void>) {
   const { pages, widgets } = engineOf(mod)
   if (pages === undefined || widgets === undefined) throw new Error('cmod draws no Sidebar, because the cmod plugin started without its pages and widgets.')
   const told = new Set<string>()
   let inBrowser: ReadonlySet<string> = new Set()
 
-  const titleOf = (open: OpenPage) => (open.page === installPage ? `Install ${open.mod}` : (pages.declared().find((each) => each.mod === open.mod)?.pages.find((page) => page.id === open.page)?.title ?? open.page))
+  const historyPage: OpenPage = { mod: mod.name, page: 'history', params: null }
+  const historyKey = keyOf(historyPage)
+  const isHistory = (open: Pick<OpenPage, 'mod' | 'page'>) => keyOf(open) === historyKey
+  const historyView = history(() => mod.state.session.pages.some(isHistory) && ((pane.isShown && mod.state.session.shown === historyKey) || inBrowser.has(historyKey)))
+
+  const titleOf = (open: OpenPage) => (isHistory(open) ? historyView.title : open.page === installPage ? `Install ${open.mod}` : (pages.declared().find((each) => each.mod === open.mod)?.pages.find((page) => page.id === open.page)?.title ?? open.page))
 
   const tell = () => {
-    const { pages: open, shown } = mod.state.session
+    const shown = mod.state.session.shown
+    const open = mod.state.session.pages.filter((each) => !isHistory(each))
     const isShown = pane.isShown
     const inSettings = isShown && shown === settingsTab ? view.shownPage() : undefined
     const mods = new Set([...told, ...open.map((each) => each.mod), ...(inSettings === undefined ? [] : [inSettings.mod])])
@@ -139,6 +146,7 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       const rows = widgets.rows(Dashboard, columns - panelColumns)
       return Panel({ title: 'Widgets', children: rows.length === 0 ? emptyDashboard() : Box({ flexDirection: 'column', children: rows }) })
     }
+    if (isHistory(page)) return Panel({ title: historyView.title, children: historyView.draw(columns - panelColumns) })
     return Panel({ title: page.mod, children: pages.element(page.mod, page.page, page.params, columns - panelColumns, isFocused) ?? Text({ dimColor: true, children: `Drawing ${titleOf(page)}…` }) })
   }
 
@@ -226,6 +234,14 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
   }
   pages.apply(apply)
 
+  const openHistory = async () => {
+    addTab(historyPage)
+    show(historyKey)
+    historyView.refresh()
+    await pane.open({ focus: true })
+    tell()
+  }
+
   return {
     pane,
     async toggle() {
@@ -246,6 +262,11 @@ export function sidebar<State extends SidebarState>(mod: Mod<State>, settings: (
       await pane.open({ focus: true })
       if (name !== undefined) await view.show(name)
       tell()
+    },
+    openHistory,
+    async toggleHistory() {
+      if (pane.isShown && mod.state.session.shown === historyKey) return closePage(historyKey)
+      await openHistory()
     },
     tabs(): SidebarTab[] {
       const { left, right } = tabViews(mod.state.session.shown)
