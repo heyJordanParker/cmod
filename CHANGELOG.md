@@ -4,6 +4,11 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [6.2.2] - 2026-11-17
+
+### Fixed
+- The test kit draws the `Progress` element Claude Code 2.1.325 added, so a mod that type-checks against Claude Code 2.1.325 or later compiles, and a mod test that draws a `Progress` runs.
+
 ## [6.2.1] - 2026-11-17
 
 ### Fixed
