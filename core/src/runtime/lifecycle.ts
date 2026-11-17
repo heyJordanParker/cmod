@@ -3,7 +3,7 @@ import type { Step } from '../installer.js'
 
 import type { Imports, Mod, ModDefinition, Reservation, SettingsFile, SettingsFileChange, SettingsFileChangeListener, Subscription, Timer as ModTimer } from '../mod.js'
 import type { Options, OptionValues } from '../options.js'
-import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programPath, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
+import { dataFolder, finishStepsMethod, isAtLeast, isProgramNewer, oldestCmodVersion, pendingStepsMethod, parseEvent, programModifiedMs, readRecord, readSteps, recordPath, scriptsSha256, serviceFolder, storeFolder, type ReadFile, type RunnerEvent, type Steps } from '../records.js'
 import { homePrefix, ifMissing, relativePath } from '../utils/paths.js'
 import { firstLine, formatExit, messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
@@ -160,8 +160,8 @@ export async function readPlugin(claude: Claude): Promise<Plugin> {
   })
   if (version === undefined || record?.scriptsSha256 !== scripts) return { ...plugin, isInstalled: false, shouldRecord: false }
   const isInstalled = record.version === version || record.root === root
-  const programModifiedMs = record.program === null ? undefined : (await claude.fs.stat(programPath(store, record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
-  return { ...plugin, isInstalled, shouldRecord: isInstalled && (record.version !== version || isProgramNewer(record, programModifiedMs)) }
+  const modifiedMs = await programModifiedMs(async (path) => (await claude.fs.stat(path).catch(ifMissing(undefined)))?.mtimeMs, store, record)
+  return { ...plugin, isInstalled, shouldRecord: isInstalled && (record.version !== version || isProgramNewer(record, modifiedMs)) }
 }
 
 async function filesBelow(claude: Claude, folder: string): Promise<string[]> {

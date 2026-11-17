@@ -2,14 +2,14 @@ import { existsSync } from 'node:fs'
 import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, isProgramNewer, marketplaceOf, programPath, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, formatEvent, hotkeyBindings, hotkeyCommand, isProgramNewer, marketplaceOf, programModifiedMs, readRecord, recordPath, scriptPaths, scriptsSha256, storeFolder, writeRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import type { Hotkeys } from '@cmodjs/core/src/hotkeys.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { listPlugins, relinkPluginFolders } from '../claude.js'
 import { readPlugin, type Plugin } from '../plugin.js'
 import { runStep } from '../process.js'
-import { DownloadFailed, fetchProgram, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
-import { ifMissing, listFiles, readText, writeAtomically } from '../files.js'
+import { DownloadFailed, fetchProgram, programOf, programsFolder, programSteps, refuseThisMachine, removeData, removeProgram, restoreProgram } from '../program.js'
+import { ifMissing, listFiles, readLink, readText, writeAtomically } from '../files.js'
 import { startProgress, type Progress } from '../progress.js'
 import { bindKeys, isLinked, modBindings, turnOnUpdates, unbindKeys, updatesToTurnOnFor } from '../settings.js'
 import { approvals, approve, modLock, revokeApprovals, storePath, takeLock } from '../store.js'
@@ -181,8 +181,9 @@ async function checkSetup(plugin: Plugin): Promise<SetupState> {
   const items = [sha256, ...(hasCommands ? [await scriptsSha256(commands, files)] : []), ...Object.entries(hotkeys).flatMap(([name, { default: combo }]) => (combo === undefined ? [] : [hotkeyApproval(name, combo)])), ...permissions]
   const store = storeFolder(process.env)
   const record = await readRecord(readText, store, plugin.name)
-  const programModifiedMs = record === undefined || record.program === null ? undefined : (await stat(programPath(store, record.program, record.version)).catch(ifMissing(undefined)))?.mtimeMs
-  const isCurrent = record !== undefined && record.root === plugin.root && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, programModifiedMs)
+  const modifiedMs = record === undefined ? undefined : await programModifiedMs(async (path) => (await stat(path).catch(ifMissing(undefined)))?.mtimeMs, store, record)
+  const isProgramLinked = record?.program == null || (await readLink(join(programsFolder(), record.program))) === (await programOf(plugin, record.program))
+  const isCurrent = record !== undefined && record.root === plugin.root && record.version === plugin.version && record.scriptsSha256 === sha256 && !isProgramNewer(record, modifiedMs) && isProgramLinked
   const approved = await approvals(plugin.name)
   return { sha256, isCurrent, approving: items.filter((item) => !approved.includes(item)), updates: await updatesToTurnOnFor(marketplaceOf(plugin.root, plugin.name)) }
 }
@@ -211,6 +212,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
   const { install, uninstall, program } = plugin.steps
   const store = storeFolder(process.env)
   const previous = await readRecord(readText, store, plugin.name)
+  const previousProgram = program === undefined ? undefined : await readLink(join(programsFolder(), program))
   if (program !== undefined) await fetchProgram(plugin, program, emit)
   const counted = program === undefined ? 0 : programSteps
   const folder = storePath('uninstall', plugin.name)
@@ -273,7 +275,7 @@ async function setUpMod(plugin: Plugin, state: SetupState, hold: SignalHold, emi
     if (!isRecorded) {
       await unbindKeys(bound)
       await bindKeys(before)
-      if (program !== undefined) await restoreProgram(program, previous)
+      if (program !== undefined) await restoreProgram(program, previousProgram)
       if (previous === undefined) await rm(folder, { recursive: true, force: true })
     }
     await rm(staged, { recursive: true, force: true })

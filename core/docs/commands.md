@@ -25,7 +25,7 @@ Creates a mod in `./<name>`: a `defineMod` with one listener, a Sidebar page, a 
 cmod link [path] [--option key=value]...
 ```
 
-Loads the checkout at `path` (default: the current folder) in every Claude Code session, the running ones too, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, and runs the checkout's install step.
+Loads the checkout at `path` (default: the current folder) in every Claude Code session, the running ones too, in place of the installed mod. Installs the cmod plugin when Claude Code lacks it, unless the checkout is cmod itself. Then installs the checkout's packages, builds the program `cli/` declares and links it into cmod's programs folder and `~/.local/bin`, and runs the checkout's install step. The build is `bin/<program>/<version>/<program>.linked` in the cmod store, beside the released program of the installed copy, which it never replaces.
 
 It loads the checkout through a marketplace cmod keeps in the checkout's parent folder:
 
@@ -44,7 +44,7 @@ It refuses a parent folder whose `.claude-plugin/marketplace.json` cmod did not 
 cmod unlink [path]
 ```
 
-Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace and its declaration in `<parent>/.claude/settings.local.json` from Claude Code, and deletes its file and its line in `.git/info/exclude`. The line for `settings.local.json` stays while that file does, because Claude Code leaves it behind, empty. Then it turns back on the copy of the mod `cmod link` turned off, removes the program `cmod link` built, with its links, and sets up the copy of the mod Claude Code still has, which keeps the mod's data and secrets. Only when Claude Code has no other copy does it run the checkout's uninstall step and remove what cmod set up.
+Stops loading the checkout at `path` (default: the current folder) in every Claude Code session. Uninstalls it through Claude Code and takes it out of the marketplace in its parent folder. Once that marketplace lists no checkout, it uninstalls the cmod plugin the marketplace installed, removes the marketplace and its declaration in `<parent>/.claude/settings.local.json` from Claude Code, and deletes its file and its line in `.git/info/exclude`. The line for `settings.local.json` stays while that file does, because Claude Code leaves it behind, empty. Then it turns back on the copy of the mod `cmod link` turned off and sets up the copy of the mod Claude Code still has, which keeps the mod's data and secrets and links the released program that copy already has, with no download, then deletes the program `cmod link` built. Only when Claude Code has no other copy does it run the checkout's uninstall step and remove what cmod set up.
 
 ### cmod check
 

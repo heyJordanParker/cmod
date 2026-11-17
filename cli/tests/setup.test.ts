@@ -712,7 +712,7 @@ test('a linked mod whose version moved past its last release builds its program 
       '',
     ].join('\n'),
   )
-  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.3.0/hello'))
+  expect(await readlink(join(home, '.local/bin/hello'))).toBe(join(home, '.local/share/cmod/bin/hello/0.3.0/hello.linked'))
   expect(await new Response(Bun.spawn([join(home, '.local/bin/hello')], { stdout: 'pipe' }).stdout).text()).toBe('hello from the checkout\n')
 })
 

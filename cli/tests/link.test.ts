@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readdir, readFile, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { claudeAnswering, cmod, cmodPluginListed, deleteTemporaryHomes, fourStepInstall, temporaryHome, writeFiles, writeLinked } from './cmod.js'
 
@@ -98,6 +98,47 @@ test("unlink sets up the installed copy cmod link turned off, so the mod keeps i
   expect(await readFile(join(data, 'token'), 'utf8')).toBe('joined')
   expect(JSON.parse(await readFile(join(home, '.local/share/cmod/records/demo.json'), 'utf8')).root).toBe(copy)
   expect(existsSync(join(home, 'uninstalls'))).toBe(false)
+})
+
+test("link keeps the installed copy's program beside the checkout's build, and unlink runs that program again with no download and deletes the build", async () => {
+  const home = await temporaryHome()
+  const checkout = join(home, 'Developer/hello-mod')
+  const copy = join(home, 'cache/hello-mod/0.2.0')
+  const modFiles = {
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'hello-mod', version: '0.2.0', repository: 'http://127.0.0.1:9/owner/hello-mod' }),
+    'package.json': JSON.stringify({ name: 'hello-mod', cmod: { program: 'hello', install: './setup/install.sh' } }),
+    'setup/install.sh': '#!/bin/sh\necho "ran in $CMOD_PLUGIN_ROOT" >> "$CMOD_DATA/runs"\n',
+  }
+  const build = `mkdir -p dist && printf '#!/bin/sh\\necho hello from the checkout\\n' > dist/hello-${process.platform}-${process.arch}`
+  await writeFiles(copy, modFiles)
+  await writeFiles(checkout, { ...modFiles, 'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }) })
+  await writeFiles(home, {
+    'bin/claude': claudeAnswering([...cmodPluginListed, { ...published, id: 'hello-mod@market', installPath: copy }]).replace(
+      '  "plugin "*) exit 1 ;;',
+      '  "plugin disable hello-mod@market --json"|"plugin enable hello-mod@market --json") echo \'{"outcome":"ok"}\' ;;\n  "plugin "*) exit 1 ;;',
+    ),
+    '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho hello from the release\n',
+  })
+  await chmod(join(home, '.local/share/cmod/bin/hello/0.2.0/hello'), 0o755)
+  const programs = join(home, '.local/share/cmod/programs/hello')
+  const released = join(home, '.local/share/cmod/bin/hello/0.2.0/hello')
+  const built = `${released}.linked`
+  const outputOf = async () => new Response(Bun.spawn([programs], { stdout: 'pipe' }).stdout).text()
+  expect((await cmod(home, 'setup', copy)).exitCode).toBe(0)
+
+  expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
+  expect(await readlink(programs)).toBe(built)
+  expect(await outputOf()).toBe('hello from the checkout\n')
+  expect(await readFile(released, 'utf8')).toBe('#!/bin/sh\necho hello from the release\n')
+
+  const unlinked = await cmod(home, 'unlink', checkout)
+
+  expect(unlinked.exitCode).toBe(0)
+  expect(unlinked.stdout).not.toContain('Downloading')
+  expect(await readlink(programs)).toBe(released)
+  expect(await outputOf()).toBe('hello from the release\n')
+  expect(existsSync(built)).toBe(false)
+  expect(await readFile(join(home, '.local/share/cmod/data/hello-mod/runs'), 'utf8')).toBe(`ran in ${copy}\nran in ${checkout}\nran in ${copy}\n`)
 })
 
 test("link declares its marketplace in the parent folder's .claude/settings.local.json, so the settings.json other computers share holds no path of this one, and unlink takes the declaration out", async () => {
@@ -252,7 +293,7 @@ test('link builds the program cli/ declares into the store and points ~/.local/b
     'cli/package.json': JSON.stringify({ name: 'hello', cmod: { build, output: 'dist' } }),
   })
   const entry = join(home, '.local/bin/hello')
-  const target = join(home, '.local/share/cmod/bin/hello/0.3.0/hello')
+  const target = join(home, '.local/share/cmod/bin/hello/0.3.0/hello.linked')
 
   expect((await cmod(home, 'link', checkout)).exitCode).toBe(0)
   expect(await readlink(entry)).toBe(target)

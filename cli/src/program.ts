@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, symlink } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, rmdir, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { dataFolder, instancePath, isObject, pluginName, programPath, storeFolder, type InstallRecord, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, instancePath, isObject, linkedProgramPath, pluginName, programPath, storeFolder, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
@@ -191,7 +191,7 @@ export async function installProgram(program: Program, version: string, progress
 }
 
 async function storeBuild(program: Program, version: string, progress: Progress, environment: Readonly<Record<string, string | undefined>>): Promise<{ target: string; isChanged: boolean }> {
-  const target = programPath(storeFolder(process.env), program.name, version)
+  const target = linkedProgramPath(storeFolder(process.env), program.name, version)
   return buildProgram(
     program,
     [machine],
@@ -231,9 +231,10 @@ async function scriptEntry(program: Program): Promise<string | undefined> {
 }
 
 export async function fetchProgram(plugin: Plugin, name: string, emit: (event: RunnerEvent) => void): Promise<void> {
-  const target = programPath(storeFolder(process.env), name, plugin.version)
-  const checkout = existsSync(target) || !(await isLinked(plugin.root)) ? undefined : await readProgram(plugin)
+  const built = linkedProgramPath(storeFolder(process.env), name, plugin.version)
+  const checkout = existsSync(built) || !(await isLinked(plugin.root)) ? undefined : await readProgram(plugin)
   if (checkout?.name === name) await buildUnlessFailed(checkout, () => storeBuild(checkout, plugin.version, reporting(emit), process.env))
+  const target = await programOf(plugin, name)
   if (!existsSync(target)) {
     if (plugin.repository === undefined) throw new Error(`${plugin.root}/.claude-plugin/plugin.json names no "repository", so cmod has no release to download ${name} from. Add "repository": "https://github.com/<owner>/<repo>".`)
     const release = `${releaseDownloads(plugin.repository)}/v${plugin.version}`
@@ -267,6 +268,12 @@ export async function fetchProgram(plugin: Plugin, name: string, emit: (event: R
   const note = terminalNote(name, entry)
   if (note !== undefined) emit({ type: 'log', text: note })
   emit({ type: 'progress', done: programSteps, total: programSteps, label: `${name} ${plugin.version} is installed` })
+}
+
+export async function programOf(plugin: Plugin, name: string): Promise<string> {
+  const released = programPath(storeFolder(process.env), name, plugin.version)
+  const built = linkedProgramPath(storeFolder(process.env), name, plugin.version)
+  return existsSync(built) && (!existsSync(released) || (await isLinked(plugin.root))) ? built : released
 }
 
 function reporting(emit: (event: RunnerEvent) => void): Progress {
@@ -348,9 +355,22 @@ export async function removeData(name: string): Promise<void> {
   await deleteSecrets(name)
 }
 
-export async function restoreProgram(name: string, record: InstallRecord | undefined): Promise<void> {
-  if (record?.program === name) await linkProgram(name, programPath(storeFolder(process.env), name, record.version))
+export async function restoreProgram(name: string, previous: string | undefined): Promise<void> {
+  if (previous !== undefined && existsSync(previous)) await linkProgram(name, previous)
   else await removeProgram(name)
+}
+
+export async function removeLinkedBuilds(name: string): Promise<void> {
+  const folder = storePath('bin', name)
+  for (const version of await readdir(folder).catch(ifMissing([]))) {
+    await rm(join(folder, version, `${name}.linked`), { force: true })
+    await rmdir(join(folder, version)).catch(ifKept)
+  }
+  await rmdir(folder).catch(ifKept)
+}
+
+function ifKept(error: NodeJS.ErrnoException): void {
+  if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST' && error.code !== 'ENOTDIR') ifMissing(undefined)(error)
 }
 
 function terminalNote(name: string, entry: string | undefined): string | undefined {

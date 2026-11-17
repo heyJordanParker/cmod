@@ -88,10 +88,10 @@ async function linkedProgramMod(home: string): Promise<string> {
     'src/other.ts': "export const other = 'the mod alone reads this'\n",
   })
   await writeLinked(home, root)
-  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello': '#!/bin/sh\necho first build\n' })
-  await chmod(store(home, 'bin/hello/0.2.0/hello'), 0o755)
+  await writeFiles(home, { '.local/share/cmod/bin/hello/0.2.0/hello.linked': '#!/bin/sh\necho first build\n' })
+  await chmod(store(home, 'bin/hello/0.2.0/hello.linked'), 0o755)
   await mkdir(store(home, 'programs'), { recursive: true })
-  await symlink(store(home, 'bin/hello/0.2.0/hello'), store(home, 'programs/hello'))
+  await symlink(store(home, 'bin/hello/0.2.0/hello.linked'), store(home, 'programs/hello'))
   return root
 }
 
@@ -161,12 +161,12 @@ test.concurrent("cmod watch keeps a linked mod's program file when a change buil
   const watching = await watchingFolders(home)
   await writeFiles(root, { 'cli/message': 'second build\n' })
   await until(() => existsSync(store(home, 'plugins-changed')))
-  const built = statSync(store(home, 'bin/hello/0.2.0/hello'))
+  const built = statSync(store(home, 'bin/hello/0.2.0/hello.linked'))
   const mark = await readFile(store(home, 'plugins-changed'), 'utf8')
 
   await writeFiles(root, { 'cli/notes.txt': 'a change the build does not use\n' })
   await until(() => readFileSync(store(home, 'plugins-changed'), 'utf8') !== mark)
-  const kept = statSync(store(home, 'bin/hello/0.2.0/hello'))
+  const kept = statSync(store(home, 'bin/hello/0.2.0/hello.linked'))
   expect({ ino: kept.ino, mtimeMs: kept.mtimeMs }).toEqual({ ino: built.ino, mtimeMs: built.mtimeMs })
   expect(await readFile(join(home, 'builds'), 'utf8')).toBe('built\nbuilt\n')
   watching.child.kill()

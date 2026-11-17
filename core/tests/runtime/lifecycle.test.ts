@@ -2034,6 +2034,16 @@ test('the cmod plugin counts as installed when the cmod program is its version o
   expect(await installedWith('0.1.9-rc.1')).toBe(false)
 })
 
+test("the cmod plugin counts as installed when the cmod program at its version is a linked checkout's build", async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  Object.assign(
+    fake.fakes.fs,
+    fakeFiles({ [`${root}/.claude-plugin/plugin.json`]: '{ "name": "cmod", "version": "0.2.0" }', [cmodProgram]: '', [`${cmodStore}/bin/cmod/0.1.0/cmod`]: '', [`${cmodStore}/bin/cmod/0.2.0/cmod.linked`]: '' }),
+  )
+
+  expect((await readPlugin(fake.claude)).isInstalled).toBe(true)
+})
+
 test('readSteps reads "approve": true, and a 4.x mod\'s "approve" permission, as a mod that approves tool calls', () => {
   expect(readSteps({ cmod: { approve: true } })).toEqual({ approve: true })
   expect(readSteps({ cmod: { permissions: { approve: true, prompt: true } } })).toEqual({ approve: true, permissions: ['approve', 'prompt'] })

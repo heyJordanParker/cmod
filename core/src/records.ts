@@ -70,6 +70,17 @@ export function programPath(store: string, program: string, version: string): st
   return `${store}/bin/${checkedName(program)}/${version}/${program}`
 }
 
+export function linkedProgramPath(store: string, program: string, version: string): string {
+  return `${programPath(store, program, version)}.linked`
+}
+
+export async function programModifiedMs(modifiedMs: (path: string) => Promise<number | undefined>, store: string, record: InstallRecord): Promise<number | undefined> {
+  if (record.program === null) return undefined
+  const times = await Promise.all([programPath(store, record.program, record.version), linkedProgramPath(store, record.program, record.version)].map(modifiedMs))
+  const found = times.filter((time): time is number => time !== undefined)
+  return found.length === 0 ? undefined : Math.max(...found)
+}
+
 export function isProgramNewer(record: InstallRecord, programModifiedMs: number | undefined): boolean {
   return record.program !== null && (programModifiedMs === undefined || programModifiedMs > Date.parse(record.installedAt))
 }
@@ -77,7 +88,7 @@ export function isProgramNewer(record: InstallRecord, programModifiedMs: number 
 export async function readCmodVersion(files: { list: (folder: string) => Promise<readonly string[]>; exists: (path: string) => Promise<boolean> }, store: string): Promise<string | undefined> {
   if (!(await files.exists(`${store}/programs/cmod`))) return undefined
   const newestFirst = (await files.list(`${store}/bin/cmod`)).filter((name) => releaseVersion.test(name)).toSorted((one, other) => (isAtLeast(one, other) ? -1 : 1))
-  for (const version of newestFirst) if (await files.exists(programPath(store, 'cmod', version))) return version
+  for (const version of newestFirst) if ((await files.exists(programPath(store, 'cmod', version))) || (await files.exists(linkedProgramPath(store, 'cmod', version)))) return version
   return undefined
 }
 
@@ -458,7 +469,7 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '6.2.0'
+export const coreVersion = '6.2.1'
 
 export const oldestCmodVersion = '6.1.0'
 
