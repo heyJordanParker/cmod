@@ -80,7 +80,7 @@ test.concurrent('a stale consent lock whose process is gone does not stall setup
   expect(result.stdout).toEndWith('done demo 0.1.0\n')
   expect(result.exitCode).toBe(0)
   expect(existsSync(lock)).toBe(false)
-}, 5_000)
+})
 
 test.concurrent('a lock held by a live process that is not its holder is taken over', async () => {
   const home = await temporaryHome()
