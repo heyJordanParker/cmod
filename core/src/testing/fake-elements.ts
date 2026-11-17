@@ -37,6 +37,7 @@ export const elements: ElementTable = {
   Image: element('Image'),
   Svg: element('Svg'),
   Raster: element('Raster'),
+  Progress: element('Progress'),
   Client: element('Client'),
 }
 
