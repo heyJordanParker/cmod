@@ -1,6 +1,6 @@
 import { basename, parse, type GlobPattern, type ParseEntry } from '../vendor.js'
 
-export type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number }
+export type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number; runner?: number }
 
 export type ParsedShell = {
   commands: ShellCommand[]
@@ -582,8 +582,9 @@ function addCommand(first: Word, args: Word[], folder: string, stdin: Stdin | un
   else if (wrappers.has(program)) addWrapper(first, program, args, folder, stdin, result)
   else {
     const flags = expandFlags(program, args)
-    result.commands.push({ argv: [first.text, ...flags], folder })
+    const runner = result.commands.push({ argv: [first.text, ...flags], folder }) - 1
     addEffects(program, args, flags, folder, stdin, result)
+    runBy(runner, result)
     if (program === 'cd') return changedFolder(args, folder)
   }
   return undefined
@@ -613,11 +614,33 @@ function addFind(first: Word, args: Word[], folder: string, result: ParsedShell)
     actions.push(args.slice(index + 1, end < 0 ? args.length : end))
     index = end < 0 ? args.length : end
   }
-  result.commands.push({ argv: [first.text, ...own], folder })
-  if (own.includes('-delete')) for (const start of findStarts(args)) addPath(result, 'writes', start, folder)
-  for (const [actionFirst, ...actionArgs] of actions) {
-    if (actionFirst !== undefined) addCommand(actionFirst, actionArgs, folder, undefined, result)
+  const runner = result.commands.push({ argv: [first.text, ...own], folder }) - 1
+  const starts = findStarts(args)
+  if (own.includes('-delete')) for (const start of starts) addPath(result, 'writes', start, folder)
+  for (const action of actions) addFindAction(action, starts, folder, result)
+  runBy(runner, result)
+}
+
+function addFindAction(action: Word[], starts: Word[], folder: string, result: ParsedShell): void {
+  const [first, ...args] = action
+  if (first === undefined) return
+  const reads = result.reads.length
+  const writes = result.writes.length
+  addCommand(first, args, folder, undefined, result)
+  if (!action.some((word) => word.text.includes('{}'))) return
+  result.reads.splice(reads)
+  result.writes.splice(writes)
+  for (const start of starts) {
+    const found: ParsedShell = { commands: [], reads: result.reads, writes: result.writes, fetches: [], isFullyParsed: true }
+    const [foundFirst, ...foundArgs] = action.map((word) => foundWord(word, start))
+    addCommand(foundFirst!, foundArgs, folder, undefined, found)
+    if (!found.isFullyParsed) result.isFullyParsed = false
   }
+}
+
+function foundWord(word: Word, start: Word): Word {
+  if (!word.text.includes('{}')) return word
+  return { text: word.text.replaceAll('{}', start.text), isGlob: word.isGlob || start.isGlob, isDynamic: word.isDynamic || start.isDynamic }
 }
 
 function findStarts(args: Word[]): Word[] {
@@ -637,18 +660,20 @@ function addWrapper(first: Word, program: string, args: Word[], folder: string, 
   start += wrapper.leadingOperands ?? 0
   while (wrapper.takesAssignments === true && assignmentPattern.test(args[start]?.text ?? '')) start += 1
   const hasTrailingCode = wrapper.codeOptions?.includes(args[start]?.text ?? '') === true
-  result.commands.push({ argv: [first.text, ...expandFlags(program, args.slice(0, start))], folder })
+  const runner = result.commands.push({ argv: [first.text, ...expandFlags(program, args.slice(0, start))], folder }) - 1
   const innerFolder = options.findLast((option) => wrapper.folderOptions?.includes(option.name) === true)?.value
   const wrappedFolder = innerFolder === undefined ? folder : joinFolder(folder, innerFolder.text)
   const code = hasTrailingCode ? args[start + 1] : options.findLast((option) => wrapper.codeOptions?.includes(option.name) === true)?.value
   const rest = args.slice(hasTrailingCode ? start + 2 : start)
   const isShell = wrapper.shellUnless !== undefined && !options.some((option) => wrapper.shellUnless?.includes(option.name) === true)
-  if (code !== undefined || isShell) {
-    parseLine([...(code === undefined ? [] : [code]), ...rest].map((word) => word.text).join(' '), wrappedFolder, result)
-    return
-  }
   const [innerFirst, ...innerArgs] = rest
-  if (innerFirst !== undefined) addCommand(innerFirst, innerArgs, wrappedFolder, stdin, result)
+  if (code !== undefined || isShell) parseLine([...(code === undefined ? [] : [code]), ...rest].map((word) => word.text).join(' '), wrappedFolder, result)
+  else if (innerFirst !== undefined) addCommand(innerFirst, innerArgs, wrappedFolder, stdin, result)
+  runBy(runner, result)
+}
+
+function runBy(runner: number, result: ParsedShell): void {
+  for (const command of result.commands.slice(runner + 1)) command.runner ??= runner
 }
 
 function addEffects(program: string, args: Word[], flags: string[], folder: string, stdin: Stdin | undefined, result: ParsedShell): void {

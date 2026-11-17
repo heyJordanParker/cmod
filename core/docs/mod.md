@@ -594,7 +594,7 @@ export const myMod = defineMod({
 parseShell(line: string): ParsedShell
 
 type ParsedShell = { commands: ShellCommand[]; reads: string[]; writes: string[]; fetches: string[]; isFullyParsed: boolean }
-type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number }
+type ShellCommand = { argv: [string, ...string[]]; folder: string; input?: number; runner?: number }
 
 resolve(...paths): string   join(...paths): string   dirname(path): string   basename(path, suffix?): string
 extname(path): string        relative(from, to): string   isAbsolute(path): boolean   normalize(path): string
@@ -603,7 +603,8 @@ extname(path): string        relative(from, to): string   isAbsolute(path): bool
 - `commands` lists every command the line runs, those inside `sudo`, `bash -c`, `$(…)`, and heredocs included, with flags such as `-rf` split into `-r` and `-f`.
 - `folder` is where a command runs, as the line wrote it: `''` for the folder the line starts in, `src` after `cd src`, `/tmp` after `cd /tmp`, and `~/p` after `cd ~/p`. `resolve(call.cwd, folder)` makes it absolute.
 - `input` is the index in `commands` of the command whose output this one reads through `|` or `|&`, and is absent for a command that reads no pipe. `trace read a.ts | head -5` gives `head` the `input` `0`. A wrapper such as `timeout 5 trace read a.ts` writes the output of the command it runs, so `input` names `trace`, not `timeout`.
-- `reads`, `writes`, and `fetches` are the paths and URLs the commands name, as written. A path that holds a shell expansion makes `isFullyParsed` false, and so does a line the parser cannot read.
+- `runner` is the index in `commands` of the command that runs this one, such as `sudo`, `xargs`, `find -exec`, or `bash -c`, and is absent for a command the line's own shell runs, `$(…)` and `( … )` included. `sudo rm x` gives `rm` the `runner` `0`, and in `sudo bash -c 'rm x'` the runners chain from `rm` to `bash` to `sudo`.
+- `reads`, `writes`, and `fetches` are the paths and URLs the commands name, as written. A `{}` in a `find -exec` action stands for each start path of the `find`, so `find build -exec rm {} +` writes `build`, as `find build -delete` does, while its `argv` keeps `{}`. A path that holds a shell expansion makes `isFullyParsed` false, and so does a line the parser cannot read.
 - `resolve` has no working folder to start from in Claude Code, so pass an absolute folder first, such as `resolve(sessions.current.cwd, path)`.
 
 ```ts

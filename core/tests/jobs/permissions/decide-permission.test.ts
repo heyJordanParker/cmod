@@ -58,6 +58,12 @@ describe('the named behaviors', () => {
     expect(await decide({ deny: [{ read: '**/.env' }] }, bash('echo .env | xargs cat'))).toEqual({ decision: 'deny' })
   })
 
+  test("find /etc/ssl -exec rm {} + is denied by write: '/etc/**', as find /etc/ssl -delete is", async () => {
+    const rules: PermissionRules<TestMod> = { deny: [{ write: '/etc/**' }] }
+    expect(await decide(rules, bash('find /etc/ssl -exec rm {} +'))).toEqual({ decision: 'deny' })
+    expect(await decide(rules, bash('find /etc/ssl -delete'))).toEqual({ decision: 'deny' })
+  })
+
   test('an Edit with replace_all: true produces the whole new file as content', async () => {
     const seen = seenCalls()
     const workspace = workspaceWith({ '/work/app/a.ts': 'let a = 1\nlet b = a + a\n' })

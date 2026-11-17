@@ -67,7 +67,7 @@ describe('pipes', () => {
   test('a wrapped writer is the command it runs, and a command after ; or && reads no pipe', () => {
     expect(parseShell('timeout 5 trace grep x | jq . && echo done').commands).toEqual([
       { argv: ['timeout', '5'], folder: '' },
-      { argv: ['trace', 'grep', 'x'], folder: '' },
+      { argv: ['trace', 'grep', 'x'], folder: '', runner: 0 },
       { argv: ['jq', '.'], folder: '', input: 1 },
       { argv: ['echo', 'done'], folder: '' },
     ])
@@ -77,8 +77,8 @@ describe('pipes', () => {
     expect(parseShell(`cd src && bash -c 'trace read a.ts | head'`).commands).toEqual([
       { argv: ['cd', 'src'], folder: '' },
       { argv: ['bash', '-c', 'trace read a.ts | head'], folder: 'src' },
-      { argv: ['trace', 'read', 'a.ts'], folder: 'src' },
-      { argv: ['head'], folder: 'src', input: 2 },
+      { argv: ['trace', 'read', 'a.ts'], folder: 'src', runner: 1 },
+      { argv: ['head'], folder: 'src', input: 2, runner: 1 },
     ])
     expect(parseShell('echo "$(trace read a.ts | wc -l)"').commands).toEqual([
       { argv: ['trace', 'read', 'a.ts'], folder: '' },
@@ -142,6 +142,39 @@ describe('wrappers', () => {
 
   test('sudo -D and env -C change the folder of the wrapped command', () => {
     expect(parseShell('sudo -D app rm a && env -C lib rm b').writes).toEqual(['app/a', 'lib/b'])
+  })
+})
+
+describe('runners', () => {
+  test.each([
+    ['find build -exec rm {} \\;', 0],
+    ['ls | xargs rm', 1],
+    ['sudo rm x', 0],
+    [`bash -c 'rm x'`, 0],
+    [`bash <<'EOF'\nrm x\nEOF`, 0],
+    ['command rm x', 0],
+    [`ssh host 'rm x'`, 0],
+  ])('%s names the command that runs rm', (line, runner) => {
+    expect(parseShell(line).commands.find(({ argv }) => argv[0] === 'rm')?.runner).toBe(runner)
+  })
+
+  test.each([
+    ['find . -name x; rm y'],
+    ['echo $(rm y)'],
+    ['(rm y)'],
+    ['rm y | cat'],
+  ])('%s runs rm from the line itself', (line) => {
+    expect(parseShell(line).commands.find(({ argv }) => argv[0] === 'rm')?.runner).toBeUndefined()
+  })
+
+  test('nested runners form a chain back to the line', () => {
+    expect(parsePublicShell(`sudo env FOO=1 bash -c 'rm -rf build | cat'`).commands).toEqual([
+      { argv: ['sudo'], folder: '' },
+      { argv: ['env', 'FOO=1'], folder: '', runner: 0 },
+      { argv: ['bash', '-c', 'rm -rf build | cat'], folder: '', runner: 1 },
+      { argv: ['rm', '-r', '-f', 'build'], folder: '', runner: 2 },
+      { argv: ['cat'], folder: '', input: 3, runner: 2 },
+    ])
   })
 })
 
@@ -303,6 +336,10 @@ describe('reads and writes', () => {
     ['find build -name x.o -delete', ['build']],
     ['find -L . -delete', ['.']],
     ['find -name x -delete', ['.']],
+    ['find /etc -exec rm {} +', ['/etc']],
+    ['cd src && find a b -name x -exec rm -f {} \\;', ['src/a', 'src/b']],
+    ['find /etc -exec mv {} /tmp \\;', ['/etc', '/tmp/etc', '/tmp']],
+    ['find build -exec sudo rm {} +', ['build']],
   ])('%s writes %p', (line, writes) => {
     expect(parseShell(line).writes).toEqual(writes)
   })
@@ -324,6 +361,7 @@ describe('reads and writes', () => {
     ['cp a b', ['a']],
     ['rsync -av src host:backup', ['src']],
     ['ln -s a b', []],
+    ['find /etc -name x -exec cat {} +', ['/etc']],
   ])('%s reads %p', (line, reads) => {
     expect(parseShell(line).reads).toEqual(reads)
   })
