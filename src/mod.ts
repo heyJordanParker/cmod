@@ -1,3 +1,4 @@
+import { program } from '../node_modules/@cmodjs/core/jobs/program.js'
 import { slashCommand } from '../node_modules/@cmodjs/core/jobs/slash-command.js'
 import { defineMod, device, fs, longestMs, messageOf, process, sessions, settings, type Mod, type Timer } from '../node_modules/@cmodjs/core/mod.js'
 import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, parseEvent, parseLinks, parsePluginsChanged, pluginsChangedPath, storeChangedPath } from '../node_modules/@cmodjs/core/records.js'
@@ -110,9 +111,11 @@ export const cmodPlugin = defineMod({
     loaded = {}
     unloaded.clear()
 
+    const server = mod.use(program({ command: ['cmod', 'serve'], isService: true, processType: 'Interactive' }))
+    engineOf(mod).onServeUnreached(() => void server.ready().catch((error: unknown) => report({ id: 'serve', message: 'cmod serve did not start, so this session reaches no other session', error })))
     addClaudeTools(mod)
     const shown = sidebar(mod, settingsView(mod), (isShown) => history(mod, isShown), (): Promise<void> => web.openInBrowser())
-    const web = webUi(mod, shown)
+    const web = webUi(mod, shown, server)
     mod.hotkeys.sidebar.onPress(() => shown.toggle())
     mod.hotkeys.settings.onPress(() => shown.toggleSettings())
     mod.hotkeys.history.onPress(() => shown.toggleHistory())
@@ -461,7 +464,7 @@ export const cmodPlugin = defineMod({
       const project = await claude.session.root()
       if (synced?.project === project && (await changedAt(synced.watched)).join(',') === synced.stamp) return []
       const startedAt = await claude.clock.now()
-      const result = JSON.parse(await runCmod(claude, ['rules', '--project', project, '--json'], await claude.session.id())) as SyncedRules
+      const result = JSON.parse(await runCmod(claude, ['rules', '--project', project, '--plugin', claude.plugin.root, '--json'], await claude.session.id())) as SyncedRules
       const times = await changedAt(result.watched)
       synced = { project, watched: result.watched, stamp: times.some((at) => at >= startedAt - 1000) ? '' : times.join(',') }
       return rulesNotes(result)

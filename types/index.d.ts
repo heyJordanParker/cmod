@@ -7,4 +7,13 @@ declare module 'claude-code' {
     cmod: Cmod
   }
   interface CmodDependencies {}
+  interface CmodInterfaces {
+    'cmod/Terminal': {
+      methods: {
+        screen(session: string): string
+        press(session: string, keys: string): void
+        show(session: string, place: 'focus' | 'peek' | 'tab' | 'right' | 'down' | 'hide'): void
+      }
+    }
+  }
 }

@@ -1,4 +1,4 @@
-import { program, type Program } from '../node_modules/@cmodjs/core/jobs/program.js'
+import type { Program } from '../node_modules/@cmodjs/core/jobs/program.js'
 import { Person, Prompt, sessions, type Mod } from '../node_modules/@cmodjs/core/mod.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { cmodError } from '../node_modules/@cmodjs/core/runtime/programs.js'
@@ -22,11 +22,10 @@ type Sidebar = Pick<ReturnType<typeof sidebar>, 'tabs' | 'draw' | 'closeTab' | '
 
 type Call = { readonly callId: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
 
-export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State>, shown: Sidebar) {
+export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State>, shown: Sidebar, server: Program) {
   const { claude, router, pages, report, onRedraw } = engineOf(mod)
   if (pages === undefined) throw new Error('cmod draws no web UI, because the cmod plugin started without its pages.')
-  let server: Program | undefined
-  let address: string | undefined
+  let address: { readonly url: string; readonly socketPath?: string } | undefined
   let views: readonly WebView[] = []
   let aboutPosted = ''
   let isFollowing = false
@@ -48,9 +47,9 @@ export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State
   const isOn = () => mod.state.memory.preferences.servesWebUi
 
   const call = async (path: string, body?: object) => {
-    if (address === undefined) throw new Error('cmod web serve has not answered yet.')
-    const answer = await claude.http.fetch(`${address}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
-    if (!answer.ok) throw new Error(`cmod web serve answered ${path} with ${answer.status}: ${answer.text}`)
+    if (address === undefined) throw new Error('cmod serve has not answered yet.')
+    const answer = await claude.http.fetch(`${address.url}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), ...(address.socketPath === undefined ? {} : { socketPath: address.socketPath }) })
+    if (!answer.ok) throw new Error(`cmod serve answered ${path} with ${answer.status}: ${answer.text}`)
     return JSON.parse(answer.text) as unknown
   }
 
@@ -217,7 +216,7 @@ export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State
     try {
       while (isOn()) {
         try {
-          address = (await ready.ready()).url
+          address = await ready.ready()
           aboutPosted = ''
           posted.clear()
           measureSoon()
@@ -237,11 +236,8 @@ export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State
     }
   }
 
-  const serve = (): Program | undefined => {
-    if (!isOn()) return undefined
-    server ??= mod.use(program({ command: ['cmod', 'web', 'serve'], singleInstance: true, isWebApp: true }))
-    void follow(server)
-    return server
+  const serve = () => {
+    if (isOn()) void follow(server)
   }
 
   const openInBrowser = async () => {
@@ -250,7 +246,8 @@ export function webUi<State extends SidebarState & SettingsState>(mod: Mod<State
         await writePreference(mod, 'servesWebUi', true)
         await refreshPreferences(mod)
       }
-      await serve()?.ready()
+      await server.ready()
+      serve()
       const { exitCode, stdout, stderr } = await claude.process.run(['cmod', 'web'])
       const home = stdout.trim().split('\n')[0] ?? ''
       const address = Button({ plain: true, key: 'web:address', href: home, label: home })
