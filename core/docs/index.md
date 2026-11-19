@@ -75,7 +75,7 @@ A program the mod needs lives as source in `cli/`. `cmod publish` builds it and 
 | How do I draw a page in the Sidebar, a pane, change how Claude Code draws a row, or ask the person something? | [ui.md](ui.md) |
 | How do I show a status, such as the branch or a CI result, by the prompt, while Claude works, after each turn, or on the Dashboard? | [ui.md](ui.md#widgets) |
 | How do I add a slash command, a tool, a permission rule, a check, a prompt, a schedule, or a background program? | [jobs.md](jobs.md) |
-| How does one mod call another? | [dependencies.md](dependencies.md) |
+| How does one mod call another, or call whichever mods answer an interface? | [dependencies.md](dependencies.md) |
 | How does a mod change the machine, ship a program, or clean up after itself? | [install-steps.md](install-steps.md) |
 | How do I test a mod without Claude Code? | [testing.md](testing.md) |
 | Which `cmod` command links, checks, tries in a clean Claude Code, or publishes a mod? | [commands.md](commands.md) |
@@ -89,7 +89,7 @@ A mod imports from the files below, and every other file in this package is inte
 | `mod.js` | `defineMod`, `ModDefinition`, `Mod`, `Subscription`, `Timer`, `Reservation`, `JobContext`, `Job`, `SlashCommand`, `Tool`, `Step`, `longestMs`, `messageOf` | [mod.md](mod.md), [jobs.md](jobs.md), [install-steps.md](install-steps.md#steps-in-claude-code) |
 | `mod.js` | `Hotkey`, `HotkeyInit`, `Combo`, `Key` | [mod.md](mod.md#hotkeys) |
 | `mod.js` | `settings`, `Settings`, `SettingsFile`, `SettingsFileChange`, `SettingsFileChangeListener`, `config`, `ConfigRow`, `commands`, `CommandInfo`, `CommandRun`, `CommandRunAnswer`, `CommandRunResult`, `model`, `ModelCompleteRequest`, `ModelCompleteOptions`, `ModelCompleteResult`, `fs`, `Entry`, `Stat`, `StatOptions`, `FileMatch`, `FileChange`, `metadata`, `Metadata`, `process`, `ProcessRunOptions`, `ProcessRunResult`, `ProcessSpawnOptions`, `Subprocess`, `http`, `HttpOptions`, `HttpResponse`, `clipboard`, `AskOptions`, `Imports` | [mod.md](mod.md) |
-| `mod.js` | `sessions`, `Sessions`, `Session`, `CurrentSession`, `TaskOwner`, `RecordPart`, `OnMethods`, `BeforeMethods`, `Listener`, `ListenerTime`, `ReadOptions`, `AnswerOptions`, `Refusal`, `SearchOptions`, `SessionScope`, `SessionSend`, `TaskStartArgs`, `ToolCallArgs`, `Usage`, `RateLimit`, `TaskStatus`, `Surface`, `Matcher` | [session.md](session.md) |
+| `mod.js` | `sessions`, `Sessions`, `Session`, `CurrentSession`, `TaskOwner`, `RecordPart`, `OnMethods`, `BeforeMethods`, `Listener`, `ListenerTime`, `ReadOptions`, `AnswerOptions`, `Refusal`, `SearchOptions`, `SessionScope`, `SessionSend`, `TaskStartArgs`, `ForkArgs`, `ToolCallArgs`, `Usage`, `RateLimit`, `TaskStatus`, `Surface`, `Matcher` | [session.md](session.md) |
 | `mod.js` | `Placement`, `ProjectSetup`, `SessionStartAsked`, `SessionStarted`, `SessionEnded`, `ModelChange`, `CwdChange`, `DirectoryAdd`, `Worktree`, `Notification`, `Elicitation`, `ElicitationResponse`, `McpServer`, `PermissionUpdate`, `PermissionCheck`, `PermissionRequest`, `PermissionDenial`, `BatchedCall`, `ToolBatch`, `Todo`, `ReplyDisplay` | [session.md](session.md#the-session-s-own-events) |
 | `mod.js` | `Message`, `MessageType`, `Prompt`, `Note`, `Reply`, `ToolCall`, `ToolResult`, `Skill`, `InstructionFile`, `AttachedFile`, `AttachmentType`, `Notice`, `Sender`, `SenderType`, `Person`, `Mod`, `Schedule`, `Channel`, `Sdk`, `Engine` | [session.md](session.md#message) |
 | `mod.js` | `Context`, `Turn`, `Goal`, `Task` | [session.md](session.md#turn-context-goal-and-task) |
@@ -97,7 +97,7 @@ A mod imports from the files below, and every other file in this package is inte
 | `mod.js` | `PageInit`, `Page`, `PageProps`, `PaneInit`, `Pane`, `PaneProps`, `PaneScroll`, `PaneClose`, `OpenOptions`, `ScrollTarget`, `ScrollOptions` | [ui.md](ui.md#the-sidebar-and-its-pages) |
 | `mod.js` | `WidgetInit`, `Widget`, `WidgetContext`, `Area`, `AbovePrompt`, `BelowPrompt`, `Working`, `TurnEnd`, `Dashboard` | [ui.md](ui.md#widgets) |
 | `mod.js` | `StyleInit`, `Style`, `StyleProps`, `Kind`, `Row`, `Block`, `ToolGroup`, `ToolProgress`, `CommandOutput`, `AskUserQuestion` | [ui.md](ui.md#styles-change-how-claude-code-draws) |
-| `mod.js` | `notInstalled` | [dependencies.md](dependencies.md) |
+| `mod.js` | `notInstalled`, `providers`, `InterfaceName`, `InterfaceMethods`, `InterfaceProvider`, `ProviderOn`, `ProviderBefore`, `ProviderListenOptions` | [dependencies.md](dependencies.md) |
 | `register.js` | `registerMod`, `registerPermissionCheck`, `registeredMod`, `AddHook`, `PluginOptions` | [mod.md](mod.md) |
 | `options.js` | `option`, `Option`, `Options`, `OptionValues`, `OptionValue`, `OptionType`, `UserConfigField`, `userConfigOf` | [options.md](options.md) |
 | `shell.js` | `parseShell`, `ParsedShell`, `ShellCommand` | [mod.md](mod.md#shell-js-and-path-js-read-a-command-line) |

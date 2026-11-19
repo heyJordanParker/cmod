@@ -1,9 +1,13 @@
 import { afterAll, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { interfaceServer } from '@cmodjs/core/src/runtime/interfaces.js'
+import { rpcRoutes } from '@cmodjs/core/src/runtime/rpc.js'
 import type { SessionEvents } from '@cmodjs/core/src/runtime/web.js'
-import { cmodWith, deleteTemporaryHomes, startCmod, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
+import { ifMissing } from '../src/files.js'
+import { answered as answeredRpc } from '../src/serve.js'
+import { cmodWith, deleteTemporaryHomes, startCmodWith, temporaryHome, writeFiles } from './cmod.js'
 
 const store = (home: string, file: string) => join(home, '.local/share/cmod', file)
 
@@ -45,13 +49,29 @@ async function homeWith(sessions: Record<string, Running>): Promise<string> {
   return home
 }
 
-async function served(home: string) {
-  const serving = startCmod(home, 'web', 'serve')
+const isListening = (url: string) => fetch(url).then(
+  () => true,
+  (error: unknown) => (error instanceof Error && 'code' in error && error.code === 'ECONNREFUSED' ? false : Promise.reject(error)),
+)
+
+async function pageOf(home: string, isOther: (port: number) => boolean = () => true) {
+  for (let waited = 0; waited < 15_000; waited += 50) {
+    const saved = await readFile(store(home, 'web.json'), 'utf8').then((text) => (JSON.parse(text) as { readonly port: number }).port, ifMissing(undefined))
+    if (saved !== undefined && isOther(saved) && (await isListening(`http://127.0.0.1:${saved}/`))) return saved
+    await Bun.sleep(50)
+  }
+  throw new Error('cmod serve never served the browser app.')
+}
+
+async function served(home: string, { env = {}, args = ['serve'], isOther }: { readonly env?: Record<string, string>; readonly args?: readonly string[]; readonly isOther?: (port: number) => boolean } = {}) {
+  const serving = startCmodWith(home, env, ...args)
   children.push(serving.child)
-  await serving.waitForOutput('127.0.0.1:')
-  const { port } = JSON.parse(await readFile(store(home, 'web.json'), 'utf8')) as { readonly port: number }
+  await serving.waitForOutput('unix:')
+  const port = await pageOf(home, isOther)
   const base = `http://127.0.0.1:${port}`
-  return { serving, port, base }
+  const socket = store(home, 'serve.sock')
+  const session = (path: string, body?: object) => fetch(`http://localhost${path}`, { unix: socket, ...(body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) })
+  return { serving, port, base, session }
 }
 
 async function browsed(base: string) {
@@ -89,7 +109,7 @@ async function browsed(base: string) {
   return { showing, press, close: () => browsing.abort() }
 }
 
-test.concurrent('loading / shows the browser app at once, with no sign-in, and cmod web refuses another host and a change from another page or none', async () => {
+test.concurrent("loading / shows the browser app at once, with no sign-in, and the page refuses another host, a change from another page or none, and a session's call", async () => {
   const home = await homeWith({})
   const { base, port, serving } = await served(home)
   const page = await fetch(`${base}/`)
@@ -107,18 +127,15 @@ test.concurrent('loading / shows the browser app at once, with no sign-in, and c
   expect((await fetch(`${base}/`, { headers: { host: `localhost:${port}` } })).status).toBe(200)
   expect((await change('/api/press', { origin: 'http://evil.example' })).status).toBe(403)
   expect((await change('/api/press', {})).status).toBe(403)
-  expect((await change('/api/sessions/s1', { origin: 'http://evil.example' })).status).toBe(403)
+  expect((await change('/api/sessions/s1', { origin: base })).status).toBe(403)
+  expect((await change('/rpc/connect', { origin: base })).status).toBe(403)
   expect((await change('/api/press', { origin: base })).status).toBe(410)
   serving.child.kill()
 }, 30_000)
 
 test.concurrent('the browser app answers you through your tailnet, by the Tailscale login of the request, and nobody else there', async () => {
   const home = await homeWith({})
-  const serving = startCmodWith(home, { CMOD_TAILNET_NAME: 'computer.example.ts.net', CMOD_TAILNET_LOGIN: 'person@example.com' }, 'web', 'serve')
-  children.push(serving.child)
-  await serving.waitForOutput('127.0.0.1:')
-  const { port } = JSON.parse(await readFile(store(home, 'web.json'), 'utf8')) as { readonly port: number }
-  const base = `http://127.0.0.1:${port}`
+  const { base, port, serving } = await served(home, { env: { CMOD_TAILNET_NAME: 'computer.example.ts.net', CMOD_TAILNET_LOGIN: 'person@example.com' } })
   const tailnet = 'computer.example.ts.net:62021'
   const through = (path: string, login: string, init: RequestInit = {}) => fetch(`${base}${path}`, { ...init, headers: { host: tailnet, 'tailscale-user-login': login, ...(init.headers as Record<string, string>) } })
   const change = (path: string, login: string, origin: string) => through(path, login, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: '{}' })
@@ -129,8 +146,8 @@ test.concurrent('the browser app answers you through your tailnet, by the Tailsc
   expect((await change('/api/press', 'person@example.com', `https://${tailnet}`)).status).toBe(410)
   expect((await change('/api/press', 'person@example.com', `http://${tailnet}`)).status).toBe(403)
   expect((await change('/api/sessions/s1', 'person@example.com', `https://${tailnet}`)).status).toBe(403)
-  await writeFiles(home, { '.local/share/cmod/tailnet/cmod/cmod.json': JSON.stringify({ port: 62021, url: `https://${tailnet}/`, reason: null }) })
-  expect((await cmodWith(home, { BROWSER: 'true' }, 'web')).stdout).toBe(`${base}/\nFrom your other machines: https://${tailnet}/\n`)
+  for (let waited = 0; !(await readFile(store(home, 'tailnet/cmod/cmod.json'), 'utf8').catch(ifMissing('')).then((text) => text.includes('https://'))) && waited < 15_000; waited += 50) await Bun.sleep(50)
+  expect((await cmodWith(home, { BROWSER: 'true' }, 'web')).stdout).toBe(`${base}/\nFrom your other machines: https://computer.example.ts.net:${port}/\n`)
   serving.child.kill()
 }, 30_000)
 
@@ -171,9 +188,9 @@ test.concurrent("a session's row and header carry the name Claude Code gives it,
 
 test.concurrent("a session's posted permission wait puts it in Needs you with the tool and its command, and the open session says to answer it in its terminal", async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Run the suite', reply: 'Running it.' } })
-  const { base, serving } = await served(home)
+  const { base, serving, session } = await served(home)
   const about = { tabs: [], pages: [], isWorking: true, waiting: { kind: 'permission', tool: 'Bash', input: { command: 'bun test' } } }
-  const posted = await fetch(`${base}/api/sessions/s1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ about }) })
+  const posted = await session('/api/sessions/s1', { about })
   const browser = await browsed(base)
   const screen = await browser.showing('Needs you 1')
   browser.close()
@@ -202,8 +219,8 @@ test.concurrent('a session moves to Needs you once Claude Code records it waits 
 
 test.concurrent("a turn stopped while its command keeps running says so on its row and in its header, because Claude Code moved the command to the session's background", async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Ping the host', reply: 'Pinging.', status: 'shell' } })
-  const { base, serving } = await served(home)
-  await fetch(`${base}/api/sessions/s1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ about: { tabs: [], pages: [], isWorking: false, lastTurn: { reason: 'stopped', at: at(9) } } }) })
+  const { base, serving, session } = await served(home)
+  await session('/api/sessions/s1', { about: { tabs: [], pages: [], isWorking: false, lastTurn: { reason: 'stopped', at: at(9) } } })
   const browser = await browsed(base)
   const screen = await browser.showing('Needs you 1')
   browser.close()
@@ -215,16 +232,16 @@ test.concurrent("a turn stopped while its command keeps running says so on its r
 
 test.concurrent("a prompt typed in a session's prompt box reaches that session's next poll as the person's prompt, and Stop reaches it as a stop", async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.' } })
-  const { base, serving } = await served(home)
-  const poll = () => fetch(`${base}/api/sessions/s1/events`).then(async (answer) => (await answer.json()) as SessionEvents)
-  await fetch(`${base}/api/sessions/s1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ about: { tabs: [], pages: [], isWorking: false } }) })
+  const { base, serving, session } = await served(home)
+  const poll = () => session('/api/sessions/s1/events').then(async (answer) => (await answer.json()) as SessionEvents)
+  await session('/api/sessions/s1', { about: { tabs: [], pages: [], isWorking: false } })
   await poll()
   const next = poll()
   const browser = await browsed(base)
   const opened = await browser.showing('data-key="prompt:s1:0"')
   const typed = await browser.press(opened, 'prompt:s1:0', 'data-submit', { kind: 'submit', value: 'Now run the whole suite' })
   const prompted = await next
-  await fetch(`${base}/api/sessions/s1`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ about: { tabs: [], pages: [], isWorking: true } }) })
+  await session('/api/sessions/s1', { about: { tabs: [], pages: [], isWorking: true } })
   const working = await browser.showing('Working 1')
   const stopped = poll()
   await browser.press(working, 'stop', 'data-press', { kind: 'press' })
@@ -238,7 +255,63 @@ test.concurrent("a prompt typed in a session's prompt box reaches that session's
   expect(stop.actions).toEqual([{ type: 'stop' }])
 }, 30_000)
 
-test.concurrent('opening a replied session marks it read, done and unread move it, and the mark outlives a restart of cmod web serve', async () => {
+test.concurrent("cmod serve deletes the before listeners an older cmod plugin kept for each session that ended, and keeps a running session's", async () => {
+  const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.' } })
+  await writeFiles(home, { '.local/share/cmod/data/cmod/before/s1.json': '[{"mod":"demo"}]', '.local/share/cmod/data/cmod/before/s9.json': '[]' })
+  const { serving } = await served(home)
+  serving.child.kill()
+
+  expect(readdirSync(store(home, 'data/cmod/before'))).toEqual(['s1.json'])
+}, 30_000)
+
+function anotherStore(home: string) {
+  const sent: unknown[] = []
+  const remote = () => ({ id: 'r1', title: 'build-box-1', project: '/srv/app', cwd: '/srv/app', model: 'claude-opus-5-5', startedAt: at(0), lastAt: at(sent.length === 0 ? 2 : 4), isRunning: true })
+  const turn = () => (sent.length === 0 ? { prompt: { id: 'r1-u' }, openedAt: at(0), closedAt: at(3) } : { prompt: { id: 'r1-p' }, openedAt: at(4) })
+  const server = interfaceServer({
+    implementations: {
+      'cmod/SessionStore': {
+        sessions: () => [remote()],
+        read: (_session: string, part: string) => (part === 'messages' ? [{ id: 'r1-a', session: 'r1', type: 'reply', at: at(2), context: 1, turn: 'r1-u', text: 'Deployed it on the build box.' }] : part === 'state' ? { turn: turn(), openCalls: {} } : []),
+      },
+      'cmod/Session': {
+        send: (session: string, input: unknown) => void sent.push(['send', session, input]),
+        abort: (session: string) => void sent.push(['abort', session]),
+      },
+    },
+  })
+  const socket = join(home, 'store.sock')
+  const routes = rpcRoutes({ handle: (connection) => server.handler(connection), onClose: (connection) => server.closed(connection), now: () => Date.now() })
+  const http = Bun.serve({ unix: socket, fetch: (request) => answeredRpc(routes, request) ?? new Response('', { status: 404 }) })
+  children.push({ kill: () => void (routes.close(), http.stop(true)) })
+  return { sent, instance: JSON.stringify({ address: `unix:${socket}`, pid: process.pid, started: at(0), provides: ['cmod/SessionStore', 'cmod/Session'] }) }
+}
+
+test.concurrent("the browser app lists the running sessions of every other session store beside this computer's, and a prompt or Stop there reaches that store's session", async () => {
+  const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.', name: 'app-1' } })
+  const other = anotherStore(home)
+  await writeFiles(home, { '.local/share/cmod/instances/anyhost/anyhost.json': other.instance })
+  const { base, serving } = await served(home)
+  const browser = await browsed(base)
+  const listed = await browser.showing('build-box-1')
+  await browser.press(listed, 'row:r1', 'data-press', { kind: 'press' })
+  const opened = await browser.showing('data-key="prompt:r1:0"')
+  await browser.press(opened, 'prompt:r1:0', 'data-submit', { kind: 'submit', value: 'Roll it back' })
+  for (let waited = 0; other.sent.length === 0 && waited < 5000; waited += 50) await Bun.sleep(50)
+  await browser.press(await browser.showing('data-key="stop"'), 'stop', 'data-press', { kind: 'press' })
+  for (let waited = 0; other.sent.length < 2 && waited < 5000; waited += 50) await Bun.sleep(50)
+  browser.close()
+  serving.child.kill()
+
+  expect(listed.html).toContain('app-1')
+  expect(listed.html).toContain('Deployed it on the build box.')
+  expect(other.sent).toEqual([
+    ['send', 'r1', { type: 'prompt', text: 'Roll it back', as: 'person' }],
+    ['abort', 'r1'],
+  ])
+}, 30_000)
+
+test.concurrent('opening a replied session marks it visited, done and unread move it, and the visit outlives a restart of cmod serve', async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.' } })
   const first = await served(home)
   const browser = await browsed(first.base)
@@ -259,11 +332,11 @@ test.concurrent('opening a replied session marks it read, done and unread move i
   restarted.close()
   again.serving.child.kill()
 
-  expect(JSON.parse(readFileSync(store(home, 'web-read.json'), 'utf8'))).toEqual({ s1: at(3) })
+  expect(Object.keys(JSON.parse(readFileSync(store(home, 'visited.json'), 'utf8')) as object)).toEqual(['s1'])
   expect(after.html).not.toContain('Replied')
 }, 30_000)
 
-test.concurrent('read marks pressed back to back reach the file in the order pressed, and cmod web serve stopped at once still writes the last', async () => {
+test.concurrent('visits pressed back to back reach the file in the order pressed, and cmod serve stopped at once still writes the last', async () => {
   const home = await homeWith({ s1: { project: 'work/app', prompt: 'Fix the login test', reply: 'The login test passes now.' } })
   const first = await served(home)
   const browser = await browsed(first.base)
@@ -276,55 +349,44 @@ test.concurrent('read marks pressed back to back reach the file in the order pre
   first.serving.child.kill()
   await first.serving.done
 
-  expect(JSON.parse(readFileSync(store(home, 'web-read.json'), 'utf8'))).toEqual({ s1: at(3) })
+  expect(Date.parse((JSON.parse(readFileSync(store(home, 'visited.json'), 'utf8')) as { s1: string }).s1)).toBeGreaterThan(Date.parse(at(3)))
 }, 30_000)
 
-test.concurrent("a session's poll stays open its whole 15 seconds, past Bun's 10-second idle timeout, and then answers with nothing new", async () => {
-  const { base, serving } = await served(await homeWith({}))
-  await fetch(`${base}/api/sessions/one`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ about: { tabs: [], pages: [] } }) })
-  await fetch(`${base}/api/sessions/one/events`)
+test.concurrent("a session's poll stays open its whole 8 seconds, under the 10-second idle timeout Bun keeps on a unix socket, and then answers with nothing new", async () => {
+  const { serving, session } = await served(await homeWith({}))
+  await session('/api/sessions/one', { about: { tabs: [], pages: [] } })
+  await session('/api/sessions/one/events')
   const startedAt = Date.now()
 
-  expect(await (await fetch(`${base}/api/sessions/one/events`)).json()).toEqual({ views: [], actions: [] })
-  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(14_900)
+  expect(await (await session('/api/sessions/one/events')).json()).toEqual({ views: [], actions: [] })
+  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(7900)
   serving.child.kill()
 }, 30_000)
 
-test.concurrent('cmod web serve listens on another port when the one in web.json is taken', async () => {
+test.concurrent('cmod serve serves the browser app on another port when the one in web.json is taken', async () => {
   const taken = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('') })
   const home = await homeWith({})
   await writeFiles(home, { '.local/share/cmod/web.json': JSON.stringify({ port: taken.port }) })
-  const { port, serving } = await served(home)
+  const { port, serving } = await served(home, { isOther: (saved) => saved !== taken.port })
 
   expect(port).not.toBe(taken.port)
   serving.child.kill()
   await taken.stop(true)
 }, 30_000)
 
-test.concurrent('cmod web serve keeps its port in web.json, listens on that port again, exits once the person turns the web UI off, and waits while it is off', async () => {
+test.concurrent('cmod serve keeps the page port in web.json, closes the page while the person has the browser app off, and opens it on that port again, while cmod web serve runs the same server', async () => {
   const home = await homeWith({})
-  const { serving } = await served(home)
-  const saved = JSON.parse(await readFile(store(home, 'web.json'), 'utf8')) as { port: number }
+  const { serving, port } = await served(home, { args: ['web', 'serve'] })
+  const isAnswered = () => isListening(`http://127.0.0.1:${port}/`)
 
-  expect(Object.keys(saved)).toEqual(['port'])
+  expect(Object.keys(JSON.parse(await readFile(store(home, 'web.json'), 'utf8')) as object)).toEqual(['port'])
   await writeFiles(home, { '.local/share/cmod/preferences.json': JSON.stringify({ servesWebUi: false }) })
-  expect((await serving.done).exitCode).toBe(0)
-
-  const waiting = startCmod(home, 'web', 'serve')
-  children.push(waiting.child)
-  await Bun.sleep(1000)
-  const isAnswered = await fetch(`http://127.0.0.1:${saved.port}/`).then(
-    () => true,
-    (error: unknown) => {
-      if (error instanceof TypeError) return false
-      throw error
-    },
-  )
-  expect(isAnswered).toBe(false)
+  for (let waited = 0; (await isAnswered()) && waited < 15_000; waited += 100) await Bun.sleep(100)
+  expect(await isAnswered()).toBe(false)
   await writeFiles(home, { '.local/share/cmod/preferences.json': JSON.stringify({ servesWebUi: true }) })
-  await waiting.waitForOutput(`127.0.0.1:${saved.port}`)
-  expect(JSON.parse(await readFile(store(home, 'web.json'), 'utf8'))).toEqual(saved)
-  waiting.child.kill()
+
+  expect(await pageOf(home)).toBe(port)
+  serving.child.kill()
 }, 30_000)
 
 test.concurrent('cmod web prints the address, opens it in the browser, and says how to turn the browser app on when it does not run', async () => {
@@ -340,7 +402,8 @@ test.concurrent('cmod web prints the address, opens it in the browser, and says 
 
   expect(before.exitCode).toBe(1)
   expect(before.stderr).toBe('cmod web: the browser app does not run now. Press open in browser on the Sidebar in Claude Code, which turns it on.\n')
-  expect([opened.exitCode, opened.stdout]).toEqual([0, `http://127.0.0.1:${port}/\n`])
-  expect(readFileSync(join(home, 'opened'), 'utf8')).toBe(opened.stdout)
-  expect([overSsh.exitCode, overSsh.stdout, overSsh.stderr]).toEqual([1, `http://127.0.0.1:${port}/\n`, 'cmod web: this computer has no browser to open, so open the address above yourself.\n'])
+  const address = `http://127.0.0.1:${port}/`
+  expect([opened.exitCode, opened.stdout.split('\n')[0]]).toEqual([0, address])
+  expect(readFileSync(join(home, 'opened'), 'utf8')).toBe(`${address}\n`)
+  expect([overSsh.exitCode, overSsh.stdout.split('\n')[0], overSsh.stderr]).toEqual([1, address, 'cmod web: this computer has no browser to open, so open the address above yourself.\n'])
 }, 30_000)

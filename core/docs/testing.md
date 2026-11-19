@@ -184,7 +184,7 @@ The current session, `test-session`, starts with one message: the cmod plugin's 
 - `endTurn({ answer?, failure? })` ends the open turn, as Claude stopping does. `answer` is Claude's last words, and `failure` ends it on an error, such as `{ type: 'rate_limit', text: 'Rate limited' }`. `{ task }` ends the open turn of that task's owner instead, and the first one a background task's session ends also ends the task.
 - `compact()` records a compaction boundary, which ends the context and starts the next, then the cmod plugin's device note, as a compaction does.
 - `startSession({ source, id? })` starts a session as `/clear`, `/resume`, or a fork does, under `id` when it names one, and adds the cmod plugin's device note. A first `startup` is the session the test already started, so it adds no second note. The mod's `session` values are that session's, so a `resume` to `test-session` brings the first session's values back, and `onSessionStart` hears the `source`. Set `fakes.device.read` before a `resume` to test a session that moved to another computer.
-- `startTask({ title, agentType?, model?, openedBy?, parent?, isBackground?, forkedFrom? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn. `forkedFrom: 'test-session'` starts a fork, `isBackground: true` a background task whose owner is a session of its own, and both together a clone. A message added with a background task's `task` goes into its owner's session.
+- `startTask({ title, agentType?, model?, openedBy?, parent?, isBackground?, forkedFrom? })` starts a task and returns its id, under the task `parent` names when it has one. Its owner runs `agentType` on `model`, and a `Prompt` added with its `task` opens the owner's own turn. `forkedFrom: 'test-session'` starts a fork, `isBackground: true` a background task whose owner is a session of its own, and both together a background fork. A message added with a background task's `task` goes into its owner's session.
 
 Each one runs the mod's session listeners, as a new message does in Claude Code. A `MessageDraft` is a message without its place: `{ type: Prompt, text, from? }`, `{ type: Note, text, from? }`, `{ type: Reply, text }`, `{ type: ToolCall, name, input?, callId? }`, `{ type: ToolResult, callId, output, isError? }`, `{ type: Skill, name, text }`, `{ type: InstructionFile, path, text }`, `{ type: AttachedFile, path, attachmentType, text }`, or `{ type: Notice, text }`.
 
@@ -206,7 +206,7 @@ test('/recall finds the earlier session about the deploy', async () => {
 })
 ```
 
-`shown.sent` lists what the mod sent to other sessions and to tasks' owners, each with its `session`, and its `task` for an owner. `fakes.agent.spawn` answers the current session's `startTask` and `fork`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`, and `fakes.tool.call` its `callTool`. A background `startTask` and a `clone` start their task in the fake session, after asking the mod's `beforeTaskStart` listeners, and so do another session's `startTask` and `fork`.
+`shown.sent` lists what the mod sent to other sessions and to tasks' owners, each with its `session`, and its `task` for an owner. `fakes.agent.spawn` answers the current session's `startTask` and `fork`, such as `async () => ({ agentId: 'agent-7', model: 'test-model' })`, and `fakes.tool.call` its `callTool`. A background `startTask` and a background `fork` start their task in the fake session, after asking the mod's `beforeTaskStart` listeners, and so do another session's `startTask` and `fork`.
 
 A `before` listener on the current session answers what `raise` asks, such as `tested.raise.beforePrompt({ text: 'Deploy to prod' })` or `tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'rm -rf build' } })`.
 
@@ -309,6 +309,7 @@ type Fakes = {
   cmod: { call? }
   tool: { call? }
   device: { read? }
+  serve: { sessions?, search?, read?, unheld?, visit?, remove? }
 }
 ```
 
@@ -320,6 +321,8 @@ Set a fake to answer a call:
 - A `program` job is the exception: it catches the `process.spawn` error and retries after 1, 2, 4, 8 and 16 seconds on real timers, so its `ready()` waits past `bun test`'s 5-second timeout. Set `fakes.process.spawn` before a test starts a `program` job.
 - A `program` job with `singleInstance` spawns `/test/home/.local/share/cmod/programs/cmod program <mod> --no-wait -- <command…>`, so `fakes.process.spawn` gets that `argv`, and the first line the fake writes to standard output is the address of the copy this session runs. A fake that writes `held` and ends tests a session another session runs the copy for: `ready()` resolves the address in `/test/home/.local/share/cmod/instances/<mod>/<program>.json`, which the test gives as `{"address":"unix:/tmp/x.sock"}` in `files`.
 - A `program` job with `isService` spawns `/test/home/.local/share/cmod/programs/cmod program <mod> --service --env <name> -- <command…>`, with one `--env` for each key of its `environment`, every time it starts, and a fake that writes `held` and ends stands for the service: `ready()` resolves the address in the instance file, as above. A file `/test/home/.local/share/cmod/services/<mod>/<program>.json` in `files` stands for a service an earlier version of the mod wrote: when the mod's setup adds no `isService` program of that name, its start spawns `/test/home/.local/share/cmod/programs/cmod program <mod> --remove-service -- <program>`.
+- A `program` job with `provides` puts `--provides <interface>` after `<mod>` for each interface, and one with `processType` puts `--process-type <type>` right after `--service`.
+- `serve` answers what the cmod plugin asks `cmod serve` for the sessions of the computer, which only a test of the cmod plugin itself reaches: `sessions` lists them, `read(session, part, options)` answers a part such as `messages`, and `unheld(session, action, input)` answers an action on a session no running cmod plugin holds.
 - A `program` job with `isWebApp` puts `--web-app` right after `<mod>` in that `argv`. `ready()` resolves `tailnetUrl` when the instance file gives one, such as `{"address":"127.0.0.1:62021","tailnetUrl":"https://my-computer.my-tailnet.ts.net:62021/"}` in `files`.
 - `files` already fills the `fs` fakes: a write is read back, and `list` lists the given files. The fake file system resolves a relative path against `/`, not against the session's working folder, so a mod under test reads `${sessions.current.project}/<file>` rather than a relative path. `fs.list()` with no path rejects.
 - `ui.open` places every pane by default. A fake that answers `{ isPlaced: false }` holds a pane back.

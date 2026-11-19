@@ -1,23 +1,28 @@
+import { randomUUID } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { dataFolder, storeFolder } from '@cmodjs/core/src/records.js'
 import type { TaskData } from '@cmodjs/core/src/session/conversation.js'
 import { startBackground } from '../claude.js'
 import { writeAtomically } from '../files.js'
+import { sessionTranscripts } from '../history.js'
 
 export const summary = 'Start a task in a new background Claude Code session.'
 
-export const help = `Usage: cmod task start <prompt> --title <title> [--clone] [--agent <type>] [--model <model>] [--cwd <folder>] [--json]
+export const help = `Usage: cmod task start <prompt> --title <title> [--clone [--at <message>]] [--agent <type>] [--model <model>] [--cwd <folder>] [--json]
 
 Start a task in a new background Claude Code session, for a mod's startTask with
-isBackground and its clone.
+isBackground and its fork with isBackground.
 
 The task belongs to the session this command runs in, which Claude Code names
 in CLAUDE_CODE_SESSION_ID. The new session starts fresh on the prompt, or with
---clone on a copy of that session's conversation. --agent and --model pick the
-agent definition and model of a fresh session, and --cwd the folder it works
-in. It prints the task, as one line of JSON with --json, and the cmod plugin of
-the new session tells the starting session once it answered.`
+--clone on a fork of that session's conversation, which cmod writes as a new
+transcript: the whole conversation, or with --at its first message through the
+message with that id, and nothing after it. --agent and --model pick the agent
+definition and model of a fresh session, and --cwd the folder it works in. It
+prints the task, as one line of JSON with --json, and the cmod plugin of the new
+session tells the starting session once it answered.`
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -26,6 +31,7 @@ export async function run(argv: string[]): Promise<number> {
     options: {
       title: { type: 'string' },
       clone: { type: 'boolean', default: false },
+      at: { type: 'string' },
       agent: { type: 'string' },
       model: { type: 'string' },
       cwd: { type: 'string' },
@@ -37,6 +43,7 @@ export async function run(argv: string[]): Promise<number> {
   const title = values.title?.trim() ?? ''
   if (title === '') throw new Error('cmod task start takes --title <title>, the title the task shows.')
   if (values.clone && (values.agent !== undefined || values.model !== undefined)) throw new Error('cmod task start --clone takes no --agent or --model, because a clone runs as the session it copies.')
+  if (values.at !== undefined && !values.clone) throw new Error('cmod task start --at takes --clone, because it names the last message of the fork.')
   const session = process.env['CLAUDE_CODE_SESSION_ID']
   if (session === undefined || session === '') throw new Error('cmod task start runs inside Claude Code, which names the session the task belongs to in CLAUDE_CODE_SESSION_ID.')
   const task = {
@@ -49,12 +56,54 @@ export async function run(argv: string[]): Promise<number> {
     isBackground: true as const,
   }
   const settings = JSON.stringify({ env: { CMOD_TASK: JSON.stringify({ session, ...task }) } })
+  const cwd = resolve(values.cwd ?? process.cwd())
+  const fork = values.clone ? await writeFork(session, cwd, values.at, title) : undefined
   const id = await startBackground(
-    [...(values.clone ? ['--resume', session, '--fork-session'] : []), ...(values.agent === undefined ? [] : ['--agent', values.agent]), ...(values.model === undefined ? [] : ['--model', values.model]), '--settings', settings, '--', prompt],
-    resolve(values.cwd ?? process.cwd()),
+    [...(fork === undefined ? [] : ['--resume', fork]), ...(values.agent === undefined ? [] : ['--agent', values.agent]), ...(values.model === undefined ? [] : ['--model', values.model]), '--settings', settings, '--', prompt],
+    cwd,
   )
   const started: TaskData = { id, ...task }
   await writeAtomically(join(dataFolder(storeFolder(process.env), 'cmod'), 'tasks', session, `${id}.json`), JSON.stringify(started))
   process.stdout.write(values.json ? `${JSON.stringify(started)}\n` : `${id}  ${title}\n`)
   return 0
+}
+
+type Row = Readonly<Record<string, unknown>> & { readonly type?: unknown; readonly uuid?: unknown; readonly parentUuid?: unknown; readonly isSidechain?: unknown }
+
+const messageTypes = new Set(['user', 'assistant', 'attachment', 'system', 'progress'])
+
+const carriedTypes = new Set(['content-replacement', 'memory-mode', 'relocated'])
+
+async function writeFork(source: string, project: string, at: string | undefined, title: string): Promise<string> {
+  const [main] = sessionTranscripts(source, project)
+  if (main === undefined) throw new Error(`session ${source} has no transcript yet, so it has nothing to fork.`)
+  const rows = (await readFile(main.path, 'utf8')).split('\n').flatMap((line): Row[] => {
+    try {
+      const row = JSON.parse(line) as unknown
+      return typeof row === 'object' && row !== null && !Array.isArray(row) ? [row as Row] : []
+    } catch (error) {
+      if (error instanceof SyntaxError) return []
+      throw error
+    }
+  })
+  const messages = new Map(rows.flatMap((row) => (typeof row.uuid === 'string' && messageTypes.has(String(row.type)) && row.isSidechain !== true ? [[row.uuid, row] as const] : [])))
+  const last = at ?? rows.findLast((row) => (row.type === 'user' || row.type === 'assistant') && typeof row.uuid === 'string' && messages.has(row.uuid))?.uuid
+  if (typeof last !== 'string' || !messages.has(last)) throw new Error(at === undefined ? `session ${source} holds no message to fork.` : `session ${source} holds no message ${at} to fork from. Its read lists each message's id.`)
+  const chain: Row[] = []
+  for (let uuid: unknown = last; typeof uuid === 'string' && !chain.some((row) => row.uuid === uuid); uuid = messages.get(uuid)?.parentUuid) {
+    const row = messages.get(uuid)
+    if (row === undefined) break
+    chain.unshift(row)
+  }
+  const fork = randomUUID()
+  let parentUuid: unknown = null
+  const lines: unknown[] = []
+  for (const row of chain) {
+    lines.push({ ...row, sessionId: fork, parentUuid, isSidechain: false, forkedFrom: { sessionId: source, messageUuid: row.uuid } })
+    if (row.type !== 'progress') parentUuid = row.uuid
+  }
+  for (const row of rows) if (carriedTypes.has(String(row.type)) && row['sessionId'] === source) lines.push({ ...row, sessionId: fork })
+  lines.push({ type: 'custom-title', customTitle: title, sessionId: fork })
+  await writeFile(join(main.folder, `${fork}.jsonl`), lines.map((line) => `${JSON.stringify(line)}\n`).join(''), { flag: 'wx' })
+  return fork
 }

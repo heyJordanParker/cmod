@@ -10,7 +10,7 @@ import { TurnEnd, TurnStart, type Turn } from '../session/context/turn/turn.js'
 import { forkAgentType, searchLimit, type ContextData, type GoalData, type SessionChange, type SessionData, type TaskData, type TurnData } from '../session/conversation.js'
 import { GoalChange, type Goal } from '../session/goal/goal.js'
 import { TaskEnd, TaskStart, type Task } from '../session/goal/task.js'
-import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
+import { beforeEvents, processEvents, Session, sessionEvents, type BeforeEvent, type ForkArgs, type Placement, type BeforeMethods, type Surface, type OnMethods, type ProcessBeforeMethods, type ProcessName, type ProcessOnMethods, type RecordPart, type SearchOptions, type SessionEvent, type SessionScope, type SessionSend, type Sessions, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage } from '../session/session.js'
 import { matches, sentMatcher, type Matcher, type SentMatcher } from '../utils/matcher.js'
 import { beforeAnswerKeys, foldAnswers, foldBefore, methodOf, takenAnswer, type Answers, type Place } from './before.js'
 import type { Claude } from './claude.js'
@@ -20,12 +20,13 @@ import { listenerOf, PassedTimeout, withinTime, type ListenOptions, type ListenT
 import { callFiles, type HomeFolders, type HookFields } from './hooks.js'
 import type { PermissionRoutes } from './permission-check.js'
 
-export type Listened = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined; readonly onFailure?: 'refuse'; readonly scope?: Scope }
+export type Listened = { readonly event: SessionEvent; readonly matcher: SentMatcher | undefined; readonly onFailure?: 'refuse'; readonly scope?: Scope; readonly timeoutMs?: number }
 
 export const everySession = '*'
 
 export const conversationMethods = {
   sessions: 'cmod:sessions',
+  session: 'cmod:session',
   search: 'cmod:search',
   messages: 'cmod:messages',
   turns: 'cmod:turns',
@@ -50,7 +51,7 @@ export function pickedColor(args: string): string | undefined {
   return resetColors.includes(picked) ? undefined : picked
 }
 
-const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort'] as const
+const acts = ['send', 'startTask', 'fork', 'clone', 'startBackgroundTask', 'callTool', 'usage', 'surfaces', 'abort', 'end', 'visit', 'delete'] as const
 
 export type Act = (typeof acts)[number]
 
@@ -160,7 +161,7 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     void Promise.resolve().then(async () => {
       queued.delete(key)
       const heard = (from: Map<string, Set<Listening>>): Listened[] =>
-        [...(from.get(key) ?? [])].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), ...(options.onFailure === 'refuse' ? { onFailure: 'refuse' as const, scope } : {}) }))
+        [...(from.get(key) ?? [])].map(({ event, matcher, options, scope }) => ({ event, matcher: matcher === undefined ? undefined : sentMatcher(matcher), scope, ...(options.onFailure === 'refuse' ? { onFailure: 'refuse' as const } : {}), ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) }))
       const tracksTasks = [...(listening.get(key) ?? []), ...(deciding.get(key) ?? [])].some(({ scope }) => scope.task !== undefined || scope.isGoal === true)
       const subscriptions = [...heard(listening), ...(tracksTasks ? [{ event: TaskStart }] : [])]
       await call(conversationMethods.subscribe, { session: key, subscriptions }).catch((error: unknown) => report(`sessions:${key}`, `Hears nothing from ${key === everySession ? 'the other sessions' : `session ${key}`}`, error))
@@ -419,6 +420,9 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
       get forkedFrom() {
         return read().forkedFrom
       },
+      get visitedAt() {
+        return read().visitedAt
+      },
       search: (text: string, matcher?: Matcher<Message>) => recordPart(scope()).search(text, matcher),
       ...eventMethods(scope, true),
       goal: goalOf(where),
@@ -442,13 +446,21 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
         if (isHere() && message.as !== Session) return sendHere(message)
         await act(id(), 'send', message, owned)
       },
+      async end() {
+        await act(id(), 'end', null, owned)
+      },
+      async visit(at?: string) {
+        await act(id(), 'visit', at ?? new Date().toISOString(), owned)
+      },
     }
     if (isOwner) return session as unknown as Sessions['current']
     const started = async (starting: Promise<TaskData>): Promise<Task> => taskOf(id(), await starting.catch((error: unknown) => Promise.reject(new Error(`${name}: ${messageOf(error)}`))))
     return Object.assign(session, {
-      startTask: (task: TaskStartArgs): Promise<Task> => started(task.isBackground === true ? act<TaskData>(id(), 'startBackgroundTask', task) : isHere() ? spawnTask(claude, task) : act<TaskData>(id(), 'startTask', task)),
-      fork: (task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task> => started(isHere() ? spawnTask(claude, task, current.id) : act<TaskData>(id(), 'fork', task)),
-      clone: (task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task> => started(act<TaskData>(id(), 'clone', task)),
+      startTask: (task: TaskStartArgs): Promise<Task> => started(task.isBackground === true || task.machine !== undefined ? act<TaskData>(id(), 'startBackgroundTask', task) : isHere() ? spawnTask(claude, task) : act<TaskData>(id(), 'startTask', task)),
+      fork: (task: ForkArgs): Promise<Task> => started(isHere() && task.isBackground !== true && task.at === undefined ? spawnTask(claude, task, current.id) : act<TaskData>(id(), 'fork', task)),
+      delete: async () => {
+        await act(id(), 'delete', null)
+      },
       callTool: async (toolCall: ToolCallArgs): Promise<ToolResult> => (await withFiles(await act<ToolResult>(id(), 'callTool', toolCall))) as ToolResult,
     }) as unknown as Sessions['current']
   }
@@ -607,20 +619,22 @@ export function createSessionsClient({ name, claude, report, hookOn, routeOn, pe
     return asked.map((entry) => refusalOf(entry.options, beforeAnswerKeys[event], error)).find((answer) => answer !== undefined)
   }
 
+  const listed = (data: SessionData) => {
+    if (data.id !== current.id) {
+      known.set(data.id, data)
+      return sessionOf(() => known.get(data.id) ?? data)
+    }
+    if (current.title === '') current = { ...current, title: data.title }
+    return currentSession
+  }
+
   return {
     sessions: {
       get current() {
         return currentSession
       },
-      list: async (scope: SessionScope = {}) =>
-        (await call<SessionData[]>(conversationMethods.sessions, scope)).map((data) => {
-          if (data.id !== current.id) {
-            known.set(data.id, data)
-            return sessionOf(() => known.get(data.id) ?? data)
-          }
-          if (current.title === '') current = { ...current, title: data.title }
-          return currentSession
-        }),
+      list: async (scope: SessionScope = {}) => (await call<SessionData[]>(conversationMethods.sessions, scope)).map(listed),
+      get: async (id: string) => (id === current.id ? currentSession : listed(await call<SessionData>(conversationMethods.session, { session: id }))),
       search: (text, matcher, options = {}) => searched({ text, ...searchOptionsOf(options) }, matcher),
       ...every,
     },

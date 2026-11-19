@@ -21,6 +21,7 @@ export type Engine = {
   readonly onRedraw: (listener: () => void) => Subscription
   readonly widgets?: Widgets
   readonly pages?: Pages
+  readonly onServeUnreached: (listener: () => void) => void
 }
 
 const engines = new WeakMap<object, Engine>()

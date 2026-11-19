@@ -22,6 +22,7 @@ export type SessionData = {
   readonly forkedFrom?: string
   readonly isRunning: boolean
   readonly agentType?: string
+  readonly visitedAt?: string
 }
 
 export type ContextData = Pick<Context, 'number' | 'openedAt' | 'closedAt' | 'task'>
@@ -30,7 +31,7 @@ export type TurnData = Pick<Turn, 'prompt' | 'context' | 'openedAt' | 'closedAt'
 
 export type TurnEnding = Pick<Turn, 'answer' | 'reason' | 'failure'>
 
-export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt' | 'status' | 'name' | 'spawnedBy' | 'isBackground'> & { readonly agentType?: string; readonly model?: string; readonly parent?: string; readonly forkedFrom?: string }
+export type TaskData = Pick<Task, 'id' | 'title' | 'openedBy' | 'openedAt' | 'closedAt' | 'status' | 'name' | 'spawnedBy' | 'isBackground'> & { readonly agentType?: string; readonly model?: string; readonly parent?: string; readonly machine?: string; readonly forkedFrom?: string }
 
 export const forkAgentType = 'fork'
 

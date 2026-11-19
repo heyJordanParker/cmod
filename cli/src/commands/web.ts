@@ -1,9 +1,8 @@
-import { browserCommand, parsePreferences, parseTailnetRecord, parseWebUi, preferencesPath, storeFolder, tailnetPath, webPath } from '@cmodjs/core/src/records.js'
+import { browserCommand, parseTailnetRecord, parseWebUi, storeFolder, tailnetPath, webPath } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
-import { readJson, writeAtomically } from '../files.js'
+import { readJson } from '../files.js'
 import { capture } from '../process.js'
-import { isNewerCmodInstalled } from '../store.js'
-import { serveWeb } from '../web.js'
+import { serve } from './serve.js'
 
 export const summary = 'Run your Claude Code sessions from one page in your browser.'
 
@@ -22,20 +21,9 @@ web prints that address, https://<computer>.<tailnet>.ts.net:<port>/, which
 opens from each of your machines. It answers only you there, by the Tailscale
 login of the request, and Settings, under cmod, Preferences, turns it off.
 
-cmod web serve runs the browser app on 127.0.0.1. It lists every Claude Code
-session that runs on this computer, in every project, from Claude Code's own
-records and transcripts: the ones that need you, the ones that replied, the
-ones working, and the idle ones. A session opens its conversation with a
-prompt box under it, which sends the prompt as yours, and the Sidebar pages
-its cmod plugin draws. The cmod plugin of each session runs it through cmod
-program, so one copy serves every session, while the preference is on. It
-keeps web.json in the cmod store with the port it listens on, listens on that
-port again while it is free, and prints 127.0.0.1:<port> once it listens. It
-keeps which replies you read in web-read.json beside it. It exits once the
-preference is off or a newer cmod is installed in the cmod store, and a copy
-started while the preference is off waits until it is on.`
-
-const checkMs = 5000
+cmod web serve runs cmod serve, the server of this computer's sessions that
+serves the browser app, for a session whose cmod plugin is older. cmod serve
+--help describes it.`
 
 const answerMs = 2000
 
@@ -43,29 +31,6 @@ export async function run(argv: string[]): Promise<number> {
   const [mode, ...rest] = argv
   if (rest.length > 0 || (mode !== undefined && mode !== 'serve')) throw new Error(`cmod web takes no arguments, or serve.\n\n${help}`)
   return mode === 'serve' ? serve() : open()
-}
-
-async function isOn(store: string): Promise<boolean> {
-  return parsePreferences(await readJson(preferencesPath(store)), preferencesPath(store)).servesWebUi
-}
-
-async function serve(): Promise<number> {
-  const store = storeFolder(process.env)
-  while (!(await isOn(store))) {
-    if (await isNewerCmodInstalled()) return 0
-    await Bun.sleep(checkMs)
-  }
-  const path = webPath(store)
-  const server = serveWeb({ port: parseWebUi(await readJson(path), path)?.port ?? 0 })
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => void server.stop().finally(() => process.exit(0)))
-  try {
-    await writeAtomically(path, `${JSON.stringify({ port: server.port }, null, 2)}\n`)
-    process.stdout.write(`127.0.0.1:${server.port}\n`)
-    while ((await isOn(store)) && !(await isNewerCmodInstalled())) await Bun.sleep(checkMs)
-    return 0
-  } finally {
-    await server.stop()
-  }
 }
 
 async function open(): Promise<number> {

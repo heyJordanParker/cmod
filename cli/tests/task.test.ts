@@ -42,14 +42,56 @@ test('cmod task start runs claude --bg with the starting session in --settings e
   expect(await lines(home, 'bg-place')).toEqual([join(home, 'work'), 'unset'])
 })
 
-test('cmod task start --clone resumes the starting session as a fork in the background, and its task names the session it copies', async () => {
-  const home = await backgroundHome()
+const row = (uuid: string, parentUuid: string | null, type: string, text: string) => ({ uuid, parentUuid, type, sessionId: 'starter', isSidechain: false, timestamp: '2026-11-19T10:00:00.000Z', message: { role: type, content: text } })
 
-  const started = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Try SQL', '--clone', '--json', 'Rebuild this on SQL.')
-  const args = await lines(home, 'bg-args')
+const starterTranscript = [
+  row('m1', null, 'user', 'Build the parser.'),
+  row('m2', 'm1', 'assistant', 'Built it on regexes.'),
+  { ...row('s1', 'm2', 'user', 'a subagent prompt'), isSidechain: true },
+  row('m3', 'm2', 'user', 'Now add tests.'),
+  row('m4', 'm3', 'assistant', 'Added them.'),
+  { type: 'content-replacement', sessionId: 'starter', replacements: [{ toolUseId: 't1' }] },
+]
+  .map((line) => `${JSON.stringify(line)}\n`)
+  .join('')
+
+async function forkedHome(): Promise<string> {
+  const home = await backgroundHome()
+  await writeFiles(home, { '.claude/projects/-work/starter.jsonl': starterTranscript })
+  return home
+}
+
+async function forkOf(home: string, args: readonly string[]) {
+  const started = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Try SQL', '--clone', ...args, '--json', 'Rebuild this on SQL.')
+  const ran = (await lines(home, 'bg-args')).filter((arg) => !arg.startsWith('{'))
+  const fork = ran[2] ?? ''
+  const transcript = (await readFile(join(home, '.claude/projects/-work', `${fork}.jsonl`), 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+  return { started, args: ran, fork, transcript }
+}
+
+test('cmod task start --clone writes a fork of the whole conversation of the starting session and resumes it in the background, and its task names the session it copies', async () => {
+  const { started, args, fork, transcript } = await forkOf(await forkedHome(), [])
 
   expect(JSON.parse(started.stdout)).toEqual({ id: sessionId, title: 'Try SQL', forkedFrom: 'starter', openedBy: '', openedAt: expect.any(String), isBackground: true })
-  expect(args.filter((arg) => !arg.startsWith('{'))).toEqual(['--bg', '--resume', 'starter', '--fork-session', '--settings', '--', 'Rebuild this on SQL.'])
+  expect(args).toEqual(['--bg', '--resume', fork, '--settings', '--', 'Rebuild this on SQL.'])
+  expect(transcript.map((line) => [line['uuid'] ?? line['type'], line['parentUuid'], line['sessionId']])).toEqual([
+    ['m1', null, fork],
+    ['m2', 'm1', fork],
+    ['m3', 'm2', fork],
+    ['m4', 'm3', fork],
+    ['content-replacement', undefined, fork],
+    ['custom-title', undefined, fork],
+  ])
+  expect(transcript[0]?.['forkedFrom']).toEqual({ sessionId: 'starter', messageUuid: 'm1' })
+})
+
+test('cmod task start --clone --at forks the conversation from its first message through that message, and nothing after it', async () => {
+  const home = await forkedHome()
+  const { transcript } = await forkOf(home, ['--at', 'm2'])
+  const missing = await cmodWith(home, { CLAUDE_CODE_SESSION_ID: 'starter' }, 'task', 'start', '--title', 'Try SQL', '--clone', '--at', 'gone', 'Rebuild this on SQL.')
+
+  expect(transcript.flatMap((line) => (typeof line['uuid'] === 'string' ? [line['uuid']] : []))).toEqual(['m1', 'm2'])
+  expect([missing.exitCode, missing.stderr]).toEqual([1, 'cmod task: session starter holds no message gone to fork from. Its read lists each message\'s id.\n'])
 })
 
 test("the starting session's tasks list a background task, with the status claude agents gives it", async () => {

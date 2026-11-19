@@ -1,5 +1,6 @@
 import type { Job } from '../mod.js'
-import { instancePath, storeFolder } from '../records.js'
+import { instancePath, interfaceName, processTypes, storeFolder, type ProcessType } from '../records.js'
+import type { InterfaceName } from '../runtime/interfaces.js'
 import { engineOf } from '../runtime/engine.js'
 import { isHeld } from '../runtime/programs.js'
 import { ifMissing } from '../utils/paths.js'
@@ -21,8 +22,16 @@ const staleMs = 15_000
 
 const retryWithinMs = 1000
 
-export function program(options: { readonly command: readonly string[]; readonly environment?: Record<string, string>; readonly singleInstance?: boolean; readonly isService?: boolean; readonly isWebApp?: boolean }): Job<Program> {
-  const { command, environment, singleInstance = false, isService = false, isWebApp = false } = options
+export function program(options: {
+  readonly command: readonly string[]
+  readonly environment?: Record<string, string>
+  readonly singleInstance?: boolean
+  readonly isService?: boolean
+  readonly isWebApp?: boolean
+  readonly provides?: readonly InterfaceName[]
+  readonly processType?: ProcessType
+}): Job<Program> {
+  const { command, environment, singleInstance = false, isService = false, isWebApp = false, provides = [], processType } = options
   return ({ mod, announce, reserveName }) => {
     const { claude, report, spawnCmod, isInstalledCopy, watches } = engineOf(mod)
     const [executable] = command
@@ -31,7 +40,13 @@ export function program(options: { readonly command: readonly string[]; readonly
     else if (singleInstance) reserveName('program', basename(executable), `${mod.name}: the single instance of ${executable} is already added. Give each singleInstance program its own executable.`)
     const isElected = singleInstance || isService
     if (isWebApp && !isElected) throw new Error(`${mod.name}: the web app ${executable} runs a copy per session, and your tailnet reaches one copy per computer. Add singleInstance: true or isService: true.`)
-    const webApp = isWebApp ? ['--web-app'] : []
+    if (provides.length > 0 && !isElected) throw new Error(`${mod.name}: ${executable} provides ${provides.join(' and ')}, and every caller finds a provider through its one copy on the computer. Add singleInstance: true or isService: true.`)
+    const unnamed = provides.find((name) => !interfaceName.test(name))
+    if (unnamed !== undefined) throw new Error(`${mod.name}: ${executable} provides ${unnamed}, which is no interface name. Name an interface <mod>/<Name>, such as anyhost/Platform.`)
+    if (processType !== undefined && !(processTypes as readonly string[]).includes(processType)) throw new Error(`${mod.name}: ${executable}'s processType is ${String(processType)}. Give ${processTypes.join(' or ')}.`)
+    if (processType !== undefined && !isService) throw new Error(`${mod.name}: ${executable}'s processType names the launchd class of a service. Add isService: true.`)
+    const holderFlags = [...(isWebApp ? ['--web-app'] : []), ...provides.flatMap((name) => ['--provides', name])]
+    const serviceClass = processType === undefined ? [] : ['--process-type', processType]
     const request = { argv: command, ...(environment === undefined ? {} : { env: environment }) }
     let state: Program['state'] = 'stopped'
     let address: Address | undefined
@@ -44,8 +59,8 @@ export function program(options: { readonly command: readonly string[]; readonly
     let leaseCheck: Promise<void> | undefined
 
     const spawn = (isOwnService: boolean) => {
-      if (isOwnService) return spawnCmod(['program', mod.name, ...webApp, '--service', ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
-      return isElected ? spawnCmod(['program', mod.name, ...webApp, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
+      if (isOwnService) return spawnCmod(['program', mod.name, ...holderFlags, '--service', ...serviceClass, ...Object.keys(environment ?? {}).flatMap((name) => ['--env', name]), '--', ...command], environment)
+      return isElected ? spawnCmod(['program', mod.name, ...holderFlags, '--no-wait', '--', ...command], environment) : claude.process.spawn(request)
     }
 
     const instanceFile = () =>

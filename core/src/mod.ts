@@ -1,6 +1,7 @@
 import type {
   AskOptions,
   CmodDependencies,
+  CmodInterfaces,
   ConfigRow as ClaudeConfigRow,
   FsStatOptions,
   HookStream,
@@ -114,6 +115,30 @@ export type CommandInfo = { readonly name: string; readonly description: string;
 
 export type CommandRunResult = { readonly text?: string; readonly note?: string }
 
+export type InterfaceName = Extract<keyof CmodInterfaces, string>
+
+type MethodsOf<Name extends InterfaceName> = CmodInterfaces[Name] extends { readonly methods: infer Methods } ? Methods : Record<never, never>
+
+type EventsOf<Name extends InterfaceName> = CmodInterfaces[Name] extends { readonly events: infer Events } ? Events : Record<never, never>
+
+export type ProviderListenOptions = { readonly timeoutMs?: number; readonly onFailure?: 'pass' | 'refuse' }
+
+export type ProviderOn<Payload> = {
+  (listener: (payload: Payload, signal: AbortSignal) => unknown, options?: ProviderListenOptions): Subscription
+  (matcher: Matcher<Payload>, listener: (payload: Payload, signal: AbortSignal) => unknown, options?: ProviderListenOptions): Subscription
+}
+
+export type ProviderBefore<Payload> = {
+  (listener: (payload: Payload, signal: AbortSignal) => unknown, options?: ProviderListenOptions): Subscription
+  (matcher: Matcher<Payload>, listener: (payload: Payload, signal: AbortSignal) => unknown, options?: ProviderListenOptions): Subscription
+}
+
+export type InterfaceMethods<Name extends InterfaceName> = { readonly [Method in keyof MethodsOf<Name>]: MethodsOf<Name>[Method] extends (...args: infer Args) => infer Result ? (...args: Args) => Result | Promise<Awaited<Result>> : never }
+
+export type InterfaceProvider<Name extends InterfaceName> = { readonly mod: string; readonly program?: string } & {
+  readonly [Method in keyof MethodsOf<Name>]: MethodsOf<Name>[Method] extends (...args: infer Args) => infer Result ? (...args: Args) => Promise<Awaited<Result>> : never
+} & { readonly [Event in keyof EventsOf<Name> & string as `on${Event}`]: ProviderOn<EventsOf<Name>[Event]> } & { readonly [Event in keyof EventsOf<Name> & string as `before${Event}`]: ProviderBefore<EventsOf<Name>[Event]> }
+
 export type Imports = {
   readonly sessions: Sessions
   readonly commands: {
@@ -152,6 +177,7 @@ export type Imports = {
   readonly device: { read(): Promise<Device> }
   readonly clipboard: { write(text: string): Promise<void> }
   readonly mods: { isLoaded(name: string): Promise<boolean> }
+  providers<Name extends InterfaceName>(name: Name): Promise<InterfaceProvider<Name>[]>
 }
 
 export const sessions: Imports['sessions'] = {
@@ -159,6 +185,7 @@ export const sessions: Imports['sessions'] = {
     return bound().sessions.current
   },
   list: (options) => bound().sessions.list(options),
+  get: (id) => bound().sessions.get(id),
   search: (text, matcher, options) => bound().sessions.search(text, matcher, options),
   ...(Object.fromEntries(Object.keys(sessionEvents).map((named) => [`on${named}`, (...args: unknown[]) => (bound().sessions[`on${named}` as keyof OnMethods] as (...each: unknown[]) => Subscription)(...args)])) as OnMethods),
 }
@@ -221,6 +248,8 @@ export const mods: Imports['mods'] = {
   isLoaded: (name) => bound().mods.isLoaded(name),
 }
 
+export const providers: Imports['providers'] = (name) => bound().providers(name)
+
 export type Mod<State extends object = Record<never, never>, Declared extends Options = Options, Keys extends Hotkeys = Hotkeys> = {
   readonly name: string
   readonly folder: string
@@ -248,6 +277,7 @@ export type Mod<State extends object = Record<never, never>, Declared extends Op
   readonly toast: Toast
   ask(question: string, options?: readonly string[] | AskOptions): Promise<string>
   readonly dependencies: CmodDependencies
+  provide<Name extends InterfaceName>(name: Name, methods: InterfaceMethods<Name>): Subscription
 }
 
 export const Mod = modSender
@@ -304,7 +334,7 @@ export { AbovePrompt, BelowPrompt, Dashboard, TurnEnd, Working, type Area, type 
 export type { Step } from './installer.js'
 export type { SlashCommand } from './jobs/slash-command.js'
 export type { Tool } from './jobs/tool.js'
-export { Session, type AnswerOptions, type BeforeMethods, type Surface, type Listener, type ListenerTime, type OnMethods, type ReadOptions, type RecordPart, type Refusal, type SearchOptions, type SessionScope, type SessionSend, type Sessions, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type Notification, type Elicitation, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionRequest, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage, type RateLimit, type CommandRun, type CommandRunAnswer } from './session/session.js'
+export { Session, type AnswerOptions, type BeforeMethods, type Surface, type Listener, type ListenerTime, type OnMethods, type ReadOptions, type RecordPart, type Refusal, type SearchOptions, type SessionScope, type SessionSend, type Sessions, type ForkArgs, type CurrentSession, type Placement, type ProjectSetup, type SessionStartAsked, type SessionStarted, type SessionEnded, type ModelChange, type CwdChange, type DirectoryAdd, type Worktree, type Notification, type Elicitation, type ElicitationResponse, type McpServer, type PermissionUpdate, type PermissionCheck, type PermissionRequest, type PermissionDenial, type BatchedCall, type ToolBatch, type Todo, type ReplyDisplay, type TaskOwner, type TaskStartArgs, type ToolCallArgs, type Usage, type RateLimit, type CommandRun, type CommandRunAnswer } from './session/session.js'
 export type { Context } from './session/context/context.js'
 export type { Turn } from './session/context/turn/turn.js'
 export type { Device } from './session/context/turn/device.js'

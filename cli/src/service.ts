@@ -1,6 +1,6 @@
 import { readdir, rm, rmdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { isObject, serviceFolder, serviceLogPath, servicePath, storeFolder } from '@cmodjs/core/src/records.js'
+import { isObject, serviceFolder, serviceLogPath, servicePath, storeFolder, type ProcessType } from '@cmodjs/core/src/records.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { claudeCodeLauncher } from './claude.js'
 import { home, ifMissing, readJson, readText, tilde, writeAtomically } from './files.js'
@@ -11,7 +11,7 @@ type Service = { readonly label: string; readonly unit: string }
 
 type Manager = {
   unit(label: string): string
-  text(mod: string, executable: string, label: string, argv: readonly string[], environment: Readonly<Record<string, string>>, log: string): string
+  text(mod: string, executable: string, label: string, argv: readonly string[], environment: Readonly<Record<string, string>>, log: string, processType: ProcessType | undefined): string
   start(label: string, unit: string, isChanged: boolean): Promise<void>
   remove(label: string, unit: string): Promise<void>
   hasTaken(label: string): Promise<boolean>
@@ -22,7 +22,7 @@ const passedVariables = ['XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR']
 
 const systemFolders = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
 
-export async function startService(mod: string, command: readonly string[], variables: readonly string[], flags: readonly string[]): Promise<{ readonly label: string; readonly status: string } | undefined> {
+export async function startService(mod: string, command: readonly string[], variables: readonly string[], flags: readonly string[], processType?: ProcessType): Promise<{ readonly label: string; readonly status: string } | undefined> {
   const executable = basename(command[0] ?? '')
   const label = `com.claudemodmanager.${mod}.${executable}`
   const unit = manager.unit(label)
@@ -31,7 +31,7 @@ export async function startService(mod: string, command: readonly string[], vari
   const passed = Object.fromEntries([...passedVariables, ...variables].flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])))
   const launcher = claudeCodeLauncher()
   const environment = { HOME: home(), PATH: [programsFolder(), ...systemFolders].join(':'), ...(launcher === undefined ? {} : { CLAUDE_CODE_EXECPATH: launcher }), ...passed }
-  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, ...flags, '--', ...command], environment, log)
+  const text = manager.text(mod, executable, label, [join(programsFolder(), 'cmod'), 'program', mod, ...flags, '--', ...command], environment, log, processType)
   try {
     await writeAtomically(record, `${JSON.stringify({ label, unit } satisfies Service)}\n`)
     const isChanged = (await readText(unit)) !== text
@@ -110,7 +110,7 @@ const xml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt
 
 const launchd: Manager = {
   unit: (label) => join(home(), 'Library', 'LaunchAgents', `${label}.plist`),
-  text: (_mod, _executable, label, argv, environment, log) =>
+  text: (_mod, _executable, label, argv, environment, log, processType) =>
     [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -132,6 +132,7 @@ const launchd: Manager = {
       '  <true/>',
       '  <key>KeepAlive</key>',
       '  <true/>',
+      ...(processType === undefined ? [] : ['  <key>ProcessType</key>', `  <string>${processType}</string>`]),
       '</dict>',
       '</plist>',
       '',

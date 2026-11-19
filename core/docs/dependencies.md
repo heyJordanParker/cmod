@@ -94,6 +94,61 @@ isLoaded(name: string): Promise<boolean>
 - Claude Code lays a provider's types file beside your mod's only for a listed dependency, so type the methods you call in your own `types/index.d.ts`, with the shape the provider's types file exports, such as `interface CmodDependencies { provider: Provider }`.
 - A mod that calls `mods.isLoaded` runs on cmod 5.4.0 or later, which the `cmod` range `cmod check` writes says.
 
+## Interfaces: several mods answer one name
+
+A dependency is one mod your mod calls by name. An interface is a name several mods answer, and the caller picks among the ones that run, as a terminal app, a remote machine, or a Markdown styler can each come from any mod. An interface is named `<mod>/<Name>`, after the mod that defines it, such as `anyhost/Platform`, and cmod defines four:
+
+- `cmod/SessionStore` lists and reads sessions, and `cmod serve` answers it for this computer
+- `cmod/Session` acts on a session and holds the listeners on it
+- `cmod/Terminal` reads a session's screen, types keys into it, and shows it in a pane
+- `cmod/Style` draws Markdown in a mod's own style
+
+The mod that defines an interface types it in its types file, on `CmodInterfaces`, with its methods and the events it tells:
+
+```ts
+declare module 'claude-code' {
+  interface CmodInterfaces {
+    'anyhost/Platform': {
+      methods: { machines(region: string): string[] }
+      events: { MachineChange: { readonly name: string } }
+    }
+  }
+}
+```
+
+A mod provides an interface from its session code with `mod.provide`, which answers the methods while the mod runs in that session, or from a `program` job with `provides` ([jobs.md](jobs.md#program)), which answers them for the whole computer and also tells events:
+
+```ts
+mod.provide('anyhost/Platform', { machines: async (region) => listMachines(region) })
+mod.use(program({ command: ['anyhost', 'serve'], isService: true, provides: ['cmod/SessionStore', 'cmod/Session', 'cmod/Terminal'] }))
+```
+
+A caller asks `providers`, imported from `mod.js`, for the providers that run now, and calls each one's methods, typed from the interface:
+
+```ts
+providers<Name extends InterfaceName>(name: Name): Promise<InterfaceProvider<Name>[]>
+```
+
+```ts
+for (const platform of await providers('anyhost/Platform')) {
+  mod.log(`${platform.mod}: ${(await platform.machines('eu')).join(', ')}`)
+  platform.onMachineChange((machine) => mod.log(`${machine.name} changed`))
+}
+```
+
+- Each provider names its `mod`, and its `program` when a program provides it. The list holds every mod that provides the interface in this session and every program that provides it on this computer, in no set order.
+- Each method returns a promise of what the provider's method returns, and rejects with the provider's error. A method the provider lacks rejects with `This program answers no <interface>.<method>.`, or `<mod> provides no <interface>.<method>.` from session code.
+- Each event `E` has an `onE` and a `beforeE` method, as the session's listeners do ([session.md](session.md#listen-to-a-record)): an `onE` listener hears it, and a `beforeE` listener's answer reaches the program, which reads it as it defines. Both take a matcher, `timeoutMs`, and `onFailure`. Only a program tells events, so a listener on a provider in session code throws `<mod> tells <interface> events only from a program.`
+- A provider that stops running leaves the list at the next call of `providers`.
+
+A program serves its interfaces as JSON-RPC 2.0 over HTTP at the address it prints, which cmod reaches with one connection per session:
+
+- `POST /rpc/connect` opens a connection and answers `{ "connection": <id> }`.
+- `POST /rpc/<id>` takes a JSON-RPC message or batch from the caller and answers 204. A request names `<interface>.<method>`, such as `anyhost/Platform.machines`, with the method's arguments as its `params` array.
+- `GET /rpc/<id>` answers the messages the program has for the caller, as a list, within 8 seconds, empty when it has none: the answers to its requests, and its own requests and notifications.
+- `DELETE /rpc/<id>` closes the connection, and a connection that polls no more for 30 seconds closes too. A call on a closed connection answers 410, and the caller connects again.
+- `$/listen` with `{ id, interface, kind, event, args?, matcher?, after? }` adds a listener on the connection, and `$/unlisten` with `{ id }` removes it. The program tells an `on` listener with the notification `$/on` `{ id, payload, cursor }`, and asks a `before` listener with the request `$/before` `{ id, payload }`, whose result is its answer. A listener that names `after`, a cursor it last heard, hears the events since. `$/cancelRequest` with `{ id }` cancels a request.
+
 ## When a call fails
 
 A call that cannot answer rejects with one of these reasons:

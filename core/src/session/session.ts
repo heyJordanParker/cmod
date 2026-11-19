@@ -146,6 +146,7 @@ export type TaskStartArgs = {
   readonly name?: string
   readonly cwd?: string
   readonly isBackground?: boolean
+  readonly machine?: string
 }
 
 export type ToolCallArgs = {
@@ -165,6 +166,7 @@ export type Session = RecordPart & {
   readonly startedAt: string
   readonly lastAt: string
   readonly forkedFrom?: string
+  readonly visitedAt?: string
   readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>
@@ -173,14 +175,18 @@ export type Session = RecordPart & {
   messages(options?: { readonly after?: string; readonly last?: number }): Promise<Message[]>
   send(message: SessionSend): Promise<void>
   startTask(task: TaskStartArgs): Promise<Task>
-  fork(task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task>
-  clone(task: Pick<TaskStartArgs, 'prompt' | 'title'>): Promise<Task>
+  fork(task: ForkArgs): Promise<Task>
   callTool(call: ToolCallArgs): Promise<ToolResult>
   usage(): Promise<Usage>
   surfaces(): Promise<Surface[]>
+  end(): Promise<void>
+  visit(at?: string): Promise<void>
+  delete(): Promise<void>
 }
 
-export type TaskOwner = Omit<Session, 'startTask' | 'callTool' | 'fork' | 'clone'>
+export type ForkArgs = Pick<TaskStartArgs, 'prompt' | 'title' | 'isBackground'> & { readonly at?: string }
+
+export type TaskOwner = Omit<Session, 'startTask' | 'callTool' | 'fork' | 'delete'>
 
 type ProcessEvent = { readonly on: string; readonly before?: string }
 
@@ -354,5 +360,6 @@ export type SearchOptions = SessionScope & { readonly before?: Pick<Message, 'se
 export type Sessions = OnMethods & {
   readonly current: CurrentSession
   list(options?: SessionScope): Promise<Session[]>
+  get(id: string): Promise<Session>
   search(text: string, matcher?: Matcher<Message>, options?: SearchOptions): AsyncIterable<Message>
 }

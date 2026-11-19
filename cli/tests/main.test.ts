@@ -50,6 +50,8 @@ const runBySessions: Readonly<Record<string, readonly string[]>> = {
   program: [],
   secret: ['store', 'get', 'delete'],
   task: ['start'],
+  serve: [],
+  web: ['serve'],
   history: ['sessions', 'follow', 'state', 'usage', 'search', 'messages', 'turns', 'contexts', 'tasks', 'goal', 'index'],
 }
 

@@ -1,23 +1,29 @@
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, watch } from 'node:fs'
+import { readdir, readFile } from 'node:fs/promises'
+import type { Database } from 'bun:sqlite'
 import { basename } from 'node:path'
 import type { Server } from 'bun'
-import { isObject } from '@cmodjs/core/src/records.js'
+import { isObject, storeFolder } from '@cmodjs/core/src/records.js'
+import { cmodPluginName } from '@cmodjs/core/src/runtime/dependencies.js'
+import { readProviders, sessionInterface, sessionStore } from '@cmodjs/core/src/runtime/interfaces.js'
+import { addressCall, connectRpc, RpcError, rpcCodes, type RpcClient } from '@cmodjs/core/src/runtime/rpc.js'
 import { htmlOf, type ClosedPage, type ElementData, type HandlerData, type SessionAbout, type SessionEvents, type SessionWait, type WebAction, type WebDrawing, type WebInput, type WebView } from '@cmodjs/core/src/runtime/web.js'
 import { Message, type Message as SessionMessage } from '@cmodjs/core/src/session/context/turn/message/message.js'
 import { Prompt } from '@cmodjs/core/src/session/context/turn/message/prompt.js'
+import { Person } from '@cmodjs/core/src/session/context/turn/message/sender.js'
 import { Reply } from '@cmodjs/core/src/session/context/turn/message/reply.js'
 import { ToolCall } from '@cmodjs/core/src/session/context/turn/message/tool-call.js'
 import { ToolResult } from '@cmodjs/core/src/session/context/turn/message/tool-result.js'
 import { TurnEnd, TurnStart } from '@cmodjs/core/src/session/context/turn/turn.js'
-import type { SessionChange, SessionData } from '@cmodjs/core/src/session/conversation.js'
+import type { ConversationState, SessionChange, SessionData } from '@cmodjs/core/src/session/conversation.js'
 import { firstLine, messageOf } from '@cmodjs/core/src/utils/text.js'
-import { readJson, writeAtomically } from './files.js'
-import { followSessions, hasTranscript, listSessions, openHistory, readMessages, readState, readTurns, runningEntries, runningFolder, type RunningEntry } from './history.js'
-import { storePath } from './store.js'
+import { ifMissing } from './files.js'
+import { followSessions, hasTranscript, listSessions, readMessages, readState, readTurns, runningEntries, runningFolder, type RunningEntry } from './history.js'
+import type { SessionServer } from './serve.js'
 import { appScreen, conversationTab, groupOrder, listColumns, visibleRows, webPage, type AgentRow, type FeedItem, type Group, type PressInput, type Screen, type ScreenActions } from './web-page.js'
 
-const pollMs = 15_000
+const pollMs = 8000
 
 const idleSeconds = 30
 
@@ -70,6 +76,8 @@ type Agent = {
   readonly openCalls: Map<string, Call>
   messages: SessionMessage[]
   readonly stop: AbortController
+  readonly store?: RpcClient
+  readAt?: string
 }
 
 type PressHandler = (input: PressInput) => void
@@ -91,7 +99,12 @@ type Stream = {
   readonly handlers: Map<number, readonly PressHandler[]>
 }
 
-export type WebServer = { readonly port: number; stop(): Promise<void> }
+export type WebApp = {
+  sessionRoute(request: Request): Promise<Response> | undefined
+  listen(port: number): number
+  close(): Promise<void>
+  stop(): Promise<void>
+}
 
 class Refusal extends Error {
   readonly status: number
@@ -102,22 +115,24 @@ class Refusal extends Error {
   }
 }
 
-export function serveWeb({ port }: { readonly port: number }): WebServer {
-  const db = openHistory()
+export function webApp({ db, sessions }: { readonly db: Database; readonly sessions: SessionServer }): WebApp {
   const posted = new Map<string, Posted>()
   const agents = new Map<string, Agent>()
   const streams = new Map<string, Stream>()
   const encoder = new TextEncoder()
-  const marksPath = storePath('web-read.json')
-  let marks = new Map<string, string>()
+  let visits = new Map<string, string>()
   let summaryTimer: ReturnType<typeof setTimeout> | undefined
   let registryTimer: ReturnType<typeof setTimeout> | undefined
   const following = new AbortController()
+  const stores = new Map<string, RpcClient>()
+  let isReadingStores = false
 
   const report = (doing: string, error: unknown) => process.stderr.write(`cmod web serve: ${doing}: ${messageOf(error)}\n`)
 
-  const { CMOD_TAILNET_NAME: tailnetName = '', CMOD_TAILNET_LOGIN: tailnetLogin = '' } = process.env
-  const isOwnTailnet = (request: Request, host: string) => tailnetName !== '' && host.replace(/:\d+$/, '') === tailnetName && request.headers.get('tailscale-user-login') === tailnetLogin
+  const isOwnTailnet = (request: Request, host: string) => {
+    const { CMOD_TAILNET_NAME: tailnetName = '', CMOD_TAILNET_LOGIN: tailnetLogin = '' } = process.env
+    return tailnetName !== '' && host.replace(/:\d+$/, '') === tailnetName && request.headers.get('tailscale-user-login') === tailnetLogin
+  }
 
   const postedOf = (id: string): Posted => {
     const known = posted.get(id)
@@ -157,7 +172,8 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
     const { entry, summary } = agent
     const wait = waitOf(agent)
     const ended = lastTurnOf(agent)
-    const isUnread = ended !== undefined && marks.get(entry.session) !== ended.at
+    const visitedAt = visits.get(entry.session)
+    const isUnread = ended !== undefined && (visitedAt === undefined || visitedAt < ended.at)
     const reply = lastReply(agent)
     const replyLine = reply === undefined ? '' : firstLine(reply.text)
     const current = [...agent.openCalls.values()].at(-1)
@@ -228,13 +244,20 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
     return true
   }
 
-  let markWrites = Promise.resolve()
-  const writeMarks = () => {
-    const running = new Set(agents.keys())
-    marks = new Map([...marks].filter(([id]) => running.has(id)))
-    const text = `${JSON.stringify(Object.fromEntries(marks), null, 2)}\n`
-    markWrites = markWrites.then(() => writeAtomically(marksPath, text)).catch((error: unknown) => void report(`kept the read marks only in memory, because ${marksPath} could not be written`, error))
+  let visitWrites = Promise.resolve()
+  const visit = (session: string, at: string) => {
+    visits.set(session, at)
+    visitWrites = visitWrites.then(async () => void (await sessions.call(session, 'visit', at))).catch((error: unknown) => void report(`kept the visit of ${session} only in memory`, error))
   }
+
+  const actElsewhere = (stream: Stream, agent: Agent, action: 'send' | 'abort', input: object) =>
+    void agent.store?.request(`${sessionInterface}.${action}`, [agent.entry.session, input, { project: agent.entry.cwd }]).then(
+      () => readStoresSoon(),
+      (error: unknown) => {
+        stream.notice = `${action === 'send' ? 'The prompt did not reach' : 'Stop did not reach'} ${agent.entry.name ?? agent.entry.session}: ${messageOf(error)}`
+        redrawSoon(stream)
+      },
+    )
 
   const actionsOf = (stream: Stream): ScreenActions => {
     const at = () => (stream.cursor === undefined ? undefined : agents.get(stream.cursor))
@@ -262,19 +285,18 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
         const agent = agents.get(session)
         const last = agent === undefined ? undefined : lastTurnOf(agent)
         if (last?.reason !== 'answered') return
-        marks.set(session, last.at)
-        writeMarks()
+        visit(session, new Date().toISOString())
       },
       done() {
         const last = ended()
         if (stream.cursor === undefined || last === undefined) return
-        marks.set(stream.cursor, last.at)
-        writeMarks()
+        visit(stream.cursor, new Date().toISOString())
         move(1)
       },
       unread() {
-        if (stream.cursor === undefined || !marks.delete(stream.cursor)) return
-        writeMarks()
+        const last = ended()
+        if (stream.cursor === undefined || last === undefined) return
+        visit(stream.cursor, new Date(Date.parse(last.at) - 1).toISOString())
       },
       toggleIdle() {
         stream.isIdleOpen = !stream.isIdleOpen
@@ -294,6 +316,12 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
       prompt(text) {
         const agent = at()
         if (agent === undefined || text.trim() === '') return
+        if (agent.store !== undefined) {
+          actElsewhere(stream, agent, 'send', { type: Prompt, text, as: Person })
+          stream.sent += 1
+          stream.focus = 'prompt'
+          return
+        }
         if (!queue(agent.entry.session, { type: 'prompt', text })) {
           stream.notice = "This session's cmod plugin does not answer the browser app, so type the prompt in its terminal."
           return
@@ -303,6 +331,8 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
         stream.notice = undefined
       },
       stop() {
+        const agent = at()
+        if (agent?.store !== undefined) return actElsewhere(stream, agent, 'abort', {})
         if (stream.cursor !== undefined && !queue(stream.cursor, { type: 'stop' })) stream.notice = "This session's cmod plugin does not answer the browser app, so press Esc in its terminal."
       },
     }
@@ -486,14 +516,16 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
     const running = new Set(entries.map((entry) => entry.session))
     let isChanged = false
     for (const [id, agent] of agents) {
-      if (running.has(id)) continue
+      if (running.has(id) || agent.store !== undefined) continue
       agent.stop.abort()
       agents.delete(id)
       isChanged = true
     }
     for (const entry of entries) {
       const known = agents.get(entry.session)
-      if (known !== undefined) {
+      if (known?.store !== undefined) {
+        agents.delete(entry.session)
+      } else if (known !== undefined) {
         known.entry = entry
         continue
       }
@@ -510,6 +542,63 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
   const readRegistrySoon = () => {
     registryTimer ??= setTimeout(readRegistry, registryQuietMs)
   }
+
+  const storesOf = async () => {
+    const files = {
+      list: async (path: string) => (await readdir(path, { withFileTypes: true }).catch(ifMissing([]))).map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file' })),
+      read: (path: string) => readFile(path, 'utf8').catch(ifMissing(undefined)),
+    }
+    const found = (await readProviders(files, storeFolder(process.env), sessionStore)).filter((provider) => provider.mod !== cmodPluginName)
+    for (const [address, client] of stores) {
+      if (found.some((provider) => provider.address === address)) continue
+      stores.delete(address)
+      void client.close()
+    }
+    for (const { address } of found) {
+      if (stores.has(address)) continue
+      const call = addressCall(async (url, init) => {
+        const answer = await fetch(url, { method: init.method, ...(init.body === undefined ? {} : { body: init.body }), ...(init.headers === undefined ? {} : { headers: init.headers }), ...(init.socketPath === undefined ? {} : { unix: init.socketPath }) })
+        return { status: answer.status, text: await answer.text() }
+      }, address)
+      stores.set(address, connectRpc({ call, handle: (method) => Promise.reject(new RpcError(rpcCodes.methodNotFound, `cmod web answers no ${method}.`)), wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }))
+    }
+    return [...stores.values()]
+  }
+  const readStore = async (store: RpcClient, seen: Set<string>) => {
+    const listed = await store.request<SessionData[]>(`${sessionStore}.sessions`, [{ everyProject: true, running: true }])
+    for (const summary of listed) {
+      const known = agents.get(summary.id)
+      if (seen.has(summary.id) || (known !== undefined && known.store === undefined)) continue
+      seen.add(summary.id)
+      const agent: Agent = known ?? { entry: { session: summary.id, cwd: summary.cwd, pid: 0, entrypoint: sessionStore, name: summary.title }, summary, isTurnOpen: false, closedAt: undefined, openCalls: new Map(), messages: [], stop: new AbortController(), store }
+      agent.summary = summary
+      agents.set(summary.id, agent)
+      if (agent.readAt === summary.lastAt) continue
+      const [messages, state] = await Promise.all([
+        store.request<SessionMessage[]>(`${sessionStore}.read`, [summary.id, 'messages', { project: summary.cwd, last: feedMessages }]),
+        store.request<ConversationState | null>(`${sessionStore}.read`, [summary.id, 'state', { project: summary.cwd }]),
+      ])
+      agent.messages = messages.filter((message) => message.task === undefined)
+      agent.isTurnOpen = state?.turn !== undefined && state.turn.closedAt === undefined
+      agent.closedAt = state?.turn?.closedAt
+      agent.openCalls.clear()
+      for (const [callId, call] of Object.entries(state?.openCalls ?? {})) agent.openCalls.set(callId, { name: call.name, input: call.input })
+      agent.readAt = summary.lastAt
+    }
+  }
+  const readStores = async () => {
+    if (isReadingStores) return
+    isReadingStores = true
+    try {
+      const seen = new Set<string>()
+      for (const store of await storesOf()) await readStore(store, seen).catch((error: unknown) => report('kept the sessions a store listed last', error))
+      for (const [id, agent] of agents) if (agent.store !== undefined && !seen.has(id)) agents.delete(id)
+      redrawAll()
+    } finally {
+      isReadingStores = false
+    }
+  }
+  const readStoresSoon = () => void readStores().catch((error: unknown) => report('kept the sessions it listed last', error))
 
   const stream = (request: Request, url: URL, server: Server<undefined>): Response => {
     const id = url.searchParams.get('stream') ?? ''
@@ -554,16 +643,26 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
       press(await request.json())
       return Response.json({})
     }
-    const [, id, events] = sessionPath.exec(url.pathname) ?? []
-    if (id !== undefined && events !== undefined && request.method === 'GET') return Response.json(await poll(id, request.signal))
-    if (id !== undefined && events === undefined && request.method === 'POST') {
-      post(id, await request.json())
-      return Response.json({})
-    }
     throw new Refusal(404, `cmod web has no ${request.method} ${url.pathname}.`)
   }
 
-  const listen = (at: number) =>
+  const sessionRoute = async (request: Request): Promise<Response> => {
+    const url = new URL(request.url)
+    const [, id, events] = sessionPath.exec(url.pathname) ?? []
+    try {
+      if (id !== undefined && events !== undefined && request.method === 'GET') return Response.json(await poll(id, request.signal))
+      if (id !== undefined && events === undefined && request.method === 'POST') {
+        post(id, await request.json())
+        return Response.json({})
+      }
+      throw new Refusal(404, `cmod serve has no ${request.method} ${url.pathname}.`)
+    } catch (error) {
+      if (error instanceof Refusal) return Response.json({ error: error.message }, { status: error.status })
+      return Response.json({ error: messageOf(error) }, { status: 500 })
+    }
+  }
+
+  const page = (at: number) =>
     Bun.serve({
       hostname: '127.0.0.1',
       port: at,
@@ -576,9 +675,8 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
         const own = `${isTailnet ? 'https' : 'http'}://${host}`
         if (!isTailnet && host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return Response.json({ error: 'cmod web answers only 127.0.0.1, localhost, and you on your tailnet.' }, { status: 421 })
         const url = new URL(request.url)
-        const isSessionCall = sessionPath.test(url.pathname)
-        if (isTailnet && isSessionCall) return Response.json({ error: "cmod web takes a session's calls only from this computer." }, { status: 403 })
-        if (origin !== null ? origin !== own : request.method !== 'GET' && !isSessionCall) return Response.json({ error: `cmod web takes a change only from its own page, and this came from ${origin ?? 'no page'}.` }, { status: 403 })
+        if (sessionPath.test(url.pathname) || url.pathname.startsWith('/rpc')) return Response.json({ error: "cmod web takes a session's calls only on cmod serve's socket." }, { status: 403 })
+        if (origin !== null ? origin !== own : request.method !== 'GET') return Response.json({ error: `cmod web takes a change only from its own page, and this came from ${origin ?? 'no page'}.` }, { status: 403 })
         try {
           return await route(request, url, server)
         } catch (error) {
@@ -587,39 +685,57 @@ export function serveWeb({ port }: { readonly port: number }): WebServer {
         }
       },
     })
-  let server: Server<undefined>
-  try {
-    server = listen(port)
-  } catch (error) {
-    if (port === 0 || (error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
-    server = listen(0)
-  }
+  let server: Server<undefined> | undefined
 
-  void readJson(marksPath).then(
+  void sessions.visits().then(
     (saved) => {
-      if (isObject(saved)) marks = new Map(Object.entries(saved).flatMap(([id, at]) => (typeof at === 'string' ? [[id, at] as const] : [])))
+      visits = new Map(Object.entries(saved))
       redrawAll()
     },
-    (error: unknown) => report(`starts with no read marks, because ${marksPath} does not read`, error),
+    (error: unknown) => report('starts with no visits', error),
   )
-  readRegistry()
-  summarize()
-  mkdirSync(runningFolder(), { recursive: true })
-  const registry = watch(runningFolder(), { signal: following.signal }).on('change', readRegistrySoon).on('error', (error: unknown) => report('lists new sessions only every 5 seconds', error))
-  const sweep = setInterval(() => {
-    readRegistrySoon()
-    for (const [id, session] of posted) if (!isLive(session) && Date.now() - session.seenAt > liveMs) posted.delete(id)
-    for (const [id, each] of streams) if (each.send === undefined && Date.now() - each.seenAt > keptStreamMs) streams.delete(id)
-  }, sweepMs)
+  let registry: ReturnType<typeof watch> | undefined
+  let sweep: ReturnType<typeof setInterval> | undefined
+  const start = () => {
+    if (registry !== undefined) return
+    readRegistry()
+    summarize()
+    mkdirSync(runningFolder(), { recursive: true })
+    registry = watch(runningFolder(), { signal: following.signal }).on('change', readRegistrySoon).on('error', (error: unknown) => report('lists new sessions only every 5 seconds', error))
+    readStoresSoon()
+    sweep = setInterval(() => {
+      readRegistrySoon()
+      readStoresSoon()
+      for (const [id, session] of posted) if (!isLive(session) && Date.now() - session.seenAt > liveMs) posted.delete(id)
+      for (const [id, each] of streams) if (each.send === undefined && Date.now() - each.seenAt > keptStreamMs) streams.delete(id)
+    }, sweepMs)
+  }
+  const close = async () => {
+    const was = server
+    server = undefined
+    await was?.stop(true)
+  }
   return {
-    port: server.port ?? port,
+    sessionRoute: (request) => (sessionPath.test(new URL(request.url).pathname) ? sessionRoute(request) : undefined),
+    listen(port) {
+      start()
+      if (server !== undefined) return server.port ?? port
+      try {
+        server = page(port)
+      } catch (error) {
+        if (port === 0 || (error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
+        server = page(0)
+      }
+      return server.port ?? port
+    },
+    close,
     async stop() {
       clearInterval(sweep)
-      registry.close()
+      registry?.close()
       following.abort()
-      await server.stop(true)
-      await markWrites
-      db.close()
+      await Promise.all([...stores.values()].map((store) => store.close()))
+      await close()
+      await visitWrites
     },
   }
 }

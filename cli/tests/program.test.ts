@@ -451,6 +451,31 @@ WantedBy=default.target
   expect(statSync(unitOf(home, 'demo')).mode & 0o777).toBe(0o600)
 }, 60000)
 
+test.concurrent("cmod program --service --process-type Interactive gives the launchd agent that ProcessType, and --provides names each interface in the instance file and in the service's command", async () => {
+  const home = await serviceHome()
+
+  const { exitCode, stdout } = await cmod(home, 'program', 'demo', '--service', '--process-type', 'Interactive', '--provides', 'demo/Platform', '--', 'fake-server', '--port', '0')
+  await until(() => existsSync(join(home, '.local/share/cmod/instances/demo/fake-server.json')))
+  const unit = readFileSync(unitOf(home, 'demo'), 'utf8')
+
+  expect([exitCode, stdout]).toEqual([0, 'held\n'])
+  expect(JSON.parse(readFileSync(join(home, '.local/share/cmod/instances/demo/fake-server.json'), 'utf8'))).toMatchObject({ provides: ['demo/Platform'] })
+  expect(unit).toContain(isMac ? '<string>--provides</string>\n    <string>demo/Platform</string>' : '"--provides" "demo/Platform"')
+  expect(unit.includes('<key>ProcessType</key>\n  <string>Interactive</string>')).toBe(isMac)
+}, 60000)
+
+test.concurrent('cmod program refuses a process type launchd has no class for, a process type without --service, and a provided name that is no interface name', async () => {
+  const home = await serviceHome()
+
+  const unknown = await cmod(home, 'program', 'demo', '--service', '--process-type', 'Urgent', '--', 'fake-server')
+  const elected = await cmod(home, 'program', 'demo', '--no-wait', '--process-type', 'Interactive', '--', 'fake-server')
+  const unnamed = await cmod(home, 'program', 'demo', '--no-wait', '--provides', 'Platform', '--', 'fake-server')
+
+  expect([unknown.exitCode, unknown.stderr]).toEqual([1, 'cmod program: cmod program --process-type takes Interactive or Background, not Urgent.\n'])
+  expect([elected.exitCode, elected.stderr]).toEqual([1, 'cmod program: cmod program --process-type names the launchd class of a service, so it goes with --service.\n'])
+  expect([unnamed.exitCode, unnamed.stderr]).toEqual([1, 'cmod program: cmod program --provides takes an interface name, <mod>/<Name>, such as cmod/SessionStore, not Platform.\n'])
+})
+
 test.concurrent("a cmod command the service's program runs finds the Claude Code of the session that wrote the service, though the service's PATH holds no claude", async () => {
   const home = await serviceHome()
   await writeExecutables(home, { '.local/share/cmod/programs/fake-server': listingServer })

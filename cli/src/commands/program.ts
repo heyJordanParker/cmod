@@ -2,18 +2,18 @@ import { existsSync, watch } from 'node:fs'
 import { mkdir, open, readdir, rm, utimes } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { instancePath, serviceLogPath, storeFolder } from '@cmodjs/core/src/records.js'
+import { instancePath, interfaceName, processTypes, serviceLogPath, storeFolder, type ProcessType, type ProgramInstance } from '@cmodjs/core/src/records.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { ifMissing, readJson, readText, writeAtomically } from '../files.js'
 import { readLines, spawn } from '../process.js'
-import { killMs, programsFolder, stopCopy, type Instance } from '../program.js'
+import { killMs, programsFolder, stopCopy } from '../program.js'
 import { removeService, startService } from '../service.js'
 import { isHolding, modLock, startTime, takeLock } from '../store.js'
 import { hasTailnetChanged, readTailnet, serveOnTailnet, stopServing, tailnetEnvironment } from '../tailnet.js'
 
 export const summary = "Run one copy of a mod's program for every session."
 
-export const help = `Usage: cmod program <mod> [--web-app] [--no-wait | --service [--env <name>]... | --remove-service] -- <command…>
+export const help = `Usage: cmod program <mod> [--web-app] [--provides <interface>]... [--no-wait | --service [--env <name>]... [--process-type <type>] | --remove-service] -- <command…>
 
 ${summary}
 
@@ -70,6 +70,15 @@ the tailnet. The holder takes the mapping off when the copy exits, and stops
 the copy, so it starts again, when servesTailnet changes or, checked every
 minute, Tailscale becomes ready. cmod teardown takes every mapping of the mod off.
 
+With --process-type, which a session passes for a program job with
+processType, the launchd agent carries that ProcessType: Interactive runs the
+program at the priority of an app, where launchd throttles a service with
+none, and Background runs it at the lowest. systemd has no such class, so a Linux unit carries none.
+
+With --provides, which a session passes once for each interface a program job
+provides, the holder writes the interface names to the instance file beside
+the address, which providers() reads to find the program.
+
 With --remove-service, which a session passes for each service in
 services/<mod>/ that the mod's setup no longer adds, it stops the program's
 service, deletes its unit, its record, and its log, and exits 0. A program
@@ -90,7 +99,24 @@ export async function run(argv: string[]): Promise<number> {
   const separator = rest.indexOf('--')
   const [executable, ...args] = separator === -1 ? [] : rest.slice(separator + 1)
   if (mod === undefined || executable === undefined) throw new Error(`cmod program takes a mod's name, --, and the program's command.\n\n${help}`)
-  const { values } = parseArgs({ args: rest.slice(0, separator), options: { 'no-wait': { type: 'boolean', default: false }, service: { type: 'boolean', default: false }, env: { type: 'string', multiple: true, default: [] }, 'remove-service': { type: 'boolean', default: false }, 'web-app': { type: 'boolean', default: false } } })
+  const { values } = parseArgs({
+    args: rest.slice(0, separator),
+    options: {
+      'no-wait': { type: 'boolean', default: false },
+      service: { type: 'boolean', default: false },
+      env: { type: 'string', multiple: true, default: [] },
+      'remove-service': { type: 'boolean', default: false },
+      'web-app': { type: 'boolean', default: false },
+      provides: { type: 'string', multiple: true, default: [] },
+      'process-type': { type: 'string' },
+    },
+  })
+  const unnamed = values.provides.find((name) => !interfaceName.test(name))
+  if (unnamed !== undefined) throw new Error(`cmod program --provides takes an interface name, <mod>/<Name>, such as cmod/SessionStore, not ${unnamed}.`)
+  const processType = values['process-type']
+  if (processType !== undefined && !(processTypes as readonly string[]).includes(processType)) throw new Error(`cmod program --process-type takes ${processTypes.join(' or ')}, not ${processType}.`)
+  if (processType !== undefined && !values.service) throw new Error('cmod program --process-type names the launchd class of a service, so it goes with --service.')
+  const holderFlags = [...(values['web-app'] ? ['--web-app'] : []), ...values.provides.flatMap((name) => ['--provides', name])]
   if (values['remove-service']) {
     const lock = await takeLock(modLock(mod))
     try {
@@ -106,7 +132,7 @@ export async function run(argv: string[]): Promise<number> {
   if (values.service) {
     const lock = await takeLock(modLock(mod))
     try {
-      const service = await startService(mod, [executable, ...args], values.env, values['web-app'] ? ['--web-app'] : [])
+      const service = await startService(mod, [executable, ...args], values.env, holderFlags, processType as ProcessType | undefined)
       if (service !== undefined) {
         if (!(await isStartedWithin(file, serviceStartMs))) {
           await removeService(mod, basename(executable), { keepsLog: true })
@@ -140,7 +166,7 @@ export async function run(argv: string[]): Promise<number> {
       const lock = await takeLock(lockPath, AbortSignal.abort())
       if (lock !== undefined) {
         try {
-          return await hold(mod, file, serviceLogPath(storeFolder(process.env), mod, basename(executable)), executable, args, values['web-app'], ending.signal)
+          return await hold(mod, file, serviceLogPath(storeFolder(process.env), mod, basename(executable)), executable, args, { isWebApp: values['web-app'], provides: values.provides }, ending.signal)
         } finally {
           await lock[Symbol.asyncDispose]()
         }
@@ -150,7 +176,7 @@ export async function run(argv: string[]): Promise<number> {
         process.stdout.write('held\n')
         return 0
       }
-      const address = ((await readJson(file)) as Instance | undefined)?.address
+      const address = ((await readJson(file)) as ProgramInstance | undefined)?.address
       if (address !== undefined && address !== printed) {
         printed = address
         process.stdout.write(`${address}\n`)
@@ -172,8 +198,8 @@ export async function run(argv: string[]): Promise<number> {
   }
 }
 
-async function hold(mod: string, file: string, log: string, executable: string, args: readonly string[], isWebApp: boolean, ending: AbortSignal): Promise<number> {
-  const left = (await readJson(file)) as Instance | undefined
+async function hold(mod: string, file: string, log: string, executable: string, args: readonly string[], { isWebApp, provides }: { readonly isWebApp: boolean; readonly provides: readonly string[] }, ending: AbortSignal): Promise<number> {
+  const left = (await readJson(file)) as ProgramInstance | undefined
   if (left !== undefined) await stopCopy(left.pid, left.started)
   await rm(file, { force: true })
   await trimLog(log)
@@ -205,7 +231,7 @@ async function hold(mod: string, file: string, log: string, executable: string, 
       const address = line.trim()
       shown ??= (async () => {
         const tailnetUrl = tailnet === undefined ? undefined : await serveOnTailnet(tailnet, mod, executable, address)
-        await writeAtomically(file, `${JSON.stringify({ address, pid: child.pid, started, ...(tailnetUrl === undefined ? {} : { tailnetUrl }) } satisfies Instance)}\n`)
+        await writeAtomically(file, `${JSON.stringify({ address, pid: child.pid, started, ...(tailnetUrl === undefined ? {} : { tailnetUrl }), ...(provides.length === 0 ? {} : { provides }) } satisfies ProgramInstance)}\n`)
         process.stdout.write(`${address}\n`)
       })()
     })
@@ -226,7 +252,7 @@ async function hold(mod: string, file: string, log: string, executable: string, 
 async function isStartedWithin(file: string, ms: number): Promise<boolean> {
   const deadline = Date.now() + ms
   do {
-    const instance = (await readJson(file)) as Instance | undefined
+    const instance = (await readJson(file)) as ProgramInstance | undefined
     if (instance !== undefined && (await isHolding(instance.pid, instance.started))) return true
     await Bun.sleep(100)
   } while (Date.now() < deadline)

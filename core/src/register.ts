@@ -6,10 +6,12 @@ import type { RoutedEvent } from './runtime/hooks.js'
 import { serveConversations } from './runtime/conversations.js'
 import { settledAfterAbort } from './runtime/deadline.js'
 import { readDevice } from './runtime/device.js'
+import { interfaceMethods, servePrograms } from './runtime/interfaces.js'
 import { createLifecycle, readPlugin, type Lifecycle, type ServeCmodPlugin } from './runtime/lifecycle.js'
 import { servePages } from './runtime/pages.js'
 import { permissionRoutes, type PermissionRoutes } from './runtime/permission-check.js'
 import { serveWidgets } from './runtime/widgets.js'
+import { ifMissing } from './utils/paths.js'
 import { messageOf } from './utils/text.js'
 
 let lifecycle: Lifecycle<object>
@@ -146,7 +148,16 @@ export const serveCmodPlugin: ServeCmodPlugin = ({ claude, router, store, projec
   const conversations = serveConversations({ claude, router, store, project, report, clear })
   const widgets = serveWidgets({ claude, router, store, report, turnClosedBy: (rowId) => conversations.turnClosedBy(rowId), parts, markdownIn })
   const pages = servePages({ claude, router, report, tellRefusedPress, widgets, parts, tellStylers })
-  return { conversations, widgets, pages }
+  const programs = servePrograms({
+    store,
+    fetch: (url, init) => claude.http.fetch(url, init),
+    files: { list: (path) => claude.fs.list(path).catch(ifMissing([])), read: (path) => claude.fs.read(path).catch(ifMissing(undefined)) },
+    wait: (ms) => new Promise<void>((resolve) => void claude.clock.after(ms, resolve)),
+    report: (error) => report('programs', 'A program provider missed a listener', error),
+    tell: (caller, heard) => claude.cmod.call({ to: caller, method: interfaceMethods.heard, input: heard }),
+    sessionCode: (name) => pages.providers(name),
+  })
+  return { conversations, widgets, pages, programs }
 }
 
 export type AddHook = On

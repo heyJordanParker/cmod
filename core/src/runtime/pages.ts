@@ -5,6 +5,7 @@ import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
 import { cmodPluginName, isNotInstalled, isStillInstalling } from './dependencies.js'
 import type { DrawnParts } from './parts.js'
+import { styleInterface } from './interfaces.js'
 import type { Router } from './router.js'
 import { partMethods, type PageDeclaration, type PageRequest, type PartPress, type PartsUpdate, type ShownPages } from './ui.js'
 import type { Widgets } from './widgets.js'
@@ -17,6 +18,7 @@ export type PageApply = (mod: string, requests: readonly PageRequest[]) => Promi
 
 export type Pages = {
   declared(): readonly ModPages[]
+  providers(name: string): readonly string[]
   stylers(): readonly string[]
   element(mod: string, page: string, params: unknown, columns: number, isFocused: boolean): RenderElement | undefined
   press(mod: string, press: PartPress): void
@@ -24,6 +26,12 @@ export type Pages = {
   tell(mod: string, shown: ShownPages): void
   apply(listener: PageApply): void
   onStart(listener: (mod: string) => void): void
+}
+
+export function providedBy(listing: unknown): readonly string[] {
+  if (!isObject(listing)) return []
+  const named = Array.isArray(listing['provides']) ? listing['provides'].filter((each): each is string => typeof each === 'string') : []
+  return listing['stylesMarkdown'] === true && !named.includes(styleInterface) ? [...named, styleInterface] : named
 }
 
 export function pagesOf(input: unknown): PageDeclaration[] {
@@ -49,7 +57,8 @@ export function servePages({
   readonly tellStylers: (stylers: readonly string[]) => void
 }): Pages {
   const declared = new Map<string, readonly PageDeclaration[]>()
-  const stylers = new Set<string>()
+  const provided = new Map<string, Set<string>>()
+  const providersOf = (name: string) => [...(provided.get(name) ?? [])]
   const asking = new Map<string, Promise<void>>()
   const pressing = new Set<Promise<void>>()
   let waiting: { readonly mod: string; readonly requests: readonly PageRequest[] }[] = []
@@ -103,11 +112,16 @@ export function servePages({
     return pending
   }
 
-  const restyle = (mod: string, isStyler: boolean) => {
-    if (!isStyler && !stylers.delete(mod)) return
-    if (isStyler) stylers.add(mod)
+  const provide = (mod: string, names: readonly string[]) => {
+    const wasStyler = provided.get(styleInterface)?.has(mod) === true
+    for (const [name, mods] of provided) if (!names.includes(name)) mods.delete(mod)
+    for (const name of names) provided.set(name, (provided.get(name) ?? new Set<string>()).add(mod))
+    if (wasStyler || names.includes(styleInterface)) restyle(mod)
+  }
+
+  const restyle = (mod: string) => {
     parts.forget(mod)
-    const listed = [...stylers]
+    const listed = providersOf(styleInterface)
     tellStylers(listed)
     for (const told of declared.keys()) {
       if (told === cmodPluginName) continue
@@ -120,7 +134,7 @@ export function servePages({
   const update = (mod: string, { parts: listing, redraw, requests, isAsked, isStart }: PartsUpdate) => {
     if (isStart === true) started(mod)
     if (listing !== undefined) declared.set(mod, pagesOf(listing))
-    if (listing !== undefined) restyle(mod, isObject(listing) && listing['stylesMarkdown'] === true)
+    if (listing !== undefined) provide(mod, providedBy(listing))
     const isRedrawn = redraw === true || requests?.some((request) => 'open' in request) === true
     if (listing !== undefined || isRedrawn) widgets.update(mod, { ...(listing === undefined ? {} : { parts: listing }), ...(isRedrawn ? { redraw: true } : {}) })
     if (requests === undefined || requests.length === 0) return false
@@ -153,7 +167,8 @@ export function servePages({
 
   return {
     declared: () => [...declared].map(([mod, pages]) => ({ mod, pages })),
-    stylers: () => [...stylers],
+    providers: providersOf,
+    stylers: () => providersOf(styleInterface),
     element(mod, page, params, columns, isFocused) {
       if (!declared.has(mod)) void ask(mod)
       const given = JSON.stringify(params ?? null)

@@ -30,6 +30,8 @@ const commands: Record<string, () => Promise<Command>> = {
   task: () => import('./commands/task.js'),
   watch: () => import('./commands/watch.js'),
   web: () => import('./commands/web.js'),
+  serve: () => import('./commands/serve.js'),
+  run: () => import('./commands/run.js'),
   program: () => import('./commands/program.js'),
   download: () => import('./commands/download.js'),
 }

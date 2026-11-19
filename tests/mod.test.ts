@@ -184,7 +184,7 @@ test('a rule taken out of a mod that stays linked is withdrawn by a note, and it
 
 const settled = () => Bun.sleep(0)
 
-const ready = { type: 'success', message: 'Installed', description: 'Adds the compact tool, the start_background_agent tool, the Sidebar pane, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
+const ready = { type: 'success', message: 'Installed', description: 'Adds the cmod program, the compact tool, the start_session tool, the list_sessions tool, the search_sessions tool, the read_session tool, the message_session tool, the stop_session tool, the end_session tool, the fork_session tool, the read_screen tool, the press_keys tool, the show_session tool, the delete_session tool, the Sidebar pane, /mods and /history.\nInstalled the cmod program.\nBinds meta+0 to Show or hide the Sidebar.\nBinds meta+m to Show or hide Settings.\nBinds meta+h to Show or hide History.' } as const
 
 const uninstalled = { type: 'success', message: 'four-step is uninstalled' } as const
 
@@ -939,17 +939,13 @@ const indexedConversation = (() => {
 })()
 
 function answerIndex(tested: ReturnType<typeof testMod>) {
-  tested.fakes.process.spawn = (request) => {
-    const [, command, kind] = request.argv
-    const flag = (name: string) => request.argv[request.argv.indexOf(name) + 1]
-    const task = request.argv.includes('--task') ? flag('--task') : undefined
-    const answer =
-      command !== 'history' ? undefined
-      : kind === 'turns' ? (task === undefined ? indexedConversation.turns : [])
-      : kind === 'messages' ? (indexedConversation.messages[task ?? 'main'] ?? []).filter((message) => !request.argv.includes('--turn') || (message as { turn?: string }).turn === flag('--turn'))
-      : kind === 'tasks' ? (task === undefined ? indexedConversation.tasks : [])
-      : undefined
-    return answer === undefined ? exited(0) : exited(0, { stream: 'stdout', text: `${JSON.stringify(answer)}\n` })
+  tested.fakes.serve.read = (_session, part, options) => {
+    const task = typeof options['task'] === 'string' ? options['task'] : undefined
+    if (part === 'turns') return task === undefined ? indexedConversation.turns : []
+    if (part === 'messages') return (indexedConversation.messages[task ?? 'main'] ?? []).filter((message) => options['turn'] === undefined || (message as { turn?: string }).turn === options['turn'])
+    if (part === 'tasks') return task === undefined ? indexedConversation.tasks : []
+    if (part === 'goal') return { text: '' }
+    return part === 'state' ? null : []
   }
 }
 
@@ -1395,9 +1391,13 @@ test('a session started with a linked mod starts cmod watch only while no watche
 
 const askCmod = (tested: ReturnType<typeof cmodAnswering>['tested'], caller: string, method: string, input: unknown) => tested.fire('cmod.call', { to: 'cmod', method, input, caller } as never)
 
-test('the sessions service runs cmod history in this session with each request as flags, and the session start indexes them', async () => {
+test("the sessions service asks cmod serve with each request's options, and the session start indexes the conversations", async () => {
   const session = { id: 's1', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: false }
-  const { tested, spawned, sessions } = cmodAnswering({ 'history sessions': { code: 0, stdout: `${JSON.stringify([session])}\n` }, 'history messages': { code: 0, stdout: '[]\n' }, 'history search': { code: 0, stdout: '[]\n' } })
+  const { tested, spawned } = cmodAnswering({})
+  const asked: unknown[] = []
+  tested.fakes.serve.sessions = (scope) => (asked.push(['sessions', scope]), [session])
+  tested.fakes.serve.read = (id, part, options) => (asked.push(['read', id, part, options]), part === 'state' ? null : [])
+  tested.fakes.serve.search = (text, options) => (asked.push(['search', text, options]), [])
   await tested.start()
   await tested.settle()
 
@@ -1405,13 +1405,12 @@ test('the sessions service runs cmod history in this session with each request a
   expect(await askCmod(tested, 'demo', 'cmod:messages', { session: 's1', task: 'a7', after: 'm9', last: 5 })).toEqual({ value: [] })
   expect(await askCmod(tested, 'demo', 'cmod:search', { text: 'deploy', before: { session: 's1', id: 'm9' } })).toEqual({ value: [] })
 
-  expect(spawned).toEqual([
-    [cmodProgram, 'history', 'index'],
-    [cmodProgram, 'history', 'sessions', '--since', '2026-10-09T00:00:00.000Z', '--all', '--running', '--json', '--project', '/work/app'],
-    [cmodProgram, 'history', 'messages', 's1', '--task', 'a7', '--after', 'm9', '--last', '5', '--json', '--project', '/work/app'],
-    [cmodProgram, 'history', 'search', 'deploy', '--before', 's1:m9', '--json', '--project', '/work/app'],
+  expect(asked).toEqual([
+    ['sessions', { project: '/work/app', since: '2026-10-09T00:00:00.000Z', everyProject: true, running: true }],
+    ['read', 's1', 'messages', { project: '/work/app', task: 'a7', after: 'm9', last: 5 }],
+    ['search', 'deploy', { project: '/work/app', before: { session: 's1', id: 'm9' }, record: {} }],
   ])
-  expect(sessions).toEqual(['test-session', 'test-session', 'test-session', 'test-session'])
+  expect(spawned).toEqual([[cmodProgram, 'history', 'index']])
 })
 
 test('the session start builds the history index while one mod besides cmod is set up, whatever consent.json holds', async () => {
@@ -1443,8 +1442,10 @@ test("the updateSettings call runs cmod settings for the mod, and a refusal come
   ])
 })
 
-test("a read of this session's newest messages and turns answers from memory, and runs cmod history only for what memory lacks", async () => {
-  const { tested, spawned } = cmodAnswering({ 'history messages': { code: 0, stdout: '[]\n' }, 'history turns': { code: 0, stdout: '[]\n' } })
+test("a read of this session's newest messages and turns answers from memory, and asks cmod serve only for what memory lacks", async () => {
+  const { tested } = cmodAnswering({})
+  const asked: unknown[] = []
+  tested.fakes.serve.read = (id, part, options) => (part === 'state' ? null : (asked.push([id, part, options]), []))
   await tested.start()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await prompt(tested, 'first')
@@ -1454,15 +1455,17 @@ test("a read of this session's newest messages and turns answers from memory, an
 
   expect((await read('cmod:messages', { last: 1 })).map((message) => message.text)).toEqual(['second'])
   expect(await read('cmod:turns', { last: 1 })).toHaveLength(1)
-  expect(spawned.filter((argv) => argv[1] === 'history' && argv[2] !== 'index')).toEqual([])
+  expect(asked).toEqual([])
 
   await read('cmod:messages', { last: 50 })
 
-  expect(spawned.filter((argv) => argv[1] === 'history' && argv[2] !== 'index')).toEqual([[cmodProgram, 'history', 'messages', 'test-session', '--last', '50', '--json', '--project', '/work/app']])
+  expect(asked).toEqual([['test-session', 'messages', { project: '/work/app', last: 50 }]])
 })
 
-test('the cmod plugin keeps only the newest 200 messages of its session in memory, and reads older ones from the conversation index', async () => {
-  const { tested, spawned } = cmodAnswering({ 'history messages': { code: 0, stdout: '[]\n' } })
+test('the cmod plugin keeps only the newest 200 messages of its session in memory, and reads older ones from cmod serve', async () => {
+  const { tested } = cmodAnswering({})
+  const asked: string[] = []
+  tested.fakes.serve.read = (_id, part) => (part === 'state' ? null : (asked.push(part), []))
   await tested.start()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   for (let index = 0; index < 201; index += 1) await prompt(tested, `prompt ${index}`)
@@ -1470,11 +1473,11 @@ test('the cmod plugin keeps only the newest 200 messages of its session in memor
   const read = async (input: object) => ((await askCmod(tested, 'demo', 'cmod:messages', { session: 'test-session', ...input })) as { value: { text?: string }[] }).value
 
   expect((await read({ last: 200 })).map((message) => message.text)).toEqual(Array.from({ length: 200 }, (_, index) => `prompt ${index + 1}`))
-  expect(spawned.filter((argv) => argv[1] === 'history' && argv[2] !== 'index')).toEqual([])
+  expect(asked).toEqual([])
 
   await read({ after: 'prompt-prompt 0' })
 
-  expect(spawned.filter((argv) => argv[1] === 'history' && argv[2] !== 'index')).toHaveLength(1)
+  expect(asked).toEqual(['messages'])
 })
 
 test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 or later calls on it', async () => {
@@ -1488,6 +1491,17 @@ test('the cmod plugin answers every method a mod built on @cmodjs/core 4.0.0 or 
 
   expect(await refusal('cmod:unheard')).toContain('has no method')
   for (const method of methods) expect(await refusal(method)).not.toContain('has no method')
+})
+
+test('the cmod plugin answers every method a mod built on @cmodjs/core 7.0.0 added', async () => {
+  const { tested } = cmodAnswering({})
+  await tested.start()
+  const refusal = async (method: string) => {
+    const answer = await askCmod(tested, 'demo', method, {}).catch((error: unknown) => ({ deny: String(error) }))
+    return (answer as { deny?: string }).deny ?? ''
+  }
+
+  for (const method of ['cmod:session', 'cmod:providers', 'cmod:provided', 'cmod:listenProvided', 'cmod:unlistenProvided']) expect(await refusal(method)).not.toContain('has no method')
 })
 
 const installedRoot = '/test/home/.claude/plugins/cache/demo/demo/0.2.0'
@@ -1659,18 +1673,40 @@ test('pressing Show errors from installed mods writes preferences.json, then sto
   expect(await shown()).toContain('[x] Show errors from installed mods')
 })
 
-test("Claude's start_background_agent tool starts its task in a new background session through cmod task start", async () => {
+test("Claude's start_session tool starts its task in a new background session through cmod task start, and names a machine no mod starts sessions on", async () => {
   const started = { id: 'bg-1', title: 'Upgrade', openedBy: '', openedAt: '2026-10-23T10:00:00.000Z', isBackground: true }
   const { tested, spawned, sessions } = cmodAnswering({ 'task start': { code: 0, stdout: `${JSON.stringify(started)}\n` } })
   await tested.start()
   await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
   await tested.settle()
 
-  const answer = await tested.callTool('start_background_agent', { task: 'Upgrade every dependency.', title: 'Upgrade', model: 'sonnet' })
+  const answer = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', model: 'sonnet' })
+  const elsewhere = await tested.callTool('start_session', { prompt: 'Upgrade every dependency.', title: 'Upgrade', machine: 'build-box' })
 
-  expect(answer).toEqual({ result: 'Started a background agent in session bg-1. It answers there, not in this conversation.' })
+  expect(answer).toEqual({ result: 'Started session bg-1. It answers there, not in this conversation. Read it with read_session.' })
   expect(spawned.filter((argv) => argv[1] === 'task')).toEqual([[cmodProgram, 'task', 'start', '--title', 'Upgrade', '--model', 'sonnet', '--cwd', '/work/app', '--json', '--', 'Upgrade every dependency.']])
   expect(sessions[spawned.findIndex((argv) => argv[1] === 'task')]).toBe('test-session')
+  expect(elsewhere).toEqual({ deny: 'The start_session tool failed: cmod: no mod starts sessions on build-box, so the task did not start. Leave machine out to start it on test-computer.' })
+})
+
+test("Claude's session tools list, read, message, and end other sessions through cmod serve", async () => {
+  const other = { id: 's2', title: 'Rename the tree pane', project: '/work/app', cwd: '/work/app', model: 'claude-opus-5-5', startedAt: '2026-10-11T10:00:00.000Z', lastAt: '2026-10-11T10:05:00.000Z', isRunning: true }
+  const { tested } = cmodAnswering({})
+  const acted: unknown[] = []
+  tested.fakes.serve.sessions = () => [other]
+  tested.fakes.serve.read = (_id, part) => (part === 'messages' ? [{ id: 'm1', session: 's2', type: Prompt, at: '2026-10-11T10:01:00.000Z', context: 1, turn: 'm1', text: 'rename it', from: { type: 'person' } }] : part === 'state' ? null : part === 'goal' ? { text: '' } : [])
+  tested.fakes.serve.unheld = async (id, action) => (acted.push([id, action]), null)
+  await tested.start()
+  await claudeCodeOf(tested).fire('SessionStart', { source: 'startup' })
+  await tested.settle()
+
+  expect(await tested.callTool('list_sessions', {})).toEqual({ result: 's2  running  Rename the tree pane\n  project /work/app, last active 2026-10-11T10:05:00.000Z' })
+  expect(await tested.callTool('read_session', { session: 's2' })).toEqual({ result: 's2  running  Rename the tree pane\n  project /work/app, last active 2026-10-11T10:05:00.000Z\nm1  2026-10-11T10:01:00.000Z  prompt: rename it' })
+  expect(await tested.callTool('message_session', { session: 's2', text: 'use the new name' })).toEqual({ result: 'Sent session s2 the prompt.' })
+  expect(await tested.callTool('end_session', { session: 's2' })).toEqual({ result: 'Session s2 ends once its turn ends.' })
+  expect(await tested.callTool('read_screen', { session: 's2' })).toEqual({ deny: 'The read_screen tool failed: no program on this computer provides cmod/Terminal, so the terminal of session s2 is out of reach. A session claude --bg started has none.' })
+  expect(tested.calls.filter(({ call }) => call === 'session.send').map(({ args }) => args[0])).toEqual([{ to: { sessionId: 's2' }, text: 'use the new name' }])
+  expect(acted).toEqual([['s2', 'end']])
 })
 
 test("Claude's compact tool compacts the conversation once Claude's answer ends, keeping what it named, and then prompts Claude to carry on", async () => {
@@ -2606,30 +2642,37 @@ function servingWeb(tested: ReturnType<typeof testMod>) {
   return started
 }
 
-const webServe = [cmodProgram, 'program', 'cmod', '--web-app', '--no-wait', '--', 'cmod', 'web', 'serve']
+const postsToServe = (tested: ReturnType<typeof testMod>) => {
+  const posted: string[] = []
+  tested.fakes.http.fetch = async (url, init) => {
+    if (url.includes('/api/sessions/') && init?.method === 'POST') posted.push(`${init.socketPath ?? ''} ${new URL(url).pathname}`)
+    return url.includes('/api/sessions/') ? { status: 200, ok: true, headers: {}, text: '{}' } : { status: 404, ok: false, headers: {}, text: '' }
+  }
+  return posted
+}
 
-test('a session with the web UI on runs cmod web serve once, as the single copy cmod program keeps for the computer', async () => {
+test('a session with the web UI on tells cmod serve about itself over its socket, and starts no server of its own', async () => {
   const tested = testMod(cmodPlugin, { state: bound, files: { [`${store}/preferences.json`]: JSON.stringify({ servesWebUi: true }) } })
   const started = servingWeb(tested)
+  const posted = postsToServe(tested)
   await tested.start()
-  await settledUntil(tested, () => started.length > 1)
+  await settledUntil(tested, () => posted.length > 0)
 
-  expect(started).toEqual([webServe])
+  expect(posted[0]).toBe(`${store}/serve.sock /api/sessions/test-session`)
+  expect(started.filter((argv) => argv.includes('web'))).toEqual([])
 })
 
-test('a session with the web UI off runs no cmod web serve and reaches no web UI', async () => {
+test('a session with the web UI off tells cmod serve nothing about itself', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
-  const started = servingWeb(tested)
-  const fetched: string[] = []
-  tested.fakes.http.fetch = async (url) => (fetched.push(url), { status: 404, ok: false, headers: {}, text: '' })
+  servingWeb(tested)
+  const posted = postsToServe(tested)
   await tested.start()
-  await settledUntil(tested, () => started.length > 0)
+  await settledUntil(tested, () => posted.length > 0)
 
-  expect(started).toEqual([])
-  expect(fetched).toEqual([])
+  expect(posted).toEqual([])
 })
 
-test('open in browser turns the browser app on, starts cmod web serve, and opens the address cmod web prints', async () => {
+test('open in browser turns the browser app on and opens the address cmod web prints', async () => {
   const tested = testMod(cmodPlugin, { state: bound })
   const started = servingWeb(tested)
   const ran: string[] = []
@@ -2644,7 +2687,7 @@ test('open in browser turns the browser app on, starts cmod web serve, and opens
   await settledUntil(tested, () => tested.shown.toasts.length > 0)
 
   expect(JSON.parse((await tested.fakes.fs.read?.(`${store}/preferences.json`)) ?? '{}')).toEqual({ servesWebUi: true })
-  expect(started).toEqual([webServe])
+  expect(started.filter((argv) => argv.includes('web'))).toEqual([])
   expect(ran).toContain(`${cmodProgram} web`)
   expect(tested.shown.toasts).toContainEqual(expect.objectContaining({ type: 'success', message: 'The browser app is open' }))
 })

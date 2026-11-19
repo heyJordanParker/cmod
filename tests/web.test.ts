@@ -17,12 +17,13 @@ declare const Bun: {
   sleep(ms: number): Promise<void>
   spawn(argv: readonly string[], options: { readonly env: Record<string, string>; readonly stdout: 'pipe'; readonly stderr: 'inherit' }): Spawned
   write(path: string, text: string): Promise<number>
+  file(path: string): { text(): Promise<string> }
   readonly env: Record<string, string | undefined>
 }
 
 declare const process: { readonly pid: number }
 
-declare const fetch: (url: string, init?: { readonly method?: string; readonly headers?: Record<string, string>; readonly body?: string; readonly signal?: AbortSignal }) => Promise<Fetched>
+declare const fetch: (url: string, init?: { readonly method?: string; readonly headers?: Record<string, string>; readonly body?: string; readonly signal?: AbortSignal; readonly unix?: string }) => Promise<Fetched>
 
 const clone = (import.meta as unknown as { readonly dir: string }).dir.replace(/\/tests$/, '')
 
@@ -56,7 +57,7 @@ async function firstLine(stream: AsyncIterable<Uint8Array>): Promise<string> {
     const text = joined(chunks)
     if (text.includes('\n')) return text.slice(0, text.indexOf('\n'))
   }
-  throw new Error('cmod web serve printed no address.')
+  throw new Error('cmod serve printed no address.')
 }
 
 function running(line: string): Subprocess {
@@ -132,20 +133,25 @@ const demo = defineMod({
 async function browsed() {
   const home = `/tmp/cmod-web-test-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
   homes.push(home)
-  await Bun.write(`${home}/.local/share/cmod/preferences.json`, preferences)
+  await Bun.write(`${home}/.local/share/cmod/preferences.json`, JSON.stringify({ servesWebUi: true, servesTailnet: false }))
   await Bun.write(`${home}/.claude/sessions/1.json`, JSON.stringify({ pid: process.pid, sessionId: 'test-session', cwd: `${home}/work/app`, kind: 'interactive', entrypoint: 'cli', name: 'counting' }))
-  const server = Bun.spawn(['bun', `${clone}/cli/src/main.ts`, 'web', 'serve'], { env: { HOME: home, PATH: Bun.env['PATH'] ?? '' }, stdout: 'pipe', stderr: 'inherit' })
+  const server = Bun.spawn(['bun', `${clone}/cli/src/main.ts`, 'serve'], { env: { HOME: home, PATH: Bun.env['PATH'] ?? '' }, stdout: 'pipe', stderr: 'inherit' })
   servers.push(server)
-  const address = `http://${await firstLine(server.stdout)}`
+  const socket = (await firstLine(server.stdout)).replace(/^unix:/, '')
+  let opened = ''
+  void (async () => {
+    while (opened === '') opened = await Bun.file(`${home}/.local/share/cmod/web.json`).text().catch(async (error: unknown) => (error instanceof Error && 'code' in error && error.code === 'ENOENT' ? (await Bun.sleep(50), '') : Promise.reject(error)))
+  })()
+  const address = `http://127.0.0.1:${(JSON.parse(await until(() => opened || undefined, () => 'cmod serve opened no browser app.')) as { readonly port: number }).port}`
 
   const counted = testMod(demo)
   await counted.start()
   const tested = testMod(cmodPlugin, { state: { global: { installedPlugins: ['cmod'], boundHotkeys: allHotkeys } }, files: { [`${store}/preferences.json`]: preferences } })
-  tested.fakes.process.spawn = ({ argv }) => (argv.includes('serve') ? running(address.replace('http://', '')) : running('[]'))
+  tested.fakes.process.spawn = () => running('[]')
   tested.fakes.http.fetch = async (url, init): Promise<HttpResponse> => {
     const body = init?.body
-    if (typeof body === 'object') throw new Error('cmod web serve takes text bodies only.')
-    const answer = await fetch(url, { method: init?.method ?? 'GET', headers: init?.headers ?? {}, ...(body === undefined ? {} : { body }) })
+    if (typeof body === 'object') throw new Error('cmod serve takes text bodies only.')
+    const answer = await fetch(url, { method: init?.method ?? 'GET', headers: init?.headers ?? {}, ...(body === undefined ? {} : { body }), ...(init?.socketPath === undefined ? {} : { unix: socket }) })
     return { status: answer.status, ok: answer.ok, headers: {}, text: await answer.text() }
   }
   tested.fakes.cmod.call = async (input) => (input.to === 'demo' ? calledAnswer('cmod', await counted.fire('cmod.call', { to: 'demo', method: input.method, input: input.input, caller: 'cmod' } as never)) : null)

@@ -4,6 +4,31 @@ What changed in each version of cmod, for the people who build and use mods. Rel
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-11-19
+
+### Added
+- Claude reaches your other sessions through cmod's tools: `start_session`, `list_sessions`, `search_sessions`, `read_session`, `message_session`, `stop_session`, `end_session`, `fork_session`, and `delete_session`, and `read_screen`, `press_keys`, and `show_session` reach a session's terminal through a mod whose program provides one. The rules cmod adds for Claude tell it to use them, and never to parse transcripts itself.
+- `cmod run <script>` runs a TypeScript script that imports `sessions` from `@cmodjs/core/mod.js` and reads and drives every session, with the `before` and `on` listeners a mod gets.
+- Interfaces: several mods answer one name, such as `anyhost/Platform`. A mod types one on `CmodInterfaces`, provides it with `mod.provide` or a `program` job's `provides`, and a caller asks `providers(name)` for every mod and program that answers it, with typed methods and `on` and `before` events. A program serves its interfaces as JSON-RPC over its address.
+- `sessions.get(id)` finds a session by id, running or ended. A `Session` gains `end()`, `visit(at?)`, `delete()`, and `visitedAt`.
+- `fork` takes `isBackground: true` for a background session on a copy of the conversation, and `at` for a copy that ends at a message. cmod writes the copy itself.
+- A `Prompt` sent to a session that ended resumes it in the background.
+- `startTask` takes `machine`, and a `beforeTaskStart` listener answers `{ result }` with the id of a session it started itself, such as on another machine.
+- A mod's program that provides `cmod/SessionStore` and `cmod/Session` serves the sessions of other machines, so `sessions.list`, `get`, `search`, every action, every listener, and the browser app reach them.
+- A `program` job takes `processType`, launchd's class for a service: `Interactive` runs one you wait on at the priority of an app on a loaded Mac.
+- One `cmod serve` per computer, a service of launchd's `Interactive` class, serves every session's reads, actions, and listeners on a socket only you can open, and the browser app.
+
+### Changed
+- A `before` or `on` listener on another session gets its own `timeoutMs`, up to 10 minutes, where it got 5 seconds before. A listener whose session or machine is gone stops being asked at once.
+- `clone(task)` is gone. Write `fork({ ...task, isBackground: true })`.
+- A mod that styles Markdown provides the `cmod/Style` interface, which cmod adds for a mod with a Markdown style, where its parts said `stylesMarkdown` before. A mod built on an older `@cmodjs/core` still counts as a styler.
+- A mod built on `@cmodjs/core` 7.0.0 runs on cmod 7.0.0 or later, so `cmod check` writes `>=7.0.0` for its `cmod` dependency.
+- A session whose cmod plugin is older than 7.0.0 keeps working, and reaches other sessions and the browser app once you press Reload.
+
+### Removed
+- Claude's `start_background_agent` tool is gone. `start_session` starts a background session instead.
+- `cmod history follow` no longer runs in each session, and the cmod plugin's `before` folder and the `watch`, `before`, and `answer` relays are gone. `cmod serve` deletes the `before` files of sessions that ended.
+
 ## [6.3.0] - 2026-11-17
 
 ### Added

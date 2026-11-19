@@ -9,6 +9,7 @@ import { componentOf, nameOf, type Kind, type Style, type StyledAt, type StyleIn
 import type { Subscription } from '../utils/subscription.js'
 import { messageOf } from '../utils/text.js'
 import type { Claude } from './claude.js'
+import { styleInterface } from './interfaces.js'
 import { cmodPluginName } from './dependencies.js'
 import type { Router } from './router.js'
 import type { Failure } from './toaster.js'
@@ -30,7 +31,7 @@ export type WidgetDeclaration = { readonly id: string; readonly title: string; r
 
 export type PageDeclaration = { readonly id: string; readonly title: string; readonly place: PagePlace }
 
-export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PageDeclaration[]; readonly stylesMarkdown?: true }
+export type PartList = { readonly widgets: readonly WidgetDeclaration[]; readonly pages: readonly PageDeclaration[]; readonly provides?: readonly string[] }
 
 export type PartDraw =
   | { readonly widget: string; readonly area: Area; readonly columns: number; readonly turn?: Turn }
@@ -200,6 +201,7 @@ export type UiOptions<State extends object> = {
   readonly mod: () => Mod<State>
   readonly borrowed: BorrowedMarkdown
   readonly nextDraw: () => number
+  readonly provided: () => readonly string[]
 }
 
 export type UiArea<State extends object> = {
@@ -213,6 +215,7 @@ export type UiArea<State extends object> = {
   answer(method: string, input: unknown, caller: string): Promise<{ readonly value: unknown }> | undefined
   markdownIn(table: ElementTable, at: StyledAt): ((props: MarkdownProps) => RenderElement) | undefined
   restyled(stylers: readonly string[]): void
+  relisted(): void
   started(): void
   changed(): void
   restorePanes(): Promise<void>
@@ -220,7 +223,7 @@ export type UiArea<State extends object> = {
 
 export const keptDrawInputs = 200
 
-export function createUi<State extends object>({ name, claude, router, report, announce, mod, borrowed, nextDraw }: UiOptions<State>): UiArea<State> {
+export function createUi<State extends object>({ name, claude, router, report, announce, mod, borrowed, nextDraw, provided }: UiOptions<State>): UiArea<State> {
   const panes = new Map<string, AddedPane<State>>()
   const paneLogs = new Map<string, (failure: string) => void>()
   const openPanes = new Set<string>()
@@ -259,11 +262,14 @@ export function createUi<State extends object>({ name, claude, router, report, a
   let collecting = 0
   let queued: PartsUpdate[] | undefined
 
-  const partList = (): PartList => ({
-    widgets: [...widgets.values()].map(({ id, title, areas: listed, place }) => ({ id, title, areas: listed, ...(place === undefined ? {} : { place }) })),
-    pages: [...pages.values()].map(({ init: { id, title }, place }) => ({ id, title, place })),
-    ...(markdownRenders.size > 0 ? { stylesMarkdown: true } : {}),
-  })
+  const partList = (): PartList => {
+    const provides = [...provided(), ...(markdownRenders.size > 0 ? [styleInterface] : [])]
+    return {
+      widgets: [...widgets.values()].map(({ id, title, areas: listed, place }) => ({ id, title, areas: listed, ...(place === undefined ? {} : { place }) })),
+      pages: [...pages.values()].map(({ init: { id, title }, place }) => ({ id, title, place })),
+      ...(provides.length === 0 ? {} : { provides }),
+    }
+  }
 
   const hear = (listed: unknown, isRestyled: boolean) => {
     if (!Array.isArray(listed)) return
@@ -772,7 +778,10 @@ export function createUi<State extends object>({ name, claude, router, report, a
     },
     markdownIn,
     restyled: (stylers) => hear(stylers, true),
-    started() {
+    relisted() {
+    void send({ parts: partList() })
+  },
+  started() {
       const held = merged(beforeStart ?? [])
       beforeStart = undefined
       void send({ ...held, parts: partList(), isStart: true })

@@ -8,7 +8,7 @@ import { Prompt, sessions } from '../node_modules/@cmodjs/core/mod.js'
 const prompts = (await sessions.current.messages()).filter((message) => message.type === Prompt)
 ```
 
-A mod hears, reads, and acts on the session it runs in and every other session on the computer.
+A mod hears, reads, and acts on the session it runs in, every other session on the computer, and every session of another machine a mod's program serves to this one.
 
 ## The shape of a conversation
 
@@ -33,13 +33,15 @@ Every part of the record answers the same three calls: `search` finds its messag
 type Sessions = {
   readonly current: CurrentSession
   list(options?: { running?: boolean; since?: string; everyProject?: boolean }): Promise<Session[]>
+  get(id: string): Promise<Session>
   search(text: string, matcher?: Matcher<Message>, options?: { running?: boolean; since?: string; everyProject?: boolean; before?: Message }): AsyncIterable<Message>
   onMessage(matcher?, listener, options?): Subscription   // and every on method below
 }
 ```
 
 - `current` is the session the mod runs in. It is there from `setup` on, and follows `/clear`, `/resume`, a fork, `/cd`, and a `cd` in a Bash or PowerShell call.
-- `list` lists the project's sessions, the most recent first. `everyProject` lists every project's, `running` keeps the sessions still open in a Claude Code window, and `since` keeps those active since a time, written as `30m`, `6h`, `2d`, `1w`, or a date such as `2026-10-01`.
+- `list` lists the project's sessions, the most recent first. `everyProject` lists every project's, `running` keeps the sessions still open in a Claude Code window, and `since` keeps those active since a time, written as `30m`, `6h`, `2d`, `1w`, or a date such as `2026-10-01`. It lists this computer's sessions and those of every session store a mod's program provides ([Session stores](#session-stores)).
+- `get` finds one session by its `id`, running or ended, on this computer or in any session store, and rejects with `No session <id> on this computer.` when none holds it.
 - `search` yields the messages whose text contains `text`, any case, newest first, in the project's sessions or, with `everyProject`, every project's. `text` is at least 3 characters. It reads the index a page at a time as the loop asks for more, and `break` stops it. A matcher keeps the messages it matches, and `before` starts after a message, so a "load more" picks up where a loop broke. A tool call is searched by its name and the first 1,024 characters of each input value, an instruction file by its path and text, and a tool result is not searched.
 
 ```ts
@@ -53,7 +55,11 @@ const more = sessions.search('deploy job', { type: Prompt }, { since: '1w', befo
 
 - Its `on` methods hear every running session of the project, this one included ([Listen](#listen-to-a-record)). `sessions.current`'s methods hear this session. `sessions` has no `before` methods. To change what happens in another session, call a `before` method on that session ([Change what happens](#change-what-happens)).
 
-While cmod has set up a mod other than cmod, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since. The `cmod history` command answers the same questions in a terminal ([commands.md](commands.md#cmod-history)).
+While cmod has set up a mod other than cmod, the cmod plugin indexes every conversation in the background at each session's start, so `search` waits only for what changed since. The `cmod history` command answers the same questions in a terminal ([commands.md](commands.md#cmod-history)), and a script `cmod run` runs reads and drives sessions with the same `sessions` ([commands.md](commands.md#cmod-run)).
+
+### Session stores
+
+One `cmod serve` per computer serves its sessions to every session and script on it ([commands.md](commands.md#cmod-serve)). A mod whose program provides the `cmod/SessionStore` and `cmod/Session` interfaces ([dependencies.md](dependencies.md#interfaces)) serves the sessions of other machines the same way, so `list`, `get`, and `search` read them, and every action and listener reaches them, as they reach this computer's.
 
 ## Session
 
@@ -70,6 +76,7 @@ type Session = {
   readonly startedAt: string
   readonly lastAt: string
   readonly forkedFrom?: string
+  readonly visitedAt?: string
   readonly goal: Goal
   context(): Promise<Context>
   contexts(): Promise<Context[]>
@@ -80,12 +87,14 @@ type Session = {
   onMessage(matcher?, listener, options?): Subscription      // and every on method below
   beforePrompt(matcher?, listener, options?): Subscription   // and every before method below
   send(message: { type: Prompt | Note; text: string; as?: Person | Session }): Promise<void>
-  startTask(task: { prompt: string; title: string; agentType?: string; model?: string; name?: string; cwd?: string; isBackground?: boolean }): Promise<Task>
-  fork(task: { prompt: string; title: string }): Promise<Task>
-  clone(task: { prompt: string; title: string }): Promise<Task>
+  startTask(task: { prompt: string; title: string; agentType?: string; model?: string; name?: string; cwd?: string; isBackground?: boolean; machine?: string }): Promise<Task>
+  fork(task: { prompt: string; title: string; isBackground?: boolean; at?: string }): Promise<Task>
   callTool(call: { name: string; input: Record<string, unknown> }): Promise<ToolResult>
   usage(): Promise<Usage>
   surfaces(): Promise<Surface[]>
+  end(): Promise<void>
+  visit(at?: string): Promise<void>
+  delete(): Promise<void>
 }
 ```
 
@@ -94,7 +103,8 @@ type Session = {
 - `project` is the project the session works in, and `cwd` is its working folder. For the current session both follow `/cd`, and `cwd` follows a `cd` in a Bash or PowerShell call.
 - `agentType` is the agent definition the session runs, such as `Explore` for a task's owner, or the agent a session started with `claude --agent` runs. A plain session has none.
 - `model` is the model the session runs on. `startedAt` and `lastAt` are ISO times.
-- `forkedFrom` names the session a `/branch` or a fork copied it from, and for a task's owner the session whose `fork` or `clone` started it.
+- `forkedFrom` names the session a `/branch` or a fork copied it from, and for a task's owner the session whose `fork` started it.
+- `visitedAt` is when the person last opened the session's reply, in the browser app or in a mod that calls `visit`, as an ISO time. A reply after it is unread. A session nobody visited has none.
 - `isRunning` is true while the session is open in a Claude Code window, and for a task's owner while its task runs.
 
 ### Read a record
@@ -163,7 +173,7 @@ A listener that throws shows the error toast `The <method> listener failed`, suc
 
 ### Give a listener time
 
-A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, or as soon as the person cancels the work the listener runs for, as Esc does during a tool call, so a slow call such as `http.fetch` can stop with it. Time a listener spends waiting on a call, such as `process.run`, never counts against the 10 seconds Claude Code gives a hook's own code, so a listener that waits can use its whole `timeoutMs`:
+A listener gets 10 seconds. `timeoutMs` changes that, a whole number above 0 and at most `600000`. The second argument a listener gets is its `deadline`, the time it ends as `Date.now()` counts, and a `signal` that aborts then, or as soon as the person cancels the work the listener runs for, as Esc does during a tool call, so a slow call such as `http.fetch` can stop with it. Time a listener spends waiting on a call, such as `process.run`, never counts against the 10 seconds Claude Code gives a hook's own code, so a listener that waits can use its whole `timeoutMs`, on this session and on any other:
 
 ```ts
 sessions.current.onTurnEnd(async (turn, { signal }) => {
@@ -173,7 +183,7 @@ sessions.current.onTurnEnd(async (turn, { signal }) => {
 
 A cancel stops the listener quietly. Claude Code stops the programs its `process.run` and `process.spawn` calls started, cmod goes on without its answer, and nothing it throws shows a toast.
 
-An `on` listener that passes its time stops quietly. A `before` listener that passes its time shows the error toast, and what was about to happen goes on as it was. With `onFailure: 'refuse'`, a `before` listener that throws or passes its time refuses instead, with the error as the reason, for a gate that must hold even when it breaks. The gate holds when Claude Code stops the mod's hook too, as it does when the listener's own code runs past 10 seconds without waiting on a call, and the toast `Claude Code stopped its <hook> hook` says so. On another session, it holds when that session does not answer within 5 seconds, or within what is left of the 8 seconds cmod waits on other sessions for one event, for what the listener's matcher and part cover. A `beforePermissionRequest` listener always refuses when it fails.
+An `on` listener that passes its time stops quietly. A `before` listener that passes its time shows the error toast, and what was about to happen goes on as it was. With `onFailure: 'refuse'`, a `before` listener that throws or passes its time refuses instead, with the error as the reason, for a gate that must hold even when it breaks. The gate holds when Claude Code stops the mod's hook too, as it does when the listener's own code runs past 10 seconds without waiting on a call, and the toast `Claude Code stopped its <hook> hook` says so. On another session, the session waits the listener's own `timeoutMs` and 1 second more for the session that listens, and a gate holds when no answer came by then, with the reason `session <id> did not answer within <n> s`. A listener lives on the connection of the session or script that added it, so a listener whose session ended, or whose machine dropped, is gone at once and nothing waits on it. A `beforePermissionRequest` listener always refuses when it fails.
 
 ### Change what happens
 
@@ -194,7 +204,7 @@ Each `before` method, such as `beforeToolCall`, runs `listener` just before some
 | `beforeReply`, `beforeNotice` | `{ text }` | The text the transcript keeps |
 | `beforeToolResult` | `{ output?, isError?, note? }` | The result, after the tool ran. Here `output` is what the tool answered Claude Code, such as `{ stdout, stderr }` for Bash, and an `output` answer replaces it in the same shape, `note` adds text beside it, and `isError: true` makes Claude read it as a failure, with the note as the reason. A failed call takes only a note |
 | `beforeToolCall` | `{ input?, note? }`, `{ result, note? }`, or `{ refuse }` | A tool call. `result` answers it without running the tool, and `note` reaches Claude with the call's result |
-| `beforeTaskStart` | `{ prompt?, title?, owner?: { agentType?, model?, cwd? }, isAsync? }` or `{ refuse }` | A task about to start. `prompt` and `title` replace what Claude wrote, `owner` picks the agent that does it, its model, and its folder, and `isAsync` runs a subagent while Claude goes on. A background task takes `prompt`, `title`, `owner`, and `refuse`, a fork and a clone take `prompt`, `title`, and `refuse`, and a workflow's agent takes only `refuse` |
+| `beforeTaskStart` | `{ prompt?, title?, owner?: { agentType?, model?, cwd? }, isAsync? }`, `{ result, title? }`, or `{ refuse }` | A task about to start. `prompt` and `title` replace what Claude wrote, `owner` picks the agent that does it, its model, and its folder, and `isAsync` runs a subagent while Claude goes on. A background task takes `prompt`, `title`, `owner`, `result`, and `refuse`, a background fork takes `prompt`, `title`, `result`, and `refuse`, and a workflow's agent takes only `refuse`. `result` is the id of a session the listener started itself, such as on the machine the task's `machine` names, which then is the task's owner |
 | `beforeTurnEnd` | `{ note }` or `{ refuse }` | The agent about to stop. `refuse` tells it it may not stop yet, and it reads the reason as an error. `note` gives it new information, which it reads at once and keeps working. On `task.owner`, it is the task about to hand back its answer |
 | `beforeContextEnd` | `{ summary }` or `{ refuse }` | A compaction about to start. `summary` is the text the new context starts with, which Claude reads as one prompt, in place of the summary Claude Code's model would write, so no model runs. `refuse` keeps the context, whatever another mod answered. When several mods answer `summary`, the last one asked stands |
 
@@ -247,28 +257,34 @@ sessions.current.beforeModelChange({ model: /haiku/ }, () => ({ refuse: 'This pr
 sessions.current.onCwdChange(({ cwd, previous }) => mod.log(`moved from ${previous} to ${cwd}`))
 ```
 
-A `before` method on another session asks the mod over cmod from that session. That session waits up to 5 seconds for the answer, then lets the event happen as it was and logs why.
+A `before` method on another session asks the mod over cmod from that session. That session waits up to the listener's `timeoutMs` and 1 second more for the answer, then lets the event happen as it was, or refuses it for `onFailure: 'refuse'`, and logs why.
 
 ### Act on a session
 
-Every action works on the current session and on every other running session. cmod carries an action to another session, and that session's cmod does it there.
+Every action works on the current session and on every other running session, on this computer or in a session store. cmod carries an action to another session, and that session's cmod does it there.
 
 - `send` adds a message to the session.
   - A `Note` is text the agent reads on its next call to the model and the person does not see. It starts no turn. It rejects with `<mod>: Claude Code refused the note: <reason>` when a plugin refuses it.
   - A `Prompt` is the next prompt, so the agent answers it as a turn of its own. Claude Code holds it until the session is idle, so it never cuts into a turn, and frames it as `The <mod> plugin sent a message:`. With `as: Person`, the agent reads it bare, as the person's own words, while every hook still sees that the mod sent it. It rejects with `<mod>: Claude Code dropped the prompt: <reason>` when a plugin drops it.
   - `as: Session` sends it to another session as a message from this one, which Claude Code shows as one session writing to another.
   - To a task's owner, `send` delivers the text to that running subagent.
+  - To a session that has ended, a `Prompt` resumes it in a new background Claude Code session, as `claude --bg --resume` does, which answers it.
 - `startTask` starts a task in the session, the way the Agent tool starts one, and resolves the `Task` once it started. It does not wait for the task to finish. `title` is the task's title, `agentType` names the owner's agent type, such as `Explore`, `name` is the address a teammate's `SendMessage` reaches it by, and `model` and `cwd` change what it runs on and where. It rejects with `<mod>: Claude Code refused the task: <reason>` when a hook refuses it.
   - With `isBackground: true`, the owner is a new background Claude Code session, as `claude --bg` starts, which starts fresh on the prompt and keeps running after this session ends. It takes no `name`, and rejects with `<mod>: a background task takes no name.` for one.
+  - `machine` names the machine the background session runs on, by its name or its cmod device id. A `beforeTaskStart` listener of a mod that starts sessions on other machines answers it with `result`. With no such answer, a `machine` other than this computer rejects with `<mod>: no mod starts sessions on <machine>, so the task did not start. Leave machine out to start it on <this computer>.`
 - `fork` starts a subagent that keeps this session's whole conversation and does what the prompt says.
-- `clone` starts a new background session with a copy of this session's conversation, which carries on with the prompt.
+  - With `isBackground: true`, the owner is a new background session on a copy of the conversation, which cmod writes as a transcript of its own, and which carries on with the prompt.
+  - `at` is the `id` of a message of the conversation. The copy holds the conversation from its first message through that one, and nothing after it, and needs `isBackground: true`, else the call rejects with `<mod>: a fork through a message runs as a background session. Add isBackground: true.`
+- `end` ends the session's Claude Code once its running turn ends, or at once between turns. Its conversation stays, so a `Prompt` sent to it later resumes it.
+- `visit` marks the session's reply read at `at`, an ISO time, or now, which moves its `visitedAt`.
+- `delete` deletes a session that has ended: its transcripts, its goal, its tasks, and its rows in the index. A running session stays, and the call rejects with `session <id> runs, so it stays. End it first.`
 
-Every task shows in this session's goal. `fork` and `clone` take only `prompt` and `title`, because the owner is a copy of this session. A `beforeTaskStart` listener that refuses a background task or a clone rejects the call with `<mod>: a beforeTaskStart listener refused the task: <reason>`.
+Every task shows in this session's goal. `fork` takes only `prompt`, `title`, `isBackground`, and `at`, because the owner is a copy of this session. A `beforeTaskStart` listener that refuses a background task or a background fork rejects the call with `<mod>: a beforeTaskStart listener refused the task: <reason>`.
 
 ```ts
 await sessions.current.startTask({ title: 'Map the auth code', prompt, agentType: 'Explore' })
 await sessions.current.fork({ title: 'Write the tests', prompt: 'Write tests for what we just built.' })
-await sessions.current.clone({ title: 'Try SQL instead', prompt: 'Rebuild this on SQL.' })
+await sessions.current.fork({ title: 'Try SQL instead', prompt: 'Rebuild this on SQL.', isBackground: true })
 await sessions.current.startTask({ title: 'Upgrade dependencies', prompt, isBackground: true })
 ```
 
@@ -276,13 +292,13 @@ await sessions.current.startTask({ title: 'Upgrade dependencies', prompt, isBack
 | --- | --- | --- |
 | `startTask` | absent | a subagent of this session, with its `agentType` |
 | `fork` | absent | a subagent of this session, `forkedFrom` this session |
-| `clone` | `true` | a new session whose `id` is the task's, `forkedFrom` this session |
+| `fork` with `isBackground` | `true` | a new session whose `id` is the task's, `forkedFrom` this session |
 | `startTask` with `isBackground` | `true` | a new session whose `id` is the task's |
 - `callTool` runs a tool in the session, such as `{ name: 'Bash', input: { command: 'bun test' } }`, and resolves its `ToolResult`.
 - `usage` answers the session's model, its context window's fill, its rate limits, and its cost so far, as the status line shows them: `{ model, contextWindow: { tokenCount?, size?, percent? }, rateLimits?: { type, percent, resetsAt? }[], cost?: { usd } }`. Each rate limit is one window of the account's plan: its `type`, such as `five_hour`, `seven_day`, or a Claude gateway's `spend_limit`, how much of it is used, 0 to 100, and when it resets, as an ISO 8601 time. For an ended session and a task's owner it answers the model and the tokens of its last reply, from its transcript, with no rate limits.
 - `surfaces` answers the Claude apps showing the session now: `'terminal'`, `'desktop'`, `'mobile'`, and `'vscode'`. An ended session shows in none.
 
-A task's owner is a `TaskOwner`, a session without `startTask`, `fork`, `clone`, and `callTool`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `surfaces`. An action on a session that has ended rejects with `session <id> has ended`, and `send` with `<mod>: session <id> has ended, so it takes no messages.`
+A task's owner is a `TaskOwner`, a session without `startTask`, `fork`, `callTool`, and `delete`, because Claude Code gives a subagent no way to start a task or run a tool from outside. It takes `send`, `usage`, and `surfaces`, and a background task's owner also `end` and `visit`. An action other than `send`, `usage`, `surfaces`, `visit`, and `delete` on a session that has ended rejects with `session <id> has ended, so it takes no <action>. Message it to resume it.`
 
 A prompt that comes on a clock, such as every 10 minutes, belongs in a `schedule` job instead, which Claude Code shows as one `Running scheduled task` row ([jobs.md](jobs.md#schedule)).
 

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { lstat, mkdir, readdir, readFile, readlink, rm, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { isObject, readRecord, storeFolder } from '@cmodjs/core/src/records.js'
+import { cmodPluginName } from '@cmodjs/core/src/runtime/dependencies.js'
 import { parse } from 'jsonc-parser'
 import { ifMissing, readJson, readLink, readText, writeAtomically } from './files.js'
 import { configRoot, excludeRules, includeRules, isLinked, settingsPath } from './settings.js'
@@ -31,7 +32,7 @@ export async function readRules(folder: string): Promise<Rule[]> {
 
 export type SyncedRules = { readonly linked: readonly LinkedRules[]; readonly placed: readonly string[]; readonly removed: readonly string[]; readonly watched: readonly string[] }
 
-export async function syncRules(project: string, pluginDirs: readonly string[] = []): Promise<SyncedRules> {
+export async function syncRules(project: string, pluginDirs: readonly string[] = [], own?: { readonly mod: string; readonly root: string }): Promise<SyncedRules> {
   const store = storeFolder(process.env)
   const userRules = join(configRoot(), 'rules')
   const projectRules = join(project, '.claude', 'rules')
@@ -43,20 +44,24 @@ export async function syncRules(project: string, pluginDirs: readonly string[] =
   const placed: string[] = []
   const removed: string[] = []
   const watched = new Set([settingsPath(), join(project, '.claude', 'settings.json'), projectLocal, userRules, projectRules, storePath('records'), storePath('rules.json')])
-  if (names.length === 0 && !existsSync(storePath('rules.json'))) return { linked, placed, removed, watched: [...watched] }
+  if (names.length === 0 && own === undefined && !existsSync(storePath('rules.json'))) return { linked, placed, removed, watched: [...watched] }
   await withPlaced(async (recorded) => {
     const drop = async (entry: Placed) => {
       if (await undo(entry)) removed.push(entry.mod)
       recorded.splice(recorded.indexOf(entry), 1)
     }
-    for (const mod of names) {
-      watched.add(storePath('records', `${mod}.json`))
-      const record = await readRecord(readText, store, mod)
-      if (record === undefined) continue
-      const source = rulesFolderOf(record.root)
+    const installed = await Promise.all(
+      names.filter((mod) => mod !== own?.mod).map(async (mod) => {
+        watched.add(storePath('records', `${mod}.json`))
+        const record = await readRecord(readText, store, mod)
+        return record === undefined ? [] : [{ mod, root: record.root, isOwn: false }]
+      }),
+    )
+    for (const { mod, root, isOwn } of [...installed.flat(), ...(own === undefined ? [] : [{ ...own, isOwn: true }])]) {
+      const source = rulesFolderOf(root)
       watched.add(source)
       const isWanted = existsSync(source)
-      const isEverywhere = user.enabled.get(mod) === true || pluginDirs.includes(record.root) || (await isLinked(record.root))
+      const isEverywhere = isOwn || user.enabled.get(mod) === true || pluginDirs.includes(root) || (await isLinked(root))
       const isHere = here.enabled.get(mod) ?? isEverywhere
       const link = !isWanted ? undefined : isEverywhere ? join(userRules, mod) : here.enabled.get(mod) === true ? join(projectRules, mod) : undefined
       const exclude = link !== undefined && isEverywhere && !isHere ? `${link}/**` : undefined
@@ -81,7 +86,7 @@ export async function syncRules(project: string, pluginDirs: readonly string[] =
       for (const rule of rules) watched.add(join(source, `${rule.name}.md`))
       linked.push({ mod, folder: link, rules: rules.filter((rule) => !isExcluded(join(link, `${rule.name}.md`)) && !isExcluded(join(source, `${rule.name}.md`))) })
     }
-    for (const entry of recorded.filter((each) => !names.includes(each.mod))) await drop(entry)
+    for (const entry of recorded.filter((each) => !names.includes(each.mod) && each.mod !== cmodPluginName)) await drop(entry)
   })
   return { linked, placed, removed: [...new Set(removed)].filter((mod) => !placed.includes(mod) && !linked.some((each) => each.mod === mod)), watched: [...watched] }
 }

@@ -157,6 +157,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
         .filter((session) => isInScope(session, request))
         .map((session) => session.data)
         .toSorted((first, second) => second.lastAt.localeCompare(first.lastAt)),
+    [conversationMethods.session]: (request) => sessionOf(String(request['session'])).data,
     [conversationMethods.search](request) {
       const text = String(request['text'])
       if ([...text].length < 3) throw new Error('cmod history search takes at least 3 characters.')
@@ -223,6 +224,15 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       const action = String(request['action'])
       const input = isObject(request['input']) ? request['input'] : {}
       const task = typeof request['task'] === 'string' ? request['task'] : undefined
+      if (action === 'visit') {
+        session.data = { ...session.data, visitedAt: typeof request['input'] === 'string' ? request['input'] : now() }
+        return null
+      }
+      if (action === 'delete') {
+        if (session.data.isRunning) throw new Error(`session ${session.data.id} runs, so it stays. End it first.`)
+        kept.delete(session.data.id)
+        return null
+      }
       const isLive = task === undefined ? session.data.isRunning : session.data.isRunning && taskOf(session, task).closedAt === undefined
       if (action === 'usage') return { model: task === undefined ? session.data.model : (taskOf(session, task).model ?? session.data.model), contextWindow: {} }
       if (action === 'surfaces') return isLive ? ['terminal'] : []
@@ -230,6 +240,10 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       if (action === 'abort') {
         const open = task === undefined ? session.conversation.state.turn : session.conversation.state.taskTurns[task]
         if (open?.prompt.id !== input['turn']) throw new Error(`turn ${String(input['turn'])} has ended, so there is nothing to abort.`)
+        return null
+      }
+      if (action === 'end') {
+        session.data = { ...session.data, isRunning: false }
         return null
       }
       if (action === 'send') {
@@ -240,7 +254,7 @@ export function fakeSessions({ project, cwd, given, push, callTool, listAgents, 
       const title = text('title') ?? ''
       if (action === 'startTask' || action === 'fork' || action === 'startBackgroundTask' || action === 'clone') {
         if (title.trim() === '') throw new Error('a task needs a title.')
-        const isClone = action === 'clone'
+        const isClone = action === 'clone' || (action === 'fork' && input['isBackground'] === true)
         const isBackground = isClone || action === 'startBackgroundTask'
         const forkedFrom = isClone || action === 'fork' ? session.data.id : undefined
         const agentType = forkedFrom === undefined ? text('agentType') : undefined

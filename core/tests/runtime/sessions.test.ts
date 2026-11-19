@@ -129,7 +129,7 @@ test('a mod listens on every session, with nothing declared in package.json "cmo
   const { fake, lifecycle } = await installedMod(() => void sessions.onPrompt(() => undefined))
 
   expect(lifecycle.toasts).toEqual([])
-  expect(fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method: string }).method === conversationMethods.subscribe ? [(input as { input: unknown }).input] : []))).toEqual([{ session: '*', subscriptions: [{ event: 'prompt', matcher: undefined }] }])
+  expect(fake.calls.flatMap(({ call, args: [input] }) => (call === 'cmod.call' && (input as { method: string }).method === conversationMethods.subscribe ? [(input as { input: unknown }).input] : []))).toEqual([{ session: '*', subscriptions: [{ event: 'prompt', matcher: undefined, scope: {} }] }])
 })
 
 test("a mod's note before a tool call reaches the cmod plugin, with nothing declared in package.json \"cmod\"", async () => {

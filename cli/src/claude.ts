@@ -3,6 +3,8 @@ import { mkdtemp, readdir, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { isObject } from '@cmodjs/core/src/records.js'
+import type { TaskData } from '@cmodjs/core/src/session/conversation.js'
+import type { TaskStatus } from '@cmodjs/core/src/session/goal/task.js'
 import { ifMissing } from '@cmodjs/core/src/utils/paths.js'
 import { messageOf } from '@cmodjs/core/src/utils/text.js'
 import { version as cmodVersion } from '../package.json'
@@ -243,6 +245,21 @@ export async function backgroundAgents(): Promise<{ readonly id: string; readonl
   const entries = parse(await run([claudeCode(), 'agents', '--json', '--all']), 'claude agents --json --all')
   if (!Array.isArray(entries)) throw new Error('claude agents --json --all printed no list. Update Claude Code to 2.1.308 or later.')
   return entries.filter(isObject).flatMap((entry) => (typeof entry['sessionId'] === 'string' ? [{ id: String(entry['id']), sessionId: entry['sessionId'], status: String(entry['status']) }] : []))
+}
+
+const taskStatuses: ReadonlySet<string> = new Set(['pending', 'running', 'waiting', 'idle', 'completed', 'failed', 'killed'] satisfies TaskStatus[])
+
+export async function withBackgroundStatus(tasks: readonly TaskData[], report: (error: unknown) => void): Promise<TaskData[]> {
+  if (!tasks.some((task) => task.isBackground === true)) return [...tasks]
+  const agents = await backgroundAgents().catch((error: unknown) => {
+    report(error)
+    return []
+  })
+  const statuses = new Map(agents.filter((agent) => taskStatuses.has(agent.status)).map((agent) => [agent.sessionId, agent.status as TaskStatus]))
+  return tasks.map((task) => {
+    const status = task.isBackground === true ? statuses.get(task.id) : undefined
+    return status === undefined ? task : { ...task, status }
+  })
 }
 
 function pluginDirArguments(pluginDirs: readonly string[]): string[] {

@@ -30,6 +30,7 @@ import { createState } from './state.js'
 import { createToaster, type Failure, type ShownToast, type Toaster } from './toaster.js'
 import { toolCalls } from './tool-calls.js'
 import { createHotkeys } from './hotkeys.js'
+import { createProviders, interfaceMethods, type ProgramProviders, type ProvidedCall, type ProvidedHeard } from './interfaces.js'
 import type { Pages } from './pages.js'
 import { drawnParts, type DrawnParts } from './parts.js'
 import { createWatches } from './watches.js'
@@ -65,7 +66,7 @@ export type Lifecycle<State extends object> = {
   raise(method: string, payload: Readonly<Record<string, unknown>>): Promise<unknown>
 }
 
-export type CmodPlugin = { readonly conversations: Conversations; readonly widgets: Widgets; readonly pages: Pages }
+export type CmodPlugin = { readonly conversations: Conversations; readonly widgets: Widgets; readonly pages: Pages; readonly programs: ProgramProviders }
 
 export type ServeCmodPlugin = (served: {
   readonly claude: Claude
@@ -807,7 +808,13 @@ async function createMod<State extends object, Declared extends Options>(definit
     void parts?.fill(styler, cached, input, name)?.then(() => claude.ui.invalidate('ui.render'))
     return parts?.element(styler, cached, `${styler}/markdown:${scope}:`, name, `markdown:${styler}`)
   }
-  const area = createUi<State>({ name: definition.name, claude, router, report, announce, mod: () => mod, borrowed, nextDraw: runtime.nextDraw })
+  const provided = createProviders({
+    name: definition.name,
+    call: (to, method, input) => claude.cmod.call({ to, method, input }),
+    changed: () => area.relisted(),
+    report: (error) => report({ id: 'interfaces', message: 'A provider listener failed', error }),
+  })
+  const area = createUi<State>({ name: definition.name, claude, router, report, announce, mod: () => mod, borrowed, nextDraw: runtime.nextDraw, provided: () => provided.provided() })
   const askParent = async (): Promise<string | undefined> => {
     if (definition.name === cmodPluginName) return undefined
     try {
@@ -933,6 +940,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     mods: {
       isLoaded: async (name) => (await claude.cmod.call({ to: cmodPluginName, method: loadedMethod, input: { name } })) === true,
     },
+    providers: (name) => provided.providers(name) as never,
   }
   const timer = (ms: number, subject: string, repeats: boolean, listener: () => unknown): ModTimer => {
     let isFiring = false
@@ -1012,6 +1020,7 @@ async function createMod<State extends object, Declared extends Options>(definit
     toast: toaster.toast,
     ask: (question, options) => claude.ui.ask(question, options),
     dependencies: dependencyCalls(claude, (call, task) => beforeDeadline(claude, { ms: dependencyCallMs }, call, task)),
+    provide: (name, methods) => provided.provide(name, methods),
   }
   bind(imports)
   const followSession = async (isAfterCd = false) => {
@@ -1100,6 +1109,7 @@ async function createMod<State extends object, Declared extends Options>(definit
   const served = runtime.serveCmodPlugin?.({ claude, router, store: runtime.store, project: () => modState.root, report: reportPart, clear: (id) => toaster.toast.dismiss(id), tellRefusedPress, parts, markdownIn: area.markdownIn, tellStylers: area.restyled })
   const conversations = served?.conversations
   const widgets = served?.widgets
+  const programs = served?.programs
   pages = served?.pages
   const tellColor = (to: string, told: SessionColor) => {
     if (told.session === '' || to === cmodPluginName) return
@@ -1124,6 +1134,12 @@ async function createMod<State extends object, Declared extends Options>(definit
     if (e.method === conversationMethods.sessionColor && call.caller === cmodPluginName) {
       client.recolor(e.input as SessionColor)
       return { value: null }
+    }
+    if (e.method === interfaceMethods.heard && call.caller === cmodPluginName) return { value: await provided.heard(e.input as ProvidedHeard, next.signal) }
+    if (call.caller !== undefined) {
+      const forProgram = programs?.answer(e.method, e.input, call.caller)
+      if (forProgram !== undefined) return { value: await forProgram }
+      if (e.method === interfaceMethods.provided) return { value: await provided.answer(e.input as ProvidedCall) }
     }
     const ask = beforeAskOf(call)
     if (ask !== undefined) return { value: (await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject, next.signal)) ?? null }
@@ -1160,6 +1176,7 @@ async function createMod<State extends object, Declared extends Options>(definit
       return { remove: () => void redraws.delete(listener) }
     },
     ...(widgets === undefined ? {} : { widgets }),
+    onServeUnreached: (listener) => conversations?.onUnreached(listener),
     ...(pages === undefined ? {} : { pages }),
   })
   const names = new Set<string>()

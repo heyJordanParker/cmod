@@ -17,8 +17,9 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["bun"],
+    "typeRoots": ["../types", "./node_modules/@types"],
+    "types": ["bun", "claude-code", "claude-code-tools"],
     "paths": { "@cmodjs/core/*": ["../core/*"] }
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "../types"]
 }

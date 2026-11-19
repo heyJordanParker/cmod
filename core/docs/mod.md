@@ -167,6 +167,7 @@ type Mod<State, Options, Hotkeys> = {
   readonly toast: Toast
   ask(question, options?): Promise<string>
   readonly dependencies: CmodDependencies
+  provide(name, methods): Subscription
 }
 ```
 
@@ -181,12 +182,12 @@ type Mod<State, Options, Hotkeys> = {
 - `use` adds a job, such as a slash command or a tool, and returns its handle ([jobs.md](jobs.md)).
 - `log` writes a line, under the mod's name, to Claude Code's debug log.
 - `sidebar`, `settings`, `panes`, `widgets`, and `styles` add the mod's pages, panes, widgets, and styles. `toast` shows a short message and `ask` asks a question ([ui.md](ui.md)).
-- `dependencies` calls the methods of other mods ([dependencies.md](dependencies.md)).
+- `dependencies` calls the methods of other mods, and `provide` answers an interface's methods while the mod runs, until `remove()` on the `Subscription` it returns ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)).
 
 Everything that is Claude Code's or the computer's rather than the mod's is an import from `mod.js`, so a function in any file calls it without being handed `mod`:
 
 ```ts
-import { clipboard, commands, config, device, fs, http, metadata, model, process, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
+import { clipboard, commands, config, device, fs, http, metadata, model, process, providers, sessions, settings } from '../node_modules/@cmodjs/core/mod.js'
 ```
 
 - `sessions` is the conversations: the one the mod runs in, every other one, and search across them. Everything that happens in a session, from a prompt to a permission dialog, is a method on it ([session.md](session.md)).
@@ -562,6 +563,14 @@ mods.isLoaded(name: string): Promise<boolean>
 ```
 
 Answers whether a mod runs in this Claude Code process, so a mod calls another mod it does not list only when the person has it ([dependencies.md](dependencies.md#call-a-mod-only-when-it-runs-modsisloaded)).
+
+## providers: the mods that answer an interface
+
+```ts
+providers<Name extends InterfaceName>(name: Name): Promise<InterfaceProvider<Name>[]>
+```
+
+Answers each mod and program that provides the interface now, with its methods and its events ([dependencies.md](dependencies.md#interfaces-several-mods-answer-one-name)).
 
 ## messageOf
 

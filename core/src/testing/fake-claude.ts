@@ -7,6 +7,8 @@ import { partMethods } from '../runtime/ui.js'
 import { untagged } from '../session/context/turn/message/note.js'
 import { elements } from './fake-elements.js'
 import { fakeFiles } from './fake-files.js'
+import { fakeServe, type FakeServe } from './fake-serve.js'
+import type { SessionComputer } from '../runtime/interfaces.js'
 
 export type TestCall = {
   readonly call: string
@@ -29,6 +31,7 @@ export type Fakes = {
   cmod: { call?: Claude['cmod']['call'] }
   tool: { call?: Claude['tool']['call'] }
   device: { read?: Claude['device']['read'] }
+  serve: Partial<SessionComputer>
 }
 
 const testDevice: Device = { id: '5f0e8c2a9b7d4e31a6c4d2b0e8f71a93', name: 'test-computer', os: 'linux', arch: 'x64' }
@@ -52,6 +55,7 @@ export type FakeClaude = {
   readonly fakes: Fakes
   readonly shown: Shown
   readonly store: Map<string, unknown>
+  readonly serve: FakeServe
   settle(): Promise<void>
   placePane(id: string): void
 }
@@ -63,12 +67,13 @@ export function calledAnswer(caller: string, answer: EventResult<'cmod.call'>): 
 
 export function fakeClaude(plugin: { readonly name: string; readonly root: string }): FakeClaude {
   const calls: TestCall[] = []
-  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {}, device: {} }
+  const fakes: Fakes = { process: {}, fs: {}, http: {}, settings: {}, config: {}, command: {}, ui: {}, session: {}, prompt: {}, model: {}, agent: {}, clock: {}, cmod: {}, tool: {}, device: {}, serve: {} }
   const emptyDisk = fakeFiles({})
   const shown: Shown = { notes: [], prompts: [], logs: [], debug: [], openPanes: new Set(), commands: [], tools: [], schedules: [] }
   const unplacedPanes = new Set<string>()
   let focusedPane: string | undefined
   const store = new Map<string, unknown>()
+  const serve = fakeServe(() => fakes.serve)
 
   const faked = <Args extends readonly unknown[], Result>(call: string, answer: () => ((...args: Args) => Result) | undefined) => {
     return (...args: Args): Result => {
@@ -86,6 +91,8 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
   }
 
   const cmodCall = rejected('cmod.call', () => fakes.cmod.call ?? cmodTakesParts)
+  const fetchFake = rejected('http.fetch', () => fakes.http.fetch)
+  const spawnFake = faked('process.spawn', () => fakes.process.spawn)
 
   const clonedAsClaudeCodeDoes = <Args,>(args: Args): Args => {
     try {
@@ -167,7 +174,7 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     },
     process: {
       run: rejected('process.run', () => fakes.process.run),
-      spawn: faked('process.spawn', () => fakes.process.spawn),
+      spawn: (request) => (isServeHolder(request.argv) ? servedHolder(request.argv[0] ?? '') : spawnFake(request)),
     },
     fs: {
       read: rejected('fs.read', () => fakes.fs.read ?? emptyDisk.read),
@@ -176,7 +183,12 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
       exists: rejected('fs.exists', () => fakes.fs.exists ?? emptyDisk.exists),
       stat: rejected('fs.stat', () => fakes.fs.stat ?? emptyDisk.stat),
     },
-    http: { fetch: rejected('http.fetch', () => fakes.http.fetch) },
+    http: {
+      fetch: async (url, init) => {
+        if (fakes.http.fetch === undefined && init?.socketPath?.endsWith('/serve.sock') === true) return serve.fetch(url, init)
+        return fetchFake(url, init)
+      },
+    },
     settings: { read: rejected('settings.read', () => fakes.settings.read ?? (async () => ({}))) },
     config: {
       list: rejected('config.list', () => fakes.config.list ?? (async () => [])),
@@ -256,11 +268,24 @@ export function fakeClaude(plugin: { readonly name: string; readonly root: strin
     if (unplacedPanes.delete(id)) shown.openPanes.add(id)
   }
 
-  return { claude, calls, fakes, shown, store, settle, placePane }
+  return { claude, calls, fakes, shown, store, serve, settle, placePane }
 }
 
 declare function setTimeout(fn: () => void, ms: number): unknown
 declare function clearTimeout(timeout: unknown): void
+
+function isServeHolder(argv: readonly string[]): boolean {
+  return argv[1] === 'program' && argv[2] === cmodPluginName && argv.at(-2) === cmodPluginName && argv.at(-1) === 'serve'
+}
+
+function servedHolder(program: string): ReturnType<Claude['process']['spawn']> {
+  const store = program.slice(0, program.lastIndexOf('/programs/'))
+  return (async function* () {
+    yield { stream: 'stdout' as const, text: `unix:${store}/serve.sock\n` }
+    await new Promise<never>(() => undefined)
+    return { code: 0, signal: null }
+  })() as never
+}
 
 function realTimer(ms: number, fn: () => void): Timer {
   const timeout = setTimeout(fn, ms)

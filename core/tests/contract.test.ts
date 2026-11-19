@@ -54,3 +54,16 @@ test('a mod answers every method the cmod plugin of @cmodjs/core 4.0.0, 4.1.0, a
   expect(await refusal('cmod:unheard')).toContain('has no method')
   for (const method of methods) expect(await refusal(method)).not.toContain('has no method')
 })
+
+test('a mod answers every method the cmod plugin of @cmodjs/core 7.0.0 added', async () => {
+  const tested = testMod(defineMod({ name: 'demo', setup() {} }))
+  await tested.start()
+  const refusal = async (method: string) => {
+    const answer = await claudeCodeOf(tested)
+      .fire('cmod.call', { to: 'demo', method, input: {}, caller: 'cmod' } as never)
+      .catch((error: unknown) => ({ deny: String(error) }))
+    return (answer as { deny?: string }).deny ?? ''
+  }
+
+  for (const method of ['cmod:provided', 'cmod:heard']) expect(await refusal(method)).not.toContain('has no method')
+})

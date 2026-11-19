@@ -924,7 +924,7 @@ test("a background task's owner is a new session whose id is the task's, its bef
   await expect(sessions.current.startTask({ title: 'Upgrade', prompt: 'Upgrade.', isBackground: true, name: 'upgrader' })).rejects.toThrow('demo: a background task takes no name.')
 })
 
-test("a clone is a background task whose owner is forked from this session, and its beforeTaskStart refuses it", async () => {
+test("a background fork is a background task whose owner is forked from this session, and its beforeTaskStart refuses it", async () => {
   const ended: string[] = []
   const tested = testMod(
     defineMod({
@@ -939,8 +939,8 @@ test("a clone is a background task whose owner is forked from this session, and 
   await tested.add({ type: Prompt, text: 'Store the notes' })
   await tested.settle()
 
-  await expect(sessions.current.clone({ title: 'Try SQL', prompt: 'Rebuild this on SQL.' })).rejects.toThrow('demo: a beforeTaskStart listener refused the task: SQL is out.')
-  const clone = await sessions.current.clone({ title: 'Try files', prompt: 'Rebuild this on plain files.' })
+  await expect(sessions.current.fork({ title: 'Try SQL', prompt: 'Rebuild this on SQL.', isBackground: true })).rejects.toThrow('demo: a beforeTaskStart listener refused the task: SQL is out.')
+  const clone = await sessions.current.fork({ title: 'Try files', prompt: 'Rebuild this on plain files.', isBackground: true })
   await tested.endTurn({ answer: 'Rebuilt.' }, { task: clone.id })
 
   expect(seenOf(clone)).toEqual({ id: clone.id, isBackground: true, owner: { id: clone.id, agentType: undefined, model: '', forkedFrom: 'test-session' } })

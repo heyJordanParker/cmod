@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rename, rm, rmdir, stat, symlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { dataFolder, instancePath, isObject, linkedProgramPath, pluginName, programPath, storeFolder, type RunnerEvent } from '@cmodjs/core/src/records.js'
+import { dataFolder, instancePath, isObject, linkedProgramPath, pluginName, programPath, storeFolder, type ProgramInstance, type RunnerEvent } from '@cmodjs/core/src/records.js'
 import { relativePath } from '@cmodjs/core/src/utils/paths.js'
 import { formatExit, messageOf } from '@cmodjs/core/src/utils/text.js'
 import { home, ifMissing, readJson, readLink, readText, tilde, writeAtomically } from './files.js'
@@ -12,8 +12,6 @@ import { isLinked } from './settings.js'
 import { deleteSecrets, isHolding, storePath, takeLock } from './store.js'
 
 export type Program = { name: string; folder: string; build: string; output: string }
-
-export type Instance = { readonly address: string; readonly pid: number; readonly started: string; readonly tailnetUrl?: string }
 
 export const programSteps = 3
 
@@ -340,7 +338,7 @@ async function stopCopies(name: string): Promise<void> {
   const store = storeFolder(process.env)
   for (const mod of await readdir(storePath('instances')).catch(ifMissing([]))) {
     if (!pluginName.test(mod)) continue
-    const copy = (await readJson(instancePath(store, mod, name))) as Instance | undefined
+    const copy = (await readJson(instancePath(store, mod, name))) as ProgramInstance | undefined
     if (copy !== undefined) await stopCopy(copy.pid, copy.started)
   }
 }

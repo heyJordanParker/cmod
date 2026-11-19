@@ -57,7 +57,8 @@ import { drawWith, elementOf, withLinks, type Press } from './ui/elements.js'
 import { drawnParts } from './runtime/parts.js'
 import { serveWidgets, type Widgets } from './runtime/widgets.js'
 import { engineOf } from './runtime/engine.js'
-import { pagesOf, servePages } from './runtime/pages.js'
+import { pagesOf, providedBy, servePages } from './runtime/pages.js'
+import { interfaceMethods, styleInterface, type ProviderList } from './runtime/interfaces.js'
 import { inheriting, openLink, partMethods, type DrawnPart, type PageRequest, type PartPress, type PartsUpdate } from './runtime/ui.js'
 
 export type { Fakes, TestCall } from './testing/fake-claude.js'
@@ -248,13 +249,13 @@ export function testMod<State extends object, Declared extends Options = Options
     await tellShown()
   }
   let widgets: Promise<Widgets> | undefined
-  let stylesMarkdown = false
+  let provides: readonly string[] = []
   const ownMarkdown = new Map<string, DrawnPart | null>()
   const missedMarkdown = new Map<string, { readonly markdown: string } & StyledAt>()
   const updated = async ({ parts, redraw, requests }: PartsUpdate) => {
     if (parts !== undefined) {
       declaredPages = pagesOf(parts)
-      stylesMarkdown = parts.stylesMarkdown === true
+      provides = providedBy(parts)
       ownMarkdown.clear()
     }
     if (parts !== undefined || redraw !== undefined) (await widgetsOf()).update(name, { ...(parts === undefined ? {} : { parts }), ...(redraw === undefined ? {} : { redraw }) })
@@ -264,7 +265,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const markdownIn = (table: ElementTable, at: StyledAt) => {
     let unkeyed = 0
     return (props: MarkdownProps): RenderElement => {
-      if (!stylesMarkdown) return table.Markdown(props)
+      if (!provides.includes(styleInterface)) return table.Markdown(props)
       const keyPrefix = `${name}/markdown:${props.key ?? unkeyed++}:`
       const drawnAt = `${at.surface}\u0000${at.columns}\u0000${props.text}`
       const drawn = ownMarkdown.get(drawnAt)
@@ -307,7 +308,7 @@ export function testMod<State extends object, Declared extends Options = Options
   const cmodBeneath = createRouter()
   const pages = servePages({ claude: cmodClaude, router: cmodBeneath, report: reportPart, tellRefusedPress, widgets: { update: (mod, update) => void widgetsOf().then((served) => served.update(mod, update)) }, parts, tellStylers: () => undefined })
   pages.apply((_mod, requests) => applyRequests(requests))
-  const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations)
+  const dependencies = fakeDependencies(name, options.dependencies ?? {}, conversations, () => provides)
   fake.fakes.cmod.call = async (call) => {
     if (call.to !== cmodPluginName || call.method !== partMethods.changed) return dependencies(call)
     const { requests, isAsked, ...listing } = call.input as PartsUpdate
@@ -818,8 +819,13 @@ export function testMod<State extends object, Declared extends Options = Options
   return tested
 }
 
-function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions): Claude['cmod']['call'] {
-  const cmod = { forkParent: () => null, updateSettings: () => null, [loadedMethod]: ({ name }: { readonly name: string }) => name === caller || name === cmodPluginName || Object.hasOwn(dependencies, name) }
+function fakeDependencies(caller: string, dependencies: NonNullable<TestOptions<object>['dependencies']>, conversations: FakeSessions, provides: () => readonly string[]): Claude['cmod']['call'] {
+  const cmod = {
+    forkParent: () => null,
+    updateSettings: () => null,
+    [loadedMethod]: ({ name }: { readonly name: string }) => name === caller || name === cmodPluginName || Object.hasOwn(dependencies, name),
+    [interfaceMethods.providers]: ({ name }: { readonly name: string }): ProviderList => ({ mods: provides().includes(name) ? [caller] : [], programs: [] }),
+  }
   const apis = { [cmodPluginName]: cmod, ...dependencies } as Readonly<Record<string, Parameters<typeof answerCall>[1] | undefined>>
   return async (call) => {
     const served = call.to === cmodPluginName ? conversations.answer(caller, call.method, call.input) : undefined

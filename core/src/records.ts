@@ -289,6 +289,18 @@ export function instancePath(store: string, mod: string, executable: string): st
   return `${instanceFolder(store, mod)}/${executable}.json`
 }
 
+export function serveSocketPath(store: string): string {
+  return `${store}/serve.sock`
+}
+
+export type ProgramInstance = { readonly address: string; readonly pid: number; readonly started: string; readonly tailnetUrl?: string; readonly provides?: readonly string[] }
+
+export const processTypes = ['Interactive', 'Background'] as const
+
+export type ProcessType = (typeof processTypes)[number]
+
+export const interfaceName = /^[a-z0-9][\w.-]*\/[A-Z]\w*$/
+
 export function serviceFolder(store: string, mod: string): string {
   return `${store}/services/${checkedName(mod)}`
 }
@@ -469,9 +481,9 @@ function readHotkeys(hotkeys: unknown): Steps {
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys as Record<string, HotkeyInit>) }
 }
 
-export const coreVersion = '6.3.0'
+export const coreVersion = '7.0.0'
 
-export const oldestCmodVersion = '6.1.0'
+export const oldestCmodVersion = '7.0.0'
 
 export function hotkeyCommand(mod: string, hotkey: string): string {
   return `${mod}--${hotkey}`
@@ -550,7 +562,7 @@ export async function scriptsSha256(steps: Steps, files: { read: ReadFile; list:
       text += `\0${path}\0${content}`
     }
   }
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(new TextEncoder().encode(text)))
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 

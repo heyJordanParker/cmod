@@ -824,8 +824,8 @@ test('a mod that adds or drops a markdown style makes the cmod plugin tell every
   pages.update('other', { parts: { widgets: [], pages: [] } })
   pages.update('cmod', { parts: { widgets: [], pages: [] } })
 
-  pages.update('third', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
-  pages.update('third', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
+  pages.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
   pages.update('third', { parts: { widgets: [], pages: [] } })
   pages.update('other', { parts: { widgets: [], pages: [] } })
 
@@ -846,11 +846,24 @@ test('a mod still installing misses its page list and which mods style markdown 
   pages.update('other', { parts: { widgets: [], pages: [] } })
 
   pages.element('demo', 'items', null, 60, true)
-  pages.update('third', { parts: { widgets: [], pages: [], stylesMarkdown: true } })
+  pages.update('third', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
   await fake.settle()
 
   expect(fake.shown.debug).toEqual([])
   expect(pages.stylers()).toEqual(['third'])
+})
+
+test("the cmod plugin names each interface's providers in the order they listed, and counts a mod an older core runs, which says stylesMarkdown, as a cmod/Style provider", async () => {
+  const fake = fakeClaude({ name: 'cmod', root })
+  fake.fakes.cmod.call = async () => null
+  const pages = servePages({ claude: fake.claude, router: createRouter(), report: () => undefined, tellRefusedPress: () => undefined, widgets: { update: () => undefined }, parts: drawnParts({ claude: fake.claude, report: () => undefined, press: () => undefined }), tellStylers: () => undefined })
+
+  pages.update('older', { parts: { widgets: [], pages: [], stylesMarkdown: true } as never })
+  pages.update('terminal', { parts: { widgets: [], pages: [], provides: ['demo/Terminal', 'cmod/Style'] } })
+  pages.update('other', { parts: { widgets: [], pages: [], provides: ['demo/Terminal'] } })
+  pages.update('terminal', { parts: { widgets: [], pages: [], provides: ['cmod/Style'] } })
+
+  expect([pages.stylers(), pages.providers('demo/Terminal'), pages.providers('demo/None')]).toEqual([['older', 'terminal'], ['other'], []])
 })
 
 test('a press the mod refuses makes the page draw again, so its next buttons work, and the person hears of it', async () => {
@@ -1992,8 +2005,7 @@ test('the cmod plugin takes what a mod listens to while it installs, and serves 
   bootstrap.exit(0)
   await fake.settle()
 
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ demo: { 'test-session': listens } })
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/before/test-session.json'))).toMatchObject([{ mod: 'demo', target: 'test-session', events: ['ContextEnd'] }])
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: { 'test-session': listens } }, watched: { demo: { 'test-session': watches } } })
 })
 
 test('the cmod plugin answers what a mod listens to at once while its own setup still runs, so the caller spends none of its 10 s hook budget waiting', async () => {
@@ -2017,7 +2029,7 @@ test('the cmod plugin answers what a mod listens to at once while its own setup 
   await fake.settle()
 
   expect(lifecycle.phase).toBe('active')
-  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ demo: { 'test-session': listens } })
+  expect(JSON.parse(await disk.read('/home/.local/share/cmod/data/cmod/listeners/test-session.json'))).toEqual({ subscribed: { demo: { 'test-session': listens } }, watched: {} })
 })
 
 test('the cmod plugin counts as installed when the cmod program is its version or newer', async () => {
