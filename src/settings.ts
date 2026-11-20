@@ -1,10 +1,10 @@
-import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type ConfigRow, type Mod, type Pane } from '../node_modules/@cmodjs/core/mod.js'
-import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, parseTailnetRecord, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, storeFolder, tailnetFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
+import { AbovePrompt, BelowPrompt, clipboard, Dashboard, fs, longestMs, messageOf, process, TurnEnd, Working, type Area, type ConfigRow, type Mod, type Pane, type Surface } from '../node_modules/@cmodjs/core/mod.js'
+import { finishStepsMethod, hotkeyCommand, isLogEntry, isObject, logFolder, loggedFailures, logReport, marketplaceOf, newestLog, parseLog, parsePreferences, parseTailnetRecord, pendingStepsMethod, preferencesPath, readRecord, readSteps, serviceFolder, storeChangedPath, tailnetFolder, versionsLine, type LogEntry, type LogLevel, type LogVersions, type Preferences } from '../node_modules/@cmodjs/core/records.js'
 import { filledButton } from '../node_modules/@cmodjs/core/runtime/buttons.js'
 import { isStillInstalling } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
 import { readCombos } from '../node_modules/@cmodjs/core/runtime/hotkeys.js'
-import { cmodError, newestCmodVersion } from '../node_modules/@cmodjs/core/runtime/programs.js'
+import { cmodError, cmodStore, newestCmodVersion } from '../node_modules/@cmodjs/core/runtime/programs.js'
 import { failedMethod, reportLink, reportPrompt, type LoggedFailure } from '../node_modules/@cmodjs/core/runtime/toaster.js'
 import { builtInWidgets, moved, placedIn, toggled, type Move, type PlacedWidget, type Widgets } from '../node_modules/@cmodjs/core/runtime/widgets.js'
 import { areas } from '../node_modules/@cmodjs/core/ui/areas.js'
@@ -17,12 +17,12 @@ import type { SettingsView } from './sidebar.js'
 
 export type SettingsState = {
   readonly memory: { removing: string | null; views: readonly ModView[]; log: readonly LogEntry[]; reporting: string | null; preferences: Preferences }
-  readonly session: { selected: string | null; section: string; pageParams: unknown; notice: string | null; widget: string | null }
+  readonly session: { selected: string | null; section: string; viewParams: unknown; notice: string | null; widget: string | null }
 }
 
 export const settingsMemory: SettingsState['memory'] = { removing: null, views: [], log: [], reporting: null, preferences: parsePreferences(undefined, 'preferences.json') }
 
-export const settingsSession: SettingsState['session'] = { selected: null, section: 'options', pageParams: null, notice: null, widget: null }
+export const settingsSession: SettingsState['session'] = { selected: null, section: 'options', viewParams: null, notice: null, widget: null }
 
 const areaTitles: Readonly<Record<Area, string>> = {
   [AbovePrompt]: 'Above the prompt',
@@ -59,10 +59,10 @@ type WebAppView = { readonly name: string; readonly url: string | null; readonly
 const preferenceTitles = {
   showsInstalledModErrors: 'Show errors from installed mods',
   servesWebUi: 'Show the Sidebar in your browser',
-  servesTailnet: 'Open web apps from your other machines, through Tailscale',
+  servesTailnet: 'Open web apps from your other devices, through Tailscale',
 } satisfies Partial<Record<keyof Preferences, string>>
 
-const pageSection = 'page:'
+const viewSection = 'view:'
 
 const selectedColor = 'userMessageBackground'
 
@@ -74,9 +74,8 @@ const panelColumns = 4
 
 const detailMinColumns = 40
 
-export async function storeOf(mod: object): Promise<string> {
-  const { claude } = engineOf(mod)
-  return storeFolder({ HOME: await claude.env.home(), XDG_DATA_HOME: await claude.env.dataHome() })
+export function storeOf(mod: object): Promise<string> {
+  return cmodStore(engineOf(mod).claude)
 }
 
 export async function setUpMods(mod: Mod<object>): Promise<string[]> {
@@ -225,14 +224,15 @@ function widgetsLayout<State extends SettingsState>(current: Mod<State>, widgets
 
 export function settings<State extends SettingsState>(mod: Mod<State>) {
   return (pane: Pane, changed: () => void): SettingsView => {
-    const { pages, widgets, claude } = engineOf(mod)
-    if (pages === undefined || widgets === undefined) throw new Error('cmod draws no Settings, because the cmod plugin started without its pages and widgets.')
+    const { parts, widgets, claude } = engineOf(mod)
+    if (parts === undefined || widgets === undefined) throw new Error('cmod draws no Settings, because the cmod plugin started without its pages and widgets.')
 
     const read = (path: string) => fs.read(path).catch(ifMissing(undefined))
 
-    const viewOf = async (store: string, name: string, root: string, version: string, isOn: boolean, rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
-      const manifest: unknown = await read(`${root}/package.json`).then((text) => (text === undefined ? undefined : JSON.parse(text)))
-      const plugin: unknown = await read(`${root}/.claude-plugin/plugin.json`).then((text) => (text === undefined ? undefined : JSON.parse(text)))
+    const viewOf = async (store: string, name: string, root: string | undefined, version: string, isOn: boolean, rows: readonly ConfigRow[], combos: ReadonlyMap<string, string>): Promise<ModView> => {
+      const readIn = async (file: string) => (root === undefined ? undefined : read(`${root}/${file}`))
+      const manifest: unknown = await readIn('package.json').then((text) => (text === undefined ? undefined : JSON.parse(text)))
+      const plugin: unknown = await readIn('.claude-plugin/plugin.json').then((text) => (text === undefined ? undefined : JSON.parse(text)))
       const steps = isObject(manifest) ? readSteps(manifest) : undefined
       const ask = async (method: string): Promise<readonly string[]> => {
         if (name === mod.name) return []
@@ -250,7 +250,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         hotkeys: Object.entries(steps?.hotkeys ?? {}).map(([hotkey, { title }]) => ({ name: hotkey, title, combo: combos.get(hotkeyCommand(name, hotkey)) })),
         options: rows.filter((row) => row.key.startsWith(`${name}.`)),
         pendingSteps: await ask(pendingStepsMethod),
-        changelog: changelogSections((await read(`${root}/CHANGELOG.md`)) ?? ''),
+        changelog: changelogSections((await readIn('CHANGELOG.md')) ?? ''),
         isService: (await fs.list(serviceFolder(store, name)).catch(ifMissing([]))).some((entry) => entry.name.endsWith('.json')),
         webApps: await webAppsOf(store, name),
       }
@@ -273,7 +273,9 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       const records = (await Promise.all((await setUpMods(mod)).map((name) => readRecord(read, store, name)))).filter((record) => record !== undefined)
       const own = JSON.parse((await read(`${mod.folder}/.claude-plugin/plugin.json`)) ?? '{}') as { readonly version?: string }
       const cmod = await viewOf(store, mod.name, mod.folder, own.version ?? '', true, [], combos)
-      const views = await Promise.all(records.map((record) => viewOf(store, record.name, record.root, record.version, !turnedOff.includes(record.name), rows, combos)))
+      const told = parts.declared().filter((each) => each.mod !== mod.name && !records.some((record) => record.name === each.mod))
+      const loaded = [...records, ...told.map((each) => ({ name: each.mod, root: undefined, version: '' }))]
+      const views = await Promise.all(loaded.map(({ name, root, version }) => viewOf(store, name, root, version, !turnedOff.includes(name), rows, combos)))
       return [cmod, ...views.sort((left, right) => left.name.localeCompare(right.name))]
     }
 
@@ -308,14 +310,14 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
 
     const turn = (name: string, isOn: boolean) => act(() => runCmod([isOn ? 'enable' : 'disable', name], `Turned ${name} ${isOn ? 'on' : 'off'}.`))
 
-    const setOption = (name: string, row: ConfigRow, text: string) => act(() => runCmod(['option', name, row.key.slice(name.length + 1), text.split(',').map((item) => item.trim()).join(',')], `Saved ${row.label}. ${name} reads it at its next start.`))
+    const setOption = (name: string, row: ConfigRow, text: string) => act(() => runCmod(['options', 'set', name, row.key.slice(name.length + 1), text.split(',').map((item) => item.trim()).join(',')], `Saved ${row.label}. ${name} reads it at its next start.`))
 
-    const bind = (name: string, hotkey: HotkeyView, combo: string) => act(() => runCmod(['hotkey', name, hotkey.name, combo.trim()], `Bound ${combo.trim()} to ${hotkey.title}.`))
+    const bind = (name: string, hotkey: HotkeyView, combo: string) => act(() => runCmod(['hotkeys', 'set', name, hotkey.name, combo.trim()], `Bound ${combo.trim()} to ${hotkey.title}.`))
 
     const sectionsOf = (view: ModView) => {
-      const own = pages.declared().find((each) => each.mod === view.name)?.pages.filter((page) => page.place === 'settings') ?? []
+      const own = parts.declared().find((each) => each.mod === view.name)?.views.filter((settingsView) => settingsView.place === 'settings') ?? []
       return [
-        ...own.map((page) => ({ key: `${pageSection}${page.id}`, label: page.title })),
+        ...own.map((settingsView) => ({ key: `${viewSection}${settingsView.id}`, label: settingsView.title })),
         ...(view.name === mod.name ? [] : [{ key: 'options', label: 'Options' }]),
         { key: 'hotkeys', label: 'Hotkeys' },
         ...(view.name === mod.name
@@ -387,8 +389,8 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
       })
     }
 
-    const drawSection = (view: ModView, section: string, columns: number, isFocused: boolean): JSX.Element => {
-      if (section.startsWith(pageSection)) return pages.element(view.name, section.slice(pageSection.length), mod.state.session.pageParams, columns, isFocused) ?? Text({ dimColor: true, children: 'Drawing…' })
+    const drawSection = (view: ModView, section: string, columns: number, isFocused: boolean, surface: Surface): JSX.Element => {
+      if (section.startsWith(viewSection)) return parts.element(view.name, section.slice(viewSection.length), mod.state.session.viewParams, columns, isFocused, surface) ?? Text({ dimColor: true, children: 'Drawing…' })
       if (section === 'widgets') return widgetsLayout(mod, widgets)
       if (section === 'log') return failuresLog()
       if (section === 'preferences') {
@@ -453,7 +455,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
     }
 
     return {
-      draw(columns, isFocused) {
+      draw(columns, isFocused, surface) {
         if (!hasLoaded) void refresh()
         const { removing, views } = mod.state.memory
         const { notice } = mod.state.session
@@ -479,7 +481,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
                       key: `mod:${each.name}`,
                       onPress: () => {
                         mod.state.session.selected = each.name
-                        mod.state.session.pageParams = null
+                        mod.state.session.viewParams = null
                         mod.state.memory.removing = null
                         changed()
                       },
@@ -505,7 +507,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
             Box({ justifyContent: 'space-between', columnGap: 2, flexWrap: 'wrap', children: [Text({ dimColor: true, children: view.version }), ...actions] }),
             ...(view.description === undefined ? [] : [Text({ dimColor: true, wrap: 'wrap', children: view.description })]),
             ...(view.isService ? [Text({ dimColor: true, wrap: 'wrap', children: 'Runs as a service of this computer' })] : []),
-            ...view.webApps.flatMap((app) => (app.url !== null ? [Text({ dimColor: true, wrap: 'wrap', children: `${app.name} opens from your other machines at ${app.url}` })] : app.reason !== null ? [Text({ dimColor: true, wrap: 'wrap', children: `${app.name} is not on your tailnet: ${app.reason}` })] : [])),
+            ...view.webApps.flatMap((app) => (app.url !== null ? [Text({ dimColor: true, wrap: 'wrap', children: `${app.name} opens from your other devices at ${app.url}` })] : app.reason !== null ? [Text({ dimColor: true, wrap: 'wrap', children: `${app.name} is not on your tailnet: ${app.reason}` })] : [])),
           ],
         })
         const removal =
@@ -523,7 +525,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         const finishSetup = () =>
           act(async () => {
             const opened: unknown = await claude.cmod.call({ to: view.name, method: finishStepsMethod, input: null })
-            if (isObject(opened)) pages.update(view.name, opened)
+            if (isObject(opened)) parts.update(view.name, opened)
             return undefined
           })
         const attention = [
@@ -545,7 +547,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
                     label,
                     onPress: () => {
                       mod.state.session.section = key
-                      mod.state.session.pageParams = null
+                      mod.state.session.viewParams = null
                       changed()
                     },
                   }),
@@ -558,20 +560,20 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
           children: Box({
             flexDirection: 'column',
             gap: 1,
-            children: [header, ...removal, ...attention, row, drawSection(view, shownSection, detailColumns, isFocused), ...(notice === null ? [] : [Text({ dimColor: true, wrap: 'wrap', children: notice })])],
+            children: [header, ...removal, ...attention, row, drawSection(view, shownSection, detailColumns, isFocused, surface), ...(notice === null ? [] : [Text({ dimColor: true, wrap: 'wrap', children: notice })])],
           }),
         })
         return isWide ? Box({ flexGrow: 1, columnGap: 1, children: [Box({ width: listColumns, flexShrink: 0, children: mods }), details] }) : Box({ flexDirection: 'column', flexGrow: 1, gap: 1, children: [Box({ flexDirection: 'column', flexShrink: 0, children: mods }), details] })
       },
-      shownPage() {
+      shownView() {
         const { view, section } = shownOf()
-        return view !== undefined && section.startsWith(pageSection) ? { mod: view.name, page: section.slice(pageSection.length) } : undefined
+        return view !== undefined && section.startsWith(viewSection) ? { mod: view.name, id: section.slice(viewSection.length) } : undefined
       },
-      closePage(name, page) {
+      closeView(name, shown) {
         const view = mod.state.memory.views.find((each) => each.name === name)
-        if (mod.state.session.selected !== name || mod.state.session.section !== `${pageSection}${page}` || view === undefined) return false
-        mod.state.session.section = sectionsOf(view).find(({ key }) => !key.startsWith(pageSection))?.key ?? 'hotkeys'
-        mod.state.session.pageParams = null
+        if (mod.state.session.selected !== name || mod.state.session.section !== `${viewSection}${shown}` || view === undefined) return false
+        mod.state.session.section = sectionsOf(view).find(({ key }) => !key.startsWith(viewSection))?.key ?? 'hotkeys'
+        mod.state.session.viewParams = null
         return true
       },
       async show(name, section, params) {
@@ -581,7 +583,7 @@ export function settings<State extends SettingsState>(mod: Mod<State>) {
         mod.state.session.selected = name
         mod.state.memory.removing = null
         mod.state.session.section = section ?? sectionsOf(view)[0]?.key ?? 'hotkeys'
-        mod.state.session.pageParams = params ?? null
+        mod.state.session.viewParams = params ?? null
         if (section !== 'changelog') return
         const shown = view.changelog.some(({ version }) => version === view.version) ? view.version : unreleased
         await pane.scrollTo({ key: `changelog:${shown}` }, { block: 'start' })

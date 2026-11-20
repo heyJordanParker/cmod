@@ -5,7 +5,7 @@ import { buildFailuresPath, hasLinkedMods, linkedCheckoutsOf, linksPath, parseEv
 import { heldInput } from '../node_modules/@cmodjs/core/runtime/claude.js'
 import { loadedMethod } from '../node_modules/@cmodjs/core/runtime/dependencies.js'
 import { engineOf } from '../node_modules/@cmodjs/core/runtime/engine.js'
-import type { Pages } from '../node_modules/@cmodjs/core/runtime/pages.js'
+import type { Parts } from '../node_modules/@cmodjs/core/runtime/parts.js'
 import { MissingMachineId } from '../node_modules/@cmodjs/core/runtime/device.js'
 import { deviceNote } from '../node_modules/@cmodjs/core/session/context/turn/device.js'
 import { failedMethod } from '../node_modules/@cmodjs/core/runtime/toaster.js'
@@ -47,7 +47,7 @@ let loaded: Versions = {}
 
 const unloaded = new Set<string>()
 
-let toldParts: Pick<Pages, 'declared'> | undefined
+let toldParts: Pick<Parts, 'declared'> | undefined
 
 let loading: Promise<unknown> = Promise.resolve()
 
@@ -103,9 +103,9 @@ export const cmodPlugin = defineMod({
 
   async setup(mod) {
     const triedRemovals = new Set<string>()
-    const { claude, router, report, widgets, pages } = engineOf(mod)
+    const { claude, router, report, widgets, parts } = engineOf(mod)
     if (widgets === undefined) throw new Error('cmod draws no widgets, because the cmod plugin started without them.')
-    toldParts = pages
+    toldParts = parts
     let finishRead = () => {}
     loading = new Promise<void>((resolve) => (finishRead = resolve))
     loaded = {}
@@ -114,8 +114,8 @@ export const cmodPlugin = defineMod({
     const server = mod.use(program({ command: ['cmod', 'serve'], isService: true, processType: 'Interactive' }))
     engineOf(mod).onServeUnreached(() => void server.ready().catch((error: unknown) => report({ id: 'serve', message: 'cmod serve did not start, so this session reaches no other session', error })))
     addClaudeTools(mod)
-    const shown = sidebar(mod, settingsView(mod), (isShown) => history(mod, isShown), (): Promise<void> => web.openInBrowser())
-    const web = webUi(mod, shown, server)
+    const web = webUi(mod, server)
+    const shown = sidebar(mod, settingsView(mod), (isShown) => history(mod, isShown), web.openInBrowser)
     mod.hotkeys.sidebar.onPress(() => shown.toggle())
     mod.hotkeys.settings.onPress(() => shown.toggleSettings())
     mod.hotkeys.history.onPress(() => shown.toggleHistory())
@@ -141,9 +141,9 @@ export const cmodPlugin = defineMod({
     const bindHotkeys = async (unbound: readonly (readonly [string, { readonly title: string; readonly default: string }])[]) => {
       for (const [name, hotkey] of unbound) {
         if (mod.hotkeys[name as keyof typeof mod.hotkeys].combo === undefined) {
-          const { exitCode, stderr } = await process.run(['cmod', 'hotkey', claude.plugin.root, name, hotkey.default])
+          const { exitCode, stderr } = await process.run(['cmod', 'hotkeys', 'set', claude.plugin.root, name, hotkey.default])
           if (exitCode !== 0) {
-            report({ id: `hotkey:${name}`, message: `Could not bind ${hotkey.default} to ${hotkey.title}`, description: `cmod hotkey ${formatExit(exitCode, cmodError(stderr, 'hotkey'))}` })
+            report({ id: `hotkey:${name}`, message: `Could not bind ${hotkey.default} to ${hotkey.title}`, description: `cmod hotkeys set ${formatExit(exitCode, cmodError(stderr, 'hotkeys'))}` })
             continue
           }
         }
@@ -260,7 +260,7 @@ export const cmodPlugin = defineMod({
       }
       if (!isReloadDue) await offerReload(linked.map(([name]) => name))
     }
-    pages?.onStart((name) => {
+    parts?.onStart((name) => {
       void claude.clock
         .now()
         .then((at) => {
@@ -420,13 +420,13 @@ export const cmodPlugin = defineMod({
       checkPlugins({ isForced: false })
       if (path === pluginsFile) return checkChanges()
       void followBuildFailures()
-      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod).then(web.serve)])
+      return Promise.all([widgets.reload(), checkChanges(), refreshPreferences(mod)])
     })
-    settings.beforeFileChange({ source: 'user' }, () => void mod.after(reloadDelayMs, checkChanges))
+    settings.onChange({ source: 'user' }, () => checkChanges())
     sessions.current.onPrompt(() => checkChanges())
 
     void setUpMods(mod)
-      .then(async (mods) => (mods.length > 0 ? runCmod(claude, ['history', 'index'], await claude.session.id()) : undefined))
+      .then(async (mods) => (mods.length > 0 ? runCmod(claude, ['sessions', 'index'], await claude.session.id()) : undefined))
       .catch((error: unknown) => claude.ui.warn('history:index', `cmod: the conversation index did not catch up: ${messageOf(error)}`))
 
     const tearDown = async (name: string) => {
@@ -464,7 +464,7 @@ export const cmodPlugin = defineMod({
       const project = await claude.session.root()
       if (synced?.project === project && (await changedAt(synced.watched)).join(',') === synced.stamp) return []
       const startedAt = await claude.clock.now()
-      const result = JSON.parse(await runCmod(claude, ['rules', '--project', project, '--plugin', claude.plugin.root, '--json'], await claude.session.id())) as SyncedRules
+      const result = JSON.parse(await runCmod(claude, ['rules', 'sync', '--project', project, '--plugin', claude.plugin.root, '--json'], await claude.session.id())) as SyncedRules
       const times = await changedAt(result.watched)
       synced = { project, watched: result.watched, stamp: times.some((at) => at >= startedAt - 1000) ? '' : times.join(',') }
       return rulesNotes(result)
@@ -518,7 +518,7 @@ export const cmodPlugin = defineMod({
         return (await sessionsWith(claude, mod.name, 'tip', tip)).find((session) => session !== current) ?? null
       },
       async updateSettings(input: { readonly mod: string; readonly source: string; readonly project: string; readonly values: Readonly<Record<string, unknown>> }) {
-        await runCmod(claude, ['settings', input.mod, input.source, JSON.stringify(input.values), '--project', input.project], await claude.session.id())
+        await runCmod(claude, ['settings', 'update', input.mod, input.source, JSON.stringify(input.values), '--project', input.project], await claude.session.id())
         return null
       },
       [failedMethod]: failureLog(mod),
